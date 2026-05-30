@@ -8,8 +8,9 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
+import { clearViewAsCookie, getViewAsCookie, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -17,6 +18,20 @@ type ClassProfileContextType = {
   public_profile_id: string;
   private_profile: UserProfile;
   public_profile: UserProfile;
+  /** True when a real instructor is viewing the course as a student (read-only). */
+  isViewingAsStudent: boolean;
+  /** Convenience alias for `isViewingAsStudent` — gate write surfaces on this. */
+  isReadOnly: boolean;
+  /** The viewer's actual role in the course, unaffected by view-as. */
+  realRole: Database["public"]["Enums"]["app_role"];
+  /** The viewer's actual private profile id, unaffected by view-as. */
+  realPrivateProfileId: string;
+  /** Display name of the student being viewed, when viewing as. */
+  viewAsProfileName?: string;
+  /** Instructor-only: enter read-only view as the given student's private profile id. */
+  enterViewAs: (studentPrivateProfileId: string) => void;
+  /** Exit read-only student view and return to the instructor view. */
+  exitViewAs: () => void;
 };
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined);
@@ -29,29 +44,49 @@ export function useClassProfiles() {
   return context;
 }
 
+/**
+ * Whether the viewer is a grader in the **effective** course identity. When an instructor
+ * is viewing as a student, this returns `false` (same as a real student). Use `realRole`
+ * from {@link useClassProfiles} when you need the viewer's actual enrollment.
+ */
 export function useIsGrader() {
   const { role } = useClassProfiles();
   return role.role === "grader";
 }
 
+/**
+ * Whether the viewer is an instructor in the **effective** course identity. When an
+ * instructor is viewing as a student, this returns `false`. Use `realRole` from
+ * {@link useClassProfiles} for staff-only affordances that must stay visible regardless
+ * of view-as (e.g. the enrollments "View as this student" action).
+ */
 export function useIsInstructor() {
   const { role } = useClassProfiles();
   return role.role === "instructor";
 }
 
 /**
- * Returns whether the current user's role is either "grader" or "instructor" in the class context.
- *
- * @returns `true` if the user is a grader or instructor; otherwise, `false`.
+ * Whether the viewer is grader or instructor in the **effective** course identity.
+ * Returns `false` while an instructor is masquerading as a student.
  */
 export function useIsGraderOrInstructor() {
   const { role } = useClassProfiles();
   return role.role === "grader" || role.role === "instructor";
 }
 
+/** Whether the viewer is a student in the **effective** course identity (including view-as). */
 export function useIsStudent() {
   const { role } = useClassProfiles();
   return role.role === "student";
+}
+
+/**
+ * Returns whether the current view is read-only because an instructor is viewing the
+ * course as a student. Gate student write surfaces (submit, comment, post, etc.) on this.
+ */
+export function useIsReadOnly() {
+  const { isReadOnly } = useClassProfiles();
+  return isReadOnly;
 }
 
 type UserRoleWithClassAndUser = GetResult<
@@ -76,6 +111,19 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  // Initialize the per-course view-as cookie synchronously so the very first render
+  // already knows whether a view-as session is active. Without this the provider
+  // would briefly publish the real instructor identity on the first paint before the
+  // effect ran and re-rendered with the student override.
+  const [viewAsProfileId, setViewAsProfileId] = useState<string | null>(() =>
+    typeof course_id === "string" ? getViewAsCookie(course_id) : null
+  );
+  const [viewAsRole, setViewAsRole] = useState<UserRoleWithClassAndUser | null>(null);
+  // True while the (instructor, viewAsProfileId) → student role lookup is in flight.
+  // We must not publish the real instructor identity during that window, or read-only
+  // gates would briefly re-enable instructor write UI. Initialized to true when a
+  // cookie target is present on mount so the very first render already blocks.
+  const [isResolvingViewAs, setIsResolvingViewAs] = useState<boolean>(() => !!viewAsProfileId);
   useEffect(() => {
     if (!userId) {
       setIsLoading(false);
@@ -136,7 +184,78 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     };
   }, [userId, retryNonce]);
 
-  if (isLoading) {
+  // Real (non-overridden) role for the current course.
+  const realMyRole = roles.find(
+    (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
+  );
+
+  // Re-read the per-course view-as cookie if course_id changes (e.g. navigating
+  // between courses inside this provider).
+  useEffect(() => {
+    if (!course_id) {
+      setViewAsProfileId(null);
+      return;
+    }
+    setViewAsProfileId(getViewAsCookie(course_id as string));
+  }, [course_id]);
+
+  // When an instructor has an active view-as target, fetch that student's role + profiles.
+  // Until the lookup resolves we MUST keep the provider in a loading state — see
+  // isResolvingViewAs below — otherwise consumers briefly see the real instructor role.
+  useEffect(() => {
+    const isInstructor = realMyRole?.role === "instructor";
+    if (!isInstructor || !viewAsProfileId || !course_id) {
+      setViewAsRole(null);
+      setIsResolvingViewAs(false);
+      return;
+    }
+    let cancelled = false;
+    const supabase = createClient();
+    setIsResolvingViewAs(true);
+    (async () => {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select(
+          "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
+        )
+        .eq("class_id", Number(course_id as string))
+        .eq("private_profile_id", viewAsProfileId)
+        .eq("role", "student")
+        .eq("disabled", false)
+        .single();
+      if (cancelled) return;
+      setViewAsRole(error || !data ? null : (data as UserRoleWithClassAndUser));
+      setIsResolvingViewAs(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [realMyRole?.role, viewAsProfileId, course_id]);
+
+  const enterViewAs = useCallback(
+    (studentPrivateProfileId: string) => {
+      if (!course_id) return;
+      setViewAsCookie(course_id as string, studentPrivateProfileId);
+      // Do a full document navigation rather than a soft client transition. The server
+      // recomputes the effective identity from the cookie and every course/realtime
+      // controller is rebuilt cleanly under the student identity. A soft transition
+      // (router.push + refresh) flips the client identity while the existing controllers
+      // are still being torn down, which surfaces stale-reference crashes such as
+      // "TableController for table 'discussion_threads' is closed. Cannot call getById(...)".
+      window.location.assign(`/course/${course_id}`);
+    },
+    [course_id]
+  );
+
+  const exitViewAs = useCallback(() => {
+    if (!course_id) return;
+    clearViewAsCookie(course_id as string);
+    // Full reload for the same reason as enterViewAs: rebuild all controllers under the
+    // restored instructor identity instead of racing a soft teardown/rebuild.
+    window.location.assign(`/course/${course_id}`);
+  }, [course_id]);
+
+  if (isLoading || isResolvingViewAs) {
     return <Skeleton height="100px" width="100%" />;
   }
   if (loadError) {
@@ -166,9 +285,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       </Container>
     );
   }
-  const myRole = roles.find(
-    (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
-  );
+  const myRole = realMyRole;
   if (!myRole) {
     const hasAnyRoles = roles.length > 0;
     return (
@@ -203,15 +320,25 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     );
   }
 
+  const isViewingAsStudent = myRole.role === "instructor" && !!viewAsRole;
+  const effectiveRole = isViewingAsStudent ? viewAsRole : myRole;
+
   return (
     <ClassProfileContext.Provider
       value={{
-        role: myRole,
-        private_profile_id: myRole.private_profile_id,
-        public_profile_id: myRole.public_profile_id,
+        role: effectiveRole,
+        private_profile_id: effectiveRole.private_profile_id,
+        public_profile_id: effectiveRole.public_profile_id,
         allOfMyRoles: roles,
-        private_profile: myRole.privateProfile,
-        public_profile: myRole.publicProfile
+        private_profile: effectiveRole.privateProfile,
+        public_profile: effectiveRole.publicProfile,
+        isViewingAsStudent,
+        isReadOnly: isViewingAsStudent,
+        realRole: myRole.role,
+        realPrivateProfileId: myRole.private_profile_id,
+        viewAsProfileName: isViewingAsStudent ? (viewAsRole.privateProfile?.name ?? undefined) : undefined,
+        enterViewAs,
+        exitViewAs
       }}
     >
       {children}

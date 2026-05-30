@@ -1,7 +1,9 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
 import type {
   Assignment,
   AssignmentDueDateException,
@@ -120,6 +122,79 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
     .single();
 
   return userRole || undefined;
+}
+
+export type EffectiveCourseIdentity = UserRoleData & {
+  /** True when a real instructor is viewing the course as a student. */
+  isViewingAs: boolean;
+  /** The viewer's actual role in the course (unchanged by view-as). */
+  realRole: Database["public"]["Enums"]["app_role"];
+  /** The target student's private profile id when viewing as, otherwise null. */
+  viewAsProfileId: string | null;
+};
+
+/**
+ * Resolve the "effective" identity for a course, accounting for the instructor
+ * "view as student" cookie. When the real user is an instructor for the course and the
+ * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
+ * role/profile ids are the student's (so server-branching pages render the student view
+ * scoped to that student). Otherwise the viewer's real identity is returned unchanged.
+ *
+ * Auth/RLS identity is unaffected — the override is purely presentation/scoping. RLS is
+ * the backstop that prevents the instructor from writing as the student.
+ */
+export async function getEffectiveCourseIdentity(
+  course_id: number,
+  user_id: string
+): Promise<EffectiveCourseIdentity | undefined> {
+  const realRole = await getUserRolesForCourse(course_id, user_id);
+  if (!realRole) {
+    return undefined;
+  }
+
+  const base: EffectiveCourseIdentity = {
+    ...realRole,
+    isViewingAs: false,
+    realRole: realRole.role,
+    viewAsProfileId: null
+  };
+
+  if (realRole.role !== "instructor") {
+    return base;
+  }
+
+  const cookieStore = await cookies();
+  const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
+  if (!targetProfileId) {
+    return base;
+  }
+
+  const client = await createClientWithCaching({
+    revalidate: 60,
+    tags: [`user_roles:${course_id}:view_as`]
+  });
+  const { data: targetRole } = await client
+    .from("user_roles")
+    .select("role, class_id, public_profile_id, private_profile_id")
+    .eq("class_id", course_id)
+    .eq("private_profile_id", targetProfileId)
+    .eq("role", "student")
+    .eq("disabled", false)
+    .single();
+
+  if (!targetRole) {
+    return base;
+  }
+
+  return {
+    role: "student",
+    class_id: targetRole.class_id,
+    public_profile_id: targetRole.public_profile_id,
+    private_profile_id: targetRole.private_profile_id,
+    isViewingAs: true,
+    realRole: "instructor",
+    viewAsProfileId: targetRole.private_profile_id
+  };
 }
 
 export async function getCourse(course_id: number) {

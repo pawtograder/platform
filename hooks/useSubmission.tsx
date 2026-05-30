@@ -8,7 +8,7 @@ import {
   useReferencingRubricChecks,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
@@ -211,50 +211,36 @@ export function useSubmissionFileComments({
   const [comments, setComments] = useState<SubmissionFileComment[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
       setComments([]);
       return;
     }
+    // View-as-student: PostgREST still returns unreleased comments because auth runs as
+    // the real instructor. A real student's RLS would have hidden them, so mirror that —
+    // here, not just on the return value, so onEnter/onLeave never leak unreleased rows.
+    const visible = (comment: SubmissionFileComment) =>
+      (comment.deleted_at === null || comment.deleted_at === undefined) &&
+      (file_id === undefined || comment.submission_file_id === file_id) &&
+      (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_file_comments.list((data, { entered, left }) => {
-      setComments(
-        data.filter(
-          (comment) =>
-            (comment.deleted_at === null || comment.deleted_at === undefined) &&
-            (file_id === undefined || comment.submission_file_id === file_id)
-        )
-      );
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(
-          entered.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(
-          left.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter(
-      (comment) =>
-        (comment.deleted_at === null || comment.deleted_at === undefined) &&
-        (file_id === undefined || comment.submission_file_id === file_id)
-    );
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, file_id, onEnter, onLeave]);
+  }, [submissionController, file_id, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
@@ -272,29 +258,33 @@ export function useSubmissionComments({
   const [comments, setComments] = useState<SubmissionComments[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
       setComments([]);
       return;
     }
+    // View-as-student: hide unreleased submission-level comments the real student wouldn't
+    // see. Filter here (not just on the return value) so onEnter/onLeave never leak them.
+    const visible = (comment: SubmissionComments) =>
+      (comment.deleted_at === null || comment.deleted_at === undefined) && (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_comments.list((data, { entered, left }) => {
-      const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
-      setComments(filteredData);
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  }, [submissionController, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
@@ -321,28 +311,33 @@ export function useSubmissionArtifactComments({
   const [comments, setComments] = useState<SubmissionArtifactComment[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
       setComments([]);
       return;
     }
+    // View-as-student: hide unreleased artifact comments the real student wouldn't see.
+    // Filter here (not just on the return value) so onEnter/onLeave never leak them.
+    const visible = (comment: SubmissionArtifactComment) =>
+      comment.deleted_at === null && (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_artifact_comments.list((data, { entered, left }) => {
-      setComments(data.filter((comment) => comment.deleted_at === null));
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null));
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null));
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter((comment) => comment.deleted_at === null);
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  }, [submissionController, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
@@ -734,6 +729,7 @@ export function useRubricCriteriaInstances({
 export function useSubmissionReview(reviewId?: number) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
+  const isReadOnly = useIsReadOnly();
   const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
   useEffect(() => {
     if (!ctx || !controller || !reviewId) {
@@ -745,6 +741,11 @@ export function useSubmissionReview(reviewId?: number) {
     setReview(data);
     return () => unsubscribe();
   }, [ctx, controller, reviewId]);
+  // View-as-student: RLS would hide an unreleased review from a real student. Mirror that
+  // so the masquerader doesn't see scores the actual student hasn't gotten yet.
+  if (isReadOnly && review && !review.released) {
+    return undefined;
+  }
   return review;
 }
 export function useSubmissionReviews() {
@@ -767,6 +768,7 @@ export function useSubmissionReviews() {
 export function useSubmissionReviewOrGradingReview(reviewId: number | undefined) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
+  const isReadOnly = useIsReadOnly();
   if (!ctx || !controller) {
     throw new Error("useSubmissionReviewOrGradingReview must be used within a SubmissionContext");
   }
@@ -790,6 +792,12 @@ export function useSubmissionReviewOrGradingReview(reviewId: number | undefined)
     };
   }, [ctx, controller, reviewId]);
 
+  // View-as-student: a real student's RLS hides unreleased reviews entirely. Mirror that
+  // by withholding the review row from masquerading instructors too, so the rubric sidebar
+  // and grade ledger don't leak scores ahead of release.
+  if (isReadOnly && review && !review.released) {
+    return undefined;
+  }
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
@@ -873,6 +881,7 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
   const controller = ctx?.submissionController;
   const submission = controller?.submission;
   const reviews = useSubmissionReviews();
+  const isReadOnly = useIsReadOnly();
 
   const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
 
@@ -893,6 +902,13 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
     }
   }, [rubricId, submission, controller, reviews]);
 
+  // Mirror the same release gate the singular review hooks already apply: a real student
+  // wouldn't see an unreleased review row, so the rubric sidebar's per-rubric review (and
+  // everything derived from it — criteria totals, applied checks, regrade affordances)
+  // must vanish in view-as until release.
+  if (isReadOnly && submissionReview && !submissionReview.released) {
+    return undefined;
+  }
   return submissionReview;
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {

@@ -13,11 +13,24 @@ import {
   SubmissionFileComment,
   SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Icon, Tag, Text, VStack } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Flex,
+  HStack,
+  Icon,
+  NativeSelectField,
+  NativeSelectRoot,
+  Tag,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { format } from "date-fns";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { GroupMemberLabelText } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -220,9 +233,69 @@ export function CodeLineCommentsPortal({
 }
 
 /**
- * Displays a rubric-based annotation comment on a code line, including points, rubric details, author, and visibility status.
+ * In-place score editor for an applied rubric check (issue #307).
+ *
+ * A grader may only choose a score that is **associated with the selected check** — never an arbitrary
+ * number. So this only renders when the check defines sub-options, and it offers exactly those options.
+ * For a single-value check the score is fixed by the check and there is nothing to edit (this returns
+ * null). `is_additive` only drives the sign shown; the stored value is the positive magnitude.
  */
-function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
+function CheckScoreEditor({
+  rubricCheck,
+  rubricCriteria,
+  points,
+  onChange
+}: {
+  rubricCheck: RubricCheck;
+  rubricCriteria: RubricCriteria;
+  points: number;
+  onChange: (option: { points: number; label: string }) => void;
+}) {
+  if (!isRubricCheckDataWithOptions(rubricCheck.data)) {
+    return null;
+  }
+
+  const sign = rubricCriteria.is_additive ? "+" : "-";
+  const options = rubricCheck.data.options;
+  const selectedIdx = options.findIndex((o) => o.points === points);
+
+  return (
+    <HStack gap={1}>
+      <Text fontSize="sm" color="fg.muted">
+        Score:
+      </Text>
+      <NativeSelectRoot size="sm" width="auto">
+        <NativeSelectField
+          aria-label="Edit check score"
+          value={String(selectedIdx)}
+          onChange={(e) => {
+            const opt = options[Number(e.target.value)];
+            if (opt) onChange({ points: opt.points, label: opt.label });
+          }}
+        >
+          {options.map((opt, idx) => (
+            <option key={idx} value={String(idx)}>
+              {sign}
+              {opt.points} {opt.label}
+            </option>
+          ))}
+        </NativeSelectField>
+      </NativeSelectRoot>
+    </HStack>
+  );
+}
+
+/**
+ * Displays a rubric-based annotation comment on a code line, including points, rubric details, author,
+ * and visibility status. Single shared implementation consumed by all editor variants (Monaco, plain,
+ * and starry-night) so the score-edit behavior lands everywhere from one place.
+ *
+ * Graders/instructors can edit the comment AND the score in place (issue #307): clicking "Edit" reveals
+ * a score control alongside the comment box, and saving persists both — no more delete-and-reapply to
+ * change a score. Editing is gated by `CommentActions` (which encodes the author/release/role rules), so
+ * the editor only appears when editing is actually permitted.
+ */
+export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -240,6 +313,9 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 
   const pointsText = rubricCriteria.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
   const hasPoints = comment?.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
+  // The score can only be changed among the check's own sub-options — never an arbitrary number — so
+  // the editor is offered only for checks that define options (and not while a regrade is pending).
+  const isScoreEditable = !comment.regrade_request_id && isRubricCheckDataWithOptions(rubricCheck.data);
 
   const getStudentVisibilityInfo = () => {
     if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
@@ -292,6 +368,11 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                     <Text fontSize="sm" color="fg.muted">
                       {rubricCriteria?.name} &gt; {rubricCheck?.name}
                     </Text>
+                    {comment.target_student_profile_id && (
+                      <Badge variant="outline" fontSize="xs" flexShrink={0}>
+                        <GroupMemberLabelText profileId={comment.target_student_profile_id} />
+                      </Badge>
+                    )}
                   </HStack>
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
@@ -315,19 +396,37 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
               </Box>
               <Box pl={2} w="100%">
                 {isEditing ? (
-                  <MessageInput
-                    textAreaRef={messageInputRef}
-                    defaultSingleLine={true}
-                    value={comment.comment}
-                    closeButtonText="Cancel"
-                    onClose={() => {
-                      setIsEditing(false);
-                    }}
-                    sendMessage={async (message) => {
-                      await submissionController.submission_file_comments.update(comment.id, { comment: message });
-                      setIsEditing(false);
-                    }}
-                  />
+                  <VStack align="stretch" gap={2} w="100%">
+                    {/*
+                      Score and comment are independent (issue #307): the score editor persists
+                      immediately on change, so a grader can adjust a score without touching — or
+                      re-saving — the comment. The comment box below saves the comment text on its own.
+                    */}
+                    {isScoreEditable && (
+                      <CheckScoreEditor
+                        rubricCheck={rubricCheck}
+                        rubricCriteria={rubricCriteria}
+                        points={comment.points ?? 0}
+                        onChange={({ points }) => {
+                          void submissionController.submission_file_comments.update(comment.id, { points });
+                        }}
+                      />
+                    )}
+                    <MessageInput
+                      textAreaRef={messageInputRef}
+                      defaultSingleLine={true}
+                      value={comment.comment}
+                      closeButtonText="Cancel"
+                      allowEmptyMessage={true}
+                      onClose={() => {
+                        setIsEditing(false);
+                      }}
+                      sendMessage={async (message) => {
+                        await submissionController.submission_file_comments.update(comment.id, { comment: message });
+                        setIsEditing(false);
+                      }}
+                    />
+                  </VStack>
                 ) : (
                   <Markdown>{comment.comment}</Markdown>
                 )}
@@ -344,7 +443,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 /**
  * Renders a single general comment on a code line
  */
-function CodeLineComment({ comment_id }: { comment_id: number }) {
+export function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
   const isStaff = useIsGraderOrInstructor();

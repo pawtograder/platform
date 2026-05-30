@@ -5,8 +5,10 @@ import CodeFile, {
   formatPoints,
   RubricCheckSelectOption,
   RubricCheckSubOptions,
-  RubricCriteriaSelectGroupOption
+  RubricCriteriaSelectGroupOption,
+  type CodeFileHandle
 } from "@/components/ui/code-file";
+import { FileTreeSidebar, ancestorFolderPaths, buildFileTree, flattenVisibleTree } from "@/components/ui/file-tree";
 import DownloadLink from "@/components/ui/download-link";
 import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
@@ -98,66 +100,6 @@ import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icon
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
 const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
-function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
-  const submission = useSubmission();
-  const comments = useSubmissionFileComments({});
-  const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
-  return (
-    <Box
-      maxH="250px"
-      overflowY="auto"
-      w="100%"
-      m={2}
-      css={{
-        "&::-webkit-scrollbar": {
-          width: "8px",
-          display: "block"
-        },
-        "&::-webkit-scrollbar-track": {
-          background: "#f1f1f1",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb": {
-          background: "#888",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb:hover": {
-          background: "#555"
-        }
-      }}
-    >
-      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
-        <Table.Header>
-          <Table.Row bg="bg.subtle">
-            <Table.ColumnHeader>File</Table.ColumnHeader>
-            {showCommentsFeature && <Table.ColumnHeader>Comments</Table.ColumnHeader>}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {submission.submission_files.map((file, idx) => (
-            <Table.Row key={file.id}>
-              <Table.Cell>
-                <Link
-                  variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onSelect(file.id);
-                  }}
-                >
-                  {file.name}
-                </Link>
-              </Table.Cell>
-              {showCommentsFeature && (
-                <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
-              )}
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
-    </Box>
-  );
-}
 function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1228,7 +1170,7 @@ export default function FilesView() {
     [updateUrl, selectedArtifactId, selectedFileId]
   );
 
-  const submissionFiles = submissionData?.submission_files ?? [];
+  const submissionFiles = useMemo(() => submissionData?.submission_files ?? [], [submissionData]);
   const submissionArtifacts = submissionData?.submission_artifacts ?? [];
   const normalizedSelectedFileId =
     selectedFileId !== null && submissionFiles.some((file: SubmissionFile) => file.id === selectedFileId)
@@ -1282,10 +1224,130 @@ export default function FilesView() {
   const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
 
   // Resolve prop types
-  const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
   const artifactPickerDisplayIndex = curArtifactIndex === -1 ? 0 : curArtifactIndex;
   const finalActiveSubmissionReviewId =
     activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
+
+  // ───────────────────────── File-tree navigation (#288 / #103a) ─────────────────────────
+  // Folder collapse state and a keyboard cursor are owned here (not in FileTreeSidebar) because
+  // FilesView holds the canonical ordered file list, the active id, and the selection handlers,
+  // and is the only place that also knows about artifacts. The tree stays purely presentational.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const codeFileRef = useRef<CodeFileHandle>(null);
+  const allFileComments = useSubmissionFileComments({});
+
+  const onCollapseChange = useCallback((path: string, isCollapsed: boolean) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (isCollapsed) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const fileTree = useMemo(() => buildFileTree(submissionFiles), [submissionFiles]);
+  const visibleEntries = useMemo(() => flattenVisibleTree(fileTree, collapsed), [fileTree, collapsed]);
+
+  // Auto-expand the folders leading to the active file so it is always visible in the tree.
+  // Intentionally keyed on the file name only — re-running on full `selectedFile` identity is unwanted.
+  const selectedFileName = selectedFile?.name;
+  useEffect(() => {
+    if (!selectedFileName) return;
+    const ancestors = ancestorFolderPaths(selectedFileName);
+    if (ancestors.length === 0) return;
+    setCollapsed((prev) => {
+      if (ancestors.every((p) => !prev.has(p))) return prev;
+      const next = new Set(prev);
+      ancestors.forEach((p) => next.delete(p));
+      return next;
+    });
+  }, [selectedFileName]);
+
+  // Sorted, de-duplicated commented line numbers for the active file (for next/prev-comment jumps).
+  const commentLines = useMemo(() => {
+    const lines = new Set<number>();
+    for (const c of allFileComments) {
+      if (c.submission_file_id === effectiveFileId && typeof c.line === "number") lines.add(c.line);
+    }
+    return Array.from(lines).sort((a, b) => a - b);
+  }, [allFileComments, effectiveFileId]);
+  const lastCommentLineRef = useRef<number | null>(null);
+
+  const gotoComment = useCallback(
+    (delta: 1 | -1) => {
+      if (commentLines.length === 0) return;
+      const cur = lastCommentLineRef.current;
+      let next: number;
+      if (cur === null) {
+        next = delta > 0 ? commentLines[0] : commentLines[commentLines.length - 1];
+      } else if (delta > 0) {
+        next = commentLines.find((l) => l > cur) ?? commentLines[0];
+      } else {
+        next = [...commentLines].reverse().find((l) => l < cur) ?? commentLines[commentLines.length - 1];
+      }
+      lastCommentLineRef.current = next;
+      codeFileRef.current?.scrollToLine(next);
+    },
+    [commentLines]
+  );
+
+  // Global keyboard navigation for grading. Integrates with the app-wide keyboard infra
+  // (hooks/useKeyboardShortcuts): we bail when that handler already acted (`defaultPrevented`, e.g. a
+  // `g`-chord, `?` help, or Shift-toggle) and ignore modifier/Shift combos so we never shadow it. We
+  // also bail inside editable surfaces, overlays, and interactive controls. Up/Down (or j/k) move
+  // between the *visible* files in tree order; n/p (or ]/[) jump between commented lines.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "textarea, input, select, button, a[href], [contenteditable='true'], .monaco-editor, [data-annotation-popup], [role='dialog'], [role='listbox'], [role='menu'], [role='combobox'], [role='button'], [role='tab'], [role='switch'], [role='checkbox'], [role='textbox']"
+        )
+      ) {
+        return;
+      }
+
+      const moveToFile = (delta: 1 | -1) => {
+        const files = visibleEntries.filter((entry) => entry.type === "file" && entry.fileId != null);
+        if (files.length === 0) return;
+        const curIdx = files.findIndex((entry) => entry.fileId === effectiveFileId);
+        let idx = curIdx === -1 ? (delta > 0 ? 0 : files.length - 1) : curIdx + delta;
+        idx = Math.max(0, Math.min(files.length - 1, idx));
+        const nextFile = files[idx];
+        if (nextFile?.fileId != null) handleSelectFile(nextFile.fileId);
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+        case "j":
+          e.preventDefault();
+          moveToFile(1);
+          break;
+        case "ArrowUp":
+        case "k":
+          e.preventDefault();
+          moveToFile(-1);
+          break;
+        case "n":
+        case "]":
+          e.preventDefault();
+          gotoComment(1);
+          break;
+        case "p":
+        case "[":
+          e.preventDefault();
+          gotoComment(-1);
+          break;
+        default:
+          break;
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [visibleEntries, effectiveFileId, handleSelectFile, gotoComment]);
+  // ──────────────────────────────────────────────────────────────────────────────────────
 
   // Scroll to line anchors when hash is present and relevant content is rendered
   useEffect(() => {
@@ -1415,15 +1477,39 @@ export default function FilesView() {
 
   return (
     <>
-      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
-        <Box w={"100%"} minW={"100%"}>
-          <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
+      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "4" }} direction={{ base: "column", md: "row" }}>
+        <Box
+          aria-label="File navigator"
+          tabIndex={0}
+          w={{ base: "100%", md: "320px" }}
+          flexShrink={0}
+          position={{ base: "static", md: "sticky" }}
+          top={{ md: "80px" }}
+          alignSelf="flex-start"
+          maxH={{ base: "40vh", md: "calc(100vh - 100px)" }}
+          display="flex"
+          flexDirection="column"
+          minH={0}
+          outline="none"
+          data-file-navigator=""
+        >
+          <Box flex="1" minH={0} display="flex">
+            {submissionFiles.length > 0 && (
+              <FileTreeSidebar
+                files={submissionFiles}
+                activeFileId={effectiveFileId}
+                onFileSelect={handleSelectFile}
+                collapsed={collapsed}
+                onCollapseChange={onCollapseChange}
+              />
+            )}
+          </Box>
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
             <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
           )}
         </Box>
         <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box w={"100%"}>
+        <Box w={"100%"} flex="1" minW={0}>
           {isSwitching ? (
             <Skeleton height="70vh" width="100%" />
           ) : selectedArtifact ? (
@@ -1451,7 +1537,7 @@ export default function FilesView() {
               ) : selectedFile.is_binary ? (
                 <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
               ) : (
-                <CodeFile key={selectedFile.id} file={selectedFile} />
+                <CodeFile key={selectedFile.id} ref={codeFileRef} file={selectedFile} />
               )}
             </Box>
           ) : (

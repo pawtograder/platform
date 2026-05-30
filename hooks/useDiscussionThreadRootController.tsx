@@ -7,6 +7,7 @@ import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/D
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 
 export type DiscussionThreadWithChildren = DiscussionThread & {
   children: DiscussionThread[];
@@ -22,6 +23,8 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
  */
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
+  const allRows = useTableControllerTableValues(controller.tableController);
+  const { filterDiscussionRow } = useViewAsStudentDataMask();
   const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
   // Indexed on `parent`: every PostRow that mounted in this thread tree used
   // to register its own predicate-scan list-listener, so each row mutation
@@ -30,11 +33,15 @@ export function useDiscussionThreadRoot() {
   const children = useIndexedTableControllerValues(controller.tableController, "parent", rootThread?.id);
   const ret = useMemo(() => {
     if (!rootThread) return undefined;
+    if (!filterDiscussionRow(rootThread, allRows)) {
+      return undefined;
+    }
+    const visibleChildren = children.filter((child) => filterDiscussionRow(child, allRows));
     return {
       ...rootThread,
-      children
+      children: visibleChildren
     } as DiscussionThreadWithChildren;
-  }, [rootThread, children]);
+  }, [rootThread, children, allRows, filterDiscussionRow]);
   return ret;
 }
 
@@ -44,22 +51,28 @@ export function useDiscussionThreadRoot() {
  */
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
+  const allRows = useTableControllerTableValues(controller.tableController);
+  const { filterDiscussionRow } = useViewAsStudentDataMask();
   const thread = useTableControllerValueById(controller.tableController, threadId);
   // See `useDiscussionThreadRoot` above — indexed by `parent` to avoid
   // O(listeners × rows) predicate scans on every reply mutation.
   const children = useIndexedTableControllerValues(controller.tableController, "parent", thread?.id);
+  const visibleChildren = useMemo(
+    () => children.filter((child) => filterDiscussionRow(child, allRows)),
+    [children, allRows, filterDiscussionRow]
+  );
 
   // Stable sort order: capture initial order on first render, maintain it during session
   // Reset when threadId changes (component remounts)
   const sortOrderRef = useRef<{ threadId: number; order: number[] } | null>(null);
 
   const sortedChildren = useMemo(() => {
-    if (!children || children.length === 0) return children;
+    if (!visibleChildren || visibleChildren.length === 0) return visibleChildren;
 
     // Reset sort order if threadId changed (remount)
     if (sortOrderRef.current === null || sortOrderRef.current.threadId !== threadId) {
       // Sort by likes_count descending, then created_at ascending
-      const sorted = [...children].sort((a, b) => {
+      const sorted = [...visibleChildren].sort((a, b) => {
         const likesDiff = (b.likes_count ?? 0) - (a.likes_count ?? 0);
         if (likesDiff !== 0) return likesDiff;
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
@@ -93,7 +106,7 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
     const knownChildren: DiscussionThread[] = [];
     const newChildren: DiscussionThread[] = [];
 
-    children.forEach((child) => {
+    visibleChildren.forEach((child) => {
       if (orderMap.has(child.id)) {
         knownChildren.push(child);
       } else {
@@ -127,104 +140,23 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
 
     // Clean up: remove IDs from order array that are no longer in children
     // This prevents memory leaks from deleted/removed threads
-    const childrenIdsSet = new Set(children.map((c) => c.id));
+    const childrenIdsSet = new Set(visibleChildren.map((c) => c.id));
     sortOrderRef.current!.order = sortOrderRef.current!.order.filter((id) => childrenIdsSet.has(id));
 
     return [...knownChildren, ...newChildren];
-  }, [children, threadId]);
-
-  // Stable sort order: capture initial order on first render, maintain it during session
-  // Reset when threadId changes (component remounts)
-  const sortOrderRef = useRef<{ threadId: number; order: number[] } | null>(null);
-
-  const sortedChildren = useMemo(() => {
-    if (!children || children.length === 0) return children;
-
-    // Reset sort order if threadId changed (remount)
-    if (sortOrderRef.current === null || sortOrderRef.current.threadId !== threadId) {
-      // Sort by likes_count descending, then created_at ascending
-      const sorted = [...children].sort((a, b) => {
-        const likesDiff = (b.likes_count ?? 0) - (a.likes_count ?? 0);
-        if (likesDiff !== 0) return likesDiff;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
-      // Capture the thread IDs in this order
-      sortOrderRef.current = {
-        threadId,
-        order: sorted.map((c) => c.id)
-      };
-      return sorted;
-    }
-
-    // We have a captured order - maintain it
-    // Deduplicate order array while preserving order (keep first occurrence)
-    const seenIds = new Set<number>();
-    const deduplicatedOrder: number[] = [];
-    sortOrderRef.current.order.forEach((id) => {
-      if (!seenIds.has(id)) {
-        seenIds.add(id);
-        deduplicatedOrder.push(id);
-      }
-    });
-    sortOrderRef.current.order = deduplicatedOrder;
-
-    const orderMap = new Map<number, number>();
-    sortOrderRef.current.order.forEach((id, index) => {
-      orderMap.set(id, index);
-    });
-
-    // Separate known children (in order) from new children (not in order)
-    const knownChildren: DiscussionThread[] = [];
-    const newChildren: DiscussionThread[] = [];
-
-    children.forEach((child) => {
-      if (orderMap.has(child.id)) {
-        knownChildren.push(child);
-      } else {
-        newChildren.push(child);
-      }
-    });
-
-    // Sort known children by captured order
-    knownChildren.sort((a, b) => {
-      const orderA = orderMap.get(a.id) ?? Infinity;
-      const orderB = orderMap.get(b.id) ?? Infinity;
-      return orderA - orderB;
-    });
-
-    // Sort new children by likes_count descending, then created_at ascending
-    newChildren.sort((a, b) => {
-      const likesDiff = (b.likes_count ?? 0) - (a.likes_count ?? 0);
-      if (likesDiff !== 0) return likesDiff;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-
-    // Append new children IDs to the sort order ref (only if not already present)
-    // This prevents duplicates if children array changes and recalculates
-    const orderSet = new Set(sortOrderRef.current!.order);
-    newChildren.forEach((child) => {
-      if (!orderSet.has(child.id)) {
-        sortOrderRef.current!.order.push(child.id);
-        orderSet.add(child.id);
-      }
-    });
-
-    // Clean up: remove IDs from order array that are no longer in children
-    // This prevents memory leaks from deleted/removed threads
-    const childrenIdsSet = new Set(children.map((c) => c.id));
-    sortOrderRef.current!.order = sortOrderRef.current!.order.filter((id) => childrenIdsSet.has(id));
-
-    return [...knownChildren, ...newChildren];
-  }, [children, threadId]);
+  }, [visibleChildren, threadId]);
 
   return useMemo(() => {
     if (!thread) return undefined;
+    if (!filterDiscussionRow(thread, allRows)) {
+      return undefined;
+    }
 
     return {
       ...thread,
       children: sortedChildren
     } as DiscussionThreadWithChildren;
-  }, [thread, sortedChildren]);
+  }, [thread, sortedChildren, allRows, filterDiscussionRow]);
 }
 
 /**

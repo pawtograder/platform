@@ -1,13 +1,9 @@
 "use client";
 
-import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
-import { useSubmissionFileComments } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
-import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
+import { RubricContextMenuAction, useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
+import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, HStack, Text, VStack } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file-shared";
-import { RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { useState } from "react";
 import { RubricQuickPick } from "./rubric-quick-pick";
 
 type PlainRubricLineMenuProps = {
@@ -29,11 +25,7 @@ export function PlainRubricLineMenu({
   onImmediateApply,
   onAddComment
 }: PlainRubricLineMenuProps) {
-  const review = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(review?.rubric_id);
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-  const existingComments = useSubmissionFileComments({ file_id: file.id });
+  const { menuActions, actionsByCriteria, rubricCriteria } = useRubricAnnotationActions(file);
 
   const [quickPickState, setQuickPickState] = useState<{
     isOpen: boolean;
@@ -45,72 +37,6 @@ export function PlainRubricLineMenu({
     isOpen: boolean;
     action: RubricContextMenuAction | null;
   }>({ isOpen: false, action: null });
-
-  const menuActions = useMemo(() => {
-    if (!rubricCriteria || !rubricChecks || !file) {
-      return [];
-    }
-
-    const actions: RubricContextMenuAction[] = [];
-
-    const annotationChecks = rubricChecks.filter(
-      (check: RubricCheck) =>
-        check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-    );
-
-    const criteriaWithChecks = rubricCriteria
-      .filter((criteria: RubricCriteria) =>
-        annotationChecks.some((check: RubricCheck) => check.rubric_criteria_id === criteria.id)
-      )
-      .sort((a, b) => a.ordinal - b.ordinal);
-
-    criteriaWithChecks.forEach((criteria: RubricCriteria) => {
-      const checksForCriteria = annotationChecks
-        .filter((check: RubricCheck) => check.rubric_criteria_id === criteria.id)
-        .sort((a, b) => a.ordinal - b.ordinal);
-
-      checksForCriteria.forEach((check: RubricCheck) => {
-        const existingAnnotationsForCheck = existingComments.filter(
-          (comment) => comment.rubric_check_id === check.id
-        ).length;
-        const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
-        if (isDisabled) return;
-
-        if (isRubricCheckDataWithOptions(check.data)) {
-          check.data.options.forEach((subOption: RubricCheckSubOption, index: number) => {
-            actions.push({
-              id: `check-${check.id}-sub-${index}`,
-              label: `${criteria.is_additive ? "+" : "-"}${subOption.points} ${subOption.label}`,
-              criteria,
-              check,
-              subOption
-            });
-          });
-        } else {
-          const pointsText = check.points ? ` (${criteria.is_additive ? "+" : "-"}${check.points} pts)` : "";
-          actions.push({
-            id: `check-${check.id}`,
-            label: `${check.name}${pointsText}`,
-            criteria,
-            check
-          });
-        }
-      });
-    });
-
-    return actions;
-  }, [rubricCriteria, rubricChecks, file, existingComments]);
-
-  const actionsByCriteria = useMemo(() => {
-    const map = new Map<number, RubricContextMenuAction[]>();
-    menuActions.forEach((action) => {
-      if (!action.criteria) return;
-      const id = action.criteria.id;
-      if (!map.has(id)) map.set(id, []);
-      map.get(id)!.push(action);
-    });
-    return map;
-  }, [menuActions]);
 
   const handleQuickPickSelect = (action: RubricContextMenuAction) => {
     const startLine = lineNumber;

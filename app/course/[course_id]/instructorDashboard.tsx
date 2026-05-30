@@ -727,7 +727,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
 
       {/* Discussion Activity Summary */}
       <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
-        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+        {role?.private_profile_id && (
+          <DiscussionSummary courseId={course_id} privateProfileId={role.private_profile_id} />
+        )}
       </CourseFeatureGate>
 
       <CourseFeatureGate feature={COURSE_FEATURES.OFFICE_HOURS}>

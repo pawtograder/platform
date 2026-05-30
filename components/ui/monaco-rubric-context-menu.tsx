@@ -1,22 +1,14 @@
 "use client";
-import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
-import { useSubmissionFileComments } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
-import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import { useEffect, useRef, useMemo, useState } from "react";
+import { RubricContextMenuAction, useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
+import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
+import { useEffect, useRef, useState } from "react";
 import type { Monaco } from "@monaco-editor/react";
 import type { IDisposable, editor } from "monaco-editor";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file-shared";
 import { RubricQuickPick } from "./rubric-quick-pick";
 
-export type RubricContextMenuAction = {
-  id: string;
-  label: string;
-  criteria?: RubricCriteria;
-  check?: RubricCheck;
-  subOption?: RubricCheckSubOption;
-  isCommentAction?: boolean;
-};
+// Re-export so existing importers (code-file-monaco, code-file-plain, rubric-quick-pick,
+// plain-rubric-line-menu) keep importing the type from here.
+export type { RubricContextMenuAction };
 
 export type MonacoRubricContextMenuProps = {
   editor: editor.IStandaloneCodeEditor | null;
@@ -35,11 +27,7 @@ export function MonacoRubricContextMenu({
   onImmediateApply,
   onAddComment
 }: MonacoRubricContextMenuProps) {
-  const review = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(review?.rubric_id);
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-  const existingComments = useSubmissionFileComments({ file_id: file?.id ?? 0 });
+  const { menuActions } = useRubricAnnotationActions(file);
 
   const disposablesRef = useRef<IDisposable[]>([]);
   const lastMousePositionRef = useRef<{ top: number; left: number } | null>(null);
@@ -65,69 +53,6 @@ export function MonacoRubricContextMenu({
     startLine: 1,
     endLine: 1
   });
-
-  // Build menu structure
-  const menuActions = useMemo(() => {
-    if (!rubricCriteria || !rubricChecks || !file) {
-      return [];
-    }
-
-    const actions: RubricContextMenuAction[] = [];
-
-    // Filter annotation checks
-    const annotationChecks = rubricChecks.filter(
-      (check: RubricCheck) =>
-        check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-    );
-
-    const criteriaWithChecks = rubricCriteria
-      .filter((criteria: RubricCriteria) =>
-        annotationChecks.some((check: RubricCheck) => check.rubric_criteria_id === criteria.id)
-      )
-      .sort((a, b) => a.ordinal - b.ordinal);
-
-    // Group checks by criteria
-    criteriaWithChecks.forEach((criteria: RubricCriteria) => {
-      const checksForCriteria = annotationChecks
-        .filter((check: RubricCheck) => check.rubric_criteria_id === criteria.id)
-        .sort((a, b) => a.ordinal - b.ordinal);
-
-      checksForCriteria.forEach((check: RubricCheck) => {
-        const existingAnnotationsForCheck = existingComments.filter(
-          (comment) => comment.rubric_check_id === check.id
-        ).length;
-        const atMax = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
-
-        if (isRubricCheckDataWithOptions(check.data)) {
-          // Create action for each sub-option
-          check.data.options.forEach((subOption: RubricCheckSubOption, index: number) => {
-            if (!atMax) {
-              actions.push({
-                id: `check-${check.id}-sub-${index}`,
-                label: `${criteria.is_additive ? "+" : "-"}${subOption.points} ${subOption.label}`,
-                criteria,
-                check,
-                subOption
-              });
-            }
-          });
-        } else {
-          if (!atMax) {
-            // Single check action
-            const pointsText = check.points ? ` (${criteria.is_additive ? "+" : "-"}${check.points} pts)` : "";
-            actions.push({
-              id: `check-${check.id}`,
-              label: `${check.name}${pointsText}`,
-              criteria,
-              check
-            });
-          }
-        }
-      });
-    });
-
-    return actions;
-  }, [rubricCriteria, rubricChecks, file, existingComments]);
 
   useEffect(() => {
     if (!editor || !monaco || !file || menuActions.length === 0) {

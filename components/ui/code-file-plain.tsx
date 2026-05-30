@@ -18,7 +18,9 @@ import {
   type CodeFileProps
 } from "./code-file-shared";
 import { RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
 import { PlainRubricLineMenu } from "./plain-rubric-line-menu";
+import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
@@ -213,6 +215,27 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
     );
 
     const [expanded, setExpanded] = useState<number[]>([]);
+
+    // Keyboard quick-apply palette (productivity layer), scoped to this editor by a hover flag so the
+    // Cmd/Ctrl+K chord only fires while the pointer is over the plain code area. (The global file-tree
+    // handler already ignores Cmd/Ctrl chords, so there is no conflict.)
+    const { menuActions: quickApplyActions } = useRubricAnnotationActions(currentFile ?? null);
+    const [focusedLine, setFocusedLine] = useState<number>(1);
+    const [quickApply, setQuickApply] = useState<{ isOpen: boolean; line: number }>({ isOpen: false, line: 1 });
+    const isHoveredRef = useRef(false);
+
+    useEffect(() => {
+      const handler = (e: KeyboardEvent) => {
+        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+        if (!isHoveredRef.current) return;
+        const target = e.target as HTMLElement | null;
+        if (target?.closest("textarea, input, select, [contenteditable='true'], [role='dialog']")) return;
+        e.preventDefault();
+        setQuickApply({ isOpen: true, line: focusedLine });
+      };
+      document.addEventListener("keydown", handler);
+      return () => document.removeEventListener("keydown", handler);
+    }, [focusedLine]);
 
     useImperativeHandle(ref, () => ({
       scrollToLine: (lineNumber: number) => {
@@ -441,7 +464,18 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
             submissionReviewId: submissionReview?.id
           }}
         >
-          <Box ref={scrollContainerRef} maxH="600px" overflow="auto" w="100%">
+          <Box
+            ref={scrollContainerRef}
+            maxH="600px"
+            overflow="auto"
+            w="100%"
+            onMouseEnter={() => {
+              isHoveredRef.current = true;
+            }}
+            onMouseLeave={() => {
+              isHoveredRef.current = false;
+            }}
+          >
             {lines.map((lineText, i) => {
               const lineNumber = i + 1;
               const lineComments = commentsByLine.get(lineNumber);
@@ -458,7 +492,10 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
                     minH="1.5em"
                     align="stretch"
                     cursor={hasComments ? "pointer" : "default"}
-                    onClick={() => toggleLineExpanded(lineNumber)}
+                    onClick={() => {
+                      setFocusedLine(lineNumber);
+                      toggleLineExpanded(lineNumber);
+                    }}
                     _hover={hasComments ? { bg: "bg.muted" } : undefined}
                   >
                     <Box
@@ -510,6 +547,21 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
             })}
           </Box>
         </CodeLineCommentContext.Provider>
+
+        {/* Keyboard quick-apply palette (Cmd/Ctrl+K while hovering the code). */}
+        <RubricQuickApplyPalette
+          isOpen={quickApply.isOpen}
+          onClose={() => setQuickApply((s) => ({ ...s, isOpen: false }))}
+          actions={quickApplyActions}
+          lineNumber={quickApply.line}
+          onPick={(action) => {
+            if (action.check?.is_comment_required) {
+              handleSelectCheck(action, quickApply.line, quickApply.line);
+            } else {
+              void handleImmediateApplyFromMenu(action, quickApply.line, quickApply.line);
+            }
+          }}
+        />
 
         {currentFile && commentDialogState.rubricCheck && (
           <AnnotationCommentDialog

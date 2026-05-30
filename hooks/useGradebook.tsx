@@ -25,6 +25,11 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 // Types are imported statically for type checking, but actual library is loaded dynamically
 import type { ConstantNode, FunctionNode, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
+import {
+  filterGradebookColumnsForStudentView,
+  filterGradebookEntriesForCaller,
+  pickGradebookEntryForCaller
+} from "@/lib/viewAsStudentDataMask";
 import { useClassProfiles } from "./useClassProfiles";
 
 // Lazy-loaded MathJS instance cache
@@ -119,11 +124,11 @@ export function useIsGradebookDataReady() {
 }
 export function useGradebookColumns() {
   const gradebookController = useGradebookController();
-  const [columns, setColumns] = useState<GradebookColumn[]>(gradebookController.gradebook_columns.rows);
+  const [columns, setColumns] = useState<GradebookColumn[]>(gradebookController.columns);
 
   useEffect(() => {
     return gradebookController.gradebook_columns.list((data) => {
-      setColumns(data);
+      setColumns(gradebookController.isInstructorOrGrader ? data : filterGradebookColumnsForStudentView(data));
     }).unsubscribe;
   }, [gradebookController]);
 
@@ -448,27 +453,28 @@ class StudentGradebookController {
 
   private _updateColumnsForStudentFromNewFormat(studentData: GradebookRecordsForStudent) {
     // Convert entries to GradebookColumnStudent format for backward compatibility
-    const newColumns: GradebookColumnStudent[] = studentData.entries
-      .filter((entry) => entry.is_private || !this._isInstructorOrGrader)
-      .map((entry) => ({
-        id: entry.gcs_id,
-        created_at: "", // Not available in new format
-        updated_at: "", // Not available in new format
-        class_id: 0, // Will be set by the parent controller
-        gradebook_column_id: entry.gc_id,
-        gradebook_id: 0, // Will be set by the parent controller
-        is_droppable: entry.is_droppable,
-        is_excused: entry.is_excused,
-        is_missing: entry.is_missing,
-        released: entry.released,
-        score: entry.score,
-        score_override: entry.score_override,
-        score_override_note: entry.score_override_note,
-        student_id: this._profile_id,
-        is_recalculating: entry.is_recalculating,
-        is_private: entry.is_private,
-        incomplete_values: entry.incomplete_values
-      }));
+    const newColumns: GradebookColumnStudent[] = filterGradebookEntriesForCaller(
+      studentData.entries,
+      this._isInstructorOrGrader
+    ).map((entry) => ({
+      id: entry.gcs_id,
+      created_at: "", // Not available in new format
+      updated_at: "", // Not available in new format
+      class_id: 0, // Will be set by the parent controller
+      gradebook_column_id: entry.gc_id,
+      gradebook_id: 0, // Will be set by the parent controller
+      is_droppable: entry.is_droppable,
+      is_excused: entry.is_excused,
+      is_missing: entry.is_missing,
+      released: entry.released,
+      score: entry.score,
+      score_override: entry.score_override,
+      score_override_note: entry.score_override_note,
+      student_id: this._profile_id,
+      is_recalculating: entry.is_recalculating,
+      is_private: entry.is_private,
+      incomplete_values: entry.incomplete_values
+    }));
 
     if (
       newColumns.length !== this._columnsForStudent.length ||
@@ -629,7 +635,8 @@ export class GradebookCellController {
       .from("gradebook_column_students")
       .select("*")
       .eq("class_id", this._class_id)
-      .eq("student_id", this._classRealTimeController.profileId);
+      .eq("student_id", this._classRealTimeController.profileId)
+      .eq("is_private", false);
     if (this._closed) {
       return this._data;
     }
@@ -922,6 +929,15 @@ export class GradebookCellController {
   }
 
   private _updateStudentEntry(columnStudent: GradebookColumnStudent): void {
+    // Non-staff (real students and instructors viewing as student) can only ever observe
+    // their own public rows. Drop both private rows and any classmate's public row that
+    // an _refetchByIds / legacy row broadcast might try to merge in.
+    if (
+      !this._classRealTimeController.isStaff &&
+      (columnStudent.is_private || columnStudent.student_id !== this._classRealTimeController.profileId)
+    ) {
+      return;
+    }
     const studentId = columnStudent.student_id;
 
     // Find or create student record
@@ -998,7 +1014,14 @@ export class GradebookCellController {
   /** Fetch specific gradebook_column_students rows and merge into the grid. */
   private async _refetchByIds(ids: number[]): Promise<void> {
     if (ids.length === 0 || this._closed) return;
-    const { data, error } = await this._client.from("gradebook_column_students").select("*").in("id", ids);
+    // In non-staff mode the broadcast may include ids for classmates' rows (the realtime
+    // filter is class-scoped). Constrain the actual fetch to this caller's own public
+    // rows so we never pull them over the wire — _updateStudentEntry is the backstop.
+    let query = this._client.from("gradebook_column_students").select("*").in("id", ids);
+    if (!this._classRealTimeController.isStaff) {
+      query = query.eq("student_id", this._classRealTimeController.profileId).eq("is_private", false);
+    }
+    const { data, error } = await query;
     if (this._closed) return;
     if (error) {
       throw error;
@@ -1022,7 +1045,7 @@ export class GradebookCellController {
       .gt("updated_at", this._maxUpdatedAt)
       .order("updated_at", { ascending: true });
     if (!this._classRealTimeController.isStaff) {
-      query = query.eq("student_id", this._classRealTimeController.profileId);
+      query = query.eq("student_id", this._classRealTimeController.profileId).eq("is_private", false);
     }
     const { data, error } = await query;
 
@@ -1552,10 +1575,7 @@ export class GradebookController {
         cb(undefined);
         return;
       }
-      let entry = studentData.entries.find((e) => e.gc_id === column_id && e.is_private === preferPrivate);
-      if (!entry) {
-        entry = studentData.entries.find((e) => e.gc_id === column_id && e.is_private === !preferPrivate);
-      }
+      const entry = pickGradebookEntryForCaller(studentData.entries, column_id, preferPrivate);
       if (entry) {
         cb({
           id: entry.gcs_id,
@@ -1589,8 +1609,8 @@ export class GradebookController {
 
     // Iterate through all students in the new controller
     for (const studentData of this.table.data) {
-      const entry = studentData.entries.find((e) => e.gc_id === column_id);
-      if (entry && (entry.is_private || !this._isInstructorOrGrader)) {
+      const entry = pickGradebookEntryForCaller(studentData.entries, column_id, this._isInstructorOrGrader);
+      if (entry) {
         // Convert to GradebookColumnStudent format for backward compatibility
         const gradebookColumnStudent: GradebookColumnStudent = {
           id: entry.gcs_id,
@@ -1638,30 +1658,28 @@ export class GradebookController {
     }
 
     const columns: GradebookColumnStudent[] = [];
-    for (const entry of studentData.entries) {
-      if (entry.is_private || !this._isInstructorOrGrader) {
-        // Convert to GradebookColumnStudent format for backward compatibility
-        const gradebookColumnStudent: GradebookColumnStudent = {
-          id: entry.gcs_id,
-          created_at: "", // Not available in new format
-          updated_at: "", // Not available in new format
-          class_id: this.class_id,
-          gradebook_column_id: entry.gc_id,
-          gradebook_id: this.gradebook_id,
-          is_droppable: entry.is_droppable,
-          is_excused: entry.is_excused,
-          is_missing: entry.is_missing,
-          released: entry.released,
-          score: entry.score,
-          score_override: entry.score_override,
-          score_override_note: entry.score_override_note,
-          student_id: student_id,
-          is_recalculating: entry.is_recalculating,
-          is_private: entry.is_private,
-          incomplete_values: entry.incomplete_values
-        };
-        columns.push(gradebookColumnStudent);
-      }
+    for (const entry of filterGradebookEntriesForCaller(studentData.entries, this._isInstructorOrGrader)) {
+      // Convert to GradebookColumnStudent format for backward compatibility
+      const gradebookColumnStudent: GradebookColumnStudent = {
+        id: entry.gcs_id,
+        created_at: "", // Not available in new format
+        updated_at: "", // Not available in new format
+        class_id: this.class_id,
+        gradebook_column_id: entry.gc_id,
+        gradebook_id: this.gradebook_id,
+        is_droppable: entry.is_droppable,
+        is_excused: entry.is_excused,
+        is_missing: entry.is_missing,
+        released: entry.released,
+        score: entry.score,
+        score_override: entry.score_override,
+        score_override_note: entry.score_override_note,
+        student_id: student_id,
+        is_recalculating: entry.is_recalculating,
+        is_private: entry.is_private,
+        incomplete_values: entry.incomplete_values
+      };
+      columns.push(gradebookColumnStudent);
     }
     return columns;
   }
@@ -1689,16 +1707,7 @@ export class GradebookController {
       return undefined;
     }
 
-    // Try to get the appropriate record based on user role
-    // Instructors/graders prefer private records, students get non-private
-    const preferPrivate = this._isInstructorOrGrader;
-    let entry = studentData.entries.find((e) => e.gc_id === column_id && e.is_private === preferPrivate);
-
-    // If preferred record doesn't exist, try the other type
-    if (!entry) {
-      entry = studentData.entries.find((e) => e.gc_id === column_id && e.is_private === !preferPrivate);
-    }
-
+    const entry = pickGradebookEntryForCaller(studentData.entries, column_id, this._isInstructorOrGrader);
     if (!entry) {
       return undefined;
     }
@@ -2022,7 +2031,14 @@ export class GradebookController {
     return result;
   }
   get columns() {
-    return this.gradebook_columns.rows;
+    if (this._isInstructorOrGrader) {
+      return this.gradebook_columns.rows;
+    }
+    return filterGradebookColumnsForStudentView(this.gradebook_columns.rows);
+  }
+
+  get isInstructorOrGrader() {
+    return this._isInstructorOrGrader;
   }
 
   get studentDetailView() {
@@ -2138,10 +2154,12 @@ export function GradebookProvider({
       return;
     }
 
-    // If controller exists but class_id or gradebook_id changed, recreate it
+    // If controller exists but class_id, gradebook_id, or staff/student mode changed, recreate it
     if (
       controller.current &&
-      (controller.current.class_id !== class_id || controller.current.gradebook_id !== gradebook_id)
+      (controller.current.class_id !== class_id ||
+        controller.current.gradebook_id !== gradebook_id ||
+        controller.current.isInstructorOrGrader !== isInstructorOrGrader)
     ) {
       controller.current.close();
       controller.current = null;

@@ -3,11 +3,11 @@
 import { useSubmissionFileComments } from "@/hooks/useSubmission";
 import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Icon, Text, VStack } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FaChevronDown, FaChevronRight, FaFile, FaFolder, FaFolderOpen } from "react-icons/fa";
 import { Badge } from "@chakra-ui/react";
 
-type FileTreeNode = {
+export type FileTreeNode = {
   name: string;
   type: "file" | "folder";
   file?: SubmissionFile;
@@ -15,15 +15,34 @@ type FileTreeNode = {
   path: string;
 };
 
+/** One row in the flattened, depth-first view of the tree (only entries inside expanded folders). */
+export type FlatTreeEntry = {
+  type: "file" | "folder";
+  name: string;
+  path: string;
+  fileId?: number;
+  level: number;
+};
+
+/** Single source of truth for sibling ordering: folders first, then files, both alphabetical. */
+function sortNodes(a: FileTreeNode, b: FileTreeNode): number {
+  if (a.type !== b.type) {
+    return a.type === "folder" ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
 type FileTreeSidebarProps = {
   files: SubmissionFile[];
   activeFileId?: number | null;
   onFileSelect: (fileId: number) => void;
   collapsed?: Set<string>;
   onCollapseChange?: (path: string, collapsed: boolean) => void;
+  /** Tree path of the row the keyboard cursor is on; rendered with a focus ring (folders included). */
+  cursorPath?: string | null;
 };
 
-function buildFileTree(files: SubmissionFile[]): FileTreeNode {
+export function buildFileTree(files: SubmissionFile[]): FileTreeNode {
   const root: FileTreeNode = {
     name: "",
     type: "folder",
@@ -57,6 +76,43 @@ function buildFileTree(files: SubmissionFile[]): FileTreeNode {
   return root;
 }
 
+/**
+ * Depth-first flatten of the tree honoring the collapsed set: a folder's children are emitted only
+ * when the folder is expanded. Mirrors the on-screen order so keyboard navigation (FilesView) and the
+ * rendered tree agree on which row is "next"/"previous".
+ */
+export function flattenVisibleTree(root: FileTreeNode, collapsed: Set<string>): FlatTreeEntry[] {
+  const out: FlatTreeEntry[] = [];
+
+  const walk = (node: FileTreeNode, level: number) => {
+    for (const child of Array.from(node.children.values()).sort(sortNodes)) {
+      out.push({
+        type: child.type,
+        name: child.name,
+        path: child.path,
+        fileId: child.file?.id,
+        level
+      });
+      if (child.type === "folder" && child.children.size > 0 && !collapsed.has(child.path)) {
+        walk(child, level + 1);
+      }
+    }
+  };
+
+  walk(root, 0);
+  return out;
+}
+
+/** Folder paths (prefixes) that must be expanded for `fileName` to be visible. */
+export function ancestorFolderPaths(fileName: string): string[] {
+  const parts = fileName.split("/");
+  const out: string[] = [];
+  for (let i = 0; i < parts.length - 1; i++) {
+    out.push(parts.slice(0, i + 1).join("/"));
+  }
+  return out;
+}
+
 function FileTreeItem({
   node,
   level,
@@ -64,7 +120,8 @@ function FileTreeItem({
   onFileSelect,
   collapsed,
   onCollapseChange,
-  commentCounts
+  commentCounts,
+  cursorPath
 }: {
   node: FileTreeNode;
   level: number;
@@ -73,12 +130,22 @@ function FileTreeItem({
   collapsed: Set<string>;
   onCollapseChange: (path: string, collapsed: boolean) => void;
   commentCounts: Map<number, number>;
+  cursorPath?: string | null;
 }) {
   const isCollapsed = collapsed.has(node.path);
   const hasChildren = node.children.size > 0;
   const isFile = node.type === "file";
   const isActive = node.file?.id === activeFileId;
+  const isCursor = cursorPath != null && node.path === cursorPath;
   const commentCount = node.file ? (commentCounts.get(node.file.id) ?? 0) : 0;
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // Keep the active/cursor row visible as the selection moves (mouse, URL, or keyboard navigation).
+  useEffect(() => {
+    if (isActive || isCursor) {
+      rowRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [isActive, isCursor]);
 
   const handleClick = () => {
     if (isFile && node.file) {
@@ -100,16 +167,25 @@ function FileTreeItem({
   return (
     <VStack align="stretch" gap={0}>
       <HStack
+        ref={rowRef}
         pl={`${level * 16}px`}
         pr={2}
         py={1}
         cursor="pointer"
         bg={isActive ? "bg.info" : "transparent"}
         _hover={{ bg: "bg.muted" }}
+        outline={isCursor ? "2px solid" : undefined}
+        outlineColor={isCursor ? "fg.info" : undefined}
+        outlineOffset="-2px"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         gap={1}
         minH="24px"
+        data-active={isActive ? "true" : undefined}
+        data-cursor={isCursor ? "true" : undefined}
+        aria-current={isActive ? "true" : undefined}
+        data-file-id={node.file?.id}
+        data-tree-path={node.path}
       >
         {hasChildren && (
           <Icon as={isCollapsed ? FaChevronRight : FaChevronDown} boxSize={3} color="fg.muted" flexShrink={0} />
@@ -139,13 +215,7 @@ function FileTreeItem({
       {hasChildren && !isCollapsed && (
         <VStack align="stretch" gap={0}>
           {Array.from(node.children.values())
-            .sort((a, b) => {
-              // Folders first, then files, both alphabetically
-              if (a.type !== b.type) {
-                return a.type === "folder" ? -1 : 1;
-              }
-              return a.name.localeCompare(b.name);
-            })
+            .sort(sortNodes)
             .map((child) => (
               <FileTreeItem
                 key={child.path}
@@ -156,6 +226,7 @@ function FileTreeItem({
                 collapsed={collapsed}
                 onCollapseChange={onCollapseChange}
                 commentCounts={commentCounts}
+                cursorPath={cursorPath}
               />
             ))}
         </VStack>
@@ -169,7 +240,8 @@ export function FileTreeSidebar({
   activeFileId,
   onFileSelect,
   collapsed: externalCollapsed,
-  onCollapseChange: externalOnCollapseChange
+  onCollapseChange: externalOnCollapseChange,
+  cursorPath
 }: FileTreeSidebarProps) {
   const [internalCollapsed, setInternalCollapsed] = useState<Set<string>>(new Set());
   const comments = useSubmissionFileComments({});
@@ -226,12 +298,7 @@ export function FileTreeSidebar({
     >
       <VStack align="stretch" gap={0} py={1}>
         {Array.from(tree.children.values())
-          .sort((a, b) => {
-            if (a.type !== b.type) {
-              return a.type === "folder" ? -1 : 1;
-            }
-            return a.name.localeCompare(b.name);
-          })
+          .sort(sortNodes)
           .map((child) => (
             <FileTreeItem
               key={child.path}
@@ -242,6 +309,7 @@ export function FileTreeSidebar({
               collapsed={collapsed}
               onCollapseChange={onCollapseChange}
               commentCounts={commentCounts}
+              cursorPath={cursorPath}
             />
           ))}
       </VStack>

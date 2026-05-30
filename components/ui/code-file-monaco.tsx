@@ -17,6 +17,8 @@ import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoEditor from "monaco-editor";
 import type { editor } from "monaco-editor";
 import { MonacoRubricContextMenu, RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
+import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { AnnotationCommentDialog } from "./annotation-comment-dialog";
 import {
   parseJavaFile,
@@ -168,6 +170,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const graderPseudonymousMode = useGraderPseudonymousMode();
     const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
+
+    // Keyboard quick-apply palette (productivity layer). Opened with Cmd/Ctrl+K while the editor is
+    // focused; lists the same rubric actions as the right-click menu for the cursor's line.
+    const { menuActions: quickApplyActions } = useRubricAnnotationActions(currentFile ?? null);
+    const [quickApply, setQuickApply] = useState<{ isOpen: boolean; line: number }>({ isOpen: false, line: 1 });
 
     // State for comment dialog
     const [commentDialogState, setCommentDialogState] = useState<{
@@ -944,6 +951,22 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             }
           }
         });
+
+        // Quick-apply rubric check on the cursor line (productivity layer). Scoped to the editor via
+        // addAction so it cannot collide with the global file-tree j/k handler (which bails inside
+        // .monaco-editor) and deliberately avoids Monaco's reserved chords (Cmd+F, Cmd+Shift+O, Cmd+Click).
+        const quickApplyAction = editor.addAction({
+          id: "rubric-quick-apply",
+          label: "Apply rubric check…",
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+          contextMenuGroupId: "rubric",
+          contextMenuOrder: 0.4,
+          run: (ed) => {
+            const line = ed.getPosition()?.lineNumber ?? 1;
+            setQuickApply({ isOpen: true, line });
+          }
+        });
+        providerDisposablesRef.current.push(quickApplyAction);
       },
       [allFiles, currentFile, commentsByLine, expanded, updateGlyphDecorations, updateViewZones]
     );
@@ -1210,6 +1233,22 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             onAddComment={handleAddComment}
           />
         )}
+
+        {/* Keyboard quick-apply palette (Cmd/Ctrl+K). One-click apply for checks that don't require a
+            comment; otherwise routes to the comment dialog. */}
+        <RubricQuickApplyPalette
+          isOpen={quickApply.isOpen}
+          onClose={() => setQuickApply((s) => ({ ...s, isOpen: false }))}
+          actions={quickApplyActions}
+          lineNumber={quickApply.line}
+          onPick={(action) => {
+            if (action.check?.is_comment_required) {
+              handleSelectCheck(action, quickApply.line, quickApply.line);
+            } else {
+              void handleImmediateApplyFromMenu(action, quickApply.line, quickApply.line);
+            }
+          }}
+        />
 
         {/* Comment dialog */}
         {currentFile && commentDialogState.rubricCheck && (

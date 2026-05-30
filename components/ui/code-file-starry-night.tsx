@@ -4,9 +4,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import {
   useGraderPseudonymousMode,
   useReviewAssignmentRubricParts,
-  useRubricCheck,
   useRubricChecksByRubric,
-  useRubricCriteria,
   useRubricCriteriaByRubric,
   useRubricParts,
   useRubricWithParts
@@ -69,25 +67,23 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType,
-  type CSSProperties
+  type ComponentType
 } from "react";
-import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { FaComments, FaRegComment } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import { GroupMemberLabelText, GroupMemberSelectOption } from "./group-member-select-option";
+import { GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
-import RegradeRequestWrapper from "./regrade-request-wrapper";
-import RequestRegradeDialog from "./request-regrade-dialog";
-import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
+import { CommentActions, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
 import {
   isRubricCheckDataWithOptions,
   formatPoints,
+  LineCheckAnnotation,
   type RubricCheckSubOption,
   type RubricCheckDataWithOptions,
   type RubricCriteriaSelectGroupOption,
@@ -96,12 +92,10 @@ import {
 } from "./code-file-shared";
 
 export type { RubricCheckSubOption, RubricCheckDataWithOptions };
-export { isRubricCheckDataWithOptions, formatPoints };
+// Re-export the single shared annotation component so existing importers (e.g. markdown-file-preview)
+// keep working while the implementation lives once in code-file-shared.tsx.
+export { isRubricCheckDataWithOptions, formatPoints, LineCheckAnnotation };
 export type { RubricCriteriaSelectGroupOption, RubricCheckSelectOption, RubricCheckSubOptions };
-
-// Module-stable style — see `components/ui/markdown.tsx`. Inline
-// `style={{...}}` literals defeat `<Markdown>`'s `memo` wrapper.
-const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 type CodeLineCommentContextType = {
   submission: SubmissionWithGraderResultsAndFiles;
@@ -386,6 +380,11 @@ export default function CodeFileStarryNight({
       m={embedded ? 0 : 2}
       w="100%"
       css={containerCss}
+      // Syntax highlighting (@wooorm/starry-night) loads asynchronously; until it
+      // resolves the code renders as plain text and then re-renders tokenized. This
+      // flag flips to "true" only once the highlighted tree is rendered, giving visual
+      // tests a deterministic signal to wait on so screenshots don't race the re-render.
+      data-syntax-highlighted={starryNight ? "true" : "false"}
     >
       {content}
     </Box>
@@ -475,141 +474,6 @@ export function starryNightGutter(
 
   // Replace children with new array.
   tree.children = replacement;
-}
-
-/**
- * Displays a rubric-based annotation comment on a code line, including points, rubric details, author, and visibility status.
- *
- * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
- */
-export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
-  const comment = useSubmissionFileComment(comment_id);
-  const commentAuthor = useUserProfile(comment?.author);
-  const [isEditing, setIsEditing] = useState(false);
-  const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const submissionController = useSubmissionController();
-
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-
-  const rubricCheck = useRubricCheck(comment?.rubric_check_id);
-  const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
-
-  if (!rubricCheck || !rubricCriteria || !comment) {
-    return <Skeleton height="100px" width="100%" />;
-  }
-
-  const pointsText = rubricCriteria.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
-  const hasPoints = comment?.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
-
-  // Determine if this comment will be visible to students
-  const getStudentVisibilityInfo = () => {
-    if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
-      return { isVisible: true, reason: "Always visible to students" };
-    }
-    if (rubricCheck.student_visibility === "never") {
-      return { isVisible: false, reason: "Never visible to students" };
-    }
-    if (rubricCheck.student_visibility === "if_applied") {
-      return { isVisible: true, reason: "Visible to students when grades are released (check was applied)" };
-    }
-    if (rubricCheck.student_visibility === "if_released") {
-      return { isVisible: true, reason: "Visible to students when grades are released" };
-    }
-    return { isVisible: true, reason: "Visible to students" };
-  };
-
-  const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
-
-  // Check if student can create a regrade request
-  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
-
-  // Check if this is a group submission
-
-  return (
-    <Box role="region" aria-label={`Grading checks on line ${comment.line}`}>
-      <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
-        <Box m={0} p={0} w="100%" pb={1}>
-          <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
-            <PersonAvatar size="2xs" uid={comment.author} />
-            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
-              <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
-                <Flex w="100%" justifyContent="space-between">
-                  <HStack flexGrow={10}>
-                    {!comment.eventually_visible && (
-                      <Tooltip content="This comment will never be visible to the student">
-                        <Icon as={FaRegEyeSlash} color="fg.muted" />
-                      </Tooltip>
-                    )}
-                    {comment.eventually_visible && !comment.released && (
-                      <Tooltip content="This comment is not released to the student yet">
-                        <Icon as={FaEyeSlash} />
-                      </Tooltip>
-                    )}
-                    {hasPoints && (
-                      <>
-                        <Icon
-                          as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
-                          color={rubricCriteria.is_additive ? "green.500" : "red.500"}
-                        />
-                        {pointsText}
-                      </>
-                    )}
-                    <Text fontSize="sm" color="fg.muted">
-                      {rubricCriteria?.name} &gt; {rubricCheck?.name}
-                    </Text>
-                    {comment.target_student_profile_id && (
-                      <Badge variant="outline" fontSize="xs" flexShrink={0}>
-                        <GroupMemberLabelText profileId={comment.target_student_profile_id} />
-                      </Badge>
-                    )}
-                  </HStack>
-                  <HStack gap={0} flexWrap="wrap">
-                    <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                      {commentAuthor?.name}
-                      {isGraderOrInstructor && commentAuthor?.real_name && (
-                        <Text as="span" fontSize="xs">
-                          {" "}
-                          ({commentAuthor.real_name})
-                        </Text>
-                      )}
-                    </Text>
-                    {comment.submission_review_id && (
-                      <ReviewRoundTag submission_review_id={comment.submission_review_id} />
-                    )}
-                  </HStack>
-                  <CommentActions comment={comment} setIsEditing={setIsEditing} />
-                </Flex>
-              </Box>
-              <Box pl={2}>
-                <Markdown style={RUBRIC_CHECK_DESCRIPTION_STYLE}>{rubricCheck.description}</Markdown>
-              </Box>
-              <Box pl={2} w="100%">
-                {isEditing ? (
-                  <MessageInput
-                    textAreaRef={messageInputRef}
-                    defaultSingleLine={true}
-                    value={comment.comment}
-                    closeButtonText="Cancel"
-                    onClose={() => {
-                      setIsEditing(false);
-                    }}
-                    sendMessage={async (message) => {
-                      await submissionController.submission_file_comments.update(comment.id, { comment: message });
-                      setIsEditing(false);
-                    }}
-                  />
-                ) : (
-                  <Markdown>{comment.comment}</Markdown>
-                )}
-              </Box>
-              {/* Regrade Request Button */}
-              {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
-            </VStack>
-          </HStack>
-        </Box>
-      </RegradeRequestWrapper>
-    </Box>
-  );
 }
 
 /**
@@ -934,6 +798,89 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
     const criteriaLabel = option.data.criteria?.name?.toLowerCase() ?? "";
     return optionLabel.includes(search) || criteriaLabel.includes(search);
   }, []);
+
+  // Persist the selected annotation. Shared by the comment-required flow (MessageInput "Add Check")
+  // and the one-click "Apply" path (#307) so both build identical rows.
+  const applyCheck = useCallback(
+    async (message: string) => {
+      let points = selectedCheckOption?.check?.points;
+      if (selectedSubOption !== null) {
+        points = selectedSubOption.points;
+      }
+      let comment = message || "";
+      if (selectedSubOption) {
+        comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
+      }
+      const submissionReviewId = review?.id;
+      if (!submissionReviewId && selectedCheckOption?.check?.id) {
+        toaster.error({
+          title: "Error saving comment",
+          description: "Submission review ID is missing, cannot save rubric annotation."
+        });
+        return;
+      }
+      const targetEff = effectiveAnnotationTargetStudentProfileId(annotationTargetMeta, pickedAnnotationStudentId);
+      if (targetEff.error) {
+        toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+        return;
+      }
+      const values = {
+        comment,
+        line: lineNumber,
+        rubric_check_id: selectedCheckOption?.check?.id ?? null,
+        class_id: file.class_id,
+        submission_file_id: file.id,
+        submission_id: submission.id,
+        // Use the determined author profile based on grader pseudonymous mode
+        author: authorProfileId,
+        released: review ? review.released : true,
+        points: points ?? null,
+        submission_review_id: submissionReviewId ?? null,
+        eventually_visible: selectedCheckOption?.check
+          ? selectedCheckOption.check.student_visibility !== "never"
+          : true,
+        regrade_request_id: null,
+        target_student_profile_id: targetEff.targetId
+      };
+      // Close the popover synchronously as soon as the user submits.
+      // submission_file_comments.create() optimistically inserts a
+      // tentative row (TableController._addRow), so the new annotation
+      // is visible to the user immediately even before the network
+      // round-trip resolves. Awaiting create() before close() means
+      // the popover stays open for the full INSERT latency, and any
+      // PostgREST/realtime hiccup under CI load (chromium has been
+      // observed to take >60s for this insert) leaves the popover
+      // hanging — see the "Annotate line 15 with a check:" CI flake.
+      close();
+      try {
+        await submissionController.submission_file_comments.create(values);
+      } catch (e) {
+        toaster.error({
+          title: "Error saving annotation",
+          description: getStudentFacingErrorMessage(e, {
+            releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+          })
+        });
+      }
+    },
+    [
+      selectedCheckOption,
+      selectedSubOption,
+      review,
+      annotationTargetMeta,
+      pickedAnnotationStudentId,
+      lineNumber,
+      file,
+      submission,
+      authorProfileId,
+      submissionController,
+      isGraderOrInstructor,
+      isInstructor,
+      isTaOnly,
+      close
+    ]
+  );
+
   if (!visible) {
     return null;
   }
@@ -1105,6 +1052,26 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                 {annotationTargetMeta.reason}
               </Text>
             )}
+            {/*
+              One-click apply (#307): when the check does NOT require a comment, a single "Apply"
+              button commits the annotation immediately — no need to confirm through the comment box.
+              For checks with sub-options it's enabled once a sub-option is chosen. The MessageInput
+              remains below for graders who DO want to attach a comment ("Apply with comment"). When the
+              check requires a comment, the Apply button is hidden and the MessageInput enforces it.
+            */}
+            {selectedCheckOption.check && !selectedCheckOption.check.is_comment_required && (
+              <Button
+                size="sm"
+                colorPalette="green"
+                alignSelf="stretch"
+                disabled={isRubricCheckDataWithOptions(selectedCheckOption.check.data) && !selectedSubOption}
+                onClick={() => {
+                  void applyCheck("");
+                }}
+              >
+                Apply
+              </Button>
+            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -1118,71 +1085,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
               }
               allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
               defaultSingleLine={true}
-              sendMessage={async (message) => {
-                let points = selectedCheckOption.check?.points;
-                if (selectedSubOption !== null) {
-                  points = selectedSubOption.points;
-                }
-                let comment = message || "";
-                if (selectedSubOption) {
-                  comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
-                }
-                const submissionReviewId = review?.id;
-                if (!submissionReviewId && selectedCheckOption.check?.id) {
-                  toaster.error({
-                    title: "Error saving comment",
-                    description: "Submission review ID is missing, cannot save rubric annotation."
-                  });
-                  return;
-                }
-                const targetEff = effectiveAnnotationTargetStudentProfileId(
-                  annotationTargetMeta,
-                  pickedAnnotationStudentId
-                );
-                if (targetEff.error) {
-                  toaster.error({ title: "Cannot save annotation", description: targetEff.error });
-                  return;
-                }
-                const values = {
-                  comment,
-                  line: lineNumber,
-                  rubric_check_id: selectedCheckOption.check?.id ?? null,
-                  class_id: file.class_id,
-                  submission_file_id: file.id,
-                  submission_id: submission.id,
-                  // Use the determined author profile based on grader pseudonymous mode
-                  author: authorProfileId,
-                  released: review ? review.released : true,
-                  points: points ?? null,
-                  submission_review_id: submissionReviewId ?? null,
-                  eventually_visible: selectedCheckOption.check
-                    ? selectedCheckOption.check.student_visibility !== "never"
-                    : true,
-                  regrade_request_id: null,
-                  target_student_profile_id: targetEff.targetId
-                };
-                // Close the popover synchronously as soon as the user submits.
-                // submission_file_comments.create() optimistically inserts a
-                // tentative row (TableController._addRow), so the new annotation
-                // is visible to the user immediately even before the network
-                // round-trip resolves. Awaiting create() before close() means
-                // the popover stays open for the full INSERT latency, and any
-                // PostgREST/realtime hiccup under CI load (chromium has been
-                // observed to take >60s for this insert) leaves the popover
-                // hanging — see the "Annotate line 15 with a check:" CI flake.
-                close();
-                try {
-                  await submissionController.submission_file_comments.create(values);
-                } catch (e) {
-                  toaster.error({
-                    title: "Error saving annotation",
-                    description: getStudentFacingErrorMessage(e, {
-                      releasedReviewGraderBlocked:
-                        isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
-                    })
-                  });
-                }
-              }}
+              sendMessage={applyCheck}
             />
           </>
         )}

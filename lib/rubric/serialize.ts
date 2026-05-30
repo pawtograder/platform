@@ -105,6 +105,7 @@ export function HydratedRubricToYamlRubric(rubric: HydratedRubric, ctx?: Seriali
     name: rubric.name,
     description: valOrUndefined(rubric.description),
     parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts, ctx),
-    cap_score_to_assignment_points: rubric.cap_score_to_assignment_points ?? undefined
+    cap_score_to_assignment_points: rubric.cap_score_to_assignment_points ?? undefined,
+    hide_unless_assigned: rubric.hide_unless_assigned ?? undefined
   };
 }
