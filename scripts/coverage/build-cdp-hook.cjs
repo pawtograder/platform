@@ -42,18 +42,19 @@ if (process.env.COVERAGE === "1") {
 
     let started = false;
 
-    const keep = (r) => {
-      const u = (r && r.url) || "";
-      if (!u) return false;
-      if (u.startsWith("node:")) return false;
-      if (u.includes("/node_modules/")) return false;
-      return true;
-    };
+    // Keep only compiled Next server bundles — the .next/server/app|pages
+    // chunks the converter can map back to source. Build runs spawn many
+    // short-lived node processes (webpack workers, lint, etc.); without this
+    // every one would write a dump containing just this hook + a few build
+    // tools, producing hundreds of useless files for the converter to chew on.
+    const keep = (r) => ((r && r.url) || "").includes("/.next/server/");
 
     const write = (result) => {
+      const filtered = result.filter(keep);
+      if (filtered.length === 0) return; // nothing renderable — skip
       fs.mkdirSync(outDir, { recursive: true });
       const tmp = `${outPath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ result: result.filter(keep) }));
+      fs.writeFileSync(tmp, JSON.stringify({ result: filtered }));
       fs.renameSync(tmp, outPath);
     };
 
