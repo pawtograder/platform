@@ -52,12 +52,17 @@ type LcovBlock = {
 function parseLcov(text: string): LcovBlock[] {
   const blocks: LcovBlock[] = [];
   let current: LcovBlock | null = null;
-  for (const line of text.split("\n")) {
+  // Split on /\r?\n/ (matching the source-side read at the bottom of this
+  // file): an lcov produced on a CRLF toolchain leaves a trailing \r on
+  // every line, which makes `line === "end_of_record"` never match — the
+  // final record(s) are then silently dropped, the "stops short of EOF"
+  // symptom. trim() on the terminator also tolerates stray trailing space.
+  for (const line of text.split(/\r?\n/)) {
     if (line.startsWith("SF:")) {
-      current = { sf: line.slice(3), lines: [line] };
+      current = { sf: line.slice(3).trim(), lines: [line] };
     } else if (current) {
       current.lines.push(line);
-      if (line === "end_of_record") {
+      if (line.trim() === "end_of_record") {
         blocks.push(current);
         current = null;
       }
