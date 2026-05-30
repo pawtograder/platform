@@ -180,7 +180,7 @@ jobs:
           # hard error (deleting one secret out from under the chart and
           # auto-filling it would silently change the JWT keys / DB password
           # for an in-flight preview).
-          required=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3)
+          required=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3 pawtograder-edge-functions)
           present=()
           missing=()
           for s in "${required[@]}"; do
@@ -226,6 +226,20 @@ jobs:
           kubectl -n "$NS" create secret generic pawtograder-s3 \
             --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
             --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
+          # Stub edge-functions secret for E2E mocked-GitHub mode.
+          # _shared/GitHubWrapper.ts constructs an Octokit App at module
+          # top-level on every cold start; with GITHUB_PRIVATE_KEY_STRING
+          # unset that throws synchronously and bombs every function in
+          # the runtime, including the E2E bypass paths the test suite
+          # uses. A throwaway PEM is enough — actual GitHub calls are
+          # mocked downstream when E2E_MOCK_GITHUB=true.
+          stub_pem=$(openssl genrsa 2048 2>/dev/null)
+          kubectl -n "$NS" create secret generic pawtograder-edge-functions \
+            --from-literal=GITHUB_PRIVATE_KEY_STRING="$stub_pem" \
+            --from-literal=GITHUB_APP_ID="1" \
+            --from-literal=GITHUB_OAUTH_CLIENT_ID="stub" \
+            --from-literal=GITHUB_OAUTH_CLIENT_SECRET="stub" \
+            --from-literal=GITHUB_WEBHOOK_SECRET="stub-webhook-secret"
 
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
