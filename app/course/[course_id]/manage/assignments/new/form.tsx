@@ -797,6 +797,9 @@ export default function AssignmentForm({
         ...values,
         release_date: appendTimezoneOffset(values.release_date, timezone),
         due_date: appendTimezoneOffset(values.due_date, timezone),
+        suggested_due_date: values.suggested_due_date
+          ? appendTimezoneOffset(values.suggested_due_date, timezone)
+          : null,
         group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone),
         regrade_deadline: appendTimezoneOffset(values.regrade_deadline, timezone),
         self_review_release_at: values.self_review_release_at
@@ -912,6 +915,48 @@ export default function AssignmentForm({
               Ensure all handout materials are in place before this time. Repositories for students are created at the
               release date.
             </Alert>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field
+              label={`Suggested Due Date (${course.time_zone})`}
+              helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
+              errorText={errors.suggested_due_date?.message?.toString()}
+              invalid={errors.suggested_due_date ? true : false}
+            >
+              <Controller
+                name="suggested_due_date"
+                control={control}
+                rules={{
+                  validate: (value: string) => {
+                    if (!value) return true;
+                    const dueDate = form.getValues("due_date");
+                    if (!dueDate) return true;
+                    const suggested = new TZDate(value, timezone).getTime();
+                    const due = new TZDate(dueDate, timezone).getTime();
+                    return suggested <= due || "Suggested due date must be on or before the due date";
+                  },
+                  deps: ["due_date"]
+                }}
+                render={({ field }) => {
+                  const hasATimezoneOffset =
+                    field.value &&
+                    (field.value.charAt(field.value.length - 6) === "+" ||
+                      field.value.charAt(field.value.length - 6) === "-");
+                  const localValue =
+                    field.value && hasATimezoneOffset
+                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                      : field.value;
+                  return (
+                    <Input
+                      type="datetime-local"
+                      value={localValue || ""}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  );
+                }}
+              />
+            </Field>
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
