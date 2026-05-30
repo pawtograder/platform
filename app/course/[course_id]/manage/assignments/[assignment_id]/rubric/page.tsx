@@ -340,6 +340,11 @@ function InnerRubricPage() {
 
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
   const guiEditorRef = useRef<RubricGuiEditorHandle>(null);
+  // Live Monaco editor instance. The React `value` state only updates when Monaco's
+  // onChange fires (and after a re-render), so it lags the model whenever content was
+  // just written. Reading getValue() off this ref gives the authoritative current text
+  // at the moment of a view-mode toggle, independent of onChange/debounce timing.
+  const monacoEditorRef = useRef<{ getValue: () => string } | null>(null);
   const pendingGuiRubricRef = useRef<HydratedRubric | null>(null);
   const [guiEditorEpoch, setGuiEditorEpoch] = useState(0);
   const viewModeRef = useRef(viewMode);
@@ -899,7 +904,12 @@ function InnerRubricPage() {
     (next: "gui" | "source") => {
       if (next === viewMode) return;
       if (next === "gui") {
-        if (!value || value.trim() === "") {
+        // Validate against the LIVE editor content, not the debounced `value` state.
+        // `value` only catches up after Monaco's onChange fires and React re-renders, so a
+        // toggle fired right after the model changed (e.g. paste-then-click) would otherwise
+        // validate stale text — wrongly switching to GUI on YAML that should be rejected.
+        const liveValue = monacoEditorRef.current?.getValue() ?? value;
+        if (!liveValue || liveValue.trim() === "") {
           // Empty YAML means the rubric was wiped. Clear the hydrated state too so the GUI
           // doesn't resurrect whatever was previously in activeRubric / rubricForSidebar.
           setActiveRubric(undefined);
@@ -909,7 +919,7 @@ function InnerRubricPage() {
           return;
         }
         try {
-          const parsed = YAML.parse(value) as YmlRubricType;
+          const parsed = YAML.parse(liveValue) as YmlRubricType;
           const hydrated = YamlRubricToHydratedRubric(parsed, {
             assignment_id: Number(assignment_id),
             is_private: false,
@@ -925,6 +935,17 @@ function InnerRubricPage() {
           setGuiEditorEpoch((e) => e + 1);
           setRubricForSidebar(hydrated);
           setError(undefined);
+          // Record the YAML we just validated so the source buffer and dirty-state
+          // bookkeeping reflect what the GUI now shows. We read `liveValue` straight off
+          // the editor, which can be ahead of the debounced `value` state; without syncing
+          // here, pasting valid YAML and immediately switching to GUI would leave
+          // `value`/`hasUnsavedChanges` stale (the source-mode dirty effect is skipped in
+          // GUI mode), so Save would stay disabled even though the rubric changed. Normalize
+          // through HydratedRubricToYamlRubric so it matches the snapshot form that
+          // applyGuiUnsavedStatus diffs against.
+          const consumedYaml = YAML.stringify(HydratedRubricToYamlRubric(hydrated, { allRubrics: allHydratedRubrics }));
+          setValue(consumedYaml);
+          applyGuiUnsavedStatus(hydrated, consumedYaml);
           persistViewMode("gui");
         } catch (e) {
           toaster.error({
@@ -946,7 +967,9 @@ function InnerRubricPage() {
       activeReviewRound,
       assignmentDetails,
       activeRubric,
-      flushPendingGuiSync
+      flushPendingGuiSync,
+      applyGuiUnsavedStatus,
+      allHydratedRubrics
     ]
   );
 
@@ -1670,6 +1693,9 @@ function InnerRubricPage() {
                   defaultLanguage="yaml"
                   path={`rubric-${activeReviewRound || "new"}.yml`}
                   beforeMount={handleEditorWillMount}
+                  onMount={(editor) => {
+                    monacoEditorRef.current = editor;
+                  }}
                   value={value}
                   theme={colorMode === "dark" ? "vs-dark" : "vs"}
                   onValidate={(markers) => {
