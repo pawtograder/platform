@@ -1002,6 +1002,7 @@ export type Database = {
           show_leaderboard: boolean;
           slug: string | null;
           student_repo_prefix: string | null;
+          suggested_due_date: string | null;
           template_repo: string | null;
           title: string;
           total_points: number | null;
@@ -1041,6 +1042,7 @@ export type Database = {
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
+          suggested_due_date?: string | null;
           template_repo?: string | null;
           title: string;
           total_points?: number | null;
@@ -1080,6 +1082,7 @@ export type Database = {
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
+          suggested_due_date?: string | null;
           template_repo?: string | null;
           title?: string;
           total_points?: number | null;
@@ -9896,6 +9899,7 @@ export type Database = {
           slug: string | null;
           student_profile_id: string | null;
           student_repo_prefix: string | null;
+          suggested_due_date: string | null;
           template_repo: string | null;
           title: string | null;
           total_points: number | null;
