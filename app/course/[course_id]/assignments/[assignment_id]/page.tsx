@@ -33,7 +33,7 @@ import ManageGroupWidget from "./manageGroupWidget";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
@@ -251,8 +251,16 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     {(() => {
-                      const gradeLabel = submission.submission_reviews?.completed_at
-                        ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
+                      // View-as-student: a real student's RLS hides unreleased reviews, so the
+                      // embedded review comes back null and the score reads "Pending"/"—". An
+                      // instructor masquerading reads the review via the staff RLS path, so mirror
+                      // RLS here and withhold the unreleased grade.
+                      const review =
+                        isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
+                          ? null
+                          : submission.submission_reviews;
+                      const gradeLabel = review?.completed_at
+                        ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded

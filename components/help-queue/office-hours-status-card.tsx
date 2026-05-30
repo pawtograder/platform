@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueueAssignments, useHelpQueues, useStudentVisibleHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -39,7 +39,9 @@ export function OfficeHoursStatusCard() {
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
+  // Student-visible variant so view-as counts don't include private peer requests; no-op
+  // when not masquerading.
+  const allHelpRequests = useStudentVisibleHelpRequests();
 
   // Filter to available and active queues
   const helpQueues = allHelpQueues.filter((queue) => queue.available && queue.is_active);

@@ -87,17 +87,19 @@ function sortIncompleteSurveysForBanner(surveys: Survey[]): Survey[] {
 
 export default async function StudentDashboard({
   course_id,
-  private_profile_id
+  private_profile_id,
+  isViewingAsStudent = false
 }: {
   course_id: number;
   private_profile_id: string;
+  isViewingAsStudent?: boolean;
 }) {
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 
   const supabase = await createClient();
   const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
-    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id);
+    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id, isViewingAsStudent);
 
   const identitiesResult = await supabase.auth.getUserIdentities();
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
@@ -352,7 +354,7 @@ export default async function StudentDashboard({
 
       {/* Discussion Activity Summary */}
       <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
-        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+        <DiscussionSummary courseId={course_id} privateProfileId={private_profile_id} />
       </CourseFeatureGate>
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>

@@ -6,6 +6,7 @@ import { TopicCard } from "@/components/discussion/TopicCard";
 import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMultiSelect";
 import { useFollowedDiscussionTopicIds, useTopicFollowActions } from "@/hooks/useDiscussionTopicFollow";
 import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Box, Flex, Heading, HStack, Stack, Text } from "@chakra-ui/react";
@@ -54,6 +55,7 @@ export default function DiscussionPage() {
   }, [watches]);
 
   const readStatuses = useTableControllerTableValues(controller.discussionThreadReadStatus);
+  const { isMasking: isViewingAsStudent } = useViewAsStudentDataMask();
   const readAtByThreadId = useMemo(() => {
     const map = new Map<number, string | null>();
     for (const s of readStatuses ?? []) map.set(s.discussion_thread_id, s.read_at);
@@ -93,6 +95,9 @@ export default function DiscussionPage() {
 
   const topicUnreadCounts = useMemo(() => {
     const counts = new Map<number, number>();
+    // In view-as mode the underlying rows are the instructor's, not the student's — surfacing
+    // those counts would mislead the masquerader. Suppress the badge entirely instead.
+    if (isViewingAsStudent) return counts;
     for (const t of threads) {
       const readAt = readAtByThreadId.get(t.id);
       const isUnread = readAt == null;
@@ -100,7 +105,7 @@ export default function DiscussionPage() {
       counts.set(t.topic_id, (counts.get(t.topic_id) ?? 0) + 1);
     }
     return counts;
-  }, [readAtByThreadId, threads]);
+  }, [readAtByThreadId, threads, isViewingAsStudent]);
 
   const feedThreads = useMemo(
     () =>

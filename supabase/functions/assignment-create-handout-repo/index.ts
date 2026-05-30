@@ -8,7 +8,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, class_id } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
+  const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
   scope?.setTag("function", "assignment-create-handout-repo");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
@@ -107,6 +107,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg!);
 
+  // An explicit override (e.g. demo-mode provisioning) wins over the strategy's
+  // default source template repo.
+  const sourceTemplateRepo = template_repo_override ?? action.sourceRepo;
+  scope.setTag("source_template_repo", sourceTemplateRepo);
+
   const branchProtection = {
     blockForcePush: assignment.protect_block_force_push ?? true,
     requirePullRequest: assignment.protect_require_pull_request ?? false,
@@ -116,7 +121,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   await createRepo(
     handoutRepoOrg!,
     handoutRepoName,
-    action.sourceRepo,
+    sourceTemplateRepo,
     {
       is_template_repo: action.isTemplateRepo,
       creation_method: "template",

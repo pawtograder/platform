@@ -28,6 +28,19 @@ export async function autograderSyncAllPermissionsForStudent(supabase: SupabaseC
     }
   });
 }
+
+/**
+ * Demo-only: create a single per-student assignment repo, optionally seeding it from a
+ * canned submission template instead of the assignment's empty handout. The edge function
+ * enforces that `template_repo_override` only works under edge-secret or service-role auth,
+ * so `supabase` here must be a service-role admin client.
+ */
+export async function autograderCreateRepoForStudentDemo(
+  params: FunctionTypes.AutograderCreateReposForStudentRequest,
+  supabase: SupabaseClient<Database>
+) {
+  await invokeEdgeFunction(supabase, "autograder-create-repos-for-student", { body: params });
+}
 export async function autograderCreateAssignmentRepos(
   params: FunctionTypes.AssignmentCreateAllReposRequest,
   supabase: SupabaseClient<Database>
