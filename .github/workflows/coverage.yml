@@ -213,6 +213,14 @@ jobs:
           # We don't disable Sentry sourcemaps — V8 client coverage needs
           # them to resolve compiled chunks back to .ts/.tsx files.
           NEXT_DISABLE_SENTRY: "1"
+          # Capture build-time V8 coverage. Server Components on routes with a
+          # static server shell (e.g. a layout over a "use client" page) are
+          # prerendered here at build time and served from cache at runtime,
+          # so they never execute under the runtime Inspector and would show
+          # 0% covered. The preload hook attaches a Profiler to the build
+          # process + its static-gen workers (which inherit NODE_OPTIONS) and
+          # dumps coverage/build-cdp-*.json, merged by v8-server-to-lcov.ts.
+          NODE_OPTIONS: --require ./scripts/coverage/build-cdp-hook.cjs
         run: npm run build
 
       - name: Start Next.js
@@ -382,6 +390,7 @@ jobs:
             coverage/jest/lcov.info
             coverage/postgres.log
             coverage/server-cdp*.json
+            coverage/build-cdp*.json
             coverage/enrich-*.log
           if-no-files-found: warn
           retention-days: 7

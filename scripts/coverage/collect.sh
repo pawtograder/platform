@@ -29,17 +29,22 @@ else
   echo "[collect] skip: no coverage/edge dir (was the bootstrap run with --coverage?)"
 fi
 
-# --- Next.js server (Node Inspector via instrumentation.ts) --------------
-# Coverage comes from coverage/server-cdp.json — written by
-# instrumentation.ts on SIGUSR2 (see the workflow teardown step).
-# Unlike the older NODE_V8_COVERAGE approach this captures vm-loaded
-# Server Component bundles.
-if compgen -G "coverage/server-cdp*.json" >/dev/null; then
-  echo "[collect] v8-server-to-lcov (Inspector CDP)"
+# --- Next.js server (Node Inspector) -------------------------------------
+# Two dump families, merged by the converter:
+#   server-cdp*.json — runtime, written by instrumentation.ts on SIGUSR2
+#                      (see the workflow teardown step). Captures vm-loaded
+#                      Server Component bundles, unlike the older
+#                      NODE_V8_COVERAGE approach.
+#   build-cdp*.json  — build time, written by build-cdp-hook.cjs during the
+#                      coverage `next build`. Captures Server Components that
+#                      are prerendered at build and served from cache at
+#                      runtime (so they never re-execute under instrumentation).
+if compgen -G "coverage/server-cdp*.json" >/dev/null || compgen -G "coverage/build-cdp*.json" >/dev/null; then
+  echo "[collect] v8-server-to-lcov (Inspector CDP: runtime + build dumps)"
   npx tsx scripts/coverage/v8-server-to-lcov.ts \
     || echo "[collect] WARN: server CDP conversion failed"
 else
-  echo "[collect] skip: no coverage/server-cdp*.json (was instrumentation.ts active? did SIGUSR2 fire?)"
+  echo "[collect] skip: no coverage/server-cdp*.json or build-cdp*.json"
 fi
 
 # --- Next.js client (Chromium V8) -----------------------------------------

@@ -111,17 +111,25 @@ function normalizeSourcePath(raw: string): string | null {
 }
 
 async function main(): Promise<void> {
-  // Glob coverage/server-cdp*.json. Each Next process (the primary
-  // server + any render workers) writes its own PID-suffixed dump,
-  // so concurrent writes don't trash each other.
+  // Glob both dump families and feed them to monocart together — it sums
+  // counts per source file, so a function executed at build time (prerender)
+  // and/or at request time ends up covered:
+  //   server-cdp*.json  — runtime, written by instrumentation.ts on SIGUSR2.
+  //   build-cdp*.json   — build time, written by build-cdp-hook.cjs. Captures
+  //                       Server Components that are prerendered at
+  //                       `next build` and served from cache at runtime (so
+  //                       they never re-execute and are invisible to the
+  //                       runtime dump alone).
+  // Each Next process (primary server, render/static-gen workers) writes its
+  // own PID-suffixed dump so concurrent writes don't trash each other.
   let files: string[];
   try {
-    files = (await readdir(COVERAGE_DIR)).filter((f) => /^server-cdp(-\d+)?\.json$/.test(f));
+    files = (await readdir(COVERAGE_DIR)).filter((f) => /^(server|build)-cdp(-\d+)?\.json$/.test(f));
   } catch {
     files = [];
   }
   if (files.length === 0) {
-    console.error(`[v8-server-to-lcov] no server-cdp*.json under ${COVERAGE_DIR}`);
+    console.error(`[v8-server-to-lcov] no server-cdp*.json / build-cdp*.json under ${COVERAGE_DIR}`);
     return;
   }
   const entries: V8Entry[] = [];

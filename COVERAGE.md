@@ -74,18 +74,27 @@ Documented so we don't pretend coverage is complete.
 
 1. **DB-trigger-driven function invocations don't get edge-function coverage.** When Postgres calls an edge function via `pg_net` (webhooks, async workers), the request goes through Kong → the original `edge-runtime` container, not our bootstrap. The bootstrap only catches functions invoked from the Next.js process. **v2 plan:** reroute Kong's `/functions/v1/*` upstream to point at the bootstrap. Requires touching the `supabase_kong_*` container's config and is best done as a Docker network/alias swap once we have the v1 numbers stable.
 2. **Server-side V8 coverage attribution is per-process, not per-test.** Each test hits `/api/__coverage__` to flush, but V8 in Node merges flushes within a process. To get per-test attribution we'd need to restart `next start` between tests — not worth the time cost. Per-PR aggregate is fine.
-3. ~~**Server Components are not in `server.lcov`.**~~ **Fixed.** Earlier
-   approach used `NODE_V8_COVERAGE`, which does not instrument scripts
-   loaded via the `vm` module — i.e., the path Next 15 uses for Server
-   Component bundles. New approach uses `node:inspector`'s
-   `Profiler.startPreciseCoverage` from inside the Next process via the
-   existing `instrumentation.ts` hook; precise coverage sees vm-loaded
-   scripts because it runs in the same V8 isolate. The workflow sends
-   `SIGUSR2` at teardown, `instrumentation.ts` calls
-   `Profiler.takePreciseCoverage` and writes `coverage/server-cdp-<pid>.json`,
-   and `scripts/coverage/v8-server-to-lcov.ts` converts it to lcov via
-   monocart. Verified end-to-end: 368 `SF:app/...` pages including
-   `(auth-pages)/sign-in/page.tsx`, all `admin/*`, all `api/*` routes.
+3. ~~**Server Components are not in `server.lcov`.**~~ **Fixed (runtime +
+   build capture).** Two problems, two captures, merged by
+   `scripts/coverage/v8-server-to-lcov.ts`:
+   - _vm-loaded bundles._ `NODE_V8_COVERAGE` does not instrument scripts
+     loaded via the `vm` module — the path Next 15 uses for Server
+     Component bundles. We instead use `node:inspector`'s
+     `Profiler.startPreciseCoverage` from inside the Next process via
+     `instrumentation.ts`; precise coverage sees vm-loaded scripts because
+     it runs in the same V8 isolate. The workflow sends `SIGUSR2` at
+     teardown, `instrumentation.ts` writes `coverage/server-cdp-<pid>.json`.
+   - _prerendered server shells._ A Server Component on a route whose
+     server output is static (e.g. a passthrough layout over a
+     `"use client"` page) is **prerendered at `next build`** and served
+     from the prerender cache at request time — so its render function
+     never executes at runtime and the runtime dump shows it 0% covered.
+     The coverage build runs with
+     `NODE_OPTIONS=--require ./scripts/coverage/build-cdp-hook.cjs`, which
+     attaches the same Profiler to the build process and its
+     static-generation workers and writes `coverage/build-cdp-<pid>.json`.
+     monocart sums counts across both dump families, so code that ran at
+     build and/or at request time ends up covered.
 4. **Client-side V8 coverage occasionally fails to source-map.** `v8-to-istanbul` (now `monocart-coverage-reports`) drops scripts whose source map can't be resolved (some RSC payloads, vendor chunks without maps). Expect ~5% of compiled chunks to silently disappear. Set `COVERAGE_DEBUG=1` to see them.
 5. **`plpgsql_check` profiler must be in `shared_preload_libraries`.** Otherwise coverage is per-session and won't span Playwright's many connections. `npm run coverage:setup-pg` configures this and restarts the DB container; re-run after any `supabase stop --no-backup`.
 6. **PL/pgSQL functions defined outside `supabase/migrations/*.sql` are skipped** by the coverage bridge — there's no source file to attribute to.
