@@ -777,10 +777,12 @@ export type YmlRubricType = Omit<
   | "review_round"
   | "is_private"
   | "cap_score_to_assignment_points"
+  | "hide_unless_assigned"
 > & {
   parts: YmlRubricPartType[];
   description?: string;
   cap_score_to_assignment_points?: boolean;
+  hide_unless_assigned?: boolean;
 };
 export type YmlRubricPartType = Omit<
   HydratedRubricPart,

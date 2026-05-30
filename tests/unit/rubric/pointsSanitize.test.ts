@@ -22,6 +22,7 @@ describe("sanitizeHydratedRubricPoints", () => {
       is_private: false,
       review_round: "grading-review" as const,
       cap_score_to_assignment_points: false,
+      hide_unless_assigned: false,
       created_at: "",
       rubric_parts: [
         {

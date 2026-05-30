@@ -516,10 +516,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
-  // Create a separate Supabase client for the user (using anon key)
+  // Create a separate Supabase client for the user (using anon key).
+  // persistSession/autoRefreshToken are off so concurrent clients in the same
+  // process don't clobber each other via the default shared GoTrue storage —
+  // otherwise the second setSession would override the first, leaving both
+  // clients authenticated as whoever logged in last.
   const userSupabase = createClient<Database>(
     process.env.SUPABASE_URL!,
-    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
   );
 
   const data = await verifyOtpWithRetry(testingUser.email, async () => {

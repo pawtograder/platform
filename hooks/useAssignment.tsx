@@ -17,6 +17,7 @@ import {
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
 import TableController, {
+  type BroadcastMessage,
   useFindTableControllerValue,
   useListTableControllerValues,
   useTableControllerTableValues,
@@ -446,6 +447,7 @@ export class AssignmentController {
     TableController<"review_assignment_rubric_parts">
   > = new Map();
   private _reviewAssignmentRubricPartsRefCount: Map<number, number> = new Map();
+  private _reviewAssignmentRubricHydrationUnsubscribe: (() => void) | null = null;
 
   constructor({
     client,
@@ -578,8 +580,54 @@ export class AssignmentController {
       table: "error_pin_rules",
       classRealTimeController
     });
+
+    // Self-review rubrics with hide_unless_assigned are invisible until a
+    // review_assignments row exists. Refetch rubric controllers when one
+    // arrives so useRubric("self-review") hydrates after RLS opens up.
+    this._reviewAssignmentRubricHydrationUnsubscribe = classRealTimeController.subscribeToTable(
+      "review_assignments",
+      (message: BroadcastMessage) => {
+        if (message.operation !== "INSERT" && message.operation !== "UPDATE") return;
+        const data = message.data as
+          | {
+              assignment_id?: number;
+              assignee_profile_id?: string;
+              rubric_id?: number | null;
+            }
+          | undefined;
+        if (!data || data.assignment_id !== assignment_id) return;
+        if (data.assignee_profile_id !== classRealTimeController.profileId) return;
+        if (!this._shouldRefetchRubricsForReviewAssignment(data)) return;
+        void this.refetchAllRubricData();
+      }
+    );
+  }
+
+  /**
+   * Refetch all rubric table controllers for this assignment. Needed when RLS
+   * starts allowing rubric reads after a review_assignment is created/released.
+   */
+  async refetchAllRubricData(): Promise<void> {
+    await Promise.all([
+      this.rubricsController.refetchAll(),
+      this.rubricPartsController.refetchAll(),
+      this.rubricCriteriaController.refetchAll(),
+      this.rubricChecksController.refetchAll(),
+      this.rubricCheckReferencesController.refetchAll()
+    ]);
+  }
+
+  private _shouldRefetchRubricsForReviewAssignment(data: { rubric_id?: number | null }): boolean {
+    if (!this._assignment) return true;
+    const selfReviewRubricId = this._assignment.self_review_rubric_id;
+    if (!selfReviewRubricId) return true;
+    return data.rubric_id === selfReviewRubricId;
   }
   close() {
+    if (this._reviewAssignmentRubricHydrationUnsubscribe) {
+      this._reviewAssignmentRubricHydrationUnsubscribe();
+      this._reviewAssignmentRubricHydrationUnsubscribe = null;
+    }
     this.reviewAssignments.close();
     this.regradeRequests.close();
     this.submissions.close();
