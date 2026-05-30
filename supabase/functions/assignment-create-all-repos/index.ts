@@ -52,14 +52,18 @@ async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: stri
         attempts++;
       }
     } catch (e) {
+      // A freshly-created repo can 404 briefly until GitHub finishes
+      // provisioning it — retry those. Anything else is a real error.
       if (e instanceof Error && e.message.includes("Not Found")) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         attempts++;
       } else {
         throw e;
       }
-      throw e;
     }
+  }
+  if (!repoExists) {
+    throw new Error(`Repo ${repo} did not become ready after ${maxAttempts} attempts`);
   }
 }
 

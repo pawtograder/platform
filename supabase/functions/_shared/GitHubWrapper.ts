@@ -2366,18 +2366,25 @@ export async function mergeForkUpstream(
     };
   }
 
+  // Forks inherit the source repo's default branch, which may not be "main".
+  // Prefer the fork's actual default branch over the caller's assumption so a
+  // non-"main" fork doesn't 404 here (which would skip the merge-upstream fast
+  // path); fall back to the requested branch if GitHub doesn't report one.
+  const targetBranch = repoMeta.data.default_branch || branch;
+  scope?.setTag("merge_target_branch", targetBranch);
+
   try {
     const res = await octokit.request("POST /repos/{owner}/{repo}/merge-upstream", {
       owner: org,
       repo,
-      branch
+      branch: targetBranch
     });
     // The response doesn't include the resulting SHA directly. Fetch the branch
     // tip so callers can persist synced_repo_sha / synced_handout_sha.
     const branchRes = await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", {
       owner: org,
       repo,
-      branch
+      branch: targetBranch
     });
     const tipSha = branchRes.data.commit.sha;
     const merge_type = (res.data as { merge_type?: string }).merge_type;

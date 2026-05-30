@@ -134,6 +134,11 @@ function findSourceRepo(student: StudentIdentity, sourceRepos: SourceRepoRow[]):
   if (student.profile_id) {
     return sourceRepos.find((r) => r.profile_id === student.profile_id) ?? null;
   }
+  // Prefer matching groups by NAME. For cross-assignment forks (mode 3) the
+  // assignment_group_id differs between the source and target assignments even
+  // for "the same" group, so the id-based fallback below only matches when the
+  // caller is working within a single assignment's id space (e.g. tests or
+  // same-assignment re-runs). Mode-3 callers should always supply group_name.
   if (student.group_name) {
     return sourceRepos.find((r) => r.group_name === student.group_name) ?? null;
   }

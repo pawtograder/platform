@@ -112,10 +112,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const sourceTemplateRepo = template_repo_override ?? action.sourceRepo;
   scope.setTag("source_template_repo", sourceTemplateRepo);
 
+  // The protect_* columns configure STUDENT repos. The staff handout repo must
+  // never require pull requests / approving reviews — that would block
+  // instructors pushing handout updates — so only carry force-push protection
+  // onto the handout (and only when configured for student repos).
   const branchProtection = {
     blockForcePush: assignment.protect_block_force_push ?? true,
-    requirePullRequest: assignment.protect_require_pull_request ?? false,
-    requiredReviewers: assignment.protect_required_reviewers ?? 0
+    requirePullRequest: false,
+    requiredReviewers: 0
   };
 
   await createRepo(

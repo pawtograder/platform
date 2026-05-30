@@ -622,6 +622,8 @@ declare
   v_run_number int;
   v_ordinal int;
   v_file jsonb;
+  v_expected_prefix text;
+  v_storage_key text;
 begin
   if v_user_id is null then
     raise exception 'Must be authenticated' using errcode = '42501';
@@ -715,7 +717,24 @@ begin
   returning id into v_submission_id;
 
   if p_files is not null and jsonb_array_length(p_files) > 0 then
+    -- Defense-in-depth: a malicious client could pass a storage_key pointing at
+    -- another class's / another student's submission tree. Storage RLS still
+    -- gates the bytes at signed-URL time, but reject keys outside this caller's
+    -- documented scope prefix so we never persist a cross-scope reference.
+    -- Convention (see header): classes/{class_id}/profiles/{profile_or_group_id}/...
+    v_expected_prefix := format(
+      'classes/%s/profiles/%s/',
+      v_class_id,
+      coalesce(v_assignment_group_id::text, v_profile_id::text)
+    );
     for v_file in select * from jsonb_array_elements(p_files) loop
+      v_storage_key := v_file->>'storage_key';
+      if v_storage_key is null
+         or left(v_storage_key, length(v_expected_prefix)) <> v_expected_prefix then
+        raise exception 'storage_key % is outside this submission''s scope (expected prefix %)',
+          coalesce(v_storage_key, '(null)'), v_expected_prefix
+          using errcode = '42501';
+      end if;
       insert into public.submission_files(
         class_id, submission_id, profile_id, assignment_group_id,
         name, contents, is_binary, file_size, mime_type, storage_key
@@ -729,7 +748,7 @@ begin
         true,
         coalesce((v_file->>'file_size')::bigint, 0),
         v_file->>'mime_type',
-        v_file->>'storage_key'
+        v_storage_key
       );
     end loop;
   end if;
@@ -829,6 +848,34 @@ begin
    limit 1;
   if v_existing is not null then
     return v_existing;
+  end if;
+
+  -- Deactivate any conflicting active submission in the *other* scope for the
+  -- same target, so a student can't end up with both a per-profile and a
+  -- per-group active manual submission on this assignment. (Group entry already
+  -- deactivates individual submissions, but enforce it here too since manual
+  -- submissions can be created independently of group membership changes.)
+  if p_assignment_group_id is not null then
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id is null
+       and s.profile_id in (
+         select agm.profile_id
+           from public.assignment_groups_members agm
+          where agm.assignment_group_id = p_assignment_group_id
+       );
+  else
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id in (
+         select agm.assignment_group_id
+           from public.assignment_groups_members agm
+          where agm.profile_id = p_profile_id
+       );
   end if;
 
   -- Otherwise create one as the new active submission for the target.
