@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { addDays } from "date-fns";
 import { expect, test } from "../global-setup";
 import {
@@ -23,7 +24,9 @@ import {
 // fake repos.
 
 const RUN = getTestRunPrefix();
-const SAFE = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+// Crypto-secure random suffix: these ids flow into github_username / repo names,
+// which CodeQL treats as a security context (Math.random would trip it).
+const SAFE = `${Date.now().toString(36)}${randomBytes(4).toString("hex")}`;
 
 type CreateRepoArgs = {
   org: string;
