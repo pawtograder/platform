@@ -53,16 +53,6 @@ export default defineConfig({
     // baseURL: 'https://nix.dev.pawtograder.net',
     baseURL: process.env.BASE_URL || "http://localhost:3000",
 
-    // Tolerate TLS-intercepting egress proxies. Some CI/dev networks MITM outbound
-    // HTTPS with a corporate CA that the system (and WebKit) trusts but Chromium's
-    // bundled root store does not — so Chromium rejects third-party assets the app
-    // loads over HTTPS (the Monaco editor loader from cdn.jsdelivr.net, dicebear
-    // avatars) with ERR_CERT_AUTHORITY_INVALID. That makes window.monaco never
-    // initialize and every Monaco-backed test (rubric editor, flashcards, gradebook
-    // expression builder) fail on Chromium only. This is a no-op where certificates
-    // validate normally (e.g. clean CI), so it cannot mask app-origin regressions.
-    ignoreHTTPSErrors: true,
-
     screenshot: "only-on-failure",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
