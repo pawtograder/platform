@@ -240,7 +240,7 @@ supavisor:
   replicas: 2
   image:
     repository: supabase/supavisor
-    tag: "2.5.7"
+    tag: "2.7.4" # stock supabase docker-compose pin
     pullPolicy: IfNotPresent
   poolSize: 25 # per tenant
   maxClientConn: 1000
@@ -261,7 +261,7 @@ auth:
   replicas: 2
   image:
     repository: supabase/gotrue
-    tag: "v2.176.1"
+    tag: "v2.186.0" # stock supabase docker-compose pin
     pullPolicy: IfNotPresent
   jwtExpiry: 3600
   disableSignup: false
@@ -311,7 +311,7 @@ rest:
   dbPoolAcquisitionTimeout: 30
   image:
     repository: postgrest/postgrest
-    tag: "v12.2.12"
+    tag: "v14.8" # stock supabase docker-compose pin — major bump from v12
     pullPolicy: IfNotPresent
   schemas: "public,graphql_public,pgmq_public"
   extraSearchPath: "public,extensions"
@@ -333,7 +333,7 @@ realtime:
   replicas: 3
   image:
     repository: supabase/realtime
-    tag: "v2.34.47"
+    tag: "v2.76.5" # stock supabase docker-compose pin — fixes partition / metrics auth
     pullPolicy: IfNotPresent
   # BEAM clustering — pods discover peers via a headless Service.
   cluster:
@@ -362,7 +362,7 @@ storage:
   replicas: 2
   image:
     repository: supabase/storage-api
-    tag: "v1.27.5"
+    tag: "v1.48.26" # stock supabase docker-compose pin
     pullPolicy: IfNotPresent
 
   # Backend selection. S3 is strongly recommended for k8s — avoids RWX PVCs.
@@ -486,7 +486,7 @@ kong:
   replicas: 2
   image:
     repository: kong
-    tag: "3.7.1"
+    tag: "3.9.1" # stock supabase docker-compose pin
     pullPolicy: IfNotPresent
   # Kong's nginx workers spike well past 512Mi at startup; 6Gi is plenty
   # of headroom and the prod-staging node has the RAM to spare.
