@@ -88,8 +88,7 @@ export async function streamSubmissions(
           : tokenizer === null
             ? row.repository
             : await tokenizer.token("repository", row.repository);
-      const sha =
-        row.sha === null ? null : tokenizer === null ? row.sha : await tokenizer.token("commit", row.sha);
+      const sha = row.sha === null ? null : tokenizer === null ? row.sha : await tokenizer.token("commit", row.sha);
 
       const record: Record<string, unknown> = {
         kind: "submission",
