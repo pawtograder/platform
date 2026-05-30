@@ -241,6 +241,20 @@ migrations:
   # Hook weight controls ordering relative to other pre-install hooks. Lower
   # numbers run earlier; postgres readiness is verified by the script itself.
   hookWeight: "5"
+  # On every deploy the migrator computes SHA-256 of each on-disk migration
+  # and compares to the hash recorded when it was applied. A mismatch means
+  # somebody edited an already-applied migration; downstream runs would
+  # keep skipping the (now-edited) file and the database drifts forever
+  # from the source.
+  #
+  # - false (default, REQUIRED for prod): mismatch is a hard error. The
+  #   operator must rename the migration to a fresh timestamp, accept the
+  #   drift manually, or restore the original file. Data is preserved.
+  # - true (preview / dev only): the migrator drops schema public, truncates
+  #   the migration history, and replays every migration from scratch.
+  #   DESTROYS ALL APPLICATION DATA. Auth/storage/realtime schemas stay
+  #   intact (their services own them); only public is wiped.
+  resetOnDrift: false
 
 # -----------------------------------------------------------------------------
 # Seed: load supabase/seed.sql into the database. Creates a "Demo Class"

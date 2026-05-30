@@ -117,6 +117,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # See values.yaml `migrations.resetOnDrift` for semantics.
+            - name: MIGRATIONS_RESET_ON_DRIFT
+              value: {{ .Values.migrations.resetOnDrift | default false | quote }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}

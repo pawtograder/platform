@@ -52,16 +52,17 @@ postgres:
     storageClass: ceph-rbd
     size: 10Gi
   resources:
-    # 4 Playwright workers + supavisor pools + pg_cron + pg_net + pgsodium
-    # + realtime's per-tenant connections need real memory. Three
-    # consecutive OOMKills observed in pr-helm at 17:10–17:19, then
-    # another at 17:42 after bumping to 4Gi. Stock supabase docker-compose
-    # sets no postgres memory limit at all — 8Gi here covers
-    # shared_buffers (256MB) + per-backend ~10MB × ~50 active backends
-    # + work_mem multiplied per sort/hash node + maintenance overhead
-    # + headroom for the partition-rotation DDL bursts realtime fires.
+    # OOMKilled history under E2E load: 2Gi → 4Gi → 8Gi → 16Gi.
+    # Theoretical worst case with max_connections=100, work_mem=8MB, and
+    # ~3-5 sort/hash nodes per concurrent query is ~12GB just for the
+    # backends, ignoring shared_buffers, maintenance_work_mem, OS cache,
+    # and the realtime partition-rotation DDL bursts that briefly spike
+    # backend count. Stock supabase docker-compose sets no limit at all;
+    # 16Gi gives comfortable headroom past the theoretical worst case so
+    # the cluster doesn't have to dance around an OOM threshold under
+    # E2E concurrency.
     requests: { cpu: "100m", memory: "1Gi" }
-    limits:   { cpu: "2",    memory: "8Gi" }
+    limits:   { cpu: "2",    memory: "16Gi" }
   config:
     # Slower disks → trade durability for throughput. Previews are
     # ephemeral; data loss on crash is fine.
@@ -86,11 +87,16 @@ auth:
 
 rest:
   replicas: 1
-  # 512Mi was OOM-killed under modest staging traffic; 1Gi for safety
-  # since previews can occasionally see ad-hoc curl-storms.
+  # 1Gi was OOMKilled during round-15 E2E (3 restarts across the
+  # session). PostgREST holds schema cache + connection pool +
+  # per-request response buffers; under 4-worker Playwright load the
+  # multi-MB JSON responses push it past 1Gi. 2Gi gives headroom
+  # without bothering to add replicas (cheaper than HA for previews,
+  # and OOM-free pgrst doesn't restart so single-replica downtime is a
+  # non-issue).
   resources:
     requests: { cpu: "50m",  memory: "256Mi" }
-    limits:   { cpu: "500m", memory: "1Gi" }
+    limits:   { cpu: "500m", memory: "2Gi" }
 
 realtime:
   replicas: 1
@@ -126,9 +132,13 @@ supavisor:
 
 edgeFunctions:
   replicas: 1
+  # 1Gi was OOMKilled during round-16 E2E. The Deno isolates that the
+  # supabase edge-runtime spawns per function don't garbage-collect across
+  # cold-start boundaries, and a 4-worker test burst keeps several alive
+  # concurrently. 2Gi gives headroom without bothering to add replicas.
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
-    limits:   { cpu: "1",    memory: "1Gi" }
+    limits:   { cpu: "1",    memory: "2Gi" }
   # END_TO_END_SECRET / EDGE_FUNCTION_SECRET come from the chart-rendered
   # pawtograder-e2e secret (templates/secrets.yaml when secrets.create=true
   # AND edgeFunctions.e2e.enabled=true).
@@ -138,11 +148,20 @@ edgeFunctions:
     enabled: true
     mockGitHub: true
 
+# Migration drift handling: previews are ephemeral, so when somebody
+# edits an already-applied migration we'd rather wipe + replay than fail
+# the deploy. Never set this in prod values.
+migrations:
+  resetOnDrift: true
+
 web:
   replicas: 1
+  # Web pod SIGSEGV'd (exit 139) during round-16 E2E — V8 heap pressure
+  # under concurrent test load. 2Gi gives headroom for Next.js SSR
+  # workers + concurrent request buffers.
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
-    limits:   { cpu: "1",    memory: "1Gi" }
+    limits:   { cpu: "1",    memory: "2Gi" }
   # E2E suite runs against per-PR previews; flip CSP into report-only
   # mode so Playwright's injected frames don't get blocked.
   e2e:
