@@ -242,6 +242,17 @@ jobs:
             exit 1
           fi
 
+      - name: Pre-cache edge function deps (Deno)
+        # Download every function's deps up front, OUTSIDE the readiness
+        # window below. On a cold runner the bootstrap was still downloading
+        # 47 functions' deps when the 60s health-check window expired, so the
+        # step failed before Playwright ever ran. `deno cache` is not under a
+        # timer, so it can take as long as it needs; the bootstrap then starts
+        # from a warm cache and becomes ready in seconds.
+        run: |
+          deno cache --no-check --import-map=supabase/functions/_coverage/deno.json \
+            supabase/functions/*/index.ts || true
+
       - name: Start edge function coverage bootstrap
         run: |
           set -euo pipefail
@@ -250,7 +261,9 @@ jobs:
           setsid npm run coverage:edge > /tmp/edge.log 2>&1 < /dev/null &
           echo $! > /tmp/edge.pid
           ready=0
-          for _ in $(seq 1 60); do
+          # 120s: deps are pre-cached above, so startup is normally seconds,
+          # but a cold runner importing 47 modules can still be slow.
+          for _ in $(seq 1 120); do
             if curl -fsS http://127.0.0.1:9998/__health__ >/dev/null 2>&1; then ready=1; break; fi
             sleep 1
           done
