@@ -26,7 +26,7 @@ type FormData = {
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();
-  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
+  const { private_profile_id, public_profile_id, public_profile, isReadOnly } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
   /** Blocks duplicate submits before React re-renders (double-clicks, rapid Enter). */
   const createInFlightRef = useRef(false);
@@ -51,6 +51,7 @@ export default function NewDiscussionThread() {
    */
   const [submitInFlight, setSubmitInFlight] = useState(false);
   const formBusy = isSubmitting || submitInFlight;
+  const formDisabled = formBusy || isReadOnly;
 
   const topics = useDiscussionTopics();
   const assignments = useAssignments();
@@ -132,7 +133,7 @@ export default function NewDiscussionThread() {
             }
           }}
         >
-          <Fieldset.Root bg="surface" disabled={formBusy}>
+          <Fieldset.Root bg="surface" disabled={formDisabled}>
             <Fieldset.Content w="100%">
               <Field
                 label="Topic"
@@ -411,11 +412,11 @@ export default function NewDiscussionThread() {
               type="submit"
               loading={formBusy}
               loadingText="Posting…"
-              disabled={formBusy}
+              disabled={formDisabled}
               w="100%"
               colorPalette="green"
             >
-              Submit
+              {isReadOnly ? "Read-only (viewing as student)" : "Submit"}
             </Button>
           </Fieldset.Root>
         </form>

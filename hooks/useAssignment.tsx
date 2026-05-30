@@ -29,7 +29,7 @@ import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useClassProfiles } from "./useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "./useCourseController";
 
 export function useSubmission(submission_id: number | null | undefined) {
@@ -237,8 +237,18 @@ export function useActiveSubmissions() {
   }, [controller]);
   return submissions;
 }
+// A row is hidden from a real student until its release_date has passed (or is null).
+// RLS enforces this server-side for students, but in view-as the instructor's auth
+// returns the full row set — apply the same gate client-side here so peer-review tasks
+// don't preview before release.
+function isReviewAssignmentReleasedForStudent(row: { release_date: string | null }): boolean {
+  if (!row.release_date) return true;
+  return new Date(row.release_date).getTime() <= Date.now();
+}
+
 export function useReviewAssignment(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
+  const isReadOnly = useIsReadOnly();
 
   const [reviewAssignment, setReviewAssignment] = useState<ReviewAssignments | undefined>(undefined);
   useEffect(() => {
@@ -252,20 +262,24 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
     setReviewAssignment(data);
     return () => unsubscribe();
   }, [controller, review_assignment_id]);
+  if (isReadOnly && reviewAssignment && !isReviewAssignmentReleasedForStudent(reviewAssignment)) {
+    return undefined;
+  }
   return reviewAssignment;
 }
 
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const filter = useCallback(
     (reviewAssignment: ReviewAssignments) => {
-      return (
-        reviewAssignment.assignee_profile_id === private_profile_id &&
-        (submission_id ? reviewAssignment.submission_id === submission_id : true)
-      );
+      if (reviewAssignment.assignee_profile_id !== private_profile_id) return false;
+      if (submission_id && reviewAssignment.submission_id !== submission_id) return false;
+      if (isReadOnly && !isReviewAssignmentReleasedForStudent(reviewAssignment)) return false;
+      return true;
     },
-    [private_profile_id, submission_id]
+    [private_profile_id, submission_id, isReadOnly]
   );
   return useListTableControllerValues(controller.reviewAssignments, filter);
 }

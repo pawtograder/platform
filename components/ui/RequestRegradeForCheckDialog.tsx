@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import Markdown from "@/components/ui/markdown";
 import { useAssignmentController, useAssignmentData, useBareCheckRegradeRequest } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useSubmission } from "@/hooks/useSubmission";
 import { RubricCheck as RubricCheckType } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -43,6 +43,7 @@ export default function RequestRegradeForCheckDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isReadOnly = useIsReadOnly();
   const { private_profile_id } = useClassProfiles();
   const assignment = useAssignmentData();
   const { regradeRequests } = useAssignmentController();
@@ -144,7 +145,8 @@ export default function RequestRegradeForCheckDialog({
   }
 
   // Staff view existing bare-check requests on the rubric check; only students can create them.
-  if (isGraderOrInstructor || !isReleased) {
+  // An instructor viewing as a student is read-only and cannot create them either.
+  if (isGraderOrInstructor || !isReleased || isReadOnly) {
     return null;
   }
 

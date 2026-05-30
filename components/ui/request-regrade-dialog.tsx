@@ -9,7 +9,7 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { useAssignmentData, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController } from "@/hooks/useSubmission";
 import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
@@ -32,6 +32,7 @@ export default function RequestRegradeDialog({
   const submission = useSubmission();
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const assignment = useAssignmentData();
 
   const isGroupSubmission = submission.assignment_group_id !== null;
@@ -102,6 +103,11 @@ export default function RequestRegradeDialog({
   }, [comment, private_profile_id, createRegradeRequest, submissionController]);
 
   const pointsText = rubricCriteria?.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
+
+  // Read-only: an instructor viewing as a student cannot open regrade requests.
+  if (isReadOnly) {
+    return null;
+  }
 
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {

@@ -125,7 +125,13 @@ export const RealtimeChat = ({
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly: isViewingAsStudent } = useClassProfiles();
+  // View-as student: every write here (send message, read receipt, activity log) would
+  // be attributed to the student (`author = private_profile_id`) but the instructor's
+  // auth.uid() is what RLS sees, spoofing chat authorship in a class-visible thread.
+  // Collapse to read-only so the input is disabled and the IntersectionObserver does
+  // not auto-mark messages as read on the student's behalf.
+  const effectiveReadOnly = readOnly || isViewingAsStudent;
 
   // Reply state
   const [replyToMessage, setReplyToMessage] = useState<UnifiedMessage | null>(null);
@@ -149,7 +155,7 @@ export const RealtimeChat = ({
   // Enable message notifications for this chat
   useMessageNotifications({
     helpRequestId: request_id,
-    enabled: !readOnly,
+    enabled: !effectiveReadOnly,
     titlePrefix: "New message"
   });
 
@@ -210,6 +216,9 @@ export const RealtimeChat = ({
   // Mark messages as read when they come into view using controller's persistent tracking
   useEffect(() => {
     if (!allMessages.length || !markMessageAsRead || !officeHoursController) return;
+    // View-as student: skip auto read-receipts. The receipt would carry the student's
+    // viewer_id under the instructor's auth.uid(), spoofing a "the student saw this".
+    if (effectiveReadOnly) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -239,7 +248,7 @@ export const RealtimeChat = ({
     return () => {
       observer.disconnect();
     };
-  }, [allMessages, markMessageAsRead, officeHoursController]);
+  }, [allMessages, markMessageAsRead, officeHoursController, effectiveReadOnly]);
 
   const handleSendMessage = useCallback(
     async (message: string) => {
@@ -247,6 +256,9 @@ export const RealtimeChat = ({
         throw new Error("Please wait for the chat to connect before sending messages.");
       }
       if (!message.trim() || !sendMessage || moderationStatus.isBanned) return;
+      // Defense in depth: the input is hidden behind effectiveReadOnly above, but bail
+      // here too so a programmatic invocation can't spoof a message as the student.
+      if (effectiveReadOnly) return;
 
       const replyToId =
         replyToMessage && "id" in replyToMessage && typeof replyToMessage.id === "number" ? replyToMessage.id : null;
@@ -288,7 +300,8 @@ export const RealtimeChat = ({
       private_profile_id,
       createStudentActivity,
       course_id,
-      request_id
+      request_id,
+      effectiveReadOnly
     ]
   );
 
@@ -513,10 +526,12 @@ export const RealtimeChat = ({
         )}
       </Box>
 
-      {readOnly ? (
+      {effectiveReadOnly ? (
         <Box p={{ base: 3, md: 4 }} borderTop="1px" borderColor="border.emphasized" bg="bg.muted">
           <Text fontSize="sm" color="fg.muted" textAlign="center">
-            This is a historical chat view. New messages cannot be sent.
+            {isViewingAsStudent
+              ? "Read-only preview of the student's view. Replies are disabled."
+              : "This is a historical chat view. New messages cannot be sent."}
           </Text>
         </Box>
       ) : moderationStatus.isBanned ? (
