@@ -303,6 +303,12 @@ auth:
 rest:
   enabled: true
   replicas: 2
+  # Connection-pool sizing. dbPool=40 paired with a 30s acquisition
+  # timeout was chosen so the chart's default postgres max_connections
+  # (configured in postgres-config.yaml) isn't blown out even at 3
+  # replicas: 3 × 40 = 120, well under postgres's default 200.
+  dbPool: 40
+  dbPoolAcquisitionTimeout: 30
   image:
     repository: postgrest/postgrest
     tag: "v12.2.12"

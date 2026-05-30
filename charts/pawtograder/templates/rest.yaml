@@ -68,6 +68,19 @@ spec:
               value: "false"
             - name: PGRST_DB_MAX_ROWS
               value: {{ .Values.rest.maxRows | quote }}
+            # Connection pool size. The default (10) saturates under E2E
+            # parallelism — when several workers create classes back-to-back
+            # PostgREST runs out of conns and starts returning "Could not
+            # query the database for the schema cache" mid-reload. 40 keeps
+            # the pool comfortably above the working set without overcommitting
+            # postgres's max_connections.
+            - name: PGRST_DB_POOL
+              value: {{ .Values.rest.dbPool | quote }}
+            # Wait up to this many seconds for a pool slot before returning
+            # 503 to the caller. Default 10 → busy clients time out fast under
+            # contention; 30 gives transient bursts headroom to drain.
+            - name: PGRST_DB_POOL_ACQUISITION_TIMEOUT
+              value: {{ .Values.rest.dbPoolAcquisitionTimeout | quote }}
             # PostgREST verifies JWTs against a JWKS containing both the
             # ES256 session key and the HS256 oct key (for ANON/SERVICE).
             # `@<file>` form loads the JSON Web Key Set from disk.
