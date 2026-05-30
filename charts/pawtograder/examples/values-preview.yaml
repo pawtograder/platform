@@ -52,8 +52,16 @@ postgres:
     storageClass: ceph-rbd
     size: 10Gi
   resources:
-    requests: { cpu: "100m", memory: "512Mi" }
-    limits:   { cpu: "2",    memory: "2Gi" }
+    # 4 Playwright workers + supavisor pools + pg_cron + pg_net + pgsodium
+    # + realtime's per-tenant connections need real memory. Three
+    # consecutive OOMKills observed in pr-helm at 17:10–17:19, then
+    # another at 17:42 after bumping to 4Gi. Stock supabase docker-compose
+    # sets no postgres memory limit at all — 8Gi here covers
+    # shared_buffers (256MB) + per-backend ~10MB × ~50 active backends
+    # + work_mem multiplied per sort/hash node + maintenance overhead
+    # + headroom for the partition-rotation DDL bursts realtime fires.
+    requests: { cpu: "100m", memory: "1Gi" }
+    limits:   { cpu: "2",    memory: "8Gi" }
   config:
     # Slower disks → trade durability for throughput. Previews are
     # ephemeral; data loss on crash is fine.
