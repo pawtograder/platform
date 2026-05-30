@@ -41,9 +41,15 @@ export default async function globalSetup() {
     return;
   }
 
+  // Type-erased: this helper calls RPCs (metrics_workflow_runs_by_conclusion)
+  // whose signatures land via migration. SupabaseTypes.d.ts only regenerates
+  // when someone runs `npm run client-local`, so the typed client treats those
+  // RPC names as unknown until then. The runtime behaviour is identical.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const client = createClient<Database>(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false }
-  });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any;
 
   const started = Date.now();
   let lastError: string | undefined;
