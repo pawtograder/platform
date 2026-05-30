@@ -95,6 +95,46 @@ the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
 realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
 in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
+### GitHub App credentials via OpenBao + ESO
+
+`pawtograder-edge-functions` carries the GitHub App private key + OAuth + webhook
+secret that the edge runtime uses to talk to GitHub. Two ways to provision it:
+
+1. **OpenBao + External Secrets Operator** (recommended for staging/prod). One
+   operator step per environment:
+
+   ```sh
+   # Write the App credentials into OpenBao at apps/pawtograder/github-app-<env>
+   scripts/setup-openbao-github-app.sh \
+     --env preview \
+     --from-file .secrets/github-app-preview.env
+   ```
+
+   The `.env` file holds `GITHUB_APP_ID`, `GITHUB_OAUTH_CLIENT_ID`,
+   `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, and
+   `GITHUB_PRIVATE_KEY_PATH` pointing to the PEM file.
+
+   Then in the chart values:
+
+   ```yaml
+   secrets:
+     externalSecret:
+       enabled: true
+       env: preview            # matches the --env you used above
+       storeName: openbao      # ClusterSecretStore name
+       pathPrefix: apps/pawtograder
+   ```
+
+   The chart renders an `ExternalSecret` that ESO reconciles into the
+   `pawtograder-edge-functions` Secret. When `externalSecret.enabled=true`
+   the chart's stub-generation path (for E2E previews) is automatically
+   suppressed so ESO is the unambiguous owner.
+
+2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.). Just
+   make sure the Secret exists in the release namespace with the five keys
+   `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_STRING`, `GITHUB_OAUTH_CLIENT_ID`,
+   `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET` before installing.
+
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }
 { "iss": "supabase", "ref": "pawtograder", "role": "service_role", "iat": <now>, "exp": <far-future> }

@@ -82,6 +82,21 @@ secrets:
     web: pawtograder-web
     edgeFunctions: pawtograder-edge-functions
 
+  # External Secrets Operator (ESO) wiring for pawtograder-edge-functions.
+  # When enabled, the chart renders an ExternalSecret that syncs the
+  # GitHub App credentials from OpenBao at
+  # <pathPrefix>/github-app-<env>. Provision the upstream Bao path with
+  # scripts/setup-openbao-github-app.sh first. The stub-generation path
+  # in secrets-bootstrap-script.yaml suppresses the edge-functions block
+  # when this is enabled so ESO is the unambiguous owner.
+  externalSecret:
+    enabled: false
+    env: ""                       # required when enabled: preview|staging|prod
+    storeName: openbao            # ClusterSecretStore name
+    storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
+    pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/github-app-<env>
+    refreshInterval: 1h
+
   # Inline values used only when create=true.
   values:
     postgres:
