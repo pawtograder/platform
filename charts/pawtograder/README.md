@@ -110,9 +110,11 @@ secret that the edge runtime uses to talk to GitHub. Two ways to provision it:
      --from-file .secrets/github-app-preview.env
    ```
 
-   The `.env` file holds `GITHUB_APP_ID`, `GITHUB_OAUTH_CLIENT_ID`,
-   `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, and
-   `GITHUB_PRIVATE_KEY_PATH` pointing to the PEM file.
+   The `.env` file requires `GITHUB_APP_ID`, `GITHUB_OAUTH_CLIENT_ID`, and
+   `GITHUB_PRIVATE_KEY_PATH` (path to the PEM). `GITHUB_OAUTH_CLIENT_SECRET`
+   and `GITHUB_WEBHOOK_SECRET` are optional and only needed once you wire
+   up the OAuth login flow and webhook verification respectively; the
+   script writes them as empty strings when omitted.
 
    Then in the chart values:
 

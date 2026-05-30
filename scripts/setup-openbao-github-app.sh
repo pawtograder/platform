@@ -18,12 +18,15 @@
 #     --env preview \
 #     --from-file .secrets/github-app.env
 #
-# .env file format (all required):
+# .env file format:
+#   # Required — the edge runtime fails to load without these.
 #   GITHUB_APP_ID=123456
 #   GITHUB_OAUTH_CLIENT_ID=Iv1.abc...
+#   GITHUB_PRIVATE_KEY_PATH=/abs/path/to/private-key.pem
+#   # Optional — only needed if you wire up the OAuth login flow /
+#   # GitHub webhook verification respectively. Defaulted to empty.
 #   GITHUB_OAUTH_CLIENT_SECRET=...
 #   GITHUB_WEBHOOK_SECRET=...
-#   GITHUB_PRIVATE_KEY_PATH=/abs/path/to/private-key.pem
 #
 # Requires: `bao` (or `vault`) CLI on PATH, BAO_ADDR / BAO_TOKEN exported
 # (or the legacy VAULT_* equivalents). `jq` is required for safe PEM
@@ -106,8 +109,8 @@ set -a
 . "$ENV_FILE"
 set +a
 
-required=(GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET \
-          GITHUB_WEBHOOK_SECRET GITHUB_PRIVATE_KEY_PATH)
+required=(GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_PRIVATE_KEY_PATH)
+optional=(GITHUB_OAUTH_CLIENT_SECRET GITHUB_WEBHOOK_SECRET)
 missing=()
 for v in "${required[@]}"; do
   if [[ -z "${!v:-}" ]]; then missing+=("$v"); fi
@@ -116,6 +119,11 @@ if (( ${#missing[@]} )); then
   echo "ERROR: missing required keys in $ENV_FILE: ${missing[*]}" >&2
   exit 2
 fi
+# Default empties so jq always emits the same 5-key shape (the chart's
+# ExternalSecret pulls all 5 properties — a missing one would be a sync
+# error, not a silent skip).
+: "${GITHUB_OAUTH_CLIENT_SECRET:=}"
+: "${GITHUB_WEBHOOK_SECRET:=}"
 
 [[ -r "$GITHUB_PRIVATE_KEY_PATH" ]] || {
   echo "ERROR: cannot read GITHUB_PRIVATE_KEY_PATH=$GITHUB_PRIVATE_KEY_PATH" >&2
@@ -153,8 +161,20 @@ PAYLOAD=$(jq -n \
     "webhook-secret":      $webhook_secret
   }')
 
-echo "Target: ${CLI} kv put -mount=${BAO_MOUNT} ${BAO_PATH}"
-echo "Keys:   app-id private-key oauth-client-id oauth-client-secret webhook-secret"
+supplied_opt=()
+[[ -n "$GITHUB_OAUTH_CLIENT_SECRET" ]] && supplied_opt+=(oauth-client-secret)
+[[ -n "$GITHUB_WEBHOOK_SECRET"      ]] && supplied_opt+=(webhook-secret)
+echo "Target:   ${CLI} kv put -mount=${BAO_MOUNT} ${BAO_PATH}"
+echo "Required: app-id private-key oauth-client-id"
+if (( ${#supplied_opt[@]} )); then
+  echo "Optional: ${supplied_opt[*]} (also supplied)"
+  missing_opt=()
+  [[ -z "$GITHUB_OAUTH_CLIENT_SECRET" ]] && missing_opt+=(oauth-client-secret)
+  [[ -z "$GITHUB_WEBHOOK_SECRET"      ]] && missing_opt+=(webhook-secret)
+  (( ${#missing_opt[@]} )) && echo "Empty:    ${missing_opt[*]} (written as empty string)"
+else
+  echo "Optional: none — oauth-client-secret + webhook-secret written as empty strings"
+fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "(dry-run; not writing)"
