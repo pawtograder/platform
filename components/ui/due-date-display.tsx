@@ -2,7 +2,7 @@
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Tooltip } from "@/components/ui/tooltip";
-import { Flex, Icon, Text } from "@chakra-ui/react";
+import { Flex, Icon, IconButton, Text } from "@chakra-ui/react";
 import type { ComponentProps, ReactNode } from "react";
 import { LuInfo } from "react-icons/lu";
 
@@ -50,14 +50,22 @@ export function DueDateDisplay({
   return (
     <Flex direction="column" gap={0.5} maxWidth="100%" minWidth={0}>
       {suggestedDueDate && (
-        <Tooltip content={SUGGESTED_DUE_DATE_TOOLTIP} showArrow positioning={{ placement: "top" }}>
-          <Flex alignItems="center" gap={1} color="fg.muted" minWidth={0} cursor="help" width="fit-content">
-            <Text fontSize="sm" minWidth={0}>
-              Suggested due: <TimeZoneAwareDate date={suggestedDueDate} format={dateFormat} />
-            </Text>
-            <Icon as={LuInfo} boxSize={3.5} flexShrink={0} aria-label="What is the suggested due date?" />
-          </Flex>
-        </Tooltip>
+        <Flex alignItems="center" gap={1} color="fg.muted" minWidth={0} width="fit-content">
+          <Text fontSize="sm" minWidth={0}>
+            Suggested due: <TimeZoneAwareDate date={suggestedDueDate} format={dateFormat} />
+          </Text>
+          <Tooltip content={SUGGESTED_DUE_DATE_TOOLTIP} showArrow positioning={{ placement: "top" }}>
+            <IconButton
+              aria-label="What is the suggested due date?"
+              variant="ghost"
+              size="2xs"
+              color="fg.muted"
+              flexShrink={0}
+            >
+              <Icon as={LuInfo} boxSize={3.5} />
+            </IconButton>
+          </Tooltip>
+        </Flex>
       )}
       <Flex alignItems="center" gap={1} wrap="wrap" minWidth={0}>
         {showDueLabel && <Text flexShrink={0}>Due: </Text>}
