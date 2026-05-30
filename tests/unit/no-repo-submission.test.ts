@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { createManualSubmission, createNoRepoSubmission } from "../../lib/edgeFunctions";
+import { createManualSubmission, createNoRepoSubmission } from "@/lib/edgeFunctions";
 
 jest.mock("@sentry/nextjs", () => ({
   captureException: jest.fn(),

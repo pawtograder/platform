@@ -1428,7 +1428,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
               </Flex>
             </Dialog.Header>
             <Dialog.Body p={0} pt={3}>
-              {submission.repository_id !== null && submission.repository !== null && (
+              {submission.repository_id !== null && submission.repository !== null ? (
                 <StaffCommitHistory
                   courseId={courseId}
                   assignmentId={submission.assignment_id}
@@ -1438,6 +1438,10 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                   assignmentGroupId={submission.assignment_group_id}
                   currentSubmissionId={submission.id}
                 />
+              ) : (
+                <Text fontSize="sm" color="fg.muted">
+                  No commit history available for upload submissions.
+                </Text>
               )}
             </Dialog.Body>
           </Dialog.Content>
