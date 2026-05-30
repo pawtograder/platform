@@ -150,12 +150,22 @@ test.describe("Create submission", () => {
     await assertStudentPageAccessible(page, "create submission - future deadline files");
   });
   test("If the deadline has passed, the student cannot create a submission", async () => {
-    const submission = insertSubmissionViaAPI({
-      student_profile_id: student!.private_profile_id,
-      assignment_id: assignmentInPast!.id,
-      class_id: course.id
-    });
-    await expect(submission).rejects.toThrow("You cannot submit after the due date");
+    await expect(async () => {
+      const { data, error } = await supabase.rpc("calculate_final_due_date", {
+        assignment_id_param: assignmentInPast!.id,
+        student_profile_id_param: student!.private_profile_id
+      });
+      expect(error).toBeNull();
+      expect(new Date(data as string).getTime()).toBeLessThan(Date.now());
+    }).toPass();
+
+    await expect(
+      insertSubmissionViaAPI({
+        student_profile_id: student!.private_profile_id,
+        assignment_id: assignmentInPast!.id,
+        class_id: course.id
+      })
+    ).rejects.toThrow("You cannot submit after the due date");
   });
   test("If staff manually triggered grading, the deadline is overridden and a submission is created", async () => {
     const sha = "staff-triggered-deadline-override";
