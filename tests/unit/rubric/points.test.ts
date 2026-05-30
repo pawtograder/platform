@@ -65,6 +65,7 @@ function rubric(parts: HydratedRubricPart[]): HydratedRubric {
     review_round: "grading-review",
     created_at: "",
     cap_score_to_assignment_points: false,
+    hide_unless_assigned: false,
     rubric_parts: parts
   };
 }

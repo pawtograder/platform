@@ -1,0 +1,317 @@
+[
+  {
+    "topic": "hello-world",
+    "subject": "Where does System.out.println actually print?",
+    "body": "Beginner question — when I run my Main.java in VS Code I see output in the terminal, but when I push to my handout repo I'm not sure where it shows up. Is it in the autograder logs?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Yes, the autograder captures stdout. After your run finishes, click into the submission and look at the 'Output' tab on each test.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "Took me forever to figure this out too lol, the output tab is hidden behind the chevron on each test row.",
+        "isInstructorReply": false,
+        "anonymous": true
+      }
+    ]
+  },
+  {
+    "topic": "hello-world",
+    "subject": "Compile error: cannot find symbol Println",
+    "body": "I'm getting `cannot find symbol: method Println(String)` even though I copied the code from the slides. Help?",
+    "isQuestion": true,
+    "anonymous": true,
+    "replies": [
+      {
+        "body": "Java is case-sensitive — it's `println` (lowercase p), not `Println`.",
+        "isInstructorReply": false,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "+1 to above. The slides have an autocorrect issue, sorry about that.",
+        "isInstructorReply": true,
+        "anonymous": false
+      }
+    ]
+  },
+  {
+    "topic": "loops-conditionals",
+    "subject": "off-by-one in the FizzBuzz lab",
+    "body": "My FizzBuzz prints 1 through 99 instead of 1 through 100. I have `for (int i = 1; i < 100; i++)`. What am I missing?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "`<` stops one short. Use `<=` if you want to include 100.",
+        "isInstructorReply": false,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "loops-conditionals",
+    "subject": "when to use while vs for",
+    "body": "Is there a rule of thumb for when to reach for `while` instead of `for`? Both seem to do the same thing in the examples we covered.",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Rule of thumb I use: `for` when I know the count up front, `while` when I'm looping until something becomes true (user input, file end, etc.).",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "Also `for` makes the iteration variable scope smaller which is usually nicer.",
+        "isInstructorReply": false,
+        "anonymous": false
+      }
+    ]
+  },
+  {
+    "topic": "arraylist-basics",
+    "subject": "ConcurrentModificationException when removing in a loop",
+    "body": "Trying to remove all the negative numbers from an ArrayList<Integer>:\n\nfor (Integer n : list) {\n    if (n < 0) list.remove(n);\n}\n\nIt throws ConcurrentModificationException after the first removal. Why?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Can't modify a collection while iterating with an enhanced for. Use an Iterator and call `it.remove()`, or use `removeIf(n -> n < 0)`.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "removeIf is so clean, didn't know about it until now thx",
+        "isInstructorReply": false,
+        "anonymous": true
+      }
+    ]
+  },
+  {
+    "topic": "arraylist-basics",
+    "subject": "ArrayList vs LinkedList — does it matter for HW3?",
+    "body": "Does the spec require an ArrayList specifically or could I use a LinkedList? Functionally they seem the same.",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Spec asks for ArrayList. They both implement List but ArrayList is what the test cases instantiate.",
+        "isInstructorReply": false,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "recursion",
+    "subject": "StackOverflowError on the Fibonacci problem",
+    "body": "My recursive fib(40) hangs forever and eventually crashes. Is recursion just slow or am I doing something wrong?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Naive recursive fib is exponential — fib(40) makes about a billion calls. Look up memoization for next week's lecture.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "Also if it's literally hanging and not crashing, double-check your base case isn't off.",
+        "isInstructorReply": false,
+        "anonymous": false
+      }
+    ]
+  },
+  {
+    "topic": "recursion",
+    "subject": "Tracing recursion by hand is hurting my brain",
+    "body": "I get the textbook examples but the moment I try to write my own recursive method I freeze. Any advice on the mental model?",
+    "isQuestion": true,
+    "anonymous": true,
+    "replies": [
+      {
+        "body": "Try the 'leap of faith' approach: assume the recursive call works correctly for smaller inputs, then ask what to do with that result. Don't trace the whole stack in your head.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      {
+        "body": "Visualizer at pythontutor.com supports Java now, helped me a ton.",
+        "isInstructorReply": false,
+        "anonymous": false
+      }
+    ]
+  },
+  {
+    "topic": "oop-shapes",
+    "subject": "Can a class extend two parents?",
+    "body": "I want Square to inherit from both Shape and Drawable. Java won't let me say `extends Shape, Drawable`.",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Java does single inheritance for classes. Make Drawable an interface and `implements Drawable` alongside `extends Shape`.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "oop-shapes",
+    "subject": "@Override is making my code red",
+    "body": "I added @Override to my toString and now IntelliJ is yelling at me. The method works fine without it.",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Check the spelling — usually that means you wrote `toSTring` or similar and aren't actually overriding the superclass method.",
+        "isInstructorReply": false,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Assignments",
+    "subject": "Are partner submissions allowed for HW3?",
+    "body": "The spec for HW3 doesn't say anything about pairs. Can two of us submit together?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "HW3 is individual. Labs are pair-allowed, but homeworks aren't.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Assignments",
+    "subject": "Late tokens — can I get them back?",
+    "body": "I burned a late token because GitHub Actions was down on Sunday night. Any chance of a refund?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Please file an extension request from your submission page and we'll review.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Logistics",
+    "subject": "Office hours moved this week?",
+    "body": "Calendar shows Wed OH cancelled. Is there a make-up session?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Yes — moving to Thursday 4pm in the same room. Updated the course calendar.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Logistics",
+    "subject": "Required textbook?",
+    "body": "Is the Sedgewick book required or just recommended? It's pretty expensive.",
+    "isQuestion": true,
+    "anonymous": true,
+    "replies": [
+      {
+        "body": "Recommended. All required reading is on the course site.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      },
+      { "body": "Library has 3 copies on reserve fwiw.", "isInstructorReply": false, "anonymous": false }
+    ]
+  },
+  {
+    "topic": "Memes",
+    "subject": "me debugging at 3am",
+    "body": "println statements everywhere. so many printlns. why did i choose this major.",
+    "isQuestion": false,
+    "anonymous": true,
+    "replies": [
+      { "body": "wait til you discover the actual debugger lol", "isInstructorReply": false, "anonymous": false },
+      { "body": "println debugging is real debugging, fight me", "isInstructorReply": false, "anonymous": true }
+    ]
+  },
+  {
+    "topic": "Memes",
+    "subject": "When IntelliJ suggests a fix and it actually works",
+    "body": "best feeling. better than coffee. better than weekends.",
+    "isQuestion": false,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Until you accept the fix and 12 new errors appear in other files.",
+        "isInstructorReply": false,
+        "anonymous": false
+      }
+    ]
+  },
+  {
+    "topic": "Office Hours",
+    "subject": "OH queue etiquette — what counts as 'stuck'?",
+    "body": "I've been on the same problem for 2 hours. Should I hop in the queue or keep pushing?",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "2 hours is plenty. Come to OH. We'd rather unstick you in 10 min than have you spin for another 2.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Q&A",
+    "subject": "Will the midterm cover recursion?",
+    "body": "Just want to plan study time appropriately.",
+    "isQuestion": true,
+    "anonymous": false,
+    "replies": [
+      {
+        "body": "Yes — through HW5 material, which includes recursion.",
+        "isInstructorReply": true,
+        "anonymous": false,
+        "isAnswer": true
+      }
+    ]
+  },
+  {
+    "topic": "Announcements",
+    "subject": "Lab Friday is in person this week",
+    "body": "Reminder: Friday's lab will meet in 410W as normal. We'll skip the Zoom hybrid session.",
+    "isQuestion": false,
+    "anonymous": false,
+    "replies": []
+  },
+  {
+    "topic": "Exam Prep",
+    "subject": "Study group for midterm?",
+    "body": "Anyone interested in a study group this Sunday at the library? I'll bring practice problems.",
+    "isQuestion": false,
+    "anonymous": false,
+    "replies": [
+      { "body": "I'm in! Snell 2nd floor?", "isInstructorReply": false, "anonymous": false },
+      { "body": "+1, what time?", "isInstructorReply": false, "anonymous": false }
+    ]
+  }
+]

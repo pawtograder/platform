@@ -939,6 +939,7 @@ export type Database = {
           deadline_offset: number | null;
           enabled: boolean;
           id: number;
+          release_at: string | null;
         };
         Insert: {
           allow_early?: boolean | null;
@@ -946,6 +947,7 @@ export type Database = {
           deadline_offset?: number | null;
           enabled?: boolean;
           id?: number;
+          release_at?: string | null;
         };
         Update: {
           allow_early?: boolean | null;
@@ -953,6 +955,7 @@ export type Database = {
           deadline_offset?: number | null;
           enabled?: boolean;
           id?: number;
+          release_at?: string | null;
         };
         Relationships: [
           {
@@ -6880,6 +6883,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           description: string | null;
+          hide_unless_assigned: boolean;
           id: number;
           is_private: boolean;
           name: string;
@@ -6891,6 +6895,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           description?: string | null;
+          hide_unless_assigned?: boolean;
           id?: number;
           is_private?: boolean;
           name: string;
@@ -6902,6 +6907,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           description?: string | null;
+          hide_unless_assigned?: boolean;
           id?: number;
           is_private?: boolean;
           name?: string;
@@ -10814,6 +10820,10 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
+      auto_assign_self_reviews: {
+        Args: { this_assignment_id: number; this_profile_id: string };
+        Returns: undefined;
+      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;

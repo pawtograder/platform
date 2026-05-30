@@ -506,10 +506,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // the comment stream loads via realtime and races the screenshot, which
     // caused a 64px page-height delta between runs.
     {
+      // These are stabilization waits to ensure the realtime comment stream has
+      // rendered before the screenshot (see note above) — not uniqueness checks.
+      // The just-posted escalation comment briefly renders twice (optimistic insert
+      // + the realtime echo of the same row) before they dedupe, which tripped a
+      // strict-mode "resolved to 2 elements" on getByText. Scope to .first() so the
+      // wait means "at least one copy has rendered", independent of that transient.
       const appealRegion = page.getByLabel("Grading checks on line 4");
-      await expect(appealRegion.getByText(REGRADE_COMMENT)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_RESOLUTION)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_ESCALATION)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_COMMENT).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_RESOLUTION).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_ESCALATION).first()).toBeVisible();
     }
     await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
