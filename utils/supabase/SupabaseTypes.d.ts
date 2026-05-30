@@ -289,6 +289,79 @@ export type Database = {
           }
         ];
       };
+      assignment_grading_automation_state: {
+        Row: {
+          assignment_id: number;
+          auto_assigned_at: string | null;
+          class_id: number;
+          created_at: string;
+          last_reminder_recipient_count: number;
+          last_reminder_sent_at: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          auto_assigned_at?: string | null;
+          class_id: number;
+          created_at?: string;
+          last_reminder_recipient_count?: number;
+          last_reminder_sent_at?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          auto_assigned_at?: string | null;
+          class_id?: number;
+          created_at?: string;
+          last_reminder_recipient_count?: number;
+          last_reminder_sent_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_grading_automation_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_grading_automation_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_grading_automation_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_grading_automation_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_grading_automation_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "assignment_grading_automation_state_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_group_invitations: {
         Row: {
           assignment_group_id: number;
@@ -969,6 +1042,10 @@ export type Database = {
           allow_not_graded_submissions: boolean;
           allow_student_formed_groups: boolean | null;
           archived_at: string | null;
+          auto_assign_assignee_pool: string;
+          auto_assign_at_deadline: boolean;
+          auto_assign_review_due_hours: number;
+          auto_assign_grader_subset_private_profile_ids: Json;
           autograder_points: number | null;
           class_id: number;
           created_at: string;
@@ -977,6 +1054,7 @@ export type Database = {
           enable_repo_analytics: boolean;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
+          grading_default_profile_id: number | null;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
@@ -984,6 +1062,10 @@ export type Database = {
           has_autograder: boolean;
           has_handgrader: boolean;
           id: number;
+          late_grading_cc_emails: Json;
+          late_grading_reminder_interval_hours: number | null;
+          late_grading_reminders_enabled: boolean;
+          late_grading_reply_to: string | null;
           latest_template_sha: string | null;
           max_group_size: number | null;
           max_late_tokens: number;
@@ -1008,6 +1090,10 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          auto_assign_assignee_pool?: string;
+          auto_assign_at_deadline?: boolean;
+          auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           autograder_points?: number | null;
           class_id: number;
           created_at?: string;
@@ -1016,6 +1102,7 @@ export type Database = {
           enable_repo_analytics?: boolean;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
+          grading_default_profile_id?: number | null;
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -1023,6 +1110,10 @@ export type Database = {
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
+          late_grading_cc_emails?: Json;
+          late_grading_reminder_interval_hours?: number | null;
+          late_grading_reminders_enabled?: boolean;
+          late_grading_reply_to?: string | null;
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
@@ -1047,6 +1138,10 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          auto_assign_assignee_pool?: string;
+          auto_assign_at_deadline?: boolean;
+          auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           autograder_points?: number | null;
           class_id?: number;
           created_at?: string;
@@ -1055,6 +1150,7 @@ export type Database = {
           enable_repo_analytics?: boolean;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
+          grading_default_profile_id?: number | null;
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -1062,6 +1158,10 @@ export type Database = {
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
+          late_grading_cc_emails?: Json;
+          late_grading_reminder_interval_hours?: number | null;
+          late_grading_reminders_enabled?: boolean;
+          late_grading_reply_to?: string | null;
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
@@ -1089,6 +1189,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_grading_default_profile_id_fkey";
+            columns: ["grading_default_profile_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "grading_assignment_default_profiles";
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "assignments_meta_grading_rubric_id_fkey";
@@ -3992,6 +4099,65 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      grading_assignment_default_profiles: {
+        Row: {
+          auto_assign_assignee_pool: string;
+          auto_assign_at_deadline: boolean;
+          auto_assign_review_due_hours: number;
+          auto_assign_grader_subset_private_profile_ids: Json;
+          class_id: number;
+          created_at: string;
+          description: string | null;
+          id: number;
+          late_grading_cc_emails: Json;
+          late_grading_reminder_interval_hours: number | null;
+          late_grading_reminders_enabled: boolean;
+          late_grading_reply_to: string | null;
+          name: string;
+          updated_at: string;
+        };
+        Insert: {
+          auto_assign_assignee_pool?: string;
+          auto_assign_at_deadline?: boolean;
+          auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
+          class_id: number;
+          created_at?: string;
+          description?: string | null;
+          id?: number;
+          late_grading_cc_emails?: Json;
+          late_grading_reminder_interval_hours?: number | null;
+          late_grading_reminders_enabled?: boolean;
+          late_grading_reply_to?: string | null;
+          name: string;
+          updated_at?: string;
+        };
+        Update: {
+          auto_assign_assignee_pool?: string;
+          auto_assign_at_deadline?: boolean;
+          auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
+          class_id?: number;
+          created_at?: string;
+          description?: string | null;
+          id?: number;
+          late_grading_cc_emails?: Json;
+          late_grading_reminder_interval_hours?: number | null;
+          late_grading_reminders_enabled?: boolean;
+          late_grading_reply_to?: string | null;
+          name?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "grading_assignment_default_profiles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -10810,6 +10976,10 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
+      auto_assign_grading_reviews_for_assignment: {
+        Args: { p_assignment_id: number };
+        Returns: number;
+      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -12017,6 +12187,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      queue_late_grading_reminders_for_assignment: {
+        Args: { p_assignment_id: number };
+        Returns: number;
+      };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -12079,6 +12253,7 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: undefined;
       };
+      run_assignment_grading_automation: { Args: never; Returns: undefined };
       safe_broadcast: {
         Args: {
           p_channel: string;

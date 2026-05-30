@@ -11,11 +11,11 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
-import AssignmentForm from "../../new/form";
+import AssignmentForm, { AssignmentFormValues, normalizeProfileIdSubset } from "../../new/form";
 
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
-  const form = useForm<Assignment>({
+  const form = useForm<AssignmentFormValues>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
   });
   const { data } = useOne<Assignment>({ resource: "assignments", id: assignment_id as string });
@@ -26,7 +26,21 @@ export default function EditAssignment() {
 
   useEffect(() => {
     if (queryData) {
-      reset(queryData);
+      const values = queryData as AssignmentFormValues;
+      reset({
+        ...values,
+        grading_default_profile_id: values.grading_default_profile_id ?? null,
+        auto_assign_at_deadline: values.auto_assign_at_deadline ?? false,
+        auto_assign_assignee_pool: values.auto_assign_assignee_pool ?? "graders",
+        auto_assign_review_due_hours: values.auto_assign_review_due_hours ?? 72,
+        auto_assign_grader_subset_private_profile_ids: normalizeProfileIdSubset(
+          values.auto_assign_grader_subset_private_profile_ids
+        ),
+        late_grading_reminders_enabled: values.late_grading_reminders_enabled ?? false,
+        late_grading_reminder_interval_hours: values.late_grading_reminder_interval_hours ?? 12,
+        late_grading_reply_to: values.late_grading_reply_to ?? null,
+        late_grading_cc_emails: values.late_grading_cc_emails ?? { emails: [] }
+      });
     }
   }, [queryData, reset]);
 
@@ -88,6 +102,22 @@ export default function EditAssignment() {
         values.eval_config = undefined;
         values.allow_early = undefined;
         values.deadline_offset = undefined;
+        const reminderInterval = values.late_grading_reminder_interval_hours;
+        values.late_grading_reminder_interval_hours = values.late_grading_reminders_enabled
+          ? typeof reminderInterval === "number" && Number.isFinite(reminderInterval)
+            ? reminderInterval
+            : 12
+          : null;
+        const replyTrimmed =
+          typeof values.late_grading_reply_to === "string" ? values.late_grading_reply_to.trim() : "";
+        values.late_grading_reply_to = replyTrimmed.length > 0 ? replyTrimmed : null;
+        values.late_grading_cc_emails = values.late_grading_cc_emails ?? { emails: [] };
+
+        values.auto_assign_grader_subset_private_profile_ids =
+          values.auto_assign_assignee_pool === "graders"
+            ? normalizeProfileIdSubset(values.auto_assign_grader_subset_private_profile_ids)
+            : [];
+
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {
