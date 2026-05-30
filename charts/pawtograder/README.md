@@ -95,47 +95,71 @@ the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
 realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
 in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
-### GitHub App credentials via OpenBao + ESO
+### Edge-function credentials via OpenBao + ESO
 
-`pawtograder-edge-functions` carries the GitHub App private key + OAuth + webhook
-secret that the edge runtime uses to talk to GitHub. Two ways to provision it:
+`pawtograder-edge-functions` carries every external-integration secret the
+edge runtime consumes — GitHub App, AWS Chime, Discord, Canvas, SIS,
+SMTP, MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways
+to provision it:
 
-1. **OpenBao + External Secrets Operator** (recommended for staging/prod). One
-   operator step per environment:
+1. **OpenBao + External Secrets Operator** (recommended for staging/prod).
+   One operator step per integration ("bundle") per environment:
 
    ```sh
-   # Write the App credentials into OpenBao at apps/pawtograder/github-app-<env>
-   scripts/setup-openbao-github-app.sh \
+   # github-app bundle
+   scripts/setup-openbao-edge-functions.sh \
      --env preview \
+     --bundle github-app \
      --from-file .secrets/github-app-preview.env
+
+   # aws-chime bundle (only if you use Chime in this env)
+   scripts/setup-openbao-edge-functions.sh \
+     --env preview \
+     --bundle aws-chime \
+     --from-file .secrets/aws-chime-preview.env
+
+   # list all bundles + their documented keys
+   scripts/setup-openbao-edge-functions.sh --list
    ```
 
-   The `.env` file requires `GITHUB_APP_ID`, `GITHUB_OAUTH_CLIENT_ID`, and
-   `GITHUB_PRIVATE_KEY_PATH` (path to the PEM). `GITHUB_OAUTH_CLIENT_SECRET`
-   and `GITHUB_WEBHOOK_SECRET` are optional and only needed once you wire
-   up the OAuth login flow and webhook verification respectively; the
-   script writes them as empty strings when omitted.
+   `.env` files use the literal env-var names as keys (e.g.
+   `GITHUB_APP_ID=…`, `DISCORD_BOT_TOKEN=…`). All keys are optional; the
+   script warns about missing documented keys and about unknown keys
+   (typically a typo or wrong `--bundle`). Multi-line values like the
+   GitHub App PEM use a `_FILE` suffix:
 
-   Then in the chart values:
+   ```sh
+   GITHUB_APP_ID=123456
+   GITHUB_OAUTH_CLIENT_ID=Iv1.abc
+   GITHUB_PRIVATE_KEY_STRING_FILE=/abs/path/to/private-key.pem
+   ```
+
+   Then enable in chart values, listing only the bundles you've populated:
 
    ```yaml
    secrets:
      externalSecret:
        enabled: true
-       env: preview            # matches the --env you used above
-       storeName: openbao      # ClusterSecretStore name
-       pathPrefix: apps/pawtograder
+       env: preview
+       bundles:
+         - github-app
+         - aws-chime
    ```
 
-   The chart renders an `ExternalSecret` that ESO reconciles into the
-   `pawtograder-edge-functions` Secret. When `externalSecret.enabled=true`
-   the chart's stub-generation path (for E2E previews) is automatically
-   suppressed so ESO is the unambiguous owner.
+   The chart renders one `ExternalSecret` with a `dataFrom: extract`
+   entry per bundle. ESO syncs them all into
+   `pawtograder-edge-functions` with `creationPolicy: Owner`. Adding a
+   new env var to an existing bundle is "edit the script's
+   `BUNDLE_KEYS`, rerun the script" — no chart change.
 
-2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.). Just
-   make sure the Secret exists in the release namespace with the five keys
-   `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_STRING`, `GITHUB_OAUTH_CLIENT_ID`,
-   `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET` before installing.
+   When `externalSecret.enabled=true` the chart's stub-generation path
+   (for E2E previews) is automatically suppressed so ESO is the
+   unambiguous owner.
+
+2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.).
+   Just make sure `pawtograder-edge-functions` exists in the release
+   namespace with whichever env vars your deploy uses; the edge runtime
+   checks every integration before use, so missing keys are tolerated.
 
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }

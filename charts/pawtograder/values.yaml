@@ -83,18 +83,29 @@ secrets:
     edgeFunctions: pawtograder-edge-functions
 
   # External Secrets Operator (ESO) wiring for pawtograder-edge-functions.
-  # When enabled, the chart renders an ExternalSecret that syncs the
-  # GitHub App credentials from OpenBao at
-  # <pathPrefix>/github-app-<env>. Provision the upstream Bao path with
-  # scripts/setup-openbao-github-app.sh first. The stub-generation path
-  # in secrets-bootstrap-script.yaml suppresses the edge-functions block
-  # when this is enabled so ESO is the unambiguous owner.
+  # When enabled, the chart renders an ExternalSecret that pulls one Bao
+  # path per integration "bundle" and dumps each verbatim into the
+  # pawtograder-edge-functions Secret via `dataFrom: extract`. Keys at
+  # each Bao path are stored under their literal env-var names
+  # (GITHUB_APP_ID, DISCORD_BOT_TOKEN, …) so adding a new env var to a
+  # bundle requires no chart change — just rerun the script.
+  #
+  # Provision the upstream Bao paths with
+  #   scripts/setup-openbao-edge-functions.sh --bundle <name> ...
+  # (see `--list` for all known bundles). Then enable only the bundles
+  # you've populated — a missing Bao path is a hard ESO sync error.
+  #
+  # The stub-generation path in secrets-bootstrap-script.yaml is
+  # automatically suppressed when this is enabled so ESO is the
+  # unambiguous owner.
   externalSecret:
     enabled: false
     env: ""                       # required when enabled: preview|staging|prod
+    bundles: []                   # subset of: github-app, aws-chime, discord,
+                                  #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
-    pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/github-app-<env>
+    pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
     refreshInterval: 1h
 
   # Inline values used only when create=true.
