@@ -8,6 +8,9 @@ import { matchesSubmissionFilePath } from "./filePathMatchers.ts";
 import { getAdminClient } from "./supabase.ts";
 import type { Tokenizer } from "./tokenization.ts";
 
+export { buildFileExportRecord } from "./submissionFileExportRecord.ts";
+export type { BuildFileExportRecordInput } from "./submissionFileExportRecord.ts";
+
 const FILE_PAGE_SIZE = 500;
 /** Submission ids per files-section batch (passed from CLI between calls). */
 export const FILES_SUBMISSION_BATCH_SIZE = 200;
@@ -128,47 +131,4 @@ export async function streamSubmissionFiles(
   const nextStart = batchStart + FILES_SUBMISSION_BATCH_SIZE;
   const nextFilesBatchIndex = nextStart < submissionIds.length ? filesBatchIndex + 1 : null;
   return { fileCount: total, nextFilesBatchIndex };
-}
-
-/** Build a file export record without DB access — used in unit tests. */
-export function buildFileExportRecord(input: {
-  submissionId: number;
-  submissionToken?: string;
-  name: string;
-  is_binary: boolean;
-  contents?: string | null;
-  content_base64?: string | null;
-  mime_type?: string | null;
-  file_size?: number | null;
-  withBinary: boolean;
-}): Record<string, unknown> {
-  const submissionRef =
-    input.submissionToken !== undefined ? { token: input.submissionToken } : { id: input.submissionId };
-
-  const record: Record<string, unknown> = {
-    kind: "file",
-    submission: submissionRef,
-    name: input.name,
-    is_binary: input.is_binary,
-    mime_type: input.mime_type ?? null,
-    file_size: input.file_size ?? null
-  };
-
-  if (input.is_binary) {
-    // Treat "" (valid base64 for a zero-byte file) as present, not omitted.
-    if (input.withBinary && input.content_base64 !== undefined && input.content_base64 !== null) {
-      record.content_base64 = input.content_base64;
-      record.binary_omitted = false;
-    } else {
-      record.content_base64 = null;
-      record.binary_omitted = true;
-    }
-    record.contents = null;
-  } else {
-    record.contents = input.contents ?? null;
-    record.content_base64 = null;
-    record.binary_omitted = false;
-  }
-
-  return record;
 }

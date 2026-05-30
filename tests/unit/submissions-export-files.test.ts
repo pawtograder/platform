@@ -3,7 +3,7 @@
  */
 
 import { createTokenizer } from "@/supabase/functions/cli/utils/tokenization";
-import { buildFileExportRecord } from "@/supabase/functions/cli/utils/submissionFilesExportStream";
+import { buildFileExportRecord } from "@/supabase/functions/cli/utils/submissionFileExportRecord";
 
 describe("submissions export file records", () => {
   const SALT = "test-salt-at-least-16-chars-long-aaaa";
