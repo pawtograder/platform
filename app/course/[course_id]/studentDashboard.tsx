@@ -29,6 +29,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { DueDateDisplay } from "@/components/ui/due-date-display";
 import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -117,6 +118,7 @@ export default async function StudentDashboard({
     id: number;
     title: string | null;
     due_date: string | null;
+    suggested_due_date: string | null;
     submissions?: Array<{
       created_at: string;
       ordinal: number | null;
@@ -330,7 +332,11 @@ export default async function StudentDashboard({
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
                         {assignment.due_date ? (
-                          <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                          <DueDateDisplay
+                            suggestedDueDate={assignment.suggested_due_date}
+                            dueDate={assignment.due_date}
+                            dateFormat="Pp"
+                          />
                         ) : (
                           "No due date"
                         )}

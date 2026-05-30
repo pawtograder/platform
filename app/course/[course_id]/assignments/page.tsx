@@ -3,10 +3,12 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
+import { DueDateDisplay } from "@/components/ui/due-date-display";
 import Link from "@/components/ui/link";
 import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignments } from "@/hooks/useCourseController";
 import { useIdentity } from "@/hooks/useIdentities";
 import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
@@ -134,6 +136,14 @@ export default function StudentPage() {
 
   const actions = !githubIdentity ? <LinkAccount /> : <></>;
 
+  // The dashboard RPC doesn't carry the advisory suggested_due_date; pull it from the
+  // course controller (full assignment rows) and look it up by id when rendering.
+  const courseAssignments = useAssignments();
+  const suggestedDueDateById = useMemo(
+    () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
+    [courseAssignments]
+  );
+
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
     assignments?.forEach(async (assignment) => {
@@ -157,7 +167,10 @@ export default function StudentPage() {
         type: "assignment",
         due_date: modifiedDueDate,
         due_date_component: modifiedDueDate ? (
-          <TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />
+          <DueDateDisplay
+            suggestedDueDate={suggestedDueDateById.get(assignment.id)}
+            dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
+          />
         ) : (
           <>-</>
         ),
@@ -207,7 +220,7 @@ export default function StudentPage() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();
