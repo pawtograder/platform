@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -219,11 +220,16 @@ export default function GraderResults() {
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { matches: errorPinMatches } = useErrorPinMatches(Number(submissions_id));
-  const [showHiddenOutput, setShowHiddenOutput] = useState(!isObfuscatedGradesMode);
+  // Default to hidden-output on for staff (the actual instructor identity) and off for
+  // students. In view-as student, isGraderOrInstructor flips to false so the toggle
+  // starts off and the toggle itself is hidden below — preventing the masquerader from
+  // surfacing instructor-only debug output or unreleased test stdout.
+  const [showHiddenOutput, setShowHiddenOutput] = useState(isGraderOrInstructor && !isObfuscatedGradesMode);
   useEffect(() => {
-    setShowHiddenOutput(!isObfuscatedGradesMode);
-  }, [isObfuscatedGradesMode]);
+    setShowHiddenOutput(isGraderOrInstructor && !isObfuscatedGradesMode);
+  }, [isObfuscatedGradesMode, isGraderOrInstructor]);
   if (query.isLoading) {
     return (
       <Box>
@@ -386,6 +392,13 @@ export default function GraderResults() {
   );
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
+  // Outputs the current viewer can see (students don't see instructor-only debug output).
+  // Hoisted so the tab label's `.length === 1` check counts the *visible* tabs, not the
+  // raw list — otherwise a student with one visible + one instructor-only output gets a
+  // single tab mislabeled "Student Visible Output" instead of just "Output".
+  const visibleOutputs = (data.grader_results?.grader_result_output ?? []).filter(
+    (output) => isGraderOrInstructor || output.visibility === "visible"
+  );
   // Get build output for AI analysis
   const buildOutput = data.grader_results?.grader_result_output?.[0]?.output || data.grader_results?.lint_output || "";
   return (
@@ -405,9 +418,9 @@ export default function GraderResults() {
       >
         <Tabs.List>
           {!hasBuildError && <Tabs.Trigger value="tests">Test Results</Tabs.Trigger>}
-          {data.grader_results?.grader_result_output?.map((output) => (
+          {visibleOutputs.map((output) => (
             <Tabs.Trigger key={output.id} value={output.visibility}>
-              {data.grader_results?.grader_result_output.length === 1
+              {visibleOutputs.length === 1
                 ? "Output"
                 : output.visibility === "visible"
                   ? "Student Visible Output"
@@ -415,7 +428,7 @@ export default function GraderResults() {
             </Tabs.Trigger>
           ))}
         </Tabs.List>
-        {data.grader_results?.grader_result_output?.map((output) => (
+        {visibleOutputs.map((output) => (
           <Tabs.Content key={output.id} value={output.visibility}>
             {format_output(output)}
           </Tabs.Content>
@@ -442,7 +455,7 @@ export default function GraderResults() {
             )}
             <Heading size="md">Test Results</Heading>
             <HStack w="100%" justifyContent="flex-end">
-              {hasHiddenOutput && (
+              {hasHiddenOutput && isGraderOrInstructor && (
                 <Switch
                   checked={showHiddenOutput}
                   onChange={() => setShowHiddenOutput(!showHiddenOutput)}

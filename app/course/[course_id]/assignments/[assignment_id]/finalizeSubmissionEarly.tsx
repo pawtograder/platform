@@ -1,6 +1,7 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
@@ -35,6 +36,7 @@ export default function FinalizeSubmissionEarly({
   loading: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
+  const isReadOnly = useIsReadOnly();
   const { reviewAssignments } = useAssignmentController();
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
@@ -128,7 +130,7 @@ export default function FinalizeSubmissionEarly({
       <PopConfirm
         triggerLabel="Finalize Submission Early"
         trigger={
-          <Button variant="solid" colorPalette="green" loading={loading} disabled={!enabled}>
+          <Button variant="solid" colorPalette="green" loading={loading} disabled={!enabled || isReadOnly}>
             Finalize Submission Early
           </Button>
         }

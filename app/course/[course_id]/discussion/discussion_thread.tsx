@@ -6,7 +6,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -36,6 +36,7 @@ export function DiscussionThreadReply({
 }) {
   // const invalidate = useInvalidate();
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const isReadOnly = useIsReadOnly();
 
   // Focus the textarea when the reply becomes visible
   useEffect(() => {
@@ -87,7 +88,7 @@ export function DiscussionThreadReply({
     },
     [tableController, courseController, setVisible, thread]
   );
-  if (!visible) {
+  if (!visible || isReadOnly) {
     return <></>;
   }
   return (
@@ -187,13 +188,18 @@ const DiscussionThreadContent = memo(
 
     const [replyVisible, setReplyVisible] = useState(false);
     const isGraderOrInstructor = useIsGraderOrInstructor();
+    const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
-    const { role, private_profile_id } = useClassProfiles();
+    const { private_profile_id, public_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
+    // canEdit must reflect the current viewer's identity, not the thread's OP. Checking
+    // authorProfile?.id === originalPoster exposed the Edit button to any viewer reading
+    // the OP's reply because that comparison is between the reply's author and the
+    // thread's OP — both populated for every row, regardless of viewer.
     const canEdit = useMemo(() => {
-      return authorProfile?.id === originalPoster || role.role === "instructor" || role.role === "grader";
-    }, [authorProfile, originalPoster, role.role]);
+      return thread.author === private_profile_id || thread.author === public_profile_id || isGraderOrInstructor;
+    }, [thread.author, private_profile_id, public_profile_id, isGraderOrInstructor]);
 
     // Like functionality
     const likeStatus = useDiscussionThreadLikes(thread.id);
@@ -202,6 +208,9 @@ const DiscussionThreadContent = memo(
 
     const toggleLike = useCallback(async () => {
       if (!private_profile_id) return;
+      // View-as student is read-only; the surrounding HStack already hides the heart
+      // button via isReadOnly, but gate the callback too so any future caller is safe.
+      if (isReadOnly) return;
       setLikeLoading(true);
       try {
         if (likeStatus) {
@@ -220,7 +229,7 @@ const DiscussionThreadContent = memo(
       } finally {
         setLikeLoading(false);
       }
-    }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers]);
+    }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers, isReadOnly]);
 
     const outerBorders = useCallback(
       (present: string): JSX.Element => {
@@ -339,10 +348,23 @@ const DiscussionThreadContent = memo(
                     </Text>
                     {authorProfile ? (
                       <HStack gap="1">
-                        <Text textStyle="sm" fontWeight="semibold">
-                          {authorProfile?.name}
-                          {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
-                        </Text>
+                        {isGraderOrInstructor && authorProfile?.private_profile_id ? (
+                          <StudentSummaryTrigger
+                            student_id={authorProfile.private_profile_id}
+                            course_id={Number(course_id)}
+                          >
+                            <Text textStyle="sm" fontWeight="semibold">
+                              {authorProfile?.name}
+                              {authorProfile?.real_name &&
+                                " (" + authorProfile?.real_name + " to self and instructors)"}
+                            </Text>
+                          </StudentSummaryTrigger>
+                        ) : (
+                          <Text textStyle="sm" fontWeight="semibold">
+                            {authorProfile?.name}
+                            {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
+                          </Text>
+                        )}
                         {authorProfile && <KarmaBadge karma={authorProfile.discussion_karma ?? 0} />}
                         {thread.author === originalPoster && (
                           <Badge ml="2" colorPalette="blue">
@@ -357,12 +379,6 @@ const DiscussionThreadContent = memo(
                       </HStack>
                     ) : (
                       <Skeleton width="100px" height="20px" />
-                    )}
-                    {isGraderOrInstructor && authorProfile?.private_profile_id && (
-                      <StudentSummaryTrigger
-                        student_id={authorProfile.private_profile_id}
-                        course_id={Number(course_id)}
-                      />
                     )}
                     {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
                     {/* Ensure root_thread_id is valid before passing */}
@@ -403,26 +419,30 @@ const DiscussionThreadContent = memo(
                   >
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
-                  <Link onClick={showReply} color="fg.muted">
-                    Reply
-                  </Link>
-                  <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
-                    {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
-                  </Button>
-                  {canEdit && (
-                    <Link onClick={() => setIsEditing(true)} color="fg.muted">
-                      Edit
-                    </Link>
-                  )}
-                  {root_thread?.is_question && canEdit && !isAnswered && (
-                    <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
-                      Mark as Answer
-                    </Button>
-                  )}
-                  {canEdit && root_thread?.answer === thread.id && (
-                    <Link onClick={toggleAnswered} color="fg.muted">
-                      Unmark as answer
-                    </Link>
+                  {!isReadOnly && (
+                    <>
+                      <Link onClick={showReply} color="fg.muted">
+                        Reply
+                      </Link>
+                      <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
+                        {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
+                      </Button>
+                      {canEdit && (
+                        <Link onClick={() => setIsEditing(true)} color="fg.muted">
+                          Edit
+                        </Link>
+                      )}
+                      {root_thread?.is_question && canEdit && !isAnswered && (
+                        <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
+                          Mark as Answer
+                        </Button>
+                      )}
+                      {canEdit && root_thread?.answer === thread.id && (
+                        <Link onClick={toggleAnswered} color="fg.muted">
+                          Unmark as answer
+                        </Link>
+                      )}
+                    </>
                   )}
                 </HStack>
                 <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
