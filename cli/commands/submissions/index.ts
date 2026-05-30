@@ -2,6 +2,7 @@
  * Submissions command group
  *
  * Usage:
+ *   pawtograder submissions export -c <class> [-a hw-*] [--include-file 'src/**'] [--exclude-file 'build/**']
  *   pawtograder submissions comments import --file batch-results.json --class <id> --assignment <id> --author-profile-id <uuid>
  *   pawtograder submissions artifacts import --file manifest.json --class <id> --assignment <id> [--overwrite]
  */
@@ -10,6 +11,7 @@ import type { Argv } from "yargs";
 import { logger } from "@/cli/utils/logger";
 import { buildCommentsCommands } from "./comments";
 import { buildArtifactsCommands } from "./artifacts";
+import { exportBuilder, exportHandler } from "./export";
 
 export const command = "submissions <action>";
 export const describe = "Manage submissions";
@@ -46,31 +48,9 @@ export const builder = (yargs: Argv) => {
     )
     .command(
       "export",
-      "Export submissions for an assignment (stub)",
-      (yargs) => {
-        return yargs
-          .option("class", {
-            alias: "c",
-            describe: "Class ID, slug, or name",
-            type: "string",
-            demandOption: true
-          })
-          .option("assignment", {
-            alias: "a",
-            describe: "Assignment ID or slug",
-            type: "string",
-            demandOption: true
-          })
-          .option("format", {
-            describe: "Export format",
-            type: "string",
-            choices: ["csv", "json"],
-            default: "csv"
-          });
-      },
-      () => {
-        logger.warning("submissions export: Not yet implemented");
-      }
+      "Export submission metadata and source files for an assignment",
+      (yargs) => exportBuilder(yargs),
+      exportHandler
     )
     .demandCommand(1, "You must specify an action");
 };
