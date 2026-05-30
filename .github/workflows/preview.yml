@@ -175,27 +175,54 @@ jobs:
           MINIO_SECRET: ${{ secrets.MINIO_PREVIEW_SECRET_KEY }}
         run: |
           set -euo pipefail
-          # All-or-nothing semantics: if every required secret exists we
-          # reuse them; if none exist we generate fresh; partial state is a
-          # hard error (deleting one secret out from under the chart and
-          # auto-filling it would silently change the JWT keys / DB password
-          # for an in-flight preview).
-          required=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3 pawtograder-edge-functions)
+          # Two-tier secret semantics:
+          #   atomic[]    — JWT keys, DB passwords, MinIO creds. Rotating
+          #                 any one mid-flight breaks every running pod, so
+          #                 these are all-or-nothing: partial state is a
+          #                 hard error.
+          #   topup[]     — edge-functions stub. Only the edge runtime reads
+          #                 it, restarting it is cheap, and the chart didn't
+          #                 require it pre-helm — so it's safe to back-fill
+          #                 against a pre-existing atomic set.
+          atomic=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3)
+          topup=(pawtograder-edge-functions)
           present=()
           missing=()
-          for s in "${required[@]}"; do
+          for s in "${atomic[@]}"; do
             if kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
               present+=("$s")
             else
               missing+=("$s")
             fi
           done
+          # Top-up: ensure each topup[] secret exists, generating just the
+          # missing ones. Idempotent — if it's already there, we leave it
+          # alone.
+          for s in "${topup[@]}"; do
+            if kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              echo "topup: $s exists, skipping"
+              continue
+            fi
+            case "$s" in
+              pawtograder-edge-functions)
+                echo "topup: creating $s with stub GitHub credentials"
+                stub_pem=$(openssl genrsa 2048 2>/dev/null)
+                kubectl -n "$NS" create secret generic pawtograder-edge-functions \
+                  --from-literal=GITHUB_PRIVATE_KEY_STRING="$stub_pem" \
+                  --from-literal=GITHUB_APP_ID="1" \
+                  --from-literal=GITHUB_OAUTH_CLIENT_ID="stub" \
+                  --from-literal=GITHUB_OAUTH_CLIENT_SECRET="stub" \
+                  --from-literal=GITHUB_WEBHOOK_SECRET="stub-webhook-secret"
+                ;;
+              *) echo "::error::no top-up generator for $s"; exit 1 ;;
+            esac
+          done
           if [ "${#missing[@]}" -eq 0 ]; then
-            echo "All required secrets present in $NS — reusing"
+            echo "All atomic secrets present in $NS — reusing"
             exit 0
           fi
           if [ "${#present[@]}" -ne 0 ]; then
-            echo "::error::Namespace $NS has a partial secret set. Present: ${present[*]}. Missing: ${missing[*]}. Refusing to auto-fill — delete the remaining secrets (or the whole namespace) and re-run to regenerate."
+            echo "::error::Namespace $NS has a partial atomic secret set. Present: ${present[*]}. Missing: ${missing[*]}. Refusing to auto-fill — delete the remaining atomic secrets (or the whole namespace) and re-run to regenerate."
             exit 1
           fi
           if [ -z "${MINIO_ACCESS:-}" ] || [ -z "${MINIO_SECRET:-}" ]; then
@@ -226,20 +253,8 @@ jobs:
           kubectl -n "$NS" create secret generic pawtograder-s3 \
             --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
             --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
-          # Stub edge-functions secret for E2E mocked-GitHub mode.
-          # _shared/GitHubWrapper.ts constructs an Octokit App at module
-          # top-level on every cold start; with GITHUB_PRIVATE_KEY_STRING
-          # unset that throws synchronously and bombs every function in
-          # the runtime, including the E2E bypass paths the test suite
-          # uses. A throwaway PEM is enough — actual GitHub calls are
-          # mocked downstream when E2E_MOCK_GITHUB=true.
-          stub_pem=$(openssl genrsa 2048 2>/dev/null)
-          kubectl -n "$NS" create secret generic pawtograder-edge-functions \
-            --from-literal=GITHUB_PRIVATE_KEY_STRING="$stub_pem" \
-            --from-literal=GITHUB_APP_ID="1" \
-            --from-literal=GITHUB_OAUTH_CLIENT_ID="stub" \
-            --from-literal=GITHUB_OAUTH_CLIENT_SECRET="stub" \
-            --from-literal=GITHUB_WEBHOOK_SECRET="stub-webhook-secret"
+          # pawtograder-edge-functions is created by the top-up loop above
+          # (whether or not we hit this first-install path).
 
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
