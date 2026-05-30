@@ -116,7 +116,9 @@ export default async function globalSetup() {
     if (firstSuccessAt === undefined) {
       firstSuccessAt = Date.now();
       // eslint-disable-next-line no-console
-      console.log(`[wait-for-schema-cache] first success after ${attempts} attempt(s); now requiring ${STEADY_STATE_MS}ms of quiet`);
+      console.log(
+        `[wait-for-schema-cache] first success after ${attempts} attempt(s); now requiring ${STEADY_STATE_MS}ms of quiet`
+      );
     }
     if (Date.now() - firstSuccessAt >= STEADY_STATE_MS) {
       // eslint-disable-next-line no-console
