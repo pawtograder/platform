@@ -54,10 +54,12 @@ function toDateTimeLocal(date: Date): string {
 // Slug must be unique per test (E2E parallel) so we accept one. Title is filled by caller.
 async function fillBaselineAssignmentFields(page: Page, slug: string) {
   await page.getByLabel("Slug", { exact: false }).fill(slug);
-  // Release date input (datetime-local) — labelled "Release Date (America/New_York)"
-  await page.locator('input[type="datetime-local"]').first().fill(toDateTimeLocal(futureRelease));
-  // Due Date input is the second datetime-local
-  await page.locator('input[type="datetime-local"]').nth(1).fill(toDateTimeLocal(futureDue));
+  // Select date inputs by label rather than positionally: the form has three
+  // datetime-local inputs (Release, the optional Suggested Due Date from #791,
+  // then Due) so positional .first()/.nth() are order-fragile. Anchor the
+  // regex so "Due Date" does not also match "Suggested Due Date".
+  await page.getByLabel(/^Release Date \(/).fill(toDateTimeLocal(futureRelease));
+  await page.getByLabel(/^Due Date \(/).fill(toDateTimeLocal(futureDue));
   await page.getByLabel("Points Possible", { exact: false }).fill("100");
 }
 
