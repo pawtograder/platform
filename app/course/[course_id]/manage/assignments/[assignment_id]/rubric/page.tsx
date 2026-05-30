@@ -1224,6 +1224,7 @@ function InnerRubricPage() {
         description: parsedRubricFromEditor.description,
         is_private: parsedRubricFromEditor.is_private ?? false,
         cap_score_to_assignment_points: parsedRubricFromEditor.cap_score_to_assignment_points ?? false,
+        hide_unless_assigned: parsedRubricFromEditor.hide_unless_assigned ?? false,
         parts: parsedRubricFromEditor.rubric_parts.map((part, partIdx) => ({
           id: part.id,
           name: part.name,

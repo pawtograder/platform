@@ -23,6 +23,7 @@ import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -551,7 +552,9 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                       raw.length >= 6 &&
                       (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
                     const localValue =
-                      raw && hasATimezoneOffset ? new TZDate(raw, timezone).toISOString().slice(0, -13) : (raw ?? "");
+                      raw && hasATimezoneOffset
+                        ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm")
+                        : (raw ?? "");
                     return (
                       <Input
                         type="datetime-local"

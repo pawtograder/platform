@@ -252,7 +252,7 @@ BEGIN
         WHERE a.archived_at IS NULL
           AND (
             -- Explicit release_at, when set, gates eligibility.
-            (s.release_at IS NOT NULL AND s.release_at <= NOW() AT TIME ZONE 'UTC')
+            (s.release_at IS NOT NULL AND s.release_at <= NOW())
             -- Otherwise fall back to the original assignment due_date.
             OR (s.release_at IS NULL AND a.due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC')
           )
@@ -497,9 +497,15 @@ BEGIN
   v_review_round := (p_rubric->>'review_round')::review_round;
   v_new_name := p_rubric->>'name';
   v_new_description := p_rubric->>'description';
-  v_new_is_private := COALESCE((p_rubric->>'is_private')::boolean, false);
-  v_new_cap := COALESCE((p_rubric->>'cap_score_to_assignment_points')::boolean, false);
-  v_new_hide_unless_assigned := COALESCE((p_rubric->>'hide_unless_assigned')::boolean, false);
+  v_new_is_private := CASE WHEN p_rubric ? 'is_private' THEN (p_rubric->>'is_private')::boolean END;
+  v_new_cap := CASE
+    WHEN p_rubric ? 'cap_score_to_assignment_points'
+    THEN (p_rubric->>'cap_score_to_assignment_points')::boolean
+  END;
+  v_new_hide_unless_assigned := CASE
+    WHEN p_rubric ? 'hide_unless_assigned'
+    THEN (p_rubric->>'hide_unless_assigned')::boolean
+  END;
 
   IF v_class_id IS NULL THEN
     RAISE EXCEPTION 'class_id is required';
@@ -517,8 +523,8 @@ BEGIN
       cap_score_to_assignment_points, hide_unless_assigned
     )
     VALUES (
-      v_new_name, v_new_description, v_assignment_id, v_class_id, v_new_is_private,
-      v_review_round, v_new_cap, v_new_hide_unless_assigned
+      v_new_name, v_new_description, v_assignment_id, v_class_id, COALESCE(v_new_is_private, false),
+      v_review_round, COALESCE(v_new_cap, false), COALESCE(v_new_hide_unless_assigned, false)
     )
     RETURNING id INTO v_rubric_id;
     v_is_new_rubric := true;
@@ -536,19 +542,19 @@ BEGIN
 
     IF v_old_name IS DISTINCT FROM v_new_name
        OR v_old_description IS DISTINCT FROM v_new_description
-       OR v_old_is_private IS DISTINCT FROM v_new_is_private
-       OR v_old_cap IS DISTINCT FROM v_new_cap
-       OR v_old_hide_unless_assigned IS DISTINCT FROM v_new_hide_unless_assigned THEN
+       OR (v_new_is_private IS NOT NULL AND v_old_is_private IS DISTINCT FROM v_new_is_private)
+       OR (v_new_cap IS NOT NULL AND v_old_cap IS DISTINCT FROM v_new_cap)
+       OR (v_new_hide_unless_assigned IS NOT NULL AND v_old_hide_unless_assigned IS DISTINCT FROM v_new_hide_unless_assigned) THEN
       UPDATE public.rubrics
       SET name = v_new_name,
           description = v_new_description,
-          is_private = v_new_is_private,
-          cap_score_to_assignment_points = v_new_cap,
-          hide_unless_assigned = v_new_hide_unless_assigned
+          is_private = COALESCE(v_new_is_private, is_private),
+          cap_score_to_assignment_points = COALESCE(v_new_cap, cap_score_to_assignment_points),
+          hide_unless_assigned = COALESCE(v_new_hide_unless_assigned, hide_unless_assigned)
       WHERE id = v_rubric_id;
     END IF;
 
-    IF v_old_cap IS DISTINCT FROM v_new_cap THEN
+    IF v_new_cap IS NOT NULL AND v_old_cap IS DISTINCT FROM v_new_cap THEN
       v_broad_change := true;
     END IF;
   END IF;
