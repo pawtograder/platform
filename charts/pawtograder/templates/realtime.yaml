@@ -168,6 +168,19 @@ spec:
               value: {{ .Values.realtime.maxHeaderLength | quote }}
             - name: SEED_SELF_HOST
               value: "true"
+            # Pre-create realtime.messages partitions in a batch at
+            # startup instead of lazily during message handling. Without
+            # this, every late-arriving message for a new UTC day fires a
+            # `CREATE TABLE IF NOT EXISTS realtime.messages_YYYY_MM_DD`
+            # in the middle of normal traffic, which trips
+            # extensions.pgrst_ddl_watch and invalidates PostgREST's
+            # in-memory schema cache. Concurrent REST writes during the
+            # rebuild window come back with "Could not query the database
+            # for the schema cache. Retrying." — which bombed ~15 tests
+            # per E2E run until we matched stock supabase docker-compose
+            # and turned the janitor on.
+            - name: RUN_JANITOR
+              value: "true"
             # Realtime parses the Host header to find the tenant by
             # external_id. Kong forwards with Host = the upstream service
             # name (no dots → realtime treats the whole string as the
