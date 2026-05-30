@@ -386,6 +386,11 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
       m={embedded ? 0 : 2}
       w="100%"
       css={containerCss}
+      // Syntax highlighting (@wooorm/starry-night) loads asynchronously; until it
+      // resolves the code renders as plain text and then re-renders tokenized. This
+      // flag flips to "true" only once the highlighted tree is rendered, giving visual
+      // tests a deterministic signal to wait on so screenshots don't race the re-render.
+      data-syntax-highlighted={starryNight ? "true" : "false"}
     >
       {content}
     </Box>

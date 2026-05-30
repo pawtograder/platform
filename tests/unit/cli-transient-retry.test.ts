@@ -32,6 +32,15 @@ describe("isTransientStreamError", () => {
     expect(isTransientStreamError(new Error("HTTP 503: Service Unavailable"))).toBe(true);
   });
 
+  it("matches truncated NDJSON streams (edge isolate killed before {end})", () => {
+    expect(isTransientStreamError(new Error("assignment cyb1: stream ended without {end}"))).toBe(true);
+  });
+
+  it("matches edge CPU / worker limit errors", () => {
+    expect(isTransientStreamError(new Error("CPU time exceeded"))).toBe(true);
+    expect(isTransientStreamError(new Error("WORKER_LIMIT"))).toBe(true);
+  });
+
   it("walks the error chain via .cause", () => {
     // undici wraps the underlying socket reset as `cause`; the visible
     // top-level message is generic, but the cause is what tells us the
