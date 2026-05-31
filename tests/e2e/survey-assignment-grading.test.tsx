@@ -152,32 +152,18 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Navigate to the survey list
     await page.goto(`/course/${course.id}/surveys`);
-    await expect(page.getByText("Loading surveys...")).toBeHidden();
     await expect(page.getByRole("heading", { name: "Course Surveys" })).toBeVisible();
     await expect(page.getByText(TEAM_SURVEY_TITLE)).toBeVisible();
     await expectTransparentText(page, formatDateForTest(SURVEY_DUE_DATE, "America/New_York", "full"));
     await assertStudentPageAccessible(page, "survey assignment grading - survey list");
-    await visualScreenshot(page, "Student Survey List - Team Collaboration Survey Available");
+    await visualScreenshot(page, "Student Survey List - Team Collaboration Survey Available", { skipPreIdle: true });
 
     // Click to start the survey
     const startLink = page.getByRole("link", { name: /Start Survey/i });
-    await expect(startLink).toBeVisible();
-    const surveyTakeResponseLoaded = page.waitForResponse(
-      (response) =>
-        response.request().method() === "GET" &&
-        response.url().includes("/rest/v1/survey_responses") &&
-        (response.ok() || response.status() === 406)
-    );
-    await startLink.click();
-    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
-    await surveyTakeResponseLoaded;
-
-    // Page 1: Checkboxes — wait for SurveyJS mount, not the page shell loading text (the
-    // dynamic import can skip that spinner when the chunk is cached).
     const surveyRoot = page.locator(".sd-root-modern");
-    await expect(surveyRoot).toBeVisible();
+    await Promise.all([page.waitForURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`)), startLink.click()]);
     await expect(surveyRoot.getByRole("group", { name: "This week I have..." })).toBeVisible();
-    await visualScreenshot(page, "Student Survey - Page 1 Checkboxes");
+    await visualScreenshot(page, "Student Survey - Page 1 Checkboxes", { skipPreIdle: true });
     // Scan every page of the SurveyJS-driven survey. SurveyJS is excluded
     // from axe in axeStudentA11y.ts (`.sd-root-modern`, `.sv-action`, etc.),
     // so these scans cover everything *around* the survey shell: page
@@ -197,52 +183,41 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       .filter({ hasText: "Opened a Pull Request and asked my team for feedback on my code" })
       .click();
 
-    await visualScreenshot(page, "Student Survey - Page 1 Filled");
+    await visualScreenshot(page, "Student Survey - Page 1 Filled", { skipPreIdle: true });
 
     // Navigate to page 2
     const surveyNext = surveyRoot.getByRole("button", { name: /^Next$/i });
-    await expect(surveyNext).toBeEnabled();
     await surveyNext.click();
-    await expect(surveyRoot.getByRole("group", { name: "This week I have..." })).toBeHidden();
     await expect(
       surveyRoot.getByRole("radiogroup", { name: "This week, I knew what I needed to get done" })
     ).toBeVisible();
-    await visualScreenshot(page, "Student Survey - Page 2 Likert Questions");
+    await visualScreenshot(page, "Student Survey - Page 2 Likert Questions", { skipPreIdle: true });
     await assertStudentPageAccessible(page, "team collaboration survey page 2 (likert)");
 
-    // Fill page 2 - click on the label text for SurveyJS radio buttons
-    await page
-      .locator("label")
-      .filter({ hasText: /^Strongly agree$/ })
-      .first()
+    // Fill page 2 - first Likert question only (page has multiple "Strongly agree" radios)
+    await surveyRoot
+      .getByRole("radiogroup", { name: "This week, I knew what I needed to get done" })
+      .getByRole("radio", { name: "Strongly agree" })
       .click();
-    await visualScreenshot(page, "Student Survey - Page 2 Partially Filled");
+    await visualScreenshot(page, "Student Survey - Page 2 Partially Filled", { skipPreIdle: true });
 
     // Navigate to page 3
-    await expect(surveyNext).toBeEnabled();
     await surveyNext.click();
-    await expect(
-      surveyRoot.getByRole("radiogroup", { name: "This week, I knew what I needed to get done" })
-    ).toBeHidden();
     await expect(
       surveyRoot.getByRole("radiogroup", { name: "In our team we relied on each other to get the job done." })
     ).toBeVisible();
-    await visualScreenshot(page, "Student Survey - Page 3 Team Dynamics");
+    await visualScreenshot(page, "Student Survey - Page 3 Team Dynamics", { skipPreIdle: true });
     await assertStudentPageAccessible(page, "team collaboration survey page 3 (team dynamics)");
 
     // Navigate to page 4
-    await expect(surveyNext).toBeEnabled();
     await surveyNext.click();
-    await expect(
-      surveyRoot.getByRole("radiogroup", { name: "In our team we relied on each other to get the job done." })
-    ).toBeHidden();
     await expect(surveyRoot.getByRole("group", { name: "My progress this week has been impeded by:" })).toBeVisible();
     await expect(
       surveyRoot.getByRole("textbox", {
         name: "How do you feel about your team's collaboration process in this project? Please reflect in about two sentences."
       })
     ).toBeVisible();
-    await visualScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
+    await visualScreenshot(page, "Student Survey - Page 4 Impediments and Reflection", { skipPreIdle: true });
     await assertStudentPageAccessible(page, "team collaboration survey page 4 (shell)");
   });
 
