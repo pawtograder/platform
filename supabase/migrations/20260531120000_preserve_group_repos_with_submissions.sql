@@ -396,3 +396,10 @@ members, dissolves empty groups, enqueues repo creation and ONE permission sync
 per affected repo.  Replaces N sequential edge-function round-trips.  Empty groups
 whose repositories still have submissions are preserved (repo + check runs +
 submissions kept intact) rather than deleted, to avoid FK violations and history loss.';
+
+-- Make "prohibit submissions that match the handout" the default for new
+-- assignments. Empty (handout-matching) submissions create throwaway individual
+-- submissions/repos that later complicate group formation (see above), so default
+-- to rejecting them. Existing assignments keep their current setting.
+ALTER TABLE public.assignments
+  ALTER COLUMN permit_empty_submissions SET DEFAULT false;
