@@ -90,6 +90,15 @@ export function RubricQuickApplyPalette({
         onPick(selected.action);
         onClose();
       }
+    } else if (/^[1-9]$/.test(e.key)) {
+      // Number keys 1-9 directly apply the Nth visible check (the digit is consumed, not typed into
+      // the filter — rubric checks are picked by name, not by number).
+      const idx = Number(e.key) - 1;
+      if (idx < filtered.length) {
+        e.preventDefault();
+        onPick(filtered[idx].action);
+        onClose();
+      }
     }
   };
 
@@ -164,6 +173,25 @@ export function RubricQuickApplyPalette({
                     data-selected={isSelected ? "true" : undefined}
                   >
                     <Icon as={FaBolt} color={isSelected ? "fg.info" : "fg.muted"} flexShrink={0} />
+                    {index < 9 && (
+                      <Box
+                        as="kbd"
+                        flexShrink={0}
+                        minW="5"
+                        textAlign="center"
+                        px="1"
+                        borderWidth="1px"
+                        borderColor="border.emphasized"
+                        borderBottomWidth="2px"
+                        borderRadius="sm"
+                        bg="bg.muted"
+                        fontSize="xs"
+                        fontFamily="mono"
+                        color="fg.muted"
+                      >
+                        {index + 1}
+                      </Box>
+                    )}
                     <VStack align="stretch" gap={0} flex={1} minW={0}>
                       <Text fontSize="sm" fontWeight={isSelected ? "semibold" : "normal"} lineClamp={1}>
                         {action.label}

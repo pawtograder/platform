@@ -638,6 +638,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               domNode.id = `comment-zone-${fileId}-${lineNumber}`;
               domNode.style.width = "100%";
               domNode.style.minHeight = "100px"; // Initial minimum height
+              // Monaco view zones are transparent by default, so the editor's code lines bleed
+              // through the rubric annotation. Paint a solid theme-aware background (and a top border
+              // to separate it from the code above) so applied checks render on an opaque surface.
+              domNode.style.background = "var(--chakra-colors-bg)";
+              domNode.style.borderTop = "1px solid var(--chakra-colors-border-emphasized)";
               newViewZoneNodes.set(lineNumber, domNode);
 
               // Start with a reasonable initial height, will be updated after content renders
@@ -959,8 +964,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           id: "rubric-quick-apply",
           label: "Apply rubric check…",
           keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
-          contextMenuGroupId: "rubric",
-          contextMenuOrder: 0.4,
+          // "navigation" is Monaco's first context-menu group, and a negative order pins this to the
+          // very top of the right-click menu (above "Add Comment…" and the per-criteria submenus).
+          contextMenuGroupId: "navigation",
+          contextMenuOrder: -100,
           run: (ed) => {
             const line = ed.getPosition()?.lineNumber ?? 1;
             setQuickApply({ isOpen: true, line });
@@ -1055,8 +1062,12 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         border="1px solid"
         borderColor="border.emphasized"
         p={0}
-        m={2}
+        m={0}
         w="100%"
+        h="100%"
+        minH={0}
+        display="flex"
+        flexDirection="column"
         css={{
           "& .monaco-line-highlight": {
             backgroundColor: "rgba(255, 235, 59, 0.3)",
@@ -1075,6 +1086,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         {openFiles.length > 1 && (
           <Flex
             w="100%"
+            flexShrink={0}
             bg="bg.subtle"
             borderBottom="1px solid"
             borderColor="border.emphasized"
@@ -1148,6 +1160,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         {/* File header */}
         <Flex
           w="100%"
+          flexShrink={0}
           bg="bg.subtle"
           p={2}
           borderBottom="1px solid"
@@ -1191,10 +1204,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           </HStack>
         </Flex>
 
-        {/* Monaco Editor */}
-        <Box height="600px" width="100%">
+        {/* Monaco Editor — fills the remaining height of its container */}
+        <Box flex="1" minH={0} width="100%">
           <Editor
-            height="600px"
+            height="100%"
             width="100%"
             theme={colorMode === "dark" ? "vs-dark" : "vs"}
             beforeMount={handleEditorWillMount}

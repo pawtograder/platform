@@ -58,6 +58,7 @@ import {
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useFindTableControllerValue } from "@/lib/TableController";
@@ -93,8 +94,9 @@ import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { FaCheckCircle, FaColumns, FaDownload, FaEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
 
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
@@ -1182,7 +1184,18 @@ export default function FilesView() {
       ? selectedArtifactId
       : null;
 
-  const defaultFileId = submissionFiles[0]?.id ?? null;
+  // Default to a source-code file rather than whatever happens to be first: the embedded
+  // submission_files arrive in an unspecified order, and opening a markdown file shows its rendered
+  // *preview* (no code lines) — graders want to land on code. Pick deterministically by name so the
+  // default is stable across loads, preferring code over markdown/binary, falling back to the
+  // name-first file when there is no code file.
+  const filesByName = useMemo(
+    () => [...submissionFiles].sort((a: SubmissionFile, b: SubmissionFile) => a.name.localeCompare(b.name)),
+    [submissionFiles]
+  );
+  const defaultFileId =
+    (filesByName.find((file: SubmissionFile) => !file.is_binary && !isMarkdownFile(file.name)) ?? filesByName[0])?.id ??
+    null;
   const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
   // Prefer file when both file_id and artifact_id are valid in the URL — checking
   // artifact first would null out the file and then artifact suppression would null both.
@@ -1290,6 +1303,55 @@ export default function FilesView() {
     },
     [commentLines]
   );
+
+  // ───────────────────────── Multi-file tabs + split view ─────────────────────────
+  // `openFileIds` is the ordered set of files shown as tabs; the active tab is the URL-driven
+  // effectiveFileId. `splitFileId` (when set) shows a second editor pane side-by-side.
+  const [openFileIds, setOpenFileIds] = useState<number[]>([]);
+  const [splitFileId, setSplitFileId] = useState<number | null>(null);
+  // Resizable panels are a desktop affordance; on small screens we stack the columns instead.
+  // `useStableDesktop` (not raw `useBreakpointValue`) so a full-page screenshot's transient 1px
+  // viewport can't flip the layout and remount the editor (which would drop an open annotation popup).
+  const isDesktop = useStableDesktop();
+
+  // Opening / activating a file makes it a tab.
+  useEffect(() => {
+    if (effectiveFileId == null) return;
+    setOpenFileIds((prev) => (prev.includes(effectiveFileId) ? prev : [...prev, effectiveFileId]));
+  }, [effectiveFileId]);
+
+  const openFiles = useMemo(
+    () =>
+      openFileIds
+        .map((id) => submissionFiles.find((f: SubmissionFile) => f.id === id))
+        .filter((f): f is SubmissionFile => !!f),
+    [openFileIds, submissionFiles]
+  );
+
+  const closeTab = useCallback(
+    (id: number) => {
+      setOpenFileIds((prev) => {
+        const idx = prev.indexOf(id);
+        const next = prev.filter((f) => f !== id);
+        // If the active tab was closed, activate a neighbouring tab.
+        if (id === effectiveFileId && next.length > 0) {
+          handleSelectFile(next[Math.min(idx, next.length - 1)]);
+        }
+        return next;
+      });
+      setSplitFileId((s) => (s === id ? null : s));
+    },
+    [effectiveFileId, handleSelectFile]
+  );
+
+  const splitFile = useMemo(
+    () => (splitFileId != null ? (submissionFiles.find((f: SubmissionFile) => f.id === splitFileId) ?? null) : null),
+    [splitFileId, submissionFiles]
+  );
+  const toggleSplit = useCallback(() => {
+    setSplitFileId((s) => (s != null ? null : (effectiveFileId ?? null)));
+  }, [effectiveFileId]);
+  // ──────────────────────────────────────────────────────────────────────────────
 
   // Global keyboard navigation for grading. Integrates with the app-wide keyboard infra
   // (hooks/useKeyboardShortcuts): we bail when that handler already acted (`defaultPrevented`, e.g. a
@@ -1475,76 +1537,204 @@ export default function FilesView() {
     return <NotFound />;
   }
 
-  return (
-    <>
-      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "4" }} direction={{ base: "column", md: "row" }}>
-        <Box
-          aria-label="File navigator"
-          tabIndex={0}
-          w={{ base: "100%", md: "320px" }}
-          flexShrink={0}
-          position={{ base: "static", md: "sticky" }}
-          top={{ md: "80px" }}
-          alignSelf="flex-start"
-          maxH={{ base: "40vh", md: "calc(100vh - 100px)" }}
-          display="flex"
-          flexDirection="column"
-          minH={0}
-          outline="none"
-          data-file-navigator=""
-        >
-          <Box flex="1" minH={0} display="flex">
-            {submissionFiles.length > 0 && (
-              <FileTreeSidebar
-                files={submissionFiles}
-                activeFileId={effectiveFileId}
-                onFileSelect={handleSelectFile}
-                collapsed={collapsed}
-                onCollapseChange={onCollapseChange}
-              />
-            )}
+  // Renders the content for a single file (code / markdown / binary). `primary` wires the imperative
+  // ref used by next/prev-comment navigation to the main editor pane only.
+  const renderFileContent = (file: SubmissionFile, primary: boolean): ReactNode => {
+    if (isMarkdownFile(file.name) && !file.is_binary) {
+      return (
+        <MarkdownFilePreview
+          key={file.id}
+          file={file}
+          allFiles={submission.submission_files}
+          onNavigateToFile={handleSelectFile}
+        />
+      );
+    }
+    if (file.is_binary) {
+      return <BinaryFilePreview key={file.id} file={file} />;
+    }
+    return <CodeFile key={file.id} ref={primary ? codeFileRef : undefined} file={file} />;
+  };
+
+  // A VS Code-style tab strip over the open files. `extra` renders trailing controls (e.g. close-split).
+  const FileTabBar = ({
+    activeId,
+    onSelect,
+    extra
+  }: {
+    activeId: number | null;
+    onSelect: (id: number) => void;
+    extra?: ReactNode;
+  }) => (
+    <Flex
+      bg="bg.subtle"
+      borderBottom="1px solid"
+      borderColor="border.emphasized"
+      alignItems="stretch"
+      overflowX="auto"
+      flexShrink={0}
+      aria-label="Open files"
+    >
+      {openFiles.map((f) => {
+        const isActive = f.id === activeId;
+        const name = f.name.split("/").pop() || f.name;
+        return (
+          <Flex
+            key={f.id}
+            data-tab-file-id={f.id}
+            data-active={isActive ? "true" : undefined}
+            alignItems="center"
+            gap={1}
+            px={3}
+            py={1.5}
+            cursor="pointer"
+            minW="fit-content"
+            bg={isActive ? "bg.default" : "transparent"}
+            borderRight="1px solid"
+            borderColor="border.emphasized"
+            borderBottom={isActive ? "2px solid" : "2px solid transparent"}
+            borderBottomColor={isActive ? "fg.info" : "transparent"}
+            onClick={() => onSelect(f.id)}
+          >
+            <Text fontSize="sm" fontWeight={isActive ? "semibold" : "normal"} lineClamp={1} maxW="180px">
+              {name}
+            </Text>
+            <Icon
+              as={FaTimes}
+              boxSize={2.5}
+              color="fg.muted"
+              _hover={{ color: "fg.default" }}
+              aria-label={`Close ${name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                closeTab(f.id);
+              }}
+            />
+          </Flex>
+        );
+      })}
+      <Box flex="1" />
+      {extra}
+    </Flex>
+  );
+
+  const fileNavigator = (
+    <Box
+      aria-label="File navigator"
+      tabIndex={0}
+      h="100%"
+      display="flex"
+      flexDirection="column"
+      minH={0}
+      outline="none"
+      data-file-navigator=""
+    >
+      <Box flex="1" minH={0} display="flex">
+        {submissionFiles.length > 0 && (
+          <FileTreeSidebar
+            files={submissionFiles}
+            activeFileId={effectiveFileId}
+            onFileSelect={handleSelectFile}
+            collapsed={collapsed}
+            onCollapseChange={onCollapseChange}
+          />
+        )}
+      </Box>
+      {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
+        <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
+      )}
+    </Box>
+  );
+
+  const editorArea = isSwitching ? (
+    <Skeleton height="100%" width="100%" />
+  ) : selectedArtifact ? (
+    <Box data-artifact-id={selectedArtifact.id} h="100%" overflow="auto" scrollMarginTop="80px">
+      {selectedArtifact.data !== null ? (
+        <ArtifactWithComments
+          key={selectedArtifact.id}
+          artifact={selectedArtifact as SubmissionArtifact}
+          reviewAssignmentId={activeReviewAssignmentId}
+          submissionReviewId={finalActiveSubmissionReviewId}
+        />
+      ) : (
+        <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
+      )}
+    </Box>
+  ) : selectedFile ? (
+    <Group orientation="horizontal" style={{ height: "100%" }}>
+      <Panel minSize="25">
+        <Flex direction="column" h="100%" minH={0}>
+          <FileTabBar
+            activeId={effectiveFileId}
+            onSelect={handleSelectFile}
+            extra={
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label={splitFile ? "Close split view" : "Split editor"}
+                title={splitFile ? "Close split view" : "Split editor"}
+                onClick={toggleSplit}
+                m={1}
+              >
+                <Icon as={FaColumns} />
+              </Button>
+            }
+          />
+          <Box flex="1" minH={0} overflow="auto" data-file-id={selectedFile.id} scrollMarginTop="80px">
+            {renderFileContent(selectedFile, true)}
           </Box>
-          {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
-          )}
+        </Flex>
+      </Panel>
+      {splitFile && (
+        <>
+          <PanelSeparator>
+            <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+          </PanelSeparator>
+          <Panel minSize="25">
+            <Flex direction="column" h="100%" minH={0}>
+              <FileTabBar activeId={splitFileId} onSelect={(id) => setSplitFileId(id)} />
+              <Box flex="1" minH={0} overflow="auto">
+                {renderFileContent(splitFile, false)}
+              </Box>
+            </Flex>
+          </Panel>
+        </>
+      )}
+    </Group>
+  ) : (
+    <Text>Select a file or artifact to view.</Text>
+  );
+
+  // Desktop: resizable tree|code columns inside a fixed-height shell (each pane scrolls internally,
+  // so editors fill their pane). Mobile: stack the navigator above the editor and let the page scroll.
+  if (!isDesktop) {
+    return (
+      <Flex direction="column" gap={2}>
+        <Box maxH="40vh" overflow="auto" border="1px solid" borderColor="border.emphasized" borderRadius="md">
+          {fileNavigator}
         </Box>
-        <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box w={"100%"} flex="1" minW={0}>
-          {isSwitching ? (
-            <Skeleton height="70vh" width="100%" />
-          ) : selectedArtifact ? (
-            <Box data-artifact-id={selectedArtifact.id} scrollMarginTop="80px">
-              {selectedArtifact.data !== null ? (
-                <ArtifactWithComments
-                  key={selectedArtifact.id}
-                  artifact={selectedArtifact as SubmissionArtifact}
-                  reviewAssignmentId={activeReviewAssignmentId}
-                  submissionReviewId={finalActiveSubmissionReviewId}
-                />
-              ) : (
-                <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
-              )}
-            </Box>
-          ) : selectedFile ? (
-            <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
-                <MarkdownFilePreview
-                  key={selectedFile.id}
-                  file={selectedFile}
-                  allFiles={submission.submission_files}
-                  onNavigateToFile={handleSelectFile}
-                />
-              ) : selectedFile.is_binary ? (
-                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
-              ) : (
-                <CodeFile key={selectedFile.id} ref={codeFileRef} file={selectedFile} />
-              )}
-            </Box>
-          ) : (
-            <Text>Select a file or artifact to view.</Text>
-          )}
-        </Box>
+        <Separator />
+        <Box minH="60vh">{editorArea}</Box>
       </Flex>
-    </>
+    );
+  }
+
+  return (
+    <Box h="100%" minH={0}>
+      <Group orientation="horizontal" style={{ height: "100%" }}>
+        <Panel defaultSize="20" minSize="12" maxSize="40">
+          {fileNavigator}
+        </Panel>
+        <PanelSeparator>
+          <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+        </PanelSeparator>
+        <Panel minSize="30">
+          <Box h="100%" minW={0} minH={0}>
+            {editorArea}
+          </Box>
+        </Panel>
+      </Group>
+    </Box>
   );
 }
