@@ -41,13 +41,17 @@ EOF
 ROTATE=0
 BAO_MOUNT="kv"
 BAO_PATH="apps/pawtograder/preview-shared"
-for arg in "$@"; do
-  case "$arg" in
-    --rotate)        ROTATE=1 ;;
-    --bao-mount=*)   BAO_MOUNT="${arg#*=}" ;;
-    --bao-path=*)    BAO_PATH="${arg#*=}" ;;
+# Accept both --flag=value and --flag value (the usage() text advertises
+# the space-separated form, so the parser has to handle both).
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rotate)        ROTATE=1; shift ;;
+    --bao-mount=*)   BAO_MOUNT="${1#*=}"; shift ;;
+    --bao-path=*)    BAO_PATH="${1#*=}"; shift ;;
+    --bao-mount)     BAO_MOUNT="${2:?--bao-mount requires a value}"; shift 2 ;;
+    --bao-path)      BAO_PATH="${2:?--bao-path requires a value}"; shift 2 ;;
     -h|--help)       usage; exit 0 ;;
-    *) echo "unknown arg: $arg" >&2; usage >&2; exit 2 ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 

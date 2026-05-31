@@ -313,8 +313,18 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       client.rpc("metrics_workflow_errors_by_name", { window_hours: 1 })
     ]);
 
-    m.workflowRunsRecent.reset();
-    if (runs1h.status === "fulfilled" && !runs1h.value.error) {
+    // Reset each family only after we know its fetch succeeded — otherwise
+    // a transient RPC failure would wipe the last-good gauge snapshot and
+    // the next scrape would export empty series. workflowRunsRecent is
+    // shared between the 1h and 24h queries (distinguished by the `window`
+    // label), so reset only when BOTH succeed; a single-window failure
+    // leaves the previous values for that window intact.
+    const runs1hOk = runs1h.status === "fulfilled" && !runs1h.value.error;
+    const runs24hOk = runs24h.status === "fulfilled" && !runs24h.value.error;
+    if (runs1hOk && runs24hOk) {
+      m.workflowRunsRecent.reset();
+    }
+    if (runs1hOk) {
       for (const row of runs1h.value.data ?? []) {
         m.workflowRunsRecent.set(
           {
@@ -328,8 +338,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
     } else {
       m.workflowRefreshErrors.inc({ step: "workflow_runs_1h" });
     }
-
-    if (runs24h.status === "fulfilled" && !runs24h.value.error) {
+    if (runs24hOk) {
       for (const row of runs24h.value.data ?? []) {
         m.workflowRunsRecent.set(
           {
@@ -344,8 +353,8 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       m.workflowRefreshErrors.inc({ step: "workflow_runs_24h" });
     }
 
-    m.workflowQueueSeconds.reset();
     if (queue.status === "fulfilled" && !queue.value.error) {
+      m.workflowQueueSeconds.reset();
       for (const row of queue.value.data ?? []) {
         const cid = String((row as { class_id: number | string }).class_id);
         m.workflowQueueSeconds.set({ class_id: cid, quantile: "0.5" }, Number((row as { p50: number }).p50));
@@ -356,8 +365,8 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       m.workflowRefreshErrors.inc({ step: "queue_seconds" });
     }
 
-    m.workflowRunSeconds.reset();
     if (run.status === "fulfilled" && !run.value.error) {
+      m.workflowRunSeconds.reset();
       for (const row of run.value.data ?? []) {
         const cid = String((row as { class_id: number | string }).class_id);
         m.workflowRunSeconds.set({ class_id: cid, quantile: "0.5" }, Number((row as { p50: number }).p50));
@@ -367,8 +376,8 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       m.workflowRefreshErrors.inc({ step: "run_seconds" });
     }
 
-    m.workflowErrorsRecent.reset();
     if (errors1h.status === "fulfilled" && !errors1h.value.error) {
+      m.workflowErrorsRecent.reset();
       for (const row of errors1h.value.data ?? []) {
         m.workflowErrorsRecent.set(
           {

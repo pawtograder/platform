@@ -156,6 +156,8 @@ migrations:
 
 web:
   replicas: 1
+  # Single replica → safe to be the workflow-metrics leader.
+  workflowMetricsLeader: true
   # Web pod SIGSEGV'd (exit 139) during round-16 E2E — V8 heap pressure
   # under concurrent test load. 2Gi gives headroom for Next.js SSR
   # workers + concurrent request buffers.

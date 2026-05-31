@@ -389,9 +389,11 @@ rest:
   enabled: true
   replicas: 2
   # Connection-pool sizing. dbPool=40 paired with a 30s acquisition
-  # timeout was chosen so the chart's default postgres max_connections
-  # (configured in postgres-config.yaml) isn't blown out even at 3
-  # replicas: 3 × 40 = 120, well under postgres's default 200.
+  # timeout was chosen so the chart's postgres.config.max_connections
+  # (400 by default; see the postgres block) isn't blown out even at
+  # 3 replicas: 3 × 40 = 120, well under 400. Bump in lockstep with
+  # postgres.config.max_connections if you scale rest replicas past
+  # ~9.
   dbPool: 40
   dbPoolAcquisitionTimeout: 30
   image:
@@ -593,6 +595,13 @@ web:
   # for what it controls (CSP report-only mode). NEVER in production.
   e2e:
     enabled: false
+  # When true, /api/metrics refreshes the DB-backed workflow gauges
+  # (workflow runs, queue/run percentiles, recent errors) on every
+  # scrape. Set on AT MOST ONE pod across the deploy — multiple replicas
+  # with this on multiply DB load and over-count gauges. Safe to enable
+  # for single-replica installs (previews); for multi-replica prod
+  # leave off here and run a dedicated 1-replica metrics-leader.
+  workflowMetricsLeader: false
   replicas: 2
   image:
     repository: ghcr.io/pawtograder/web

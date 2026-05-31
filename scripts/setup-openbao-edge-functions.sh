@@ -151,11 +151,36 @@ if [[ $DRY_RUN -eq 0 ]]; then
   }
 fi
 
-# Source the env file; only the variables we look up cross back.
-# shellcheck disable=SC1090
-set -a
-. "$ENV_FILE"
-set +a
+# Parse the .env file as data, NOT as a shell script. Sourcing would
+# execute any embedded commands; a malicious or accidentally-unsafe
+# bundle file could run arbitrary code on the operator's machine while
+# they're provisioning secrets. We accept only KEY=VALUE / KEY='value'
+# / KEY="value" lines (with optional `export` prefix), skip comments
+# and blank lines, and export each parsed pair into the environment.
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Strip CR (CRLF tolerance) and trim leading whitespace.
+  line="${line%$'\r'}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  # Skip blanks + comments.
+  [[ -z "$line" ]] && continue
+  [[ "$line" =~ ^# ]] && continue
+  # Drop optional `export ` prefix.
+  [[ "$line" =~ ^export[[:space:]]+ ]] && line="${line#export }" && line="${line#"${line%%[![:space:]]*}"}"
+  # Must look like KEY=VALUE where KEY is shell-safe.
+  if [[ ! "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+    echo "WARN: skipping non-KEY=VALUE line in $ENV_FILE: $line" >&2
+    continue
+  fi
+  k="${BASH_REMATCH[1]}"
+  v="${BASH_REMATCH[2]}"
+  # Strip matching surrounding quotes (single OR double). Leave unquoted
+  # values alone; no command-substitution / variable-expansion happens
+  # either way because we're parsing, not eval'ing.
+  if   [[ "$v" =~ ^\"(.*)\"$ ]]; then v="${BASH_REMATCH[1]}"
+  elif [[ "$v" =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"
+  fi
+  export "$k=$v"
+done < "$ENV_FILE"
 
 # shellcheck disable=SC2206
 DOCUMENTED_KEYS=(${BUNDLE_KEYS[$BUNDLE]})

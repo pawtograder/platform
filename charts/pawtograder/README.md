@@ -24,30 +24,53 @@ maintain alongside your deployment.
 
 ## Quick start (kind / single-node)
 
+The chart needs ~15 secret values in the `pawtograder-jwt` Secret —
+HS256 JWT secret, anon + service-role tokens, asymmetric JWK sets,
+realtime encryption key, pg-meta crypto key, pgsodium root key, plus
+supavisor's four distinct secrets when supavisor is enabled. Trying to
+hand-craft these via `--set` flags is error-prone. Use the helper:
+
 ```sh
+# 1. Generate the full JWT bundle into a .env file
+npx tsx scripts/GenerateJwtKeys.ts --env > .secrets/pawtograder-jwt.env
+
+# 2. Create the Secret from that file (along with the postgres + S3
+#    Secrets you provision however you like).
+kubectl create namespace pawtograder
+kubectl -n pawtograder create secret generic pawtograder-jwt \
+  --from-env-file=.secrets/pawtograder-jwt.env
+kubectl -n pawtograder create secret generic pawtograder-postgres \
+  --from-literal=POSTGRES_PASSWORD=$(openssl rand -base64 32) \
+  --from-literal=PAWTOGRADER_PASSWORD=$(openssl rand -base64 32)
+kubectl -n pawtograder create secret generic pawtograder-s3 \
+  --from-literal=AWS_ACCESS_KEY_ID=$S3_KEY \
+  --from-literal=AWS_SECRET_ACCESS_KEY=$S3_SECRET
+
+# 3. Install with secrets.create=false (default) — the chart reads the
+#    pre-existing Secrets above.
 helm install pawtograder oci://ghcr.io/pawtograder/charts/pawtograder \
   --version 0.1.0 \
   --namespace pawtograder \
-  --create-namespace \
   --set global.hostname=pawtograder.example.com \
   --set ingress.className=nginx \
   --set postgres.persistence.storageClass=local-path \
   --set storage.backend=s3 \
   --set storage.s3.endpoint=https://s3.example.com \
-  --set storage.s3.bucket=pawtograder \
-  --set secrets.create=true \
-  --set secrets.values.postgres.password=$(openssl rand -base64 32) \
-  --set secrets.values.postgres.pawtograderPassword=$(openssl rand -base64 32) \
-  --set secrets.values.jwt.secret=$(openssl rand -base64 48) \
-  --set secrets.values.jwt.anonKey=$ANON_JWT \
-  --set secrets.values.jwt.serviceRoleKey=$SERVICE_JWT \
-  --set secrets.values.s3.accessKey=$S3_KEY \
-  --set secrets.values.s3.secretKey=$S3_SECRET
+  --set storage.s3.bucket=pawtograder
 ```
 
-`secrets.create=true` is for evaluation only. Production deployments should
-provision Secrets out-of-band (External Secrets Operator, sealed-secrets,
-SOPS-encrypted manifests) and set `secrets.create=false`.
+For ephemeral previews you can flip the chart's in-cluster autogenerate
+path on with `--set secrets.autogenerate=true` — a pre-install hook
+mints the JWT bundle + postgres passwords + e2e tokens inside the
+cluster. See `secrets-bootstrap-script.yaml` for what gets generated.
+Never use autogenerate in production: keys aren't recoverable, and
+upgrades that recreate the namespace lose them.
+
+`--set secrets.create=true` plus inline `--set secrets.values.*` flags
+is also supported for evaluation but expects you to hand-feed all ~15
+JWT bundle values; production deployments should provision Secrets
+out-of-band (External Secrets Operator, sealed-secrets, SOPS-encrypted
+manifests) as shown above.
 
 ## Required Secrets when `secrets.create=false`
 
@@ -273,7 +296,7 @@ Prometheus or Grafana itself.
 | postgres         | `:9187 /metrics` (sidecar) | none (ClusterIP, in-pod sidecar)         |
 | storage-api      | `:5000 /metrics`         | none (already exposes Prometheus format) |
 | edge-functions   | `:9000 /metrics`         | none                                     |
-| auth (GoTrue)    | `:9999 /metrics`         | `GOTRUE_METRICS_ENABLED=true`            |
+| auth (GoTrue)    | `:9100 /metrics`         | `GOTRUE_METRICS_EXPORTER=prometheus` (separate port; `:9999` is the API) |
 | kong             | `:8001 /metrics` (admin) | none — admin port is ClusterIP-only      |
 | realtime         | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:REALTIME_METRICS_BEARER` |
 | supavisor        | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:SUPAVISOR_METRICS_BEARER` |

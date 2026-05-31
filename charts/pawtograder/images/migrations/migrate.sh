@@ -91,8 +91,16 @@ for f in "${sorted[@]}"; do
   version="${base%%_*}"
   current="$(sha_of "$f")"
 
+  # Distinguish "no row" from "row with NULL file_hash" by mapping NULL
+  # to a sentinel value that can't collide with a real sha-256 digest.
+  # COALESCE-to-empty here would merge those two cases and skip the
+  # legacy back-fill branch forever.
   stored="$(psql -tA -v ver="${version}" <<'SQL'
-SELECT COALESCE(file_hash, '') FROM supabase_migrations.schema_migrations WHERE version=:'ver';
+SELECT CASE
+         WHEN file_hash IS NULL THEN '__legacy__'
+         ELSE file_hash
+       END
+  FROM supabase_migrations.schema_migrations WHERE version=:'ver';
 SQL
 )"
 
@@ -101,24 +109,20 @@ SQL
       # Row doesn't exist yet — this migration will be applied in phase 3.
       continue
       ;;
+    "__legacy__")
+      # Row exists but pre-dates hash tracking. Back-fill silently and
+      # treat as healthy from now on.
+      psql -v ON_ERROR_STOP=1 -v ver="${version}" -v hash="${current}" <<'SQL'
+UPDATE supabase_migrations.schema_migrations SET file_hash=:'hash' WHERE version=:'ver';
+SQL
+      backfilled=$((backfilled+1))
+      continue
+      ;;
     "$current")
       # Healthy: stored hash matches on-disk file.
       continue
       ;;
     *)
-      # If stored looks like "" (empty COALESCE result) it's a legacy
-      # row with NULL file_hash. Back-fill silently and treat as healthy.
-      legacy="$(psql -tA -v ver="${version}" <<'SQL'
-SELECT (file_hash IS NULL)::int FROM supabase_migrations.schema_migrations WHERE version=:'ver';
-SQL
-)"
-      if [ "$legacy" = "1" ]; then
-        psql -v ON_ERROR_STOP=1 -v ver="${version}" -v hash="${current}" <<'SQL'
-UPDATE supabase_migrations.schema_migrations SET file_hash=:'hash' WHERE version=:'ver';
-SQL
-        backfilled=$((backfilled+1))
-        continue
-      fi
       drifted+=("${version}\t${stored}\t${current}")
       ;;
   esac
@@ -224,9 +228,15 @@ echo "[migrate] done — applied=${applied} skipped=${skipped}"
 # the migrator re-asserts the values.
 upsert_vault_secret() {
   local secret_name="$1" secret_value="$2"
+  # BEGIN/COMMIT around DELETE+create so a failed create_secret rolls
+  # the DELETE back. Without this, a transient failure here would wipe
+  # the existing secret and leave every DB→edge callback broken until
+  # the next successful migrator run.
   psql -v ON_ERROR_STOP=1 -v sname="${secret_name}" -v sval="${secret_value}" <<'SQL'
+BEGIN;
 DELETE FROM vault.secrets WHERE name = :'sname';
 SELECT vault.create_secret(:'sval', :'sname', 'set by migrate.sh for in-cluster DB->edge callbacks');
+COMMIT;
 SQL
 }
 

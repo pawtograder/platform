@@ -51,10 +51,24 @@ export async function GET(req: Request): Promise<Response> {
     });
   }
   // Refresh DB-backed business gauges (workflow runs, queue/run duration
-  // percentiles, recent errors) at scrape time. Failures are swallowed
-  // inside the helper and surfaced as web_workflow_metrics_refresh_errors_total
-  // so the scrape itself never fails just because the DB is slow.
-  await refreshWorkflowMetrics();
+  // percentiles, recent errors) at scrape time. Gated on
+  // METRICS_WORKFLOW_REFRESH_LEADER=true so only ONE pod runs the
+  // cluster-wide RPCs — without that gate every web replica would
+  // execute the same admin RPCs on each Prometheus poll, multiplying
+  // DB load by the replica count AND emitting duplicate global gauges
+  // that downstream `sum()` queries would overcount.
+  //
+  // The chart sets the env var on a single dedicated replica (or on
+  // index 0 of a StatefulSet, etc.). Other replicas still expose
+  // node/process gauges from the same registry; only the workflow
+  // family is leader-gated.
+  //
+  // Failures are swallowed inside the helper and surfaced as
+  // web_workflow_metrics_refresh_errors_total so the scrape itself
+  // never fails just because the DB is slow.
+  if (process.env.METRICS_WORKFLOW_REFRESH_LEADER === "true") {
+    await refreshWorkflowMetrics();
+  }
 
   const body = await m.registry.metrics();
   return new Response(body, {

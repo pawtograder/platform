@@ -78,6 +78,20 @@ spec:
                   name: {{ .Values.secrets.names.jwt }}
                   key: METRICS_SCRAPE_TOKEN
                   optional: true
+            {{- if .Values.web.workflowMetricsLeader }}
+            # Leader-gate for DB-backed workflow gauges. /api/metrics only
+            # refreshes the cluster-wide RPCs when this is set; without it
+            # the route just exports whatever is currently in the registry.
+            #
+            # Set on AT MOST ONE web pod across the deploy to avoid
+            # multiplying DB load + over-counting gauges. For single-replica
+            # installs (previews, small prod) it's safe to enable on the
+            # only replica via this chart value. For multi-replica prod,
+            # leave this off here and run a dedicated 1-replica metrics
+            # leader deployment instead.
+            - name: METRICS_WORKFLOW_REFRESH_LEADER
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if .Values.web.e2e.enabled }}
             # E2E test bypass: utils/csp.ts flips CSP into report-only mode

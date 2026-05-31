@@ -1,21 +1,34 @@
 {
   "uid": "pawtograder-stack-overview",
-  "title": "Pawtograder · Stack Overview",
-  "tags": ["pawtograder", "stack"],
+  "title": "Pawtograder \u00b7 Stack Overview",
+  "tags": [
+    "pawtograder",
+    "stack"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
         "name": "namespace",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
         "query": "label_values(kube_pod_info{pod=~\"pawtograder-.*\"}, namespace)",
         "refresh": 1,
-        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
         "includeAll": true,
         "multi": false
       }
@@ -26,8 +39,16 @@
       "id": 1,
       "type": "stat",
       "title": "Pods ready",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -37,15 +58,27 @@
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
         "defaults": {
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 8 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 8
+              }
             ]
           },
           "unit": "none"
@@ -56,8 +89,16 @@
       "id": 2,
       "type": "stat",
       "title": "Pods restarting (1h)",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -67,16 +108,31 @@
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
         "defaults": {
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 5 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
             ]
           },
           "unit": "none"
@@ -87,27 +143,50 @@
       "id": 3,
       "type": "stat",
       "title": "Web error rate (5xx, 5m)",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(web_http_request_duration_seconds_count{status=~\"5..\"}[5m])) / clamp_min(sum(rate(web_http_request_duration_seconds_count[5m])), 0.001)"
+          "expr": "sum(rate(web_http_request_duration_seconds_count{status=~\"5..\", namespace=~\"$namespace\"}[5m])) / clamp_min(sum(rate(web_http_request_duration_seconds_count{namespace=~\"$namespace\"}[5m])), 0.001)"
         }
       ],
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "fieldConfig": {
         "defaults": {
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.01 },
-              { "color": "red", "value": 0.05 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
             ]
           },
           "unit": "percentunit"
@@ -118,61 +197,102 @@
       "id": 4,
       "type": "stat",
       "title": "Active submissions",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(pawtograder_active_submissions_active_count)" }
+        {
+          "refId": "A",
+          "expr": "sum(pawtograder_active_submissions_active_count{namespace=~\"$namespace\"})"
+        }
       ],
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
-      "fieldConfig": { "defaults": { "unit": "none" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      }
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "HTTP request rate by service",
       "description": "Per-service request rate. web/auth/kong serve user-facing traffic; storage-api's HTTP pool is a proxy for upstream MinIO calls (it doesn't export a request-count histogram).",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "web",
           "legendFormat": "web",
-          "expr": "sum(rate(web_http_request_duration_seconds_count[1m]))"
+          "expr": "sum(rate(web_http_request_duration_seconds_count{namespace=~\"$namespace\"}[1m]))"
         },
         {
           "refId": "kong",
           "legendFormat": "kong (proxy)",
-          "expr": "sum(rate(kong_http_requests_total[1m]))"
+          "expr": "sum(rate(kong_http_requests_total{namespace=~\"$namespace\"}[1m]))"
         },
         {
           "refId": "auth",
           "legendFormat": "auth (gotrue)",
-          "expr": "sum(rate(http_status_codes_total{job=\"pawtograder-auth\"}[1m]))"
+          "expr": "sum(rate(http_status_codes_total{job=\"pawtograder-auth\", namespace=~\"$namespace\"}[1m]))"
         },
         {
           "refId": "storage",
           "legendFormat": "storage-api (http pool)",
-          "expr": "sum(rate(storage_api_http_pool_requests[1m]))"
+          "expr": "sum(rate(storage_api_http_pool_requests{namespace=~\"$namespace\"}[1m]))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
     },
     {
       "id": 11,
       "type": "timeseries",
       "title": "P95 latency by service",
       "description": "P95 over 5 min. kong's bucket is per-request total latency; auth uses OTel http_server_duration_milliseconds.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "web",
           "legendFormat": "web",
-          "expr": "histogram_quantile(0.95, sum by(le)(rate(web_http_request_duration_seconds_bucket[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(web_http_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))"
         },
         {
           "refId": "kong",
@@ -185,14 +305,26 @@
           "expr": "histogram_quantile(0.95, sum by(le)(rate(http_server_duration_milliseconds_bucket{job=\"pawtograder-auth\"}[5m]))) / 1000"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
     },
     {
       "id": 20,
       "type": "timeseries",
       "title": "Memory by pod (RSS)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -200,14 +332,26 @@
           "expr": "sum by(pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"pawtograder-.*\", container!=\"\", container!=\"POD\"})"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "bytes" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
     },
     {
       "id": 21,
       "type": "timeseries",
       "title": "CPU by pod",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -215,14 +359,27 @@
           "expr": "sum by(pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", pod=~\"pawtograder-.*\", container!=\"\", container!=\"POD\"}[1m]))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        }
+      }
     },
     {
       "id": 30,
       "type": "table",
       "title": "Recent restarts (24h)",
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",

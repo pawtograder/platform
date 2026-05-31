@@ -19,11 +19,11 @@
 #     URLs (Kong admin, pg-meta) are absent. Postgres requires a
 #     port-forward (see PGHOST notes in the output).
 #
-# Usage:
-#   ./scripts/export-preview-agent-env.sh helm                     > tenant.env
-#   ./scripts/export-preview-agent-env.sh helm --target=external   > tenant.env
-#   eval "$(./scripts/export-preview-agent-env.sh helm --shell)"
-#   eval "$(./scripts/export-preview-agent-env.sh helm --shell --target=external)"
+# Usage (substitute <PR_ID> with the PR number, e.g. 741):
+#   ./scripts/export-preview-agent-env.sh <PR_ID>                     > tenant.env
+#   ./scripts/export-preview-agent-env.sh <PR_ID> --target=external   > tenant.env
+#   eval "$(./scripts/export-preview-agent-env.sh <PR_ID> --shell)"
+#   eval "$(./scripts/export-preview-agent-env.sh <PR_ID> --shell --target=external)"
 #
 # Reads from these in-namespace Secrets:
 #   pawtograder-jwt              JWT bundle
