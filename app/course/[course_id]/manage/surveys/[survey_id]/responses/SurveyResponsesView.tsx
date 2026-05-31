@@ -159,6 +159,10 @@ export default function SurveyResponsesView({
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
+    if (typeof document !== "undefined" && document.documentElement.hasAttribute("data-visual-tests")) {
+      return;
+    }
+
     const interval = setInterval(() => {
       setCurrentTime(new Date());
     }, 60000); // Update every minute
@@ -533,7 +537,14 @@ export default function SurveyResponsesView({
       />
 
       {/* Responses Table */}
-      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
+      <Box
+        border="1px solid"
+        borderColor="border"
+        borderRadius="lg"
+        overflow="hidden"
+        overflowX="auto"
+        data-survey-responses-table=""
+      >
         <Table.Root variant="outline" size="md">
           <Table.Header>
             <Table.Row bg="bg.subtle">

@@ -139,7 +139,9 @@ export default function SurveyAnalytics({
       }
       groups.get(key)!.questions.push(q);
     }
-    return Array.from(groups.values());
+    return Array.from(groups.values()).sort((a, b) =>
+      a.groupLabel.localeCompare(b.groupLabel, undefined, { sensitivity: "base" })
+    );
   }, [questionsToShow, valueLabelsByQuestion]);
 
   const groupsWithAlerts = useMemo(

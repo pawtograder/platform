@@ -275,6 +275,40 @@ const VISUAL_TEST_CSS = `
     display: none !important;
   }
 
+  /*
+   * Recharts SVG bars anti-alias at sub-pixel widths when ResponsiveContainer
+   * passes fractional dimensions. StableChartContainer floors sizes; this
+   * further pins rasterization for survey analytics captures.
+   */
+  html[data-visual-tests] [data-survey-chart-host] .recharts-surface {
+    shape-rendering: crispEdges !important;
+  }
+
+  html[data-visual-tests] [data-survey-chart-host] .recharts-tooltip-wrapper {
+    display: none !important;
+  }
+
+  /*
+   * A 1px overflow toggle on the wide responses table adds/removes a horizontal
+   * scrollbar (~15px), nudging row layout between captures.
+   */
+  html[data-visual-tests] [data-survey-responses-table] {
+    overflow-x: hidden !important;
+    scrollbar-width: none !important;
+  }
+
+  html[data-visual-tests] [data-survey-responses-table]::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  /*
+   * Pin light color mode during captures so next-themes hydration timing cannot
+   * flip chart tick/bar colors between runs.
+   */
+  html[data-visual-tests]:not(.dark) {
+    color-scheme: light !important;
+  }
+
 `;
 
 // Function to inject visual test setup
@@ -290,6 +324,9 @@ const injectVisualTestSetup = async (page: Page) => {
       // Set the data-visual-tests attribute on the html element
       if (document.documentElement) {
         document.documentElement.setAttribute("data-visual-tests", "");
+        document.documentElement.classList.remove("dark");
+        document.documentElement.classList.add("light");
+        document.documentElement.style.colorScheme = "light";
       }
 
       // Check if our style is already injected to avoid duplicates
@@ -364,6 +401,9 @@ export const test = base.extend<E2EFixtures>({
       // Set the data-visual-tests attribute on the html element
       if (document.documentElement) {
         document.documentElement.setAttribute("data-visual-tests", "");
+        document.documentElement.classList.remove("dark");
+        document.documentElement.classList.add("light");
+        document.documentElement.style.colorScheme = "light";
       }
 
       // Check if our style is already injected to avoid duplicates

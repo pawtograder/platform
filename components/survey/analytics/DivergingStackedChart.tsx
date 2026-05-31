@@ -2,10 +2,11 @@
 
 import { Box, HStack, Text, VStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, ReferenceDot, ReferenceLine } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceDot, ReferenceLine } from "recharts";
 import { useMemo } from "react";
 import type { QuestionStats } from "@/types/survey-analytics";
 import { WrappedYAxisTick } from "./ChartAxisTick";
+import { StableChartContainer } from "./StableChartContainer";
 import { getDivergingColor, getComparisonArrowType, partitionForDiverging, LIKERT_COLORS } from "./likert-chart-utils";
 import type { ComparisonArrowType } from "./likert-chart-utils";
 
@@ -205,6 +206,7 @@ export function DivergingStackedChart({
   }, [chartData, leftKeys, rightKeys]);
 
   const labelWidth = 280;
+  const chartHeight = Math.max(200, chartData.length * 52);
 
   if (chartData.length === 0) {
     return (
@@ -218,9 +220,11 @@ export function DivergingStackedChart({
 
   return (
     <VStack align="stretch" gap={2} w="100%">
-      <Box w="100%" h={Math.max(200, chartData.length * 52)}>
-        <ResponsiveContainer width="100%" height="100%">
+      <StableChartContainer height={chartHeight}>
+        {({ width, height }) => (
           <BarChart
+            width={width}
+            height={height}
             data={chartData}
             layout="vertical"
             margin={{ left: labelWidth, right: 20, top: 8, bottom: 40 }}
@@ -380,8 +384,8 @@ export function DivergingStackedChart({
               );
             })}
           </BarChart>
-        </ResponsiveContainer>
-      </Box>
+        )}
+      </StableChartContainer>
       <Box pl={labelWidth} pr={20} w="100%">
         <HStack gap={4} flexWrap="wrap" justify="center" pt={0} fontSize={10}>
           {legendPayload.map((item) => (
