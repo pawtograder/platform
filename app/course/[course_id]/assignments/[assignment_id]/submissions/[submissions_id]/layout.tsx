@@ -21,6 +21,7 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
+import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
@@ -65,6 +66,7 @@ import {
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
+import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
@@ -2062,7 +2064,7 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
   );
 }
 
-function RubricView() {
+function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
@@ -2092,16 +2094,19 @@ function RubricView() {
       as="aside"
       aria-label="Grading summary"
       data-grading-summary-aside=""
-      position={{ base: "static", lg: "sticky" }}
-      top={{ base: "auto", lg: "0" }}
+      // In the grading shell the aside is the SINGLE scroll container that exactly fills its
+      // fixed-height panel (the panel wrapper does not scroll). Outside the shell it keeps the
+      // original sticky, viewport-tall, self-scrolling behavior inside the long-scroll page.
+      position={inGradingShell ? "static" : { base: "static", lg: "sticky" }}
+      top={inGradingShell ? "auto" : { base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb={{ base: "4", lg: "80px" }}
-      height={{ base: "auto", lg: "100vh" }}
+      pb={inGradingShell ? "4" : { base: "4", lg: "80px" }}
+      height={inGradingShell ? "100%" : { base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY={{ base: "visible", lg: "auto" }}
+      overflowY={inGradingShell ? "auto" : { base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -2203,6 +2208,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const defaultSubPage =
     !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
   const activeSubPage = explicitSubPage ?? defaultSubPage;
+  // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
+  // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
+  // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
+  // full-page screenshot's transient 1px viewport can't flip the layout and remount the editor.
+  const isLargeScreen = useStableDesktop();
+  const useGradingShell = activeSubPage === "files" && isLargeScreen;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -2298,13 +2309,19 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </Text>
               )}
             </HStack>
-            <HStack gap={1}>
+            <HStack gap={1} flexWrap="wrap">
               <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
                 Commit {submission.sha.substring(0, 7)}
               </Link>
               <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">
                 (Download)
               </Link>
+              {/* Most recent Pawtograder submission time, visible without opening Submission History (#103b). */}
+              <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
+                <Text color="fg.muted" data-visual-test="blackout">
+                  · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
+                </Text>
+              </Tooltip>
             </HStack>
           </VStack>
         </Box>
@@ -2391,19 +2408,44 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
-          {children}
+      {useGradingShell ? (
+        // Fixed-height, resizable content | rubric shell (Files tab, large screens). The editor column
+        // (children -> FilesView) further splits into tree | code internally.
+        <Box h="calc(100vh - 12rem)" minH="32rem">
+          <Group orientation="horizontal" style={{ height: "100%" }}>
+            <Panel minSize="40">
+              <Box h="100%" minW={0} overflow="hidden" key={pathname}>
+                {children}
+              </Box>
+            </Panel>
+            <PanelSeparator>
+              <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+            </PanelSeparator>
+            <Panel defaultSize="26" minSize="15" maxSize="45">
+              {/* The aside (RubricView) is the single scroll container here, so the wrapper must NOT
+                  also scroll — nesting two overflow:auto boxes made auto-focus/scrollIntoView fight
+                  the rubric's own scroll machinery, leaving inline controls perpetually unstable. */}
+              <Box h="100%" minW={0} overflow="hidden" pl={2}>
+                <RubricView inGradingShell />
+              </Box>
+            </Panel>
+          </Group>
         </Box>
-        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
-            On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
-            so we must NOT collapse it to applied-only here. */}
-        {activeSubPage !== "grade" && (
-          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
-            <RubricView />
+      ) : (
+        <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+          <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
+            {children}
           </Box>
-        )}
-      </Flex>
+          {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
+              On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
+              so we must NOT collapse it to applied-only here. */}
+          {activeSubPage !== "grade" && (
+            <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+              <RubricView />
+            </Box>
+          )}
+        </Flex>
+      )}
     </Flex>
   );
 }

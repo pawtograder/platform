@@ -9360,6 +9360,7 @@ export type Database = {
           github_username: string | null;
           last_github_user_sync: string | null;
           name: string | null;
+          preferences: Json;
           sis_user_id: number | null;
           user_id: string;
         };
@@ -9373,6 +9374,7 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
           user_id?: string;
         };
@@ -9386,6 +9388,7 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
           user_id?: string;
         };
