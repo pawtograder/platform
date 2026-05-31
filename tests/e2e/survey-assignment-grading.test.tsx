@@ -152,6 +152,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Navigate to the survey list
     await page.goto(`/course/${course.id}/surveys`);
+    await expect(page.getByRole("heading", { name: "Course Surveys" })).toBeVisible();
     await expect(page.getByText(TEAM_SURVEY_TITLE)).toBeVisible();
     await expectTransparentText(page, formatDateForTest(SURVEY_DUE_DATE, "America/New_York", "full"));
     await assertStudentPageAccessible(page, "survey assignment grading - survey list");
@@ -162,10 +163,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(startLink).toBeVisible();
     await startLink.click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
+    await expect(page.getByText("Loading survey...")).toBeHidden();
 
     // Page 1: Checkboxes
-    // SurveyJS renders question titles in multiple places (span + hidden legend), so use .first()
-    await expect(page.getByText("This week I have...").first()).toBeVisible();
+    await expect(page.getByRole("group", { name: "This week I have..." })).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 1 Checkboxes");
     // Scan every page of the SurveyJS-driven survey. SurveyJS is excluded
     // from axe in axeStudentA11y.ts (`.sd-root-modern`, `.sv-action`, etc.),
@@ -189,8 +190,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await visualScreenshot(page, "Student Survey - Page 1 Filled");
 
     // Navigate to page 2
-    await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("This week, I knew what I needed to get done").first()).toBeVisible();
+    const surveyNext = page.locator(".sd-root-modern").getByRole("button", { name: /^Next$/i });
+    await expect(surveyNext).toBeVisible();
+    await surveyNext.click();
+    await expect(page.getByRole("radiogroup", { name: "This week, I knew what I needed to get done" })).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 2 Likert Questions");
     await assertStudentPageAccessible(page, "team collaboration survey page 2 (likert)");
 
@@ -203,16 +206,22 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await visualScreenshot(page, "Student Survey - Page 2 Partially Filled");
 
     // Navigate to page 3
-    await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("In our team we relied on each other to get the job done.").first()).toBeVisible();
+    await expect(surveyNext).toBeVisible();
+    await surveyNext.click();
+    await expect(
+      page.getByRole("radiogroup", { name: "In our team we relied on each other to get the job done." })
+    ).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 3 Team Dynamics");
     await assertStudentPageAccessible(page, "team collaboration survey page 3 (team dynamics)");
 
     // Navigate to page 4
-    await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("My progress this week has been impeded by:").first()).toBeVisible();
+    await expect(surveyNext).toBeVisible();
+    await surveyNext.click();
+    await expect(page.getByRole("group", { name: "My progress this week has been impeded by:" })).toBeVisible();
     await expect(
-      page.getByText("How do you feel about your team's collaboration process in this project?").first()
+      page.getByRole("textbox", {
+        name: "How do you feel about your team's collaboration process in this project? Please reflect in about two sentences."
+      })
     ).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
     await assertStudentPageAccessible(page, "team collaboration survey page 4 (shell)");
