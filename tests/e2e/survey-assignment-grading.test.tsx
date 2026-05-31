@@ -194,10 +194,11 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await visualScreenshot(page, "Student Survey - Page 2 Likert Questions", { skipPreIdle: true });
     await assertStudentPageAccessible(page, "team collaboration survey page 2 (likert)");
 
-    // Fill page 2 - first Likert question only (page has multiple "Strongly agree" radios)
+    // Fill page 2 - first Likert question only (SurveyJS hides native radios; click its label)
     await surveyRoot
       .getByRole("radiogroup", { name: "This week, I knew what I needed to get done" })
-      .getByRole("radio", { name: "Strongly agree" })
+      .locator("label")
+      .filter({ hasText: /^Strongly agree$/ })
       .click();
     await visualScreenshot(page, "Student Survey - Page 2 Partially Filled", { skipPreIdle: true });
 
