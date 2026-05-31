@@ -127,7 +127,8 @@ else
   POSTGREST_URL="$KONG_URL"
   AUTH_URL="$KONG_URL"
   STORAGE_URL="$KONG_URL"
-  REALTIME_URL="$(echo "$KONG_URL" | sed 's|^https|wss|')"
+  # External Kong is always HTTPS, so a literal prefix swap is sufficient.
+  REALTIME_URL="wss://${KONG_URL#https://}"
   EDGE_FUNCTIONS_URL="$KONG_URL"
   PG_META_URL=""
   KONG_ADMIN_URL=""

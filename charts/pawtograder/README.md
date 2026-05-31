@@ -314,9 +314,11 @@ for log shipping; instead, the cluster runs:
   to `pawtograder-.*|monitoring`. Onboard a new app by extending the
   regex in `monitoring/alloy-config`.
 
-Both live in `/home/jon/work/k8s/apps/monitoring/`. Querying:
+Both are deployed separately at the cluster level (the operator's
+`k8s/apps/monitoring/` directory or equivalent — not in this chart).
+Querying:
 
-```
+```logql
 {namespace="pawtograder-preview-pr-741"}
 {namespace=~"pawtograder-.*", component="realtime"} |= "error"
 {namespace="pawtograder-preview-pr-741", level="error"}

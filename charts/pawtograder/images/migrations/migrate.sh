@@ -64,8 +64,10 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 
 # Lexicographic sort matches supabase's <timestamp>_<name>.sql convention.
-IFS=$'\n' sorted=( $(printf '%s\n' "${files[@]}" | sort) )
-unset IFS
+# mapfile -t handles filenames containing whitespace correctly; word-splitting
+# on IFS=$'\n' breaks on names with literal newlines (rare here, but cheap to
+# avoid).
+mapfile -t sorted < <(printf '%s\n' "${files[@]}" | sort)
 
 # Helper: SHA-256 of a file, returning the hex digest only (no filename).
 sha_of() {

@@ -142,8 +142,8 @@
     {
       "id": 30,
       "type": "timeseries",
-      "title": "Realtime pod CPU & RAM (host view)",
-      "description": "osmon reads /proc; osmon_cpu_util is the per-replica utilization fraction. osmon_ram_usage is what the host sees this pod consuming.",
+      "title": "Realtime pod CPU (host view)",
+      "description": "osmon reads /proc; osmon_cpu_util is the per-replica utilization fraction. RAM lives on the Stack Overview dashboard (different unit / scale, doesn't compose with percentunit on the same axis).",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
