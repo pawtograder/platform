@@ -271,6 +271,22 @@ seed:
   resources:
     requests: { cpu: "50m", memory: "128Mi" }
     limits: { cpu: "500m", memory: "256Mi" }
+  # When enabled, the chart syncs kv/apps/pawtograder/preview-shared from
+  # OpenBao into a pawtograder-preview-shared Secret. The seed job
+  # consumes SEED_USER_PASSWORD from that Secret and rewrites every demo
+  # user's encrypted_password so reviewers can log in.
+  #
+  # Provision the upstream Bao path once per cluster:
+  #   scripts/setup-openbao-preview-shared.sh
+  #
+  # Without this, demo users have dummyhash for encrypted_password and
+  # only magic-link auth works.
+  externalSecret:
+    enabled: false
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    path: apps/pawtograder/preview-shared
+    refreshInterval: 1h
 
 # -----------------------------------------------------------------------------
 # Supavisor (Postgres connection pooler — replaces pgbouncer)

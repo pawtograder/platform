@@ -194,3 +194,9 @@ monitoring:
 # re-runs are no-ops.
 seed:
   enabled: true
+  # Use the shared-preview seed-user password from OpenBao so reviewers
+  # can log in as the sample instructor/grader/student emails the PR
+  # comment lists. Set up once per cluster:
+  #   scripts/setup-openbao-preview-shared.sh
+  externalSecret:
+    enabled: true

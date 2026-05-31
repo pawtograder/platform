@@ -448,6 +448,16 @@ jobs:
             - Studio: `kubectl -n ${{ needs.meta.outputs.namespace }} port-forward svc/pawtograder-studio 3010:3000`
             - Logs:   `kubectl -n ${{ needs.meta.outputs.namespace }} logs -l app.kubernetes.io/instance=${{ needs.meta.outputs.release }}`
 
+            ### Sample login emails
+
+            | Role       | Email                            |
+            | ---------- | -------------------------------- |
+            | Instructor | `test1@pawtograder.net`          |
+            | Grader     | `foobar@pawtograder.net`         |
+            | Student    | `nullpointer@pawtograder.net`    |
+
+            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). Or request a magic-link from the app sign-in page.
+
             Cert may take ~1 min to issue. The preview tears down automatically when this PR closes.
 
   # --------------------------------------------------------------------------

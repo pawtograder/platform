@@ -55,6 +55,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            {{- if .Values.seed.externalSecret.enabled }}
+            # Shared-preview seed user password — synced from OpenBao by
+            # templates/preview-shared-externalsecret.yaml. seed.sh
+            # rewrites every demo user's encrypted_password to crypt()
+            # of this value so reviewers can password-auth into the
+            # preview.
+            - name: SEED_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-preview-shared
+                  key: seed_user_password
+            {{- end }}
           resources:
             {{- toYaml .Values.seed.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
