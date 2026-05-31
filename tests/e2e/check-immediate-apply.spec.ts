@@ -28,7 +28,13 @@ let requiredCheckId: number | undefined;
 test.beforeAll(async () => {
   course = await createClass();
   [student, instructor] = await createUsersInClass([
-    { name: "IA Student", email: "ia-student@pawtograder.net", role: "student", class_id: course.id, useMagicLink: true },
+    {
+      name: "IA Student",
+      email: "ia-student@pawtograder.net",
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
     {
       name: "IA Instructor",
       email: "ia-instructor@pawtograder.net",
