@@ -77,7 +77,7 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
   const isMultiFileTabs = !!(props.files && props.files.length > 1);
 
   return (
-    <Box w="100%">
+    <Box w="100%" h="100%" display="flex" flexDirection="column" minH={0}>
       <Flex
         mb={2}
         px={2}
@@ -86,6 +86,7 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
         justify="space-between"
         flexWrap="wrap"
         gap={2}
+        flexShrink={0}
         border="1px solid"
         borderColor="border.emphasized"
         borderRadius="md"
@@ -110,15 +111,19 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
           Save preference
         </Button>
       </Flex>
-      {useMonacoGradingEditor ? (
-        <CodeFileMonaco ref={ref} {...props} />
-      ) : isMultiFileTabs ? (
-        <CodeFilePlain ref={ref} {...props} />
-      ) : singleFile ? (
-        <CodeFileStarryNight file={singleFile} />
-      ) : (
-        <CodeFilePlain ref={ref} {...props} />
-      )}
+      {/* The variant fills the remaining height so Monaco can size to 100% of its container; non-Monaco
+          variants simply grow naturally inside this flex child. */}
+      <Box flex="1" minH={0} w="100%">
+        {useMonacoGradingEditor ? (
+          <CodeFileMonaco ref={ref} {...props} />
+        ) : isMultiFileTabs ? (
+          <CodeFilePlain ref={ref} {...props} />
+        ) : singleFile ? (
+          <CodeFileStarryNight file={singleFile} />
+        ) : (
+          <CodeFilePlain ref={ref} {...props} />
+        )}
+      </Box>
     </Box>
   );
 });

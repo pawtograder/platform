@@ -42,6 +42,7 @@ import {
   Icon,
   NativeSelectField,
   NativeSelectRoot,
+  Portal,
   Separator,
   Tag,
   Text,
@@ -936,161 +937,165 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   };
 
   return (
-    <Box
-      zIndex={1000}
-      top={top}
-      left={left}
-      position="fixed"
-      bg="bg.subtle"
-      w="md"
-      p={3}
-      border="1px solid"
-      borderColor="border.emphasized"
-      borderRadius="md"
-      boxShadow="lg"
-      ref={popupRef}
-      data-annotation-popup=""
-    >
-      <VStack gap={2} align="stretch">
-        <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
-          Annotate line {lineNumber} with a check:
-        </Text>
+    // Portal to <body> so the fixed-position popup is never trapped/clipped by an ancestor that
+    // establishes a containing block (e.g. react-resizable-panels' transformed panels).
+    <Portal>
+      <Box
+        zIndex={1000}
+        top={top}
+        left={left}
+        position="fixed"
+        bg="bg.subtle"
+        w="md"
+        p={3}
+        border="1px solid"
+        borderColor="border.emphasized"
+        borderRadius="md"
+        boxShadow="lg"
+        ref={popupRef}
+        data-annotation-popup=""
+      >
+        <VStack gap={2} align="stretch">
+          <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
+            Annotate line {lineNumber} with a check:
+          </Text>
 
-        <HStack>
-          <Select
-            aria-label="Select a rubric check or leave a comment"
-            ref={selectRef}
-            options={criteria}
-            menuIsOpen={selectOpen}
-            onMenuOpen={() => {
-              setSelectOpen(true);
-            }}
-            onMenuClose={() => {
-              setSelectOpen(false);
-            }}
-            escapeClearsValue={true}
-            components={components}
-            filterOption={filterOption}
-            value={selectedCheckOption}
-            onChange={(e: RubricCheckSelectOption | null) => {
-              if (e) {
-                setSelectedCheckOption(e);
-              }
-            }}
-            placeholder="Select a rubric check or leave a comment..."
-            size="sm"
-          />
-          {selectedCheckOption && selectedCheckOption.check && (
-            <StudentVisibilityIndicator
-              check={selectedCheckOption.check}
-              isApplied={true}
-              isReleased={review?.released ?? true}
+          <HStack>
+            <Select
+              aria-label="Select a rubric check or leave a comment"
+              ref={selectRef}
+              options={criteria}
+              menuIsOpen={selectOpen}
+              onMenuOpen={() => {
+                setSelectOpen(true);
+              }}
+              onMenuClose={() => {
+                setSelectOpen(false);
+              }}
+              escapeClearsValue={true}
+              components={components}
+              filterOption={filterOption}
+              value={selectedCheckOption}
+              onChange={(e: RubricCheckSelectOption | null) => {
+                if (e) {
+                  setSelectedCheckOption(e);
+                }
+              }}
+              placeholder="Select a rubric check or leave a comment..."
+              size="sm"
             />
-          )}
-        </HStack>
-        {selectedCheckOption && (
-          <>
-            {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
-              <Select
-                options={selectedCheckOption.check.data.options.map(
-                  (option: RubricCheckSubOption, index: number) =>
-                    ({
-                      label: option.label,
-                      comment: option.label,
-                      value: index.toString(),
-                      index: index.toString(),
-                      points: option.points,
-                      check: selectedCheckOption
-                    }) as RubricCheckSubOptions
-                )}
-                value={selectedSubOption}
-                onChange={(e: RubricCheckSubOptions | null) => {
-                  setSelectedSubOption(e);
-                }}
-                placeholder="Select an option for this check..."
-                size="sm"
+            {selectedCheckOption && selectedCheckOption.check && (
+              <StudentVisibilityIndicator
+                check={selectedCheckOption.check}
+                isApplied={true}
+                isReleased={review?.released ?? true}
               />
             )}
-            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points ? (
-              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
-                {formatPoints({
-                  check: selectedCheckOption.check,
-                  criteria: selectedCheckOption.criteria,
-                  points: selectedCheckOption.check.points
-                })}
-              </Text>
-            ) : (
-              <></>
-            )}
-            {selectedSubOption && selectedCheckOption.check ? (
-              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
-                {formatPoints({
-                  check: selectedCheckOption.check,
-                  criteria: selectedCheckOption.criteria,
-                  points: selectedSubOption.points
-                })}
-              </Text>
-            ) : (
-              <></>
-            )}
-            {selectedCheckOption.check && annotationTargetMeta.mode === "individual" && (
-              <NativeSelectRoot size="sm">
-                <NativeSelectField
-                  aria-label="Group member this annotation is for"
-                  value={pickedAnnotationStudentId ?? ""}
-                  onChange={(e) => setPickedAnnotationStudentId(e.target.value || null)}
-                >
-                  <option value="">Select group member…</option>
-                  {annotationTargetMeta.members.map((m) => (
-                    <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
-                  ))}
-                </NativeSelectField>
-              </NativeSelectRoot>
-            )}
-            {selectedCheckOption.check && annotationTargetMeta.mode === "assign_blocked" && (
-              <Text fontSize="sm" color="fg.error">
-                {annotationTargetMeta.reason}
-              </Text>
-            )}
-            {/*
+          </HStack>
+          {selectedCheckOption && (
+            <>
+              {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
+                <Select
+                  options={selectedCheckOption.check.data.options.map(
+                    (option: RubricCheckSubOption, index: number) =>
+                      ({
+                        label: option.label,
+                        comment: option.label,
+                        value: index.toString(),
+                        index: index.toString(),
+                        points: option.points,
+                        check: selectedCheckOption
+                      }) as RubricCheckSubOptions
+                  )}
+                  value={selectedSubOption}
+                  onChange={(e: RubricCheckSubOptions | null) => {
+                    setSelectedSubOption(e);
+                  }}
+                  placeholder="Select an option for this check..."
+                  size="sm"
+                />
+              )}
+              {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points ? (
+                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                  {formatPoints({
+                    check: selectedCheckOption.check,
+                    criteria: selectedCheckOption.criteria,
+                    points: selectedCheckOption.check.points
+                  })}
+                </Text>
+              ) : (
+                <></>
+              )}
+              {selectedSubOption && selectedCheckOption.check ? (
+                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                  {formatPoints({
+                    check: selectedCheckOption.check,
+                    criteria: selectedCheckOption.criteria,
+                    points: selectedSubOption.points
+                  })}
+                </Text>
+              ) : (
+                <></>
+              )}
+              {selectedCheckOption.check && annotationTargetMeta.mode === "individual" && (
+                <NativeSelectRoot size="sm">
+                  <NativeSelectField
+                    aria-label="Group member this annotation is for"
+                    value={pickedAnnotationStudentId ?? ""}
+                    onChange={(e) => setPickedAnnotationStudentId(e.target.value || null)}
+                  >
+                    <option value="">Select group member…</option>
+                    {annotationTargetMeta.members.map((m) => (
+                      <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
+                    ))}
+                  </NativeSelectField>
+                </NativeSelectRoot>
+              )}
+              {selectedCheckOption.check && annotationTargetMeta.mode === "assign_blocked" && (
+                <Text fontSize="sm" color="fg.error">
+                  {annotationTargetMeta.reason}
+                </Text>
+              )}
+              {/*
               One-click apply (#307): when the check does NOT require a comment, a single "Apply"
               button commits the annotation immediately — no need to confirm through the comment box.
               For checks with sub-options it's enabled once a sub-option is chosen. The MessageInput
               remains below for graders who DO want to attach a comment ("Apply with comment"). When the
               check requires a comment, the Apply button is hidden and the MessageInput enforces it.
             */}
-            {selectedCheckOption.check && !selectedCheckOption.check.is_comment_required && (
-              <Button
-                size="sm"
-                colorPalette="green"
-                alignSelf="stretch"
-                disabled={isRubricCheckDataWithOptions(selectedCheckOption.check.data) && !selectedSubOption}
-                onClick={() => {
-                  void applyCheck("");
-                }}
-              >
-                Apply
-              </Button>
-            )}
-            <MessageInput
-              textAreaRef={messageInputRef}
-              enableGiphyPicker={true}
-              sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
-              placeholder={
-                !selectedCheckOption.check
-                  ? "Add a comment about this line and press enter to submit..."
-                  : selectedCheckOption.check.is_comment_required
-                    ? "Add a comment about this check and press enter to submit..."
-                    : "Optionally add a comment, or just press enter to submit..."
-              }
-              allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
-              defaultSingleLine={true}
-              sendMessage={applyCheck}
-            />
-          </>
-        )}
-      </VStack>
-    </Box>
+              {selectedCheckOption.check && !selectedCheckOption.check.is_comment_required && (
+                <Button
+                  size="sm"
+                  colorPalette="green"
+                  alignSelf="stretch"
+                  disabled={isRubricCheckDataWithOptions(selectedCheckOption.check.data) && !selectedSubOption}
+                  onClick={() => {
+                    void applyCheck("");
+                  }}
+                >
+                  Apply
+                </Button>
+              )}
+              <MessageInput
+                textAreaRef={messageInputRef}
+                enableGiphyPicker={true}
+                sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
+                placeholder={
+                  !selectedCheckOption.check
+                    ? "Add a comment about this line and press enter to submit..."
+                    : selectedCheckOption.check.is_comment_required
+                      ? "Add a comment about this check and press enter to submit..."
+                      : "Optionally add a comment, or just press enter to submit..."
+                }
+                allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
+                defaultSingleLine={true}
+                sendMessage={applyCheck}
+              />
+            </>
+          )}
+        </VStack>
+      </Box>
+    </Portal>
   );
 }
 
