@@ -218,6 +218,22 @@ test.describe("Assignment due dates", () => {
     await assertStudentPageAccessible(page, "due dates assignments table");
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
+    const assignmentsListUrl = `/course/${course.id}/assignments`;
+    const assignmentsListUrlPattern = new RegExp(`/course/${course.id}/assignments$`);
+    const goToAssignmentsList = async () => {
+      // Nav Button-asChild links are unreliable in Playwright; use goto. Also, `/assignments\b/`
+      // matches detail URLs (`/assignments/123`), so it must not gate "back to list".
+      await page.goto(assignmentsListUrl);
+      await expect(page).toHaveURL(assignmentsListUrlPattern);
+    };
+    const openAssignment = async (assignment: Assignment) => {
+      await goToAssignmentsList();
+      const assignmentLink = page.getByRole("link", { name: assignment.title });
+      await expect(assignmentLink).toBeVisible();
+      await assignmentLink.click();
+      await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments/${assignment.id}$`));
+    };
+
     const consumeTokenAndWaitForExtension = async () => {
       const exceptionCreate = page.waitForResponse(
         (response) =>
@@ -233,12 +249,7 @@ test.describe("Assignment due dates", () => {
 
     //Test with the lab section assignment
     await loginAsUser(page, student!, course);
-    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
-    await link.click();
-    //Wait for the page to load to avoid race condition
-    await expect(page).toHaveURL(/\/assignments\b/);
-    await page.getByRole("link", { name: testLabAssignment!.title }).click();
+    await openAssignment(testLabAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
@@ -253,9 +264,7 @@ test.describe("Assignment due dates", () => {
     ).toBeVisible();
 
     //Test with the non-lab section assignment
-    await link.click();
-    await expect(page).toHaveURL(/\/assignments\b/);
-    await page.getByRole("link", { name: testAssignment!.title }).click();
+    await openAssignment(testAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
@@ -268,9 +277,7 @@ test.describe("Assignment due dates", () => {
     ).toBeVisible();
 
     //Test with the group assignment
-    await link.click();
-    await expect(page).toHaveURL(/\/assignments\b/);
-    await page.getByRole("link", { name: testGroupAssignment!.title }).click();
+    await openAssignment(testGroupAssignment!);
 
     await expect(page.getByText("This is a test group assignment for E2E testing")).toBeVisible();
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
