@@ -463,16 +463,18 @@ test.describe("Due Date Exceptions & Extensions", () => {
     });
     await expect(studentExtRow).toBeVisible();
     await studentExtRow.getByLabel("Delete").click();
-    const confirmDialog = page.getByRole("alertdialog");
+    const extensionDeleted = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/student_deadline_extensions") &&
+        response.request().method() === "DELETE" &&
+        response.ok()
+    );
     await page.getByRole("button", { name: "Confirm action" }).click();
-    // alertdialog unmounts cleanly on dismiss (unlike the regular dialog used
-    // earlier in this test), so visibility resolves correctly to "not found".
-    await expect(confirmDialog).not.toBeVisible();
-    await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} No`
-      })
-    ).not.toBeVisible();
+    await extensionDeleted;
+    // PopConfirm closes immediately; the row disappears only after the delete
+    // resolves and TableController processes the realtime event. Wait for the
+    // positive empty-table state instead of racing on row absence.
+    await expect(page.getByRole("table").getByRole("row")).toHaveCount(1);
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
     const exceptionsAfterDelete = page.waitForResponse(
       (response) =>
