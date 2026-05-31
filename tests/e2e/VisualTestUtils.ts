@@ -10,8 +10,8 @@ type VisualScreenshotOptions = ArgosScreenshotOptions & {
    */
   stabilizeRubric?: string | RegExp;
   /**
-   * Skip the pre-capture {@link waitForVisualIdle} when the test already asserted
-   * UI readiness. Argos still stabilizes in `beforeScreenshot`.
+   * Skip {@link waitForVisualIdle} when the test already asserted UI readiness
+   * (both before capture and in Argos `beforeScreenshot`).
    */
   skipPreIdle?: boolean;
 };
@@ -227,7 +227,9 @@ export async function visualScreenshot(page: Page, name: string, options: Visual
     return await argosScreenshot(page, name, {
       ...argosOptions,
       beforeScreenshot: async (api) => {
-        await waitForVisualIdle(page);
+        if (!skipPreIdle) {
+          await waitForVisualIdle(page);
+        }
         if (stabilizeRubric) {
           await stabilizeRubricSidebar(page, stabilizeRubric);
         }
