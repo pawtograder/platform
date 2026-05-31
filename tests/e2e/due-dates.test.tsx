@@ -405,13 +405,10 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
-    // Chakra v3's Dialog.Root open={isOpen} with Portal can fully unmount
-    // on close — in that case the locator resolves to no element and
-    // toHaveAttribute would time out (no element to read attributes
-    // from). toHaveCount(0) matches the unmounted case AND covers the
-    // original "not visible" intent without racing webkit's
-    // exit-animation budget.
-    await expect(addExtensionModal).toHaveCount(0);
+    // create() waits on DB triggers that backfill assignment exceptions; the dialog
+    // only closes after that resolves. Wait for the success toast (write landed)
+    // rather than dialog teardown, which can race webkit's exit animation.
+    await expect(page.getByText("Extension added")).toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -421,6 +418,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // The single virtualized table includes auto-generated rows with the instructor-granted note.
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    await expect(page.getByText("Loading exceptions...")).toBeHidden();
 
     // The student-deadline-extension trigger creates per-assignment exceptions
     // keyed by `student_id` — even for group assignments — so each row renders as
@@ -461,6 +459,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     ).not.toBeVisible();
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
+    await expect(page.getByText("Loading exceptions...")).toBeHidden();
     await expect(individualAutoRow.first()).toBeVisible();
   });
 
