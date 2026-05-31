@@ -190,13 +190,21 @@ monitoring:
   enabled: true
 
 # Seed the demo class so previews come up with content to play with.
-# Idempotent — `seed.sh` skips if classes.id=1 already exists, so PR-sync
-# re-runs are no-ops.
+# Idempotent — run-seed skips if any non-archived class already exists,
+# so PR-sync re-runs are no-ops.
 seed:
   enabled: true
-  # Use the shared-preview seed-user password from OpenBao so reviewers
-  # can log in as the sample instructor/grader/student emails the PR
-  # comment lists. Set up once per cluster:
+  template: small
+  # Pin the three sample-login emails into the seed itself so reviewers
+  # can log in with these accounts and they're real participants in the
+  # simulation (have submissions / grading assignments / etc).
+  fixedUsers:
+    instructor: instructor@pawtograder.net
+    grader: grader@pawtograder.net
+    student: student@pawtograder.net
+  # Use the shared-preview seed-user password from OpenBao so the
+  # seeded users (including the three fixedUsers above) all share the
+  # documented preview password. Set up once per cluster:
   #   scripts/setup-openbao-preview-shared.sh
   externalSecret:
     enabled: true

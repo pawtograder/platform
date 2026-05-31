@@ -268,19 +268,48 @@ migrations:
 # -----------------------------------------------------------------------------
 seed:
   enabled: false
+  image:
+    # Built from charts/pawtograder/images/seeder/Dockerfile. Node 22 +
+    # the TS scripts/ + node_modules; runs scripts/SeedDB.ts under a
+    # wrapper that waits for postgres + supabase services. Separate
+    # from the migrations image (which is psql-only ~50MB) because
+    # this one's ~600MB and we don't want every helm upgrade pulling
+    # node_modules.
+    repository: ghcr.io/pawtograder/seeder
+    tag: "" # default: chart appVersion (matches web/edge/migrations tags)
+    pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: "50m", memory: "128Mi" }
-    limits: { cpu: "500m", memory: "256Mi" }
+    # tsx + 50-student faker seed peaks around 600 MiB. Bump if you go
+    # to "medium" or larger templates.
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits: { cpu: "1", memory: "1Gi" }
+  # Which scripts/SeedDB.ts template to run. See that file's TEMPLATES
+  # constant. Common choices: "micro" (30/1/1/2), "small" (50/5/2/20).
+  template: small
+  # Fixed e-mails for the first user of each role. When set, the seeder
+  # weaves these accounts INTO the simulation — they are one of the
+  # seeded users for each role with real submissions / grading
+  # assignments / etc. Unset roles fall back to the seeder's
+  # faker-generated emails.
+  #
+  # Pair with seed.externalSecret.enabled to also rewrite their
+  # password to the shared-preview value, so reviewers can log in with
+  # the credentials surfaced in the PR comment.
+  fixedUsers:
+    instructor: ""
+    grader: ""
+    student: ""
   # When enabled, the chart syncs kv/apps/pawtograder/preview-shared from
   # OpenBao into a pawtograder-preview-shared Secret. The seed job
-  # consumes SEED_USER_PASSWORD from that Secret and rewrites every demo
-  # user's encrypted_password so reviewers can log in.
+  # consumes the password from that Secret as TEST_PASSWORD, which
+  # DatabaseSeedingUtils uses when creating auth users — so the entire
+  # seeded class shares the documented preview password.
   #
   # Provision the upstream Bao path once per cluster:
   #   scripts/setup-openbao-preview-shared.sh
   #
-  # Without this, demo users have dummyhash for encrypted_password and
-  # only magic-link auth works.
+  # Without this, the seeder falls back to TEST_PASSWORD's default
+  # ("change-it") which is fine for local dev but ugly for previews.
   externalSecret:
     enabled: false
     storeName: openbao

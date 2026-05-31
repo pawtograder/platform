@@ -1,17 +1,20 @@
 {{- if and .Values.postgres.enabled .Values.seed.enabled }}
-# Seed Job: applies supabase/seed.sql to create the Demo Class (and
-# canned auth.users / assignments / submissions). Runs as a
-# post-install,post-upgrade Helm hook.
+# Seed Job: runs scripts/SeedDB.ts to create a realistic faker-backed
+# demo class (configurable template — see values.yaml `seed.template`).
+# When the chart enables fixed-user emails, the deterministic
+# instructor/grader/student accounts get woven INTO the simulation
+# (they ARE one of the seeded users for each role, with real
+# submissions, real grading assignments, etc. — not bolted on after
+# the fact).
 #
-# IMPORTANT: this hook fires after helm's --wait phase, which only
-# blocks on Deployments/StatefulSets — NOT on the migrations Job (a
-# regular install resource). Callers MUST pass --wait-for-jobs to
-# `helm install/upgrade` so migrations completes before this fires.
-# Otherwise seed.sh races migrations against an empty schema.
-# seed.sh defends against this by hard-failing if public.classes is
-# missing, but the right thing is to wait for jobs.
+# Runs as a post-install,post-upgrade Helm hook AFTER migrations
+# completes. Callers of `helm install/upgrade` MUST pass --wait-for-jobs,
+# otherwise this hook fires while migrations is still running and the
+# schema is empty. The container's run-seed entrypoint defends against
+# that by hard-failing on missing `public.classes`, but the right thing
+# upstream is to pass --wait-for-jobs.
 #
-# Idempotent — seed.sh skips if the demo class exists.
+# Idempotent — run-seed skips if any non-archived class already exists.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,19 +38,19 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: seed
-          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.migrations.image) }}
-          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
-          command: ["/usr/local/bin/seed"]
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.seed.image) }}
+          imagePullPolicy: {{ .Values.seed.image.pullPolicy }}
+          # ENTRYPOINT is /usr/local/bin/run-seed — no command override.
           env:
+            # --- Postgres (probes only; SeedDB.ts itself talks Kong) ----
             - name: PGHOST
               value: {{ include "pawtograder.postgres.host" . }}
             - name: PGPORT
               value: {{ .Values.postgres.service.port | quote }}
             - name: PGDATABASE
               value: {{ .Values.postgres.database | quote }}
-            # supabase_admin is needed because seed.sql writes into
-            # auth.users (owned by supabase_auth_admin) and other schemas
-            # the demoted `postgres` role can't reach.
+            # supabase_admin needed for the wait-for-supabase-services
+            # probe (queries auth/storage/realtime schemas via psql).
             - name: PGUSER
               value: supabase_admin
             - name: PGPASSWORD
@@ -55,20 +58,42 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # --- Supabase admin client (SeedDB.ts uses createAdminClient) ----
+            - name: SUPABASE_URL
+              value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            # --- Seeder config ----
+            - name: SEED_TEMPLATE
+              value: {{ .Values.seed.template | default "small" | quote }}
+            {{- with .Values.seed.fixedUsers }}
+            {{- if .instructor }}
+            - name: FIXED_INSTRUCTOR_EMAIL
+              value: {{ .instructor | quote }}
+            {{- end }}
+            {{- if .grader }}
+            - name: FIXED_GRADER_EMAIL
+              value: {{ .grader | quote }}
+            {{- end }}
+            {{- if .student }}
+            - name: FIXED_STUDENT_EMAIL
+              value: {{ .student | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.seed.externalSecret.enabled }}
             # Shared-preview seed user password — synced from OpenBao by
-            # templates/preview-shared-externalsecret.yaml. seed.sh
-            # rewrites every demo user's encrypted_password to crypt()
-            # of this value so reviewers can password-auth into the
-            # preview.
+            # templates/preview-shared-externalsecret.yaml. SeedDB.ts /
+            # DatabaseSeedingUtils.ts read TEST_PASSWORD when creating
+            # auth users; we wire the OpenBao value into that env var.
             #
-            # optional: true — when ESO hasn't yet synced (e.g. the
-            # operator hasn't run setup-openbao-preview-shared.sh against
-            # the cluster), the pod still starts and seed.sh's
-            # SEED_USER_PASSWORD-empty branch leaves dummyhash in place.
-            # Without optional, a missing Secret blocks pod creation and
-            # the post-upgrade hook times out the whole helm release.
-            - name: SEED_USER_PASSWORD
+            # optional: true — when ESO hasn't yet synced (operator hasn't
+            # run setup-openbao-preview-shared.sh), the seeder falls back
+            # to its default password ("change-it"). Magic-link auth
+            # still works either way.
+            - name: TEST_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: pawtograder-preview-shared

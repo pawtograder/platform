@@ -320,9 +320,21 @@ async function runSeeding(config: SeederConfig) {
   // Use class name from environment variable if available, otherwise use config
   const className = process.env.CLASS_NAME || config.className || "Test Class";
 
+  // Fixed-user emails for preview / demo deploys. When set, these become
+  // the emails of the first user of each role the seeder creates instead
+  // of random faker-generated ones — letting reviewers log in with
+  // predictable accounts that have already produced realistic submissions
+  // / grading data because they ARE participants in the simulation, not
+  // post-hoc bolt-ons. Unset roles fall back to faker.
+  const fixedUsers = {
+    instructor: process.env.FIXED_INSTRUCTOR_EMAIL || undefined,
+    grader: process.env.FIXED_GRADER_EMAIL || undefined,
+    student: process.env.FIXED_STUDENT_EMAIL || undefined
+  };
+
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);
 
-  await seeder
+  let chain = seeder
     .withClassName(className)
     .withStudents(config.students!)
     .withGraders(config.graders!)
@@ -337,8 +349,16 @@ async function runSeeding(config: SeederConfig) {
     .withHelpRequests(config.helpRequests!)
     .withDiscussions(config.discussions!)
     .withSurveys(config.surveyConfig!)
-    .withGradingScheme(config.gradingScheme!)
-    .seed();
+    .withGradingScheme(config.gradingScheme!);
+
+  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student) {
+    console.log(
+      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ?? "(faker)"} grader=${fixedUsers.grader ?? "(faker)"} student=${fixedUsers.student ?? "(faker)"}`
+    );
+    chain = chain.withFixedUsers(fixedUsers);
+  }
+
+  await chain.seed();
 }
 
 // ============================

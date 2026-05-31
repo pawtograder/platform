@@ -11,10 +11,13 @@ FROM postgres:17-alpine
 RUN apk add --no-cache bash
 
 COPY supabase/migrations /migrations
-COPY supabase/seed.sql /seed.sql
 COPY charts/pawtograder/images/migrations/migrate.sh /usr/local/bin/migrate
-COPY charts/pawtograder/images/migrations/seed.sh /usr/local/bin/seed
-RUN chmod +x /usr/local/bin/migrate /usr/local/bin/seed
+RUN chmod +x /usr/local/bin/migrate
+
+# Seed moved to charts/pawtograder/images/seeder/ (Node + TS — runs
+# scripts/SeedDB.ts for a realistic faker-backed demo class). The
+# previous seed.sh / supabase/seed.sql path applied a hardcoded
+# 12-user fixture and is no longer used.
 
 ARG GIT_SHA=""
 ARG VERSION=""

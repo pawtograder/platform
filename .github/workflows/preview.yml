@@ -368,10 +368,38 @@ jobs:
           cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
+  # build-seeder — Node + TS sources + node_modules + psql. Used only by
+  # the post-install seed Job, so it's a separate image from migrations.
+  # Stays out of the per-pod runtime path (~600 MiB vs migrations ~50 MiB).
+  # --------------------------------------------------------------------------
+  build-seeder:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/seeder/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/seeder:${{ needs.meta.outputs.tag }}
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
+
+  # --------------------------------------------------------------------------
   # deploy — helm install/upgrade against ripley
   # --------------------------------------------------------------------------
   deploy:
-    needs: [meta, secrets, build-web, build-edge-functions, build-migrations]
+    needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: pawtograder-ci
     steps:
@@ -417,6 +445,7 @@ jobs:
             --set web.image.tag="$TAG" \
             --set edgeFunctions.image.tag="$TAG" \
             --set migrations.image.tag="$TAG" \
+            --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
             --wait --wait-for-jobs --timeout 10m
@@ -454,11 +483,13 @@ jobs:
 
             ### Sample login emails
 
-            | Role       | Email                            |
-            | ---------- | -------------------------------- |
-            | Instructor | `test1@pawtograder.net`          |
-            | Grader     | `foobar@pawtograder.net`         |
-            | Student    | `nullpointer@pawtograder.net`    |
+            | Role       | Email                              |
+            | ---------- | ---------------------------------- |
+            | Instructor | `instructor@pawtograder.net`       |
+            | Grader     | `grader@pawtograder.net`           |
+            | Student    | `student@pawtograder.net`          |
+
+            These accounts are real participants in the seeded demo class (with submissions, grading assignments, etc.) — not bolted on after the fact.
 
             Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). Or request a magic-link from the app sign-in page.
 
