@@ -29,8 +29,14 @@
 #   pawtograder-jwt              JWT bundle
 #   pawtograder-postgres         POSTGRES_PASSWORD, PAWTOGRADER_PASSWORD
 #   pawtograder-e2e              E2E + edge bypass tokens
-#   pawtograder-s3               MinIO creds (Chime / storage)
-#   pawtograder-edge-functions   GitHub App + integrations (best-effort)
+#
+# Intentionally NOT exported (integration credentials, not service-access
+# credentials — agent shouldn't be able to act as the app to GitHub /
+# AWS Chime / etc.):
+#   pawtograder-edge-functions   GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING,
+#                                GITHUB_OAUTH_CLIENT_*, GITHUB_WEBHOOK_SECRET
+#   pawtograder-s3               AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#                                (storage backend + Chime API)
 
 set -euo pipefail
 
@@ -93,15 +99,6 @@ PAWTOGRADER_PASSWORD=$(field pawtograder-postgres PAWTOGRADER_PASSWORD)
 END_TO_END_SECRET=$(field pawtograder-e2e END_TO_END_SECRET)
 EDGE_FUNCTION_SECRET=$(field pawtograder-e2e EDGE_FUNCTION_SECRET)
 
-S3_ACCESS=$(field pawtograder-s3 AWS_ACCESS_KEY_ID)
-S3_SECRET=$(field pawtograder-s3 AWS_SECRET_ACCESS_KEY)
-
-GITHUB_APP_ID=$(field pawtograder-edge-functions GITHUB_APP_ID)
-GITHUB_PRIVATE_KEY_STRING=$(field pawtograder-edge-functions GITHUB_PRIVATE_KEY_STRING)
-GITHUB_OAUTH_CLIENT_ID=$(field pawtograder-edge-functions GITHUB_OAUTH_CLIENT_ID)
-GITHUB_OAUTH_CLIENT_SECRET=$(field pawtograder-edge-functions GITHUB_OAUTH_CLIENT_SECRET)
-GITHUB_WEBHOOK_SECRET=$(field pawtograder-edge-functions GITHUB_WEBHOOK_SECRET)
-
 # --- compute URLs based on target -------------------------------------------
 SVC="svc.cluster.local"
 if [ "$target" = in-cluster ]; then
@@ -116,7 +113,6 @@ if [ "$target" = in-cluster ]; then
   KONG_ADMIN_URL="http://pawtograder-kong.${NS}.${SVC}:8001"
   PG_HOST="pawtograder-postgres.${NS}.${SVC}"
   PG_PORT="5432"
-  S3_ENDPOINT_URL="http://minio.minio.${SVC}:9000"
 else
   WEB_URL="https://pr-${PREVIEW_ID}.${PREVIEW_DOMAIN}"
   KONG_URL="https://api.pr-${PREVIEW_ID}.${PREVIEW_DOMAIN}"
@@ -140,8 +136,6 @@ else
   # cluster credentials to set the port-forward up.
   PG_HOST="127.0.0.1"
   PG_PORT="5433"
-  # MinIO's public endpoint — talos cluster proxies through s3.talos.
-  S3_ENDPOINT_URL="https://s3.talos.ripley.cloud"
 fi
 
 if [ "$mode" = env ]; then
@@ -194,21 +188,6 @@ emit PAWTOGRADER_DB_URL    "postgresql://pawtograder:${PAWTOGRADER_PASSWORD}@${P
 emit END_TO_END_SECRET     "$END_TO_END_SECRET"
 emit EDGE_FUNCTION_SECRET  "$EDGE_FUNCTION_SECRET"
 
-# --- S3 / MinIO -------------------------------------------------------------
-emit AWS_ACCESS_KEY_ID     "$S3_ACCESS"
-emit AWS_SECRET_ACCESS_KEY "$S3_SECRET"
-emit S3_ENDPOINT           "$S3_ENDPOINT_URL"
-emit S3_BUCKET             "pawtograder-previews-shared"
-
-# --- GitHub App (only if populated) -----------------------------------------
-if [ -n "$GITHUB_APP_ID" ]; then
-  emit GITHUB_APP_ID              "$GITHUB_APP_ID"
-  emit GITHUB_PRIVATE_KEY_STRING  "$GITHUB_PRIVATE_KEY_STRING"
-  emit GITHUB_OAUTH_CLIENT_ID     "$GITHUB_OAUTH_CLIENT_ID"
-  emit GITHUB_OAUTH_CLIENT_SECRET "$GITHUB_OAUTH_CLIENT_SECRET"
-  emit GITHUB_WEBHOOK_SECRET      "$GITHUB_WEBHOOK_SECRET"
-fi
-
 if [ "$mode" = env ]; then
   if [ "$target" = in-cluster ]; then
     cat <<EOF
@@ -221,9 +200,10 @@ if [ "$mode" = env ]; then
 #     PAWTOGRADER_*_URL vars (skips Kong — no rate-limiting, no JWT
 #     verification at the gateway, but the services still verify).
 #   - Postgres connects directly: psql "\$DATABASE_URL"
-#   - The edge runtime has E2E_MOCK_GITHUB=true in preview, so GitHub
-#     calls return synthesized data; real GitHub creds are still loaded
-#     in case a code path explicitly bypasses the mock.
+#   - Storage objects are reachable through the storage API
+#     (PAWTOGRADER_STORAGE_URL) using SERVICE_ROLE_KEY for admin paths
+#     or ANON_KEY + user JWT for scoped paths. Direct MinIO creds are
+#     intentionally not exported.
 EOF
   else
     cat <<EOF
@@ -237,7 +217,6 @@ EOF
 #   - Postgres requires a kubectl port-forward:
 #       kubectl -n $NS port-forward svc/pawtograder-postgres 5433:5432 &
 #     Then connect with PGHOST=127.0.0.1 PGPORT=5433 (already set).
-#   - MinIO is reachable at \$S3_ENDPOINT via the cluster's S3 ingress.
 EOF
   fi
 fi
