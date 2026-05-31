@@ -61,11 +61,19 @@ spec:
             # rewrites every demo user's encrypted_password to crypt()
             # of this value so reviewers can password-auth into the
             # preview.
+            #
+            # optional: true — when ESO hasn't yet synced (e.g. the
+            # operator hasn't run setup-openbao-preview-shared.sh against
+            # the cluster), the pod still starts and seed.sh's
+            # SEED_USER_PASSWORD-empty branch leaves dummyhash in place.
+            # Without optional, a missing Secret blocks pod creation and
+            # the post-upgrade hook times out the whole helm release.
             - name: SEED_USER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: pawtograder-preview-shared
                   key: seed_user_password
+                  optional: true
             {{- end }}
           resources:
             {{- toYaml .Values.seed.resources | nindent 12 }}
