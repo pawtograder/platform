@@ -120,6 +120,24 @@ spec:
             # See values.yaml `migrations.resetOnDrift` for semantics.
             - name: MIGRATIONS_RESET_ON_DRIFT
               value: {{ .Values.migrations.resetOnDrift | default false | quote }}
+            # DB→edge callback wiring. migrate.sh Phase 4 rewrites the vault
+            # `supabase_project_url` / `edge-function-secret` (seeded with local
+            # dev defaults by the gradebook migration) so pg_cron / triggers can
+            # reach the in-cluster edge runtime through Kong. Without this,
+            # gradebook recalculation and other DB-driven edge calls silently
+            # no-op because host.docker.internal:54321 isn't reachable in-cluster.
+            - name: SUPABASE_PROJECT_URL
+              value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
+            {{- if .Values.edgeFunctions.e2e.enabled }}
+            # The e2e overlay overrides the edge runtime's EDGE_FUNCTION_SECRET
+            # (pawtograder-e2e secret), so the vault copy must match or the
+            # edge function rejects the call with "Invalid secret".
+            - name: EDGE_FUNCTION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-e2e
+                  key: EDGE_FUNCTION_SECRET
+            {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}

@@ -24,6 +24,7 @@
 //   was failing) and a SELECT to make sure the cache is fully built.
 
 import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
 const TIMEOUT_MS = 180_000;
@@ -83,8 +84,8 @@ export default async function globalSetup() {
         ? await client
             .from("classes")
             .insert({
-              name: "schema-cache-probe-" + crypto.randomUUID(),
-              slug: "schema-cache-probe-" + crypto.randomUUID(),
+              name: "schema-cache-probe-" + randomUUID(),
+              slug: "schema-cache-probe-" + randomUUID(),
               github_org: "pawtograder-playground",
               time_zone: "America/New_York"
             })

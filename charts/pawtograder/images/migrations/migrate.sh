@@ -202,3 +202,37 @@ SQL
 done
 
 echo "[migrate] done — applied=${applied} skipped=${skipped}"
+
+# ---------------------------------------------------------------------------
+# Phase 4 — environment-specific vault secrets for DB→edge callbacks
+# ---------------------------------------------------------------------------
+# The gradebook migration seeds vault `supabase_project_url` and
+# `edge-function-secret` with LOCAL DEV defaults
+# (http://host.docker.internal:54321 / some-secret-value). Database triggers
+# and pg_cron jobs call edge functions through pg_net via
+# public.call_edge_function_internal, which reads those vault values. In a
+# deployed cluster host.docker.internal is unreachable AND the e2e overlay
+# overrides the edge runtime's EDGE_FUNCTION_SECRET, so without this step
+# every DB-driven edge call (gradebook recalculation, email batch, discord,
+# cache invalidation) silently fails — gradebook cells never refresh.
+#
+# When the operator provides SUPABASE_PROJECT_URL / EDGE_FUNCTION_SECRET
+# (wired from the chart in templates/migrations-job.yaml), point the vault at
+# the in-cluster gateway and the real shared secret. Idempotent: re-running
+# the migrator re-asserts the values.
+upsert_vault_secret() {
+  local secret_name="$1" secret_value="$2"
+  psql -v ON_ERROR_STOP=1 -v sname="${secret_name}" -v sval="${secret_value}" <<'SQL'
+DELETE FROM vault.secrets WHERE name = :'sname';
+SELECT vault.create_secret(:'sval', :'sname', 'set by migrate.sh for in-cluster DB->edge callbacks');
+SQL
+}
+
+if [ -n "${SUPABASE_PROJECT_URL:-}" ]; then
+  echo "[migrate] vault: setting supabase_project_url=${SUPABASE_PROJECT_URL}"
+  upsert_vault_secret "supabase_project_url" "${SUPABASE_PROJECT_URL}"
+fi
+if [ -n "${EDGE_FUNCTION_SECRET:-}" ]; then
+  echo "[migrate] vault: setting edge-function-secret (redacted)"
+  upsert_vault_secret "edge-function-secret" "${EDGE_FUNCTION_SECRET}"
+fi
