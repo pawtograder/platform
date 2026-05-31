@@ -529,7 +529,11 @@ begin
     join public.classes c on c.id = a.class_id
     join public.user_roles ur on ur.class_id = c.id
     where ur.user_id = v_user_id
+      and ur.private_profile_id is not null                  -- safety check for NULL profiles
+      and ur.disabled = false                                -- skip disabled/dropped students
       and (v_class_id is null or c.id = v_class_id)
+      and c.github_org is not null and c.github_org <> ''    -- skip classes with no GitHub org configured
+      and a.release_date is not null and a.release_date <= now()  -- only create repos for released assignments
       and a.repo_mode not in ('none', 'no_submission')
       and a.group_config <> 'groups'
       and (

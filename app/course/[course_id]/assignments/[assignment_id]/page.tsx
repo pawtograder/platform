@@ -236,6 +236,8 @@ export default function AssignmentPage() {
                       <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
                         {submission.sha.slice(0, 7)}
                       </Link>
+                    ) : submission.submitted_via === "manual" ? (
+                      <span>Manual</span>
                     ) : (
                       <span>Upload</span>
                     )}

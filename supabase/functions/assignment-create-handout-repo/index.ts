@@ -93,6 +93,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         latest_template_sha: sourceAssignment!.latest_template_sha ?? null
       })
       .eq("id", assignment_id);
+    // Populate this assignment's autograder.workflow_sha from the inherited
+    // handout's grade.yml. Without this the auto-created autograder row keeps
+    // workflow_sha = NULL and every student submission is rejected with a
+    // "workflow sha mismatch" error. updateAutograderWorkflowHash bulk-updates
+    // all assignments sharing this template_repo, so the source assignment is
+    // unaffected (it already has the same value).
+    if (sourceAssignment!.template_repo) {
+      await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
+    }
     return {
       repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
       org_name: sourceAssignment!.template_repo?.split("/")[0] ?? null,

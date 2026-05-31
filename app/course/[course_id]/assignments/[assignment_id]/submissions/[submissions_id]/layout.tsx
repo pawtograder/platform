@@ -1451,7 +1451,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                 />
               ) : (
                 <Text fontSize="sm" color="fg.muted">
-                  No commit history available for upload submissions.
+                  {submission.submitted_via === "manual"
+                    ? "No commit history available for manually-graded submissions."
+                    : "No commit history available for upload submissions."}
                 </Text>
               )}
             </Dialog.Body>

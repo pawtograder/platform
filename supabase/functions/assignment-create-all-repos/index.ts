@@ -252,7 +252,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username), github_org_confirmed))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username), github_org_confirmed))"
+      "*, assignment_groups(name, assignment_groups_members(*,user_roles(users(github_username), github_org_confirmed))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username), github_org_confirmed))"
     )
     .eq("assignment_id", assignmentId)
     .limit(1000);
