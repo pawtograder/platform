@@ -1250,6 +1250,21 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
   });
 
   test("instructor sees correct countif values", async () => {
+    // beforeAll sets manual scores one-by-one, enqueueing countif recalcs while lab/skill
+    // dependencies are still in flux; kick after all scores are in and wait for the
+    // calculated rows to finish recalculating before asserting final counts.
+    await expect(async () => {
+      await kickRecalculation(course.id);
+      const { data, error } = await supabase
+        .from("gradebook_column_students")
+        .select("is_recalculating, gradebook_columns!inner(score_expression)")
+        .eq("class_id", course.id)
+        .eq("is_private", true)
+        .not("gradebook_columns.score_expression", "is", null);
+      if (error) throw new Error(error.message);
+      expect(data?.every((row) => row.is_recalculating === false)).toBe(true);
+    }).toPass({ timeout: 90_000 });
+
     // Alice: labs with score>0 → lab1,lab2,lab4 → 3
     await waitForScore({
       class_id: course.id,
