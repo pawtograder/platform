@@ -6,6 +6,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
@@ -200,16 +201,8 @@ export default function SurveyResponsesView({
       }
     }
 
-    // Deterministic ordering: realtime arrival order is non-deterministic across
-    // runs. Sort by student name (then id) so the responses table renders the
-    // same way every time — required for visual regression stability.
-    return [...filtered].sort((a, b) => {
-      const nameA = a.profiles?.name ?? "";
-      const nameB = b.profiles?.name ?? "";
-      const byName = nameA.localeCompare(nameB);
-      if (byName !== 0) return byName;
-      return String(a.id).localeCompare(String(b.id));
-    });
+    // Deterministic ordering: DB/realtime arrival order is non-deterministic across runs.
+    return sortSurveyResponsesByProfile(filtered);
   }, [responses, dateRangeStart, dateRangeEnd]);
 
   // Count active filters

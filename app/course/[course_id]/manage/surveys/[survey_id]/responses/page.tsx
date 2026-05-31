@@ -1,5 +1,6 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import SurveyResponsesView from "./SurveyResponsesView";
 
 type SurveyResponsesPageProps = {
@@ -120,7 +121,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       surveyStatus={survey.status}
       surveyJson={survey.json}
       surveyDueDate={survey.due_date}
-      initialResponses={responses || []}
+      initialResponses={sortSurveyResponsesByProfile(responses || [])}
       totalStudents={assignedStudentCount}
       timezone={timezone}
       analyticsConfig={

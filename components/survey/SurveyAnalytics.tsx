@@ -3,6 +3,7 @@
 import { useObfuscatedGradesMode, useSurveysInSeries } from "@/hooks/useCourseController";
 import { useSurveyAnalytics, useSurveySeriesAnalytics } from "@/hooks/useSurveyAnalytics";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, Heading, NativeSelect, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
@@ -112,12 +113,14 @@ export default function SurveyAnalytics({
 
   const freeTextQuestions = useMemo(() => allQuestions.filter((q) => q.type === "comment"), [allQuestions]);
   const sectionFilteredResponses = useMemo(() => {
-    if (sectionFilter === "overall") return responses;
-    const [type, idStr] = sectionFilter.split(":");
-    const id = Number(idStr);
-    if (type === "lab") return responses.filter((r) => r.lab_section_id === id);
-    if (type === "class") return responses.filter((r) => r.class_section_id === id);
-    return responses;
+    let filtered = responses;
+    if (sectionFilter !== "overall") {
+      const [type, idStr] = sectionFilter.split(":");
+      const id = Number(idStr);
+      if (type === "lab") filtered = responses.filter((r) => r.lab_section_id === id);
+      else if (type === "class") filtered = responses.filter((r) => r.class_section_id === id);
+    }
+    return sortSurveyResponsesByProfile(filtered.filter((r) => r.is_submitted));
   }, [responses, sectionFilter]);
   const questionsByScaleGroup = useMemo(() => {
     const groups = new Map<
@@ -284,7 +287,7 @@ export default function SurveyAnalytics({
                   </Text>
                   <VStack align="stretch" gap={6}>
                     {freeTextQuestions.map((q) => {
-                      const submittedResponses = sectionFilteredResponses.filter((r) => r.is_submitted);
+                      const submittedResponses = sectionFilteredResponses;
                       const valueLabels = getValueLabelsFromSurveyJson(surveyJson, q.name);
                       return (
                         <Box key={q.name} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
