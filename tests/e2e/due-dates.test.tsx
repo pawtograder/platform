@@ -404,11 +404,17 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.getByRole("option", { name: student2!.private_profile_name }).click();
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
+    const extensionCreated = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/student_deadline_extensions") &&
+        response.request().method() === "POST" &&
+        response.ok()
+    );
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
-    // create() waits on DB triggers that backfill assignment exceptions; the dialog
-    // only closes after that resolves. Wait for the success toast (write landed)
-    // rather than dialog teardown, which can race webkit's exit animation.
-    await expect(page.getByText("Extension added")).toBeVisible();
+    // create() waits on DB triggers that backfill assignment exceptions. Wait for
+    // the insert response (not the success toast — the Toaster is display:none in
+    // e2e visual mode) and then for the row the TableController publishes.
+    await extensionCreated;
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -416,9 +422,17 @@ test.describe("Due Date Exceptions & Extensions", () => {
     ).toBeVisible();
     // Check that the extension is applied to the consolidated assignment exceptions table.
     // The single virtualized table includes auto-generated rows with the instructor-granted note.
+    const exceptionsCatchUp = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/assignment_due_date_exceptions") &&
+        response.request().method() === "GET" &&
+        response.ok()
+    );
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
-    await expect(page.getByText("Loading exceptions...")).toBeHidden();
+    // isReady hides "Loading exceptions..." before the post-SSR catch-up refetch
+    // (see TableController._needsCatchUpAfterInitialDataHydration) finishes.
+    await exceptionsCatchUp;
 
     // The student-deadline-extension trigger creates per-assignment exceptions
     // keyed by `student_id` — even for group assignments — so each row renders as
@@ -443,9 +457,11 @@ test.describe("Due Date Exceptions & Extensions", () => {
 
     // Test Delete of the student-wide extension itself
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions/student-extensions`);
+    await expect(page.getByRole("heading", { name: "Student-Wide Extensions" })).toBeVisible();
     const studentExtRow = page.getByRole("row", {
       name: `${student2!.private_profile_name} ${hours} No`
     });
+    await expect(studentExtRow).toBeVisible();
     await studentExtRow.getByLabel("Delete").click();
     const confirmDialog = page.getByRole("alertdialog");
     await page.getByRole("button", { name: "Confirm action" }).click();
@@ -458,8 +474,15 @@ test.describe("Due Date Exceptions & Extensions", () => {
       })
     ).not.toBeVisible();
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
+    const exceptionsAfterDelete = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/assignment_due_date_exceptions") &&
+        response.request().method() === "GET" &&
+        response.ok()
+    );
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
-    await expect(page.getByText("Loading exceptions...")).toBeHidden();
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    await exceptionsAfterDelete;
     await expect(individualAutoRow.first()).toBeVisible();
   });
 
