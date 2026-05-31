@@ -994,13 +994,18 @@ export type Database = {
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
           permit_empty_submissions: boolean;
+          protect_block_force_push: boolean;
+          protect_require_pull_request: boolean;
+          protect_required_reviewers: number;
           regrade_deadline: string | null;
           release_date: string | null;
+          repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date: boolean;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
           show_leaderboard: boolean;
           slug: string | null;
+          source_assignment_id: number | null;
           student_repo_prefix: string | null;
           suggested_due_date: string | null;
           template_repo: string | null;
@@ -1034,13 +1039,18 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          protect_block_force_push?: boolean;
+          protect_require_pull_request?: boolean;
+          protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
           show_leaderboard?: boolean;
           slug?: string | null;
+          source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
           suggested_due_date?: string | null;
           template_repo?: string | null;
@@ -1074,13 +1084,18 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          protect_block_force_push?: boolean;
+          protect_require_pull_request?: boolean;
+          protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
           show_leaderboard?: boolean;
           slug?: string | null;
+          source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
           suggested_due_date?: string | null;
           template_repo?: string | null;
@@ -1123,6 +1138,34 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignment_self_review_settings";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_source_assignment_id_fkey";
+            columns: ["source_assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_source_assignment_id_fkey";
+            columns: ["source_assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_source_assignment_id_fkey";
+            columns: ["source_assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_source_assignment_id_fkey";
+            columns: ["source_assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
           }
         ];
       };
@@ -2618,6 +2661,30 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      e2e_github_calls: {
+        Row: {
+          args: Json;
+          created_at: string;
+          fn: string;
+          id: number;
+          scope: string | null;
+        };
+        Insert: {
+          args: Json;
+          created_at?: string;
+          fn: string;
+          id?: number;
+          scope?: string | null;
+        };
+        Update: {
+          args?: Json;
+          created_at?: string;
+          fn?: string;
+          id?: number;
+          scope?: string | null;
+        };
+        Relationships: [];
       };
       email_batches: {
         Row: {
@@ -8606,12 +8673,13 @@ export type Database = {
           ordinal: number;
           profile_id: string | null;
           released: string | null;
-          repository: string;
+          repository: string | null;
           repository_check_run_id: number | null;
           repository_id: number | null;
           run_attempt: number;
           run_number: number;
-          sha: string;
+          sha: string | null;
+          submitted_via: string | null;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -8626,12 +8694,13 @@ export type Database = {
           ordinal?: number;
           profile_id?: string | null;
           released?: string | null;
-          repository: string;
+          repository?: string | null;
           repository_check_run_id?: number | null;
           repository_id?: number | null;
           run_attempt: number;
           run_number: number;
-          sha: string;
+          sha?: string | null;
+          submitted_via?: string | null;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -8646,12 +8715,13 @@ export type Database = {
           ordinal?: number;
           profile_id?: string | null;
           released?: string | null;
-          repository?: string;
+          repository?: string | null;
           repository_check_run_id?: number | null;
           repository_id?: number | null;
           run_attempt?: number;
           run_number?: number;
-          sha?: string;
+          sha?: string | null;
+          submitted_via?: string | null;
         };
         Relationships: [
           {
@@ -10820,10 +10890,6 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
-      auto_assign_self_reviews: {
-        Args: { this_assignment_id: number; this_profile_id: string };
-        Returns: undefined;
-      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -11109,6 +11175,18 @@ export type Database = {
         };
         Returns: number;
       };
+      create_manual_submission: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id: number;
+          p_profile_id?: string;
+        };
+        Returns: number;
+      };
+      create_no_repo_submission: {
+        Args: { p_assignment_id: number; p_files: Json };
+        Returns: number;
+      };
       create_regrade_request: {
         Args: {
           private_profile_id: string;
@@ -11311,6 +11389,27 @@ export type Database = {
               p_org: string;
               p_profile_id?: string;
               p_repo_name: string;
+              p_template_repo: string;
+            };
+            Returns: number;
+          }
+        | {
+            Args: {
+              p_assignment_group_id?: number;
+              p_assignment_id?: number;
+              p_branch_protection?: Json;
+              p_class_id: number;
+              p_course_slug: string;
+              p_creation_method?: string;
+              p_debug_id?: string;
+              p_github_usernames: string[];
+              p_is_template_repo?: boolean;
+              p_latest_template_sha?: string;
+              p_org: string;
+              p_profile_id?: string;
+              p_repo_name: string;
+              p_source_repo?: string;
+              p_student_team_permission?: string;
               p_template_repo: string;
             };
             Returns: number;
@@ -12299,6 +12398,12 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      assignment_repo_mode:
+        | "none"
+        | "template_only_staff"
+        | "template_with_student_forks"
+        | "fork_from_prior_assignment"
+        | "no_submission";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -12496,6 +12601,13 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
+      assignment_repo_mode: [
+        "none",
+        "template_only_staff",
+        "template_with_student_forks",
+        "fork_from_prior_assignment",
+        "no_submission"
+      ],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [
         "general",

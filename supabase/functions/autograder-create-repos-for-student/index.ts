@@ -7,6 +7,47 @@ import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandl
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import {
+  resolveRepoCreationStrategy,
+  type AssignmentForRepoCreation,
+  type SourceRepoRow
+} from "../_shared/repoCreationStrategy.ts";
+import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
+
+function branchProtectionFromAssignment(a: {
+  protect_block_force_push?: boolean | null;
+  protect_require_pull_request?: boolean | null;
+  protect_required_reviewers?: number | null;
+}): BranchProtectionConfig {
+  return {
+    blockForcePush: a.protect_block_force_push ?? true,
+    requirePullRequest: a.protect_require_pull_request ?? false,
+    requiredReviewers: a.protect_required_reviewers ?? 0
+  };
+}
+
+async function fetchSourceAssignmentRepos(
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  assignment: { repo_mode?: string | null; source_assignment_id?: number | null }
+): Promise<SourceRepoRow[]> {
+  if (assignment.repo_mode !== "fork_from_prior_assignment" || !assignment.source_assignment_id) {
+    return [];
+  }
+  const { data, error } = await adminSupabase
+    .from("repositories")
+    .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
+    .eq("assignment_id", assignment.source_assignment_id)
+    .limit(2000);
+  if (error) {
+    throw new Error(`Error fetching source assignment repositories: ${error.message}`);
+  }
+  return (data ?? []).map((r) => ({
+    repository: r.repository,
+    profile_id: r.profile_id,
+    assignment_group_id: r.assignment_group_id,
+    group_name: r.assignment_groups?.name ?? null
+  }));
+}
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-repos-for-student");
@@ -353,6 +394,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   const assignments = allAssignments.filter(
     (a) =>
+      a.repo_mode !== "none" &&
+      a.repo_mode !== "no_submission" &&
       a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")) &&
@@ -405,7 +448,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+            const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+            const strategy = resolveRepoCreationStrategy(
+              {
+                id: assignment.id,
+                repo_mode: assignment.repo_mode ?? "template_only_staff",
+                template_repo: assignment.template_repo,
+                source_assignment_id: assignment.source_assignment_id
+              } as AssignmentForRepoCreation,
+              {
+                assignment_group_id: group.id,
+                group_name: group.name,
+                display_name: group.name
+              },
+              sourceRepos
+            );
+            if (strategy.kind !== "create") {
+              throw new UserVisibleError(
+                `Cannot create group repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+              );
+            }
+            const headSha = await createRepo(c.classes!.github_org!, repoName, strategy.sourceRepo, {
+              creation_method: strategy.creationMethod,
+              branch_protection: branchProtectionFromAssignment(assignment)
+            });
             await adminSupabase
               .from("repositories")
               .update({
@@ -498,14 +564,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       try {
+        const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+        const strategy = resolveRepoCreationStrategy(
+          {
+            id: assignment.id,
+            repo_mode: assignment.repo_mode ?? "template_only_staff",
+            template_repo: assignment.template_repo,
+            source_assignment_id: assignment.source_assignment_id
+          } as AssignmentForRepoCreation,
+          { profile_id: userProfileID, display_name: githubUsername! },
+          sourceRepos
+        );
+        if (strategy.kind !== "create") {
+          throw new UserVisibleError(
+            `Cannot create individual repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+          );
+        }
         // Demo provisioning can override the per-student template repo so each real-fleet
         // member starts from a canned submission rather than the blank handout. Already
         // gated above to (edge-secret OR service-role) + matching assignment_id.
         const sourceTemplateRepo =
           templateRepoOverride && assignmentId !== undefined && assignment.id === assignmentId
             ? templateRepoOverride
-            : assignment.template_repo;
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo);
+            : strategy.sourceRepo;
+        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo, {
+          creation_method: strategy.creationMethod,
+          branch_protection: branchProtectionFromAssignment(assignment)
+        });
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
         await adminSupabase

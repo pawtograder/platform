@@ -1439,7 +1439,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
               </Flex>
             </Dialog.Header>
             <Dialog.Body p={0} pt={3}>
-              {submission.repository_id !== null && (
+              {submission.repository_id !== null && submission.repository !== null ? (
                 <StaffCommitHistory
                   courseId={courseId}
                   assignmentId={submission.assignment_id}
@@ -1449,6 +1449,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                   assignmentGroupId={submission.assignment_group_id}
                   currentSubmissionId={submission.id}
                 />
+              ) : (
+                <Text fontSize="sm" color="fg.muted">
+                  {submission.submitted_via === "manual"
+                    ? "No commit history available for manually-graded submissions."
+                    : "No commit history available for upload submissions."}
+                </Text>
               )}
             </Dialog.Body>
           </Dialog.Content>
@@ -2298,14 +2304,19 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </Text>
               )}
             </HStack>
-            <HStack gap={1}>
-              <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
-                Commit {submission.sha.substring(0, 7)}
-              </Link>
-              <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">
-                (Download)
-              </Link>
-            </HStack>
+            {submission.sha && submission.repository && (
+              <HStack gap={1}>
+                <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
+                  Commit {submission.sha.substring(0, 7)}
+                </Link>
+                <Link
+                  href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
+                  target="_blank"
+                >
+                  (Download)
+                </Link>
+              </HStack>
+            )}
           </VStack>
         </Box>
         {submission.is_not_graded && (
