@@ -54,6 +54,28 @@ async function waitForStableLocator(locator: Locator) {
   }
 }
 
+async function waitForStableSurveyCharts(page: Page) {
+  await page
+    .waitForFunction(
+      () => {
+        const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-survey-chart-host]"));
+        if (hosts.length === 0) return true;
+        return hosts.every((host) => {
+          const surface = host.querySelector(".recharts-surface");
+          if (!surface) return false;
+          const hostRect = host.getBoundingClientRect();
+          const surfaceRect = surface.getBoundingClientRect();
+          return hostRect.width > 0 && surfaceRect.width > 0 && Math.abs(hostRect.width - surfaceRect.width) < 2;
+        });
+      },
+      undefined,
+      { timeout: 10_000 }
+    )
+    .catch(() => {
+      /* page may not include survey charts */
+    });
+}
+
 export async function waitForVisualIdle(page: Page) {
   await page.waitForLoadState("domcontentloaded");
   await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {
@@ -135,6 +157,8 @@ export async function waitForVisualIdle(page: Page) {
         // test's domain assertions when it matters.
       });
   }
+
+  await waitForStableSurveyCharts(page);
 }
 
 export async function stabilizeRubricSidebar(page: Page, rubricName: string | RegExp) {

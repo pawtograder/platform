@@ -49,10 +49,18 @@ export function GroupSummaryCards({
     [groupAnalytics]
   );
 
+  const primaryQuestionName = (group: GroupAnalytics) => {
+    const names = Object.keys(group.questionStats).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+    return names[0] ?? null;
+  };
+
   return (
     <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4 }} gap={3} w="100%">
       {sortedGroups.map((group) => {
-        const stats = Object.values(group.questionStats)[0];
+        const statsKey = primaryQuestionName(group);
+        const stats = statsKey ? group.questionStats[statsKey] : undefined;
         const isSelected = selectedGroupId === group.groupId;
         const hasCritical = group.alerts.some((a) => a.severity === "critical");
         const hasWarning = group.alerts.some((a) => a.severity === "warning");

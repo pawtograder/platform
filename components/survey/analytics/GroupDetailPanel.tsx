@@ -2,6 +2,7 @@
 
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import type { GroupAnalytics, QuestionStats, SurveyResponseWithContext } from "@/types/survey-analytics";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import type { SurveyQuestionInfo } from "./utils";
 import { Box, Card, HStack, Text, VStack } from "@chakra-ui/react";
 import { ChoiceDistributionChart } from "./ChoiceDistributionChart";
@@ -45,7 +46,7 @@ export function GroupDetailPanel({
     );
   }
 
-  const allGroupMemberRows = responses.filter((r) => r.group_id === group.groupId);
+  const allGroupMemberRows = sortSurveyResponsesByProfile(responses.filter((r) => r.group_id === group.groupId));
   const groupResponses = allGroupMemberRows.filter((r) => r.is_submitted);
   const valueLabelsByQuestion = Object.fromEntries(
     allQuestions.map((q) => [q.name, getValueLabelsFromSurveyJson(surveyJson, q.name)])

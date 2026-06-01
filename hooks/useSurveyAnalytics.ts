@@ -12,6 +12,7 @@ import type {
   QuestionStats,
   Alert
 } from "@/types/survey-analytics";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import {
   computeStats,
   getDistributionWithDelta,
@@ -231,7 +232,11 @@ export function computeGroupAnalyticsFromResponses(
     groupAnalytics.push(groupStats);
   }
 
-  return groupAnalytics;
+  return groupAnalytics.sort((a, b) => {
+    const byName = a.groupName.localeCompare(b.groupName, undefined, { sensitivity: "base" });
+    if (byName !== 0) return byName;
+    return a.groupId - b.groupId;
+  });
 }
 
 function generateAlerts(groupStats: GroupAnalytics, analyticsConfig: SurveyAnalyticsConfig | null): Alert[] {
@@ -346,7 +351,7 @@ export function useSurveyAnalytics(
         setError(rpcError.message);
         setResponses([]);
       } else {
-        setResponses((data as SurveyResponseWithContext[]) ?? []);
+        setResponses(sortSurveyResponsesByProfile((data as SurveyResponseWithContext[]) ?? []));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -609,7 +614,10 @@ export function useSurveySeriesAnalytics(
           p_class_id: classId
         });
         if (rpcError) throw rpcError;
-        return { surveyId: sid, responses: (data as SurveyResponseWithContext[]) ?? [] };
+        return {
+          surveyId: sid,
+          responses: sortSurveyResponsesByProfile((data as SurveyResponseWithContext[]) ?? [])
+        };
       })
     )
       .then((results) => {
