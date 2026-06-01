@@ -1,0 +1,145 @@
+{{- if .Values.web.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.web.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.web.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: web
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.web.image) }}
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.service.port }}
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: {{ .Values.web.service.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            # Server-only Supabase wiring. NEXT_PUBLIC_* are baked into the
+            # client bundle at build time and cannot be overridden here — the
+            # image must have been built with build-args matching this chart's
+            # hostname/keys.
+            - name: SUPABASE_URL
+              value: {{ default (include "pawtograder.api.url" .) .Values.web.apiUrl | quote }}
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: ANON_KEY
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            {{- if .Values.monitoring.enabled }}
+            # Static bearer token gating the app's /api/metrics endpoint.
+            # ServiceMonitor injects it as Authorization: Bearer <token>.
+            # Marked optional: pre-existing pawtograder-jwt Secrets (from
+            # before METRICS_SCRAPE_TOKEN was added to the bundle) may not
+            # carry this key. When absent, /api/metrics returns 503 — the
+            # /api/metrics route handler also checks for the env var so
+            # there's no scrape leak.
+            - name: METRICS_SCRAPE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: METRICS_SCRAPE_TOKEN
+                  optional: true
+            {{- if .Values.web.workflowMetricsLeader }}
+            # Leader-gate for DB-backed workflow gauges. /api/metrics only
+            # refreshes the cluster-wide RPCs when this is set; without it
+            # the route just exports whatever is currently in the registry.
+            #
+            # Set on AT MOST ONE web pod across the deploy to avoid
+            # multiplying DB load + over-counting gauges. For single-replica
+            # installs (previews, small prod) it's safe to enable on the
+            # only replica via this chart value. For multi-replica prod,
+            # leave this off here and run a dedicated 1-replica metrics
+            # leader deployment instead.
+            - name: METRICS_WORKFLOW_REFRESH_LEADER
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.web.e2e.enabled }}
+            # E2E test bypass: utils/csp.ts flips CSP into report-only mode
+            # when this is set, which lets Playwright inject the test-runner
+            # frames and stubs that production CSP would block. NEVER set
+            # this in a real prod install — it weakens browser-level
+            # protections that depend on enforce mode.
+            - name: E2E_ENABLE
+              value: "true"
+            {{- end }}
+            {{- with .Values.web.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.names.web }}
+                optional: true
+            {{- range .Values.web.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+                optional: true
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.web)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.web)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.web)) }}
+      affinity:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

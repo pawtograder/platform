@@ -1208,6 +1208,90 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       try {
+        // E2E load-test fast path: bypass GitHub entirely. When E2E_MOCK_GITHUB is set
+        // and this is an E2E repo, skip cloneRepository/zip-extraction/getRepoTarballURL
+        // and insert one canned submission_files row so submit-feedback can still
+        // resolve file_name lookups for synthetic line comments.
+        const e2eMockGithub = isE2ERun && Deno.env.get("E2E_MOCK_GITHUB") === "true";
+        if (e2eMockGithub && !isRegressionRerun) {
+          if (submission_id === undefined) {
+            throw new UserVisibleError("Internal error: submission id missing while saving E2E mock files", 500);
+          }
+          // Mirror the real handout's signature file (`package
+          // com.pawtograder.example.java`) so E2E assertions on the rendered
+          // submission files hold without a real GitHub clone.
+          const mockContents =
+            "package com.pawtograder.example.java;\n\n" +
+            "public class Main {\n" +
+            "    public static void main(String[] args) {\n" +
+            '        System.out.println("Hello, world!");\n' +
+            "    }\n" +
+            "}\n";
+          const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+            submission_id,
+            name: "Main.java",
+            profile_id: repoData.profile_id,
+            assignment_group_id: repoData.assignment_group_id,
+            contents: mockContents,
+            class_id: repoData.assignments.class_id!,
+            is_binary: false,
+            file_size: mockContents.length
+          });
+          if (textFileError) {
+            Sentry.captureException(textFileError, scope);
+            throw new UserVisibleError(
+              `Internal error: Failed to insert mock submission file: ${textFileError.message}`
+            );
+          }
+
+          // Replicate the real clone path's empty-submission detection so the
+          // is_empty_submission / permit_empty_submissions flows stay covered
+          // under E2E_MOCK_GITHUB. The combined hash is computed identically to
+          // computeCombinedHashFromSubmissionFiles in the test helper, so a
+          // submission whose files match a recorded handout fingerprint is
+          // flagged empty (and rejected when the assignment prohibits it).
+          const file_hashes: Record<string, string> = {
+            "Main.java": sha256Hex(Buffer.from(mockContents, "utf-8"))
+          };
+          const submissionCombinedHash = combinedHashFromPerFileHexHashes(file_hashes);
+          const { data: handoutMatch, error: handoutMatchError } = await adminSupabase
+            .from("assignment_handout_file_hashes")
+            .select("id")
+            .eq("assignment_id", repoData.assignment_id)
+            .eq("combined_hash", submissionCombinedHash)
+            .limit(1)
+            .maybeSingle();
+          if (handoutMatchError) {
+            Sentry.captureException(handoutMatchError, scope);
+          }
+          const isEmpty = !!handoutMatch;
+          const { error: emptyUpdateError } = await adminSupabase
+            .from("submissions")
+            .update({ is_empty_submission: isEmpty })
+            .eq("id", submission_id);
+          if (emptyUpdateError) {
+            Sentry.captureException(emptyUpdateError, scope);
+          }
+          const isGraderOrInstructor = actorIsStaff || isStaffTriggeredSubmission;
+          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+            throw new UserVisibleError(
+              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              400
+            );
+          }
+
+          return {
+            grader_url: "e2e-mock-grader-url",
+            grader_sha: "e2e-mock-grader-sha",
+            submission_id
+          };
+        }
+
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
         const repo = await handleGitHubApiCall(
