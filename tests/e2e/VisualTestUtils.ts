@@ -135,6 +135,28 @@ export async function waitForVisualIdle(page: Page) {
         // test's domain assertions when it matters.
       });
   }
+
+  await waitForSubmissionReviewCompletionSettled(page);
+}
+
+/**
+ * On submission pages where the hand grading review is already released, completion
+ * happened earlier in the suite. Realtime hydration of completed_by/completed_at can
+ * lag behind the pre-completion ReviewActions block ("Submission Review Actions",
+ * "Other graders", "Complete Review"), which shifts layout and causes large visual
+ * diffs on instructor regrade views. Only runs when "Released to studentYes" is
+ * visible so in-progress grading screenshots and unreleased grader views are skipped.
+ */
+export async function waitForSubmissionReviewCompletionSettled(page: Page) {
+  const releasedToStudent = page.getByText("Released to studentYes");
+  if (!(await releasedToStudent.isVisible().catch(() => false))) {
+    return;
+  }
+
+  const reviewActionsHeading = page.getByRole("heading", { name: "Submission Review Actions" });
+  await expect(reviewActionsHeading).toBeHidden({ timeout: 15_000 });
+  await expect(page.getByText("Completed by", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Completed at", { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 export async function stabilizeRubricSidebar(page: Page, rubricName: string | RegExp) {
