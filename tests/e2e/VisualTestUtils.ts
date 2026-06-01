@@ -159,15 +159,15 @@ export async function waitForSubmissionReviewCompletionSettled(page: Page) {
   // up to ~24s and time tests out on every released screenshot under load. retries=2 + Argos review
   // cover the rare unsettled capture.
   await expect(page.getByRole("heading", { name: "Submission Review Actions" }))
-    .toBeHidden({ timeout: 8_000 })
+    .toBeHidden({ timeout: 15_000 })
     .catch(() => {
       /* realtime still behind — capture proceeds rather than failing the test */
     });
   await expect(page.getByText("Completed by", { exact: true }))
-    .toBeVisible({ timeout: 8_000 })
+    .toBeVisible({ timeout: 15_000 })
     .catch(() => {});
   await expect(page.getByText("Completed at", { exact: true }))
-    .toBeVisible({ timeout: 8_000 })
+    .toBeVisible({ timeout: 15_000 })
     .catch(() => {});
 }
 
