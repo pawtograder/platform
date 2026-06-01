@@ -658,7 +658,9 @@ export function useRubricCheckInstances(
           (c as { target_student_profile_id?: string | null }).target_student_profile_id === target_student_profile_id
       );
     }
-    return filtered;
+    return [...filtered].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id
+    );
   }, [ctx, fileComments, submissionComments, artifactComments, check.id, review_id, target_student_profile_id]);
 
   return filteredComments;

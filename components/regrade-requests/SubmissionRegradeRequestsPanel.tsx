@@ -170,8 +170,9 @@ export default function SubmissionRegradeRequestsPanel({ submissionId }: { submi
         // Active requests come first
         return aActive ? -1 : 1;
       }
-      // Same category, newest first
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      // Same category, newest first; id tiebreak when created_at matches (common under load).
+      const byCreatedAt = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      return byCreatedAt !== 0 ? byCreatedAt : b.id - a.id;
     });
   }, [requests]);
 

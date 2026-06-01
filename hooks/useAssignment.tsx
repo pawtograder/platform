@@ -398,7 +398,9 @@ export function useBareCheckRegradeRequest(
     if (active.length === 0) {
       return undefined;
     }
-    return [...active].sort((a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime())[0];
+    return [...active].sort(
+      (a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime() || b.id - a.id
+    )[0];
   }, [matches]);
 }
 

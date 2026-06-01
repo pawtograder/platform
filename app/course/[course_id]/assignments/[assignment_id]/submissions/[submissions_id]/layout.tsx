@@ -2170,8 +2170,15 @@ function RubricView() {
 }
 
 function Comments() {
-  const comments = useSubmissionComments({}).filter((comment) => !comment.rubric_check_id);
-  if (!comments || comments.length === 0) {
+  const allComments = useSubmissionComments({});
+  const comments = useMemo(
+    () =>
+      [...(allComments ?? [])]
+        .filter((comment) => !comment.rubric_check_id)
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id),
+    [allComments]
+  );
+  if (comments.length === 0) {
     return null;
   }
   return (
