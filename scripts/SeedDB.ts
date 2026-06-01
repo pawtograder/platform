@@ -352,8 +352,10 @@ async function runSeeding(config: SeederConfig) {
     .withGradingScheme(config.gradingScheme!);
 
   if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student) {
+    // Don't log the raw emails — they may be real reviewer addresses
+    // when operators wire this up for staging / on-call rotations.
     console.log(
-      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ?? "(faker)"} grader=${fixedUsers.grader ?? "(faker)"} student=${fixedUsers.student ?? "(faker)"}`
+      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"}`
     );
     chain = chain.withFixedUsers(fixedUsers);
   }

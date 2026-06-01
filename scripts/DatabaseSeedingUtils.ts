@@ -1245,6 +1245,7 @@ export class DatabaseSeeder {
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
+      fixedUsers: this.config.fixedUsers,
       demoFixtures: this.config.demoFixtures,
       perAssignmentRepos: this.config.perAssignmentRepos,
       handoutStrategy: this.config.handoutStrategy,

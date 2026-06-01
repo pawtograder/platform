@@ -54,21 +54,24 @@ RUN apt-get update \
 
 # Copy node_modules from deps stage (avoids re-downloading + reuses the
 # Docker layer cache when only TS sources change between builds).
-COPY --from=deps /app/node_modules ./node_modules
+# --chown=node:node so the built-in node UID can read them when we drop
+# privileges below.
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 
 # Source files SeedDB.ts walks transitively. Copy enough of the tree to
 # resolve all imports — scripts/, tests/, utils/, supabase/ (the Database
 # type), components/, libs/, etc. The image is for seeding so we don't
 # care about excluding test fixtures.
-COPY tsconfig.json package.json package-lock.json ./
-COPY scripts ./scripts
-COPY utils ./utils
-COPY supabase ./supabase
-COPY tests ./tests
+COPY --chown=node:node tsconfig.json package.json package-lock.json ./
+COPY --chown=node:node scripts ./scripts
+COPY --chown=node:node utils ./utils
+COPY --chown=node:node supabase ./supabase
+COPY --chown=node:node tests ./tests
 
-# Entrypoint wrapper
+# Entrypoint wrapper. Stays root-owned (mode 0755) so node can execute
+# it but not modify it.
 COPY charts/pawtograder/images/seeder/run-seed.sh /usr/local/bin/run-seed
-RUN chmod +x /usr/local/bin/run-seed
+RUN chmod 0755 /usr/local/bin/run-seed
 
 ARG GIT_SHA=""
 ARG VERSION=""
@@ -76,5 +79,10 @@ LABEL org.opencontainers.image.source="https://github.com/pawtograder/platform" 
       org.opencontainers.image.title="pawtograder-seeder" \
       org.opencontainers.image.revision="$GIT_SHA" \
       org.opencontainers.image.version="$VERSION"
+
+# Drop privileges. The node:bookworm-slim base image ships a non-root
+# `node` user (uid/gid 1000). The image is a short-lived post-install
+# Job but defense-in-depth still applies.
+USER node
 
 ENTRYPOINT ["/usr/local/bin/run-seed"]
