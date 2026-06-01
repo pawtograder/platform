@@ -412,6 +412,41 @@ async function checkAndTripErrorCircuitBreaker(
   }
 }
 
+async function assertOrgGitHubCircuitClosed(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
+    if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
+      const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
+      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+        scope.setTag("circuit_state", "open");
+        scope.setContext("circuit_breaker_active", {
+          org,
+          reason: row.reason || "Circuit breaker active",
+          open_until: row.open_until
+        });
+
+        const openUntil = row.open_until ? new Date(row.open_until) : new Date(Date.now() + 3600000);
+        throw new UserVisibleError(
+          `GitHub operations are temporarily unavailable for organization ${org} due to rate limiting or errors. Please try again after ${openUntil.toLocaleString()}. Reason: ${row.reason || "Circuit breaker active"}`
+        );
+      }
+    }
+  } catch (e) {
+    if (e instanceof UserVisibleError) {
+      throw e;
+    }
+    scope.setContext("circuit_check_warning", {
+      org,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+  }
+}
+
 // Wrapper function to handle GitHub API calls with circuit breaker logic
 async function handleGitHubApiCall<T>(
   operation: () => Promise<T>,
@@ -421,6 +456,7 @@ async function handleGitHubApiCall<T>(
   scope: Sentry.Scope,
   retryCount: number = 0
 ): Promise<T> {
+  await assertOrgGitHubCircuitClosed(adminSupabase, org, scope);
   try {
     return await operation();
   } catch (error) {
@@ -580,37 +616,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
 
-  try {
-    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
-    if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
-      const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
-      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
-        scope.setTag("circuit_state", "open");
-        scope.setContext("circuit_breaker_active", {
-          org,
-          reason: row.reason || "Circuit breaker active",
-          open_until: row.open_until
-        });
-
-        // Circuit breaker is open - fail fast with user-visible error
-        const openUntil = row.open_until ? new Date(row.open_until) : new Date(Date.now() + 3600000); // 1 hour default
-        throw new UserVisibleError(
-          `GitHub operations are temporarily unavailable for organization ${org} due to rate limiting or errors. Please try again after ${openUntil.toLocaleString()}. Reason: ${row.reason || "Circuit breaker active"}`
-        );
-      }
-    }
-  } catch (e) {
-    // If it's already a UserVisibleError from circuit breaker, re-throw it
-    if (e instanceof UserVisibleError) {
-      throw e;
-    }
-    // Circuit check failure should not break processing; log and continue
-    scope.setContext("circuit_check_warning", {
-      org,
-      error_message: e instanceof Error ? e.message : String(e)
-    });
-    Sentry.captureException(e, scope);
-  }
   // Find the corresponding student and assignment
   console.log("Creating submission for", repository, sha, workflow_ref);
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);

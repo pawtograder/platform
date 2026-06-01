@@ -1895,6 +1895,23 @@ export async function insertSubmissionViaAPI({
   if (!check_run_id) {
     throw new Error("Failed to create check run id");
   }
+  // autograder-create-submission retries check-run lookup with exponential backoff
+  // (up to ~31s). Poll until the row is readable so past-due rejections return
+  // before Playwright's expect(...).rejects timeout.
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const { data: visibleCheckRun, error: visibleCheckRunError } = await supabase
+      .from("repository_check_runs")
+      .select("id")
+      .eq("id", check_run_id)
+      .maybeSingle();
+    if (!visibleCheckRunError && visibleCheckRun?.id) {
+      break;
+    }
+    if (attempt === 29) {
+      throw new Error(`repository_check_run ${check_run_id} not visible before invoking autograder-create-submission`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   // Prepare a JWT token to invoke the edge function
   const payload = {
     repository: repository,
