@@ -9,6 +9,11 @@ type VisualScreenshotOptions = ArgosScreenshotOptions & {
    * accessible region label.
    */
   stabilizeRubric?: string | RegExp;
+  /**
+   * Skip {@link waitForVisualIdle} when the test already asserted UI readiness
+   * (both before capture and in Argos `beforeScreenshot`).
+   */
+  skipPreIdle?: boolean;
 };
 
 function escapeRegExp(value: string) {
@@ -209,9 +214,11 @@ async function restoreStickyPositions(page: Page) {
 }
 
 export async function visualScreenshot(page: Page, name: string, options: VisualScreenshotOptions = {}) {
-  const { stabilizeRubric, beforeScreenshot, ...argosOptions } = options;
+  const { stabilizeRubric, skipPreIdle, beforeScreenshot, ...argosOptions } = options;
 
-  await waitForVisualIdle(page);
+  if (!skipPreIdle) {
+    await waitForVisualIdle(page);
+  }
   if (stabilizeRubric) {
     await stabilizeRubricSidebar(page, stabilizeRubric);
   }
@@ -220,7 +227,9 @@ export async function visualScreenshot(page: Page, name: string, options: Visual
     return await argosScreenshot(page, name, {
       ...argosOptions,
       beforeScreenshot: async (api) => {
-        await waitForVisualIdle(page);
+        if (!skipPreIdle) {
+          await waitForVisualIdle(page);
+        }
         if (stabilizeRubric) {
           await stabilizeRubricSidebar(page, stabilizeRubric);
         }
