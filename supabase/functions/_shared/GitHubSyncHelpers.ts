@@ -5,7 +5,7 @@
  * Can be used by async workers, scripts, or manual operations.
  */
 
-import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
+import { createRedis, bottleneckRedisOptions, type RedisClient } from "./Redis.ts";
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
@@ -13,7 +13,7 @@ import { applyPatch } from "https://esm.sh/diff@5.1.0";
 import { encodeBase64 } from "https://deno.land/std@0.221.0/encoding/base64.ts";
 import * as github from "./GitHubWrapper.ts";
 import { getCreateContentLimiter } from "./GitHubWrapper.ts";
-import { Redis } from "./Redis.ts";
+// (Redis-related imports consolidated above into the one createRedis line)
 import { Database } from "./SupabaseTypes.d.ts";
 
 export interface FileChange {
@@ -94,23 +94,17 @@ export interface SyncResult {
   no_changes?: boolean;
 }
 
-// Redis client for caching
-let redisClient: UpstashRedis | null = null;
+// Redis client for caching. createRedis picks ioredis (REDIS_URL) or
+// the Upstash REST adapter automatically; both speak the GET/SETEX
+// subset this file uses.
+let redisClient: RedisClient | null = null;
 
-function getRedisClient(): UpstashRedis | null {
+function getRedisClient(): RedisClient | null {
   if (redisClient) {
     return redisClient;
   }
-
-  const redisUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const redisToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-
-  if (redisUrl && redisToken) {
-    redisClient = new UpstashRedis({ url: redisUrl, token: redisToken });
-    return redisClient;
-  }
-
-  return null;
+  redisClient = createRedis();
+  return redisClient;
 }
 
 const syncLimiters = new Map<string, Bottleneck>();
@@ -119,31 +113,25 @@ function getSyncLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = syncLimiters.get(key);
   if (existing) return existing;
+  // bottleneckRedisOptions picks ioredis (REDIS_URL) or the Upstash
+  // adapter (UPSTASH_REDIS_REST_*) automatically; null falls through
+  // to the local-only limiter.
+  const redisOpts = bottleneckRedisOptions();
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
+  if (redisOpts) {
     limiter = new Bottleneck({
       id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 20,
       maxConcurrent: 20,
       reservoirRefreshAmount: 20,
       reservoirRefreshInterval: 60_000,
-      datastore: "ioredis",
       timeout: 600000, // 10 minutes
       clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default"
-      },
-      Redis
+      ...redisOpts
     });
     limiter.on("error", (err: Error) => console.error(err));
   } else {
-    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
+    Sentry.captureMessage("No Redis configured (REDIS_URL / UPSTASH_*), using local sync limiter");
     limiter = new Bottleneck({
       id: `sync_repo_to_handout:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
       reservoir: 10,

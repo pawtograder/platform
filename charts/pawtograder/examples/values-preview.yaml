@@ -130,6 +130,12 @@ kong:
 supavisor:
   enabled: false   # not used by chart in current config
 
+# Point at the cluster-shared Redis (bootstrap manifests live in
+# charts/pawtograder/examples/shared-redis/; provision the OpenBao path
+# once per cluster via scripts/setup-openbao-redis-shared.sh).
+redis:
+  provider: shared
+
 edgeFunctions:
   replicas: 1
   # 1Gi was OOMKilled during round-16 E2E. The Deno isolates that the

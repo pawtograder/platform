@@ -25,7 +25,7 @@ import {
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { Redis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
+import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -86,22 +86,16 @@ function detectRateLimitType(error: unknown): {
   return { type: null };
 }
 
-// Redis client for webhook status tracking
-let redisClient: Redis | null = null;
-function getRedisClient(): Redis | null {
+// Redis client for webhook status tracking. createRedis picks ioredis
+// (REDIS_URL) or the Upstash REST adapter (UPSTASH_REDIS_REST_*)
+// automatically; both speak the SET/GET/EXPIRE subset this file uses.
+let redisClient: RedisClient | null = null;
+function getRedisClient(): RedisClient | null {
   if (redisClient) {
     return redisClient;
   }
-
-  const redisUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const redisToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-
-  if (redisUrl && redisToken) {
-    redisClient = new Redis({ url: redisUrl, token: redisToken });
-    return redisClient;
-  }
-
-  return null;
+  redisClient = createRedis();
+  return redisClient;
 }
 
 // Webhook status structure stored in Redis

@@ -1,5 +1,5 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { Redis } from "./Redis.ts";
+import { bottleneckRedisOptions } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -141,17 +141,22 @@ function buildRedisBottleneck(
   opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
   clearDatastore: boolean
 ): Bottleneck {
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL")!;
-  const host = upstashUrl.replace("https://", "");
-  const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN")!;
+  // bottleneckRedisOptions picks ioredis (REDIS_URL) or the Upstash
+  // adapter (UPSTASH_REDIS_REST_*) automatically. Callers of this
+  // helper currently assume at least one is configured — the
+  // getCreateContentLimiter path is only invoked when Redis-backed
+  // limiting is desired, so falling through to "no Redis" would defeat
+  // the purpose. Throw to surface mis-configuration loudly.
+  const redisOpts = bottleneckRedisOptions();
+  if (!redisOpts) {
+    throw new Error("buildRedisBottleneck called without REDIS_URL or UPSTASH_REDIS_REST_URL+TOKEN");
+  }
   return new Bottleneck({
     id,
     ...opts,
-    datastore: "ioredis",
     timeout: 600000,
     clearDatastore,
-    clientOptions: { host, password, username: "default", tls: {}, port: 6379 },
-    Redis
+    ...redisOpts
   });
 }
 

@@ -534,6 +534,44 @@ studio:
 # -----------------------------------------------------------------------------
 # Edge Functions (Deno)
 # -----------------------------------------------------------------------------
+# Redis (Bottleneck rate-limiter state, webhook tracking, sync cache)
+# -----------------------------------------------------------------------------
+# Three modes (no per-release Redis deployment — same shape as MinIO):
+#
+#   external (default)
+#     The chart renders nothing. Operator provisions
+#     UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN out-of-band via
+#     pawtograder-edge-functions (or wherever the edge runtime gets its
+#     envFrom secrets). Works with managed Upstash, Cloudflare R2,
+#     anything that speaks the Upstash REST protocol.
+#
+#   shared
+#     The chart renders an ExternalSecret that ESO syncs into a
+#     pawtograder-redis Secret from OpenBao at
+#     `kv/apps/pawtograder/redis-shared` (key: REDIS_URL). The edge
+#     runtime additionally mounts pawtograder-redis via envFrom and the
+#     Redis.ts factory picks the ioredis branch when REDIS_URL is set.
+#
+#     The shared Redis itself lives in a separate cluster-scoped
+#     namespace (single instance, single password — see
+#     charts/pawtograder/examples/shared-redis/ for the bootstrap
+#     manifests). All previews point at the same Redis, isolated by
+#     Bottleneck's key namespacing (limiter ids include the class +
+#     env so collisions across previews are not a concern).
+#
+#   disabled
+#     Chart renders nothing. Edge functions check for the env vars
+#     before use and degrade gracefully (rate-limiting falls back to
+#     local-only, webhook tracking returns null, etc.).
+redis:
+  provider: external
+  shared:
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    path: apps/pawtograder/redis-shared
+    refreshInterval: 1h
+
+# -----------------------------------------------------------------------------
 # The functions themselves are baked into a per-release image by the
 # pawtograder build pipeline (FROM supabase/edge-runtime + COPY supabase/functions).
 # Configure env vars consumed by functions in `web.envFrom`-style secrets.

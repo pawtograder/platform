@@ -1,4 +1,4 @@
-import { Redis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
+import { createRedis, type RedisClient } from "./Redis.ts";
 
 /**
  * Bottleneck (ioredis/Upstash) stores limiter state under keys b_<id>_settings, etc.
@@ -61,7 +61,7 @@ function readMaxExportedLimiters(): number {
   return Math.min(parsed, ABSOLUTE_MAX_BOTTLENECK_LIMITERS);
 }
 
-async function scanAllSettingsKeys(redis: Redis): Promise<string[]> {
+async function scanAllSettingsKeys(redis: RedisClient): Promise<string[]> {
   const maxLimiters = readMaxExportedLimiters();
   let cursor = 0;
   const ids = new Set<string>();
@@ -111,13 +111,13 @@ function parseEvalTriple(raw: unknown): { running: number; concurrent_clients: n
  * so callers can record a single error in Sentry.
  */
 export async function collectBottleneckRedisSnapshots(): Promise<BottleneckLimiterSnapshot[]> {
-  const url = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const token = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (!url || !token) {
+  // createRedis picks ioredis (REDIS_URL) or the Upstash REST adapter
+  // automatically; both speak the SCAN + EVAL subset Bottleneck stores
+  // its limiter state under. Returns null when Redis isn't configured.
+  const redis = createRedis();
+  if (!redis) {
     return [];
   }
-
-  const redis = new Redis({ url, token });
   const limiterIds = await scanAllSettingsKeys(redis);
   const now = Date.now();
 

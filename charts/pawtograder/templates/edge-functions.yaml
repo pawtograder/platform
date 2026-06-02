@@ -102,6 +102,17 @@ spec:
                 name: {{ . }}
                 optional: true
             {{- end }}
+            {{- if eq (.Values.redis.provider | default "external") "shared" }}
+            # Shared in-cluster Redis URL — synced from OpenBao by
+            # templates/redis-externalsecret.yaml. The Redis.ts factory
+            # picks the ioredis branch when REDIS_URL is present. Mounted
+            # additively on top of any UPSTASH_* creds in
+            # pawtograder-edge-functions (the factory prefers REDIS_URL).
+            # optional:true so a missing ESO sync doesn't block startup.
+            - secretRef:
+                name: pawtograder-redis
+                optional: true
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: http
