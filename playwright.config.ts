@@ -13,6 +13,10 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  /* The Canvas LTI 1.3 suite is heavy (boots a full Canvas LMS) and runs in its
+     own selectively-triggered CI lane via playwright.canvas.config.ts. Keep it
+     out of the default/per-PR E2E run. */
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts"],
   /* Run tests in files in parallel */
   fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

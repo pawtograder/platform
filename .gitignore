@@ -73,3 +73,7 @@ axe-debug/
 /.e2e-*.done
 /.build.done
 /screenshot-diff-report.json
+
+# Canvas LTI e2e captured secrets/IDs (generated at runtime)
+tests/e2e/lti/.canvas-e2e.json
+playwright-report-canvas/
