@@ -79,7 +79,11 @@ export function createRedis(
  * clientOptions for one backend.
  */
 // deno-lint-ignore no-explicit-any
-export function bottleneckRedisOptions(): { datastore: "ioredis"; Redis: any; clientOptions: Record<string, unknown> } | null {
+export function bottleneckRedisOptions(): {
+  datastore: "ioredis";
+  Redis: any;
+  clientOptions: Record<string, unknown>;
+} | null {
   const redisUrl = Deno.env.get("REDIS_URL");
   if (redisUrl) {
     // ioredis accepts the URL constructor form directly, but Bottleneck
