@@ -72,13 +72,96 @@ JWT bundle values; production deployments should provision Secrets
 out-of-band (External Secrets Operator, sealed-secrets, SOPS-encrypted
 manifests) as shown above.
 
+## Deploying staging
+
+`charts/pawtograder/examples/values-staging.yaml` is the canonical
+long-lived deployment overlay (durable Postgres, HA-ish stateless tier,
+S3 backups, ExternalSecrets out of OpenBao). It assumes:
+
+- A dedicated `tier: prod-staging` node pool with a matching `NoSchedule`
+  taint.
+- An ingress controller answering on `nginx` ingressClass with
+  cert-manager wired to `letsencrypt-prod`.
+- DNS records for `staging.pawtograder.net`,
+  `api.staging.pawtograder.net`, and `studio.staging.pawtograder.net`
+  pointing at the ingress LB.
+- S3 buckets `pawtograder-staging-backups` and
+  `pawtograder-staging-storage` on `s3.talos.ripley.cloud`.
+
+### One-time: provision OpenBao + ExternalSecrets
+
+Populate the bundles the chart's ExternalSecrets read from
+(`kv/apps/pawtograder-staging/*`):
+
+```sh
+# JWT bundle (all ~15 supabase-internal tokens / keys). `bao kv put @file`
+# expects JSON, so convert the dotenv output through jq first.
+npx tsx scripts/GenerateJwtKeys.ts --env > /tmp/pawtograder-staging-jwt.env
+jq -Rn '[inputs
+  | select(test("^[^#=]+="))
+  | capture("^(?<key>[^=]+)=(?<value>.*)$")
+] | from_entries' /tmp/pawtograder-staging-jwt.env \
+  | bao kv put kv/apps/pawtograder-staging/jwt -
+rm /tmp/pawtograder-staging-jwt.env
+
+# App integration bundles. Each command prompts for the values it expects,
+# or reads from a --env-file. See the script's --list output.
+scripts/setup-openbao-edge-functions.sh --bundle github-app --env staging
+scripts/setup-openbao-edge-functions.sh --bundle discord    --env staging
+scripts/setup-openbao-edge-functions.sh --bundle canvas     --env staging
+scripts/setup-openbao-edge-functions.sh --bundle llm        --env staging
+scripts/setup-openbao-edge-functions.sh --bundle sentry     --env staging
+scripts/setup-openbao-edge-functions.sh --bundle e2e        --env staging
+
+# SMTP for GoTrue mail (signup confirm / magic link / recovery). All creds,
+# including SMTP_ADMIN_EMAIL (the From: address), live in this bundle —
+# nothing baked into chart values. SMTP_PASS, not SMTP_PASSWORD.
+bao kv put kv/apps/pawtograder-staging/smtp \
+  SMTP_HOST='<smtp-host>' \
+  SMTP_PORT='587' \
+  SMTP_USER='<smtp-username>' \
+  SMTP_PASS='<smtp-password>' \
+  SMTP_ADMIN_EMAIL='noreply@staging.pawtograder.net'
+
+# Postgres + S3 + Studio basic-auth Secrets (chart doesn't manage these)
+kubectl -n pawtograder-staging create secret generic pawtograder-postgres \
+  --from-literal=POSTGRES_PASSWORD=$(openssl rand -base64 32) \
+  --from-literal=PAWTOGRADER_PASSWORD=$(openssl rand -base64 32)
+kubectl -n pawtograder-staging create secret generic pawtograder-s3 \
+  --from-literal=AWS_ACCESS_KEY_ID=$S3_KEY \
+  --from-literal=AWS_SECRET_ACCESS_KEY=$S3_SECRET
+htpasswd -nbB admin "$STUDIO_PASS" | kubectl -n pawtograder-staging \
+  create secret generic pawtograder-studio-auth --from-file=auth=/dev/stdin
+```
+
+OAuth provider credentials (GitHub, Microsoft/Azure) ride in the
+`pawtograder-web` bundle — `GITHUB_OAUTH_CLIENT_ID` /
+`GITHUB_OAUTH_CLIENT_SECRET`, `AZURE_OAUTH_CLIENT_ID` /
+`AZURE_OAUTH_CLIENT_SECRET`. Use `bao kv patch kv/apps/pawtograder-staging/web …`
+to add them without clobbering the rest of that bundle, then flip
+`auth.external.<provider>.enabled: true` in the values overlay.
+
+Apply the ExternalSecret manifests in the namespace so ESO syncs each
+OpenBao bundle into the matching K8s Secret name.
+
+### Deploy or redeploy
+
+```sh
+scripts/redeploy-staging.sh
+```
+
+That script uninstalls any existing release, drops the Postgres PVC
+(staging data is disposable), waits for the namespace to settle, then
+runs `helm upgrade --install` with the values file above. Re-run any
+time you want a clean slate — it's idempotent on a missing release.
+
 ## Required Secrets when `secrets.create=false`
 
 | Secret name (default)        | Required keys                                                                                                                                                                                                                                                |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
 | `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
-| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (if SMTP)                                                                                                                                                                                                 |
+| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`)                                                                                                                                                          |
 | `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
 | `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
 | `pawtograder-edge-functions` | Optional. Same idea, mounted into the edge-runtime pod.                                                                                                                                                                                                      |

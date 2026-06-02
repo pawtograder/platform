@@ -7,10 +7,14 @@
 #
 #   apps/pawtograder/github-app-<env>    GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING,
 #                                        GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET,
-#                                        GITHUB_WEBHOOK_SECRET
+#                                        GITHUB_WEBHOOK_SECRET, EVENTBRIDGE_SECRET
+#                                        (EVENTBRIDGE_SECRET authenticates the GitHub
+#                                        webhook ingress via AWS EventBridge — see
+#                                        github-repo-webhook; lives here, not aws-chime,
+#                                        because it's GitHub-only and github-app is
+#                                        already mounted into edge functions.)
 #   apps/pawtograder/aws-chime-<env>     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#                                        AWS_CHIME_EVENT_AUTH_TOKEN, AWS_CHIME_SQS_QUEUE_ARN,
-#                                        EVENTBRIDGE_SECRET
+#                                        AWS_CHIME_EVENT_AUTH_TOKEN, AWS_CHIME_SQS_QUEUE_ARN
 #   apps/pawtograder/discord-<env>       DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
 #   apps/pawtograder/canvas-<env>        CANVAS_API_KEY, CANVAS_API_URL
 #   apps/pawtograder/sis-<env>           SIS_API_URL, SIS_AUTH_TOKEN
@@ -57,8 +61,8 @@ set -euo pipefail
 # env-var names exactly.
 
 declare -A BUNDLE_KEYS=(
-  [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET"
-  [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN EVENTBRIDGE_SECRET"
+  [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
+  [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"
   [canvas]="CANVAS_API_KEY CANVAS_API_URL"
   [sis]="SIS_API_URL SIS_AUTH_TOKEN"

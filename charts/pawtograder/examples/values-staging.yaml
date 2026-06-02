@@ -1,0 +1,239 @@
+# Long-lived staging overlay — hosts/data are durable, replicas are HA-ish,
+# secrets come from ExternalSecrets backed by OpenBao.
+#
+# Usage:
+#   helm upgrade --install pawtograder ./charts/pawtograder \
+#     -n pawtograder-staging --create-namespace \
+#     -f charts/pawtograder/examples/values-staging.yaml
+#
+# Wipe-and-redeploy helper:
+#   scripts/redeploy-staging.sh
+#
+# Prereqs (one-time, see README "Deploying staging"):
+#   - OpenBao paths under kv/apps/pawtograder-staging/* populated via
+#     scripts/setup-openbao-edge-functions.sh + GenerateJwtKeys.ts.
+#   - ExternalSecrets in pawtograder-staging sync those into the K8s
+#     Secret names listed under `secrets.names` below.
+#   - DNS for staging.pawtograder.net + api.staging.pawtograder.net +
+#     studio.staging.pawtograder.net pointing at the cluster ingress.
+#   - S3 buckets `pawtograder-staging-backups` and `pawtograder-staging-storage`
+#     on s3.talos.ripley.cloud, with creds in pawtograder-s3.
+
+global:
+  hostname: staging.pawtograder.net
+  apiOnSeparateHost: true
+  imageRegistry: ""
+  # Pin to the dedicated staging node pool. Workers in that pool carry a
+  # matching taint so the rest of the cluster's pods don't schedule here.
+  nodeSelector:
+    tier: prod-staging
+  tolerations:
+    - key: tier
+      operator: Equal
+      value: prod-staging
+      effect: NoSchedule
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls:
+    enabled: true
+    secretName: pawtograder-staging-tls
+
+# Secrets come from ExternalSecrets synced out of OpenBao
+# (kv/apps/pawtograder-staging/*). Bootstrap with:
+#   scripts/setup-openbao-edge-functions.sh --bundle <name>
+# and seed the JWT bundle once with:
+#   npx tsx scripts/GenerateJwtKeys.ts --env > /tmp/jwt.env
+#   bao kv put kv/apps/pawtograder-staging/jwt @/tmp/jwt.env
+secrets:
+  create: false
+  names:
+    jwt: pawtograder-jwt
+    postgres: pawtograder-postgres
+    s3: pawtograder-s3
+    smtp: pawtograder-smtp
+    web: pawtograder-web
+    edgeFunctions: pawtograder-edge-functions
+
+# ----- Postgres: durable local SSD ------------------------------------------
+# Local-path keeps the DB on the worker's NVMe — staging doubles as our
+# performance-testing target so raw IOPS matter. Tradeoff: every worker in
+# the `tier=prod-staging` pool must be listed in the local-path-provisioner
+# ConfigMap (kubectl -n local-path-storage edit cm local-path-config) before
+# postgres can schedule there.
+postgres:
+  persistence:
+    storageClass: local-path
+    size: 100Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      # 16Gi headroom past observed peak. Bumped from 12Gi after E2E load
+      # under concurrent Playwright runs pushed working-set memory past
+      # the old ceiling. Stock supabase docker-compose sets no limit;
+      # 16Gi keeps us comfortably above the theoretical worst case
+      # (max_connections × per-backend work_mem + shared_buffers +
+      # maintenance_work_mem) without burning the whole node.
+      memory: 16Gi
+
+# ----- Stateless tier: HA-ish, generous resource ceilings ------------------
+auth:
+  external:
+    github:
+      enabled: true
+      redirectUri: https://api.staging.pawtograder.net/auth/v1/callback
+    # Microsoft (Entra ID), multi-tenant — GoTrue uses the common endpoint,
+    # so any Microsoft account can sign in. Creds come from the
+    # pawtograder-web Secret keys AZURE_OAUTH_CLIENT_ID /
+    # AZURE_OAUTH_CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web).
+    # Redirect URI registered in Azure:
+    #   https://api.staging.pawtograder.net/auth/v1/callback
+    azure:
+      enabled: true
+  # Confirm signups via email (real round-trip) rather than auto-confirming.
+  # Requires working SMTP below.
+  enableEmailAutoconfirm: false
+  # GoTrue transactional mail (signup confirm, magic link, recovery).
+  # All creds — including SMTP_ADMIN_EMAIL (the From: address) — come from
+  # the pawtograder-smtp Secret keys SMTP_HOST / SMTP_PORT / SMTP_USER /
+  # SMTP_PASS / SMTP_ADMIN_EMAIL (synced from kv/apps/pawtograder-staging/smtp).
+  # senderName is the only non-secret SMTP setting.
+  smtp:
+    enabled: true
+    senderName: "Pawtograder Staging"
+    # NU blocks outbound SMTP submission ports from cluster pods, so GoTrue
+    # can't reach Postmark directly. This dedicated socat relay forwards to a
+    # campus LXC listener that tunnels out to Postmark via a residential-ISP
+    # tailscale exit-node (mirror of apps/zammad/smtp-relay.yaml, but that
+    # one's LXC port ends at Dreamhost — Postmark needs its own LXC listener).
+    #
+    # Wiring (see README "Deploying staging" → SMTP):
+    #   - LXC ripley-ts-gw: socat :1588 → smtp.postmarkapp.com:587
+    #   - CoreDNS: rewrite smtp.postmarkapp.com → pawtograder-smtp-relay svc
+    #   - smtp Secret: SMTP_HOST=smtp.postmarkapp.com (real host, for cert)
+    relay:
+      enabled: true
+      # Listen port must match the smtp Secret's SMTP_PORT — GoTrue dials
+      # SMTP_HOST:SMTP_PORT, the CoreDNS rewrite lands that on this relay,
+      # which forwards to the LXC listener (1588 → smtp.postmarkapp.com:587).
+      # Port per hop is independent; STARTTLS terminates at Postmark.
+      port: 2525
+      downstream: "10.201.12.131:1588"
+      # NOTE: mail through this relay is currently unreliable due to an
+      # intermittent Cilium pod-egress packet-loss issue on the pod→campus-VLAN
+      # leg (NOT MTU — that was ruled out). See
+      # k8s/apps/cilium/INTERMITTENT-POD-EGRESS-LOSS.md.
+
+rest:
+  replicas: 3
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "2Gi"   }
+
+realtime:
+  replicas: 3
+  resources:
+    requests: { cpu: "500m", memory: "1Gi" }
+    limits:   { cpu: "2",    memory: "2Gi" }
+
+edgeFunctions:
+  replicas: 3
+  image:
+    repository: ghcr.io/pawtograder/edge-functions
+    tag: main-latest
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "4Gi"   }
+  envFromSecrets:
+    - pawtograder-github-app
+    - pawtograder-discord
+    - pawtograder-canvas
+    - pawtograder-llm
+    - pawtograder-e2e
+  e2e:
+    enabled: true
+    mockGitHub: true
+
+web:
+  image:
+    repository: ghcr.io/pawtograder/web
+    # STOPGAP: pinned to a locally-built image that bakes the CURRENT cluster
+    # anon key. `main-latest` ships a stale baked NEXT_PUBLIC_SUPABASE_ANON_KEY
+    # and 401s browser login (NEXT_PUBLIC_* is build-time inlined). Once
+    # release-images.yml (now reads the anon key from the cluster) produces a
+    # fresh main-latest, switch this back to `main-latest`.
+    tag: staging-manual-2fe9ca94
+  envFromSecrets:
+    - pawtograder-github-app
+    - pawtograder-discord
+    - pawtograder-canvas
+    - pawtograder-llm
+    - pawtograder-sentry
+  # Multiple web replicas → leader flag stays off; if you need workflow
+  # metrics on staging, drop web.replicas to 1 and flip this true (see
+  # values-preview.yaml for the pattern).
+  # workflowMetricsLeader: true
+
+migrations:
+  image:
+    repository: ghcr.io/pawtograder/migrations
+    tag: main-latest
+  # Never set resetOnDrift here — staging data is durable, drift means
+  # something's wrong and we want the deploy to fail loudly.
+
+# Supavisor (external transaction pooler) is unused — every in-cluster
+# component connects to postgres:5432 directly (PGRST_DB_URI, edge-functions
+# SUPABASE_DB_URL, etc.). Left enabled it just spams logs trying to reach its
+# own session-pooler port (localhost:6432, connection refused). Disable to
+# match values-preview.yaml.
+supavisor:
+  enabled: false
+
+# ----- Shared in-cluster Redis (same instance previews use) -----------------
+# Intentional: staging and PR previews share keyspace so Bottleneck rate
+# limiter state amortises across deploys. Bootstrap manifests live in
+# charts/pawtograder/examples/shared-redis/; the OpenBao path
+# apps/pawtograder/redis-shared is provisioned once per cluster via
+# scripts/setup-openbao-redis-shared.sh and consumed by both namespaces'
+# pawtograder-redis ExternalSecrets.
+redis:
+  provider: shared
+
+# ----- Object storage: external S3 (Ceph at s3.talos.ripley.cloud) ----------
+storage:
+  backend: s3
+  s3:
+    endpoint: https://s3.talos.ripley.cloud
+    region: us-east-1
+    bucket: pawtograder-staging-storage
+    forcePathStyle: true
+
+# ----- Studio: behind basic auth, accessible from the internet --------------
+studio:
+  ingressEnabled: true
+  basicAuth:
+    enabled: true
+    realm: Pawtograder Staging Studio
+    # Provision out-of-band:
+    #   htpasswd -nbB admin <pass> | kubectl -n pawtograder-staging \
+    #     create secret generic pawtograder-studio-auth --from-file=auth=/dev/stdin
+    secretName: pawtograder-studio-auth
+
+# ----- Nightly Postgres backups to S3 ---------------------------------------
+backup:
+  enabled: true
+  schedule: "0 4 * * *"
+  retentionDays: 14
+  s3:
+    endpoint: https://s3.talos.ripley.cloud
+    region: us-east-1
+    bucket: pawtograder-staging-backups

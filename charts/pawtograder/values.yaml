@@ -370,8 +370,30 @@ auth:
 
   smtp:
     enabled: false
-    adminEmail: ""
+    # adminEmail (the From: address) is read from the smtp Secret key
+    # SMTP_ADMIN_EMAIL, alongside SMTP_HOST/PORT/USER/PASS — it lives with
+    # the other SMTP creds rather than baked into values.
     senderName: "Pawtograder"
+    # Optional in-cluster socat relay for clusters whose upstream blocks
+    # outbound SMTP submission ports (see templates/smtp-relay.yaml). When
+    # enabled, point GOTRUE's SMTP_HOST at the real provider hostname and
+    # CoreDNS-rewrite that hostname → the pawtograder-smtp-relay Service so
+    # STARTTLS cert verification still passes end-to-end.
+    relay:
+      enabled: false
+      image: "alpine/socat:1.8.0.3"
+      port: 587
+      # host:port of the egress endpoint that tunnels out to the SMTP
+      # provider (e.g. a campus LXC listener). Required when enabled.
+      downstream: ""
+      # Optional TCP MSS clamp on the downstream connection. Set when the
+      # pod→downstream path crosses an overlay/encap hop with a lower MTU and
+      # no working PMTUD (else the STARTTLS cert exchange blackholes). ~1300
+      # is a safe value; leave unset to disable.
+      mss: ""
+      resources:
+        requests: { cpu: "10m", memory: "16Mi" }
+        limits: { memory: "64Mi" }
 
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
