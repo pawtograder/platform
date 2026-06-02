@@ -149,7 +149,11 @@ edgeFunctions:
   replicas: 3
   image:
     repository: ghcr.io/pawtograder/edge-functions
-    tag: main-latest
+    # STOPGAP: helm-branch build. `main-latest` predates the REDIS_URL/ioredis
+    # support in _shared/Redis.ts (createRedis() returns null → "Redis client
+    # not available" in github-repo-webhook). Track the helm branch until #741
+    # merges, then switch back to main-latest.
+    tag: helm-2fe9ca9
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
@@ -186,7 +190,10 @@ web:
 migrations:
   image:
     repository: ghcr.io/pawtograder/migrations
-    tag: main-latest
+    # STOPGAP: helm-branch build — `main-latest` is missing the helm-branch
+    # migrations (workflow_metrics_rpcs, dashboard RPCs, assessment_export_pepper,
+    # rubric visibility, etc.). Track helm until #741 merges, then main-latest.
+    tag: helm-2fe9ca9
   # Never set resetOnDrift here — staging data is durable, drift means
   # something's wrong and we want the deploy to fail loudly.
 
