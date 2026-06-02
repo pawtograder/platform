@@ -7,7 +7,6 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useCourseController, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
-import { createClient } from "@/utils/supabase/client";
 import { StudentDeadlineExtension } from "@/utils/supabase/DatabaseTypes";
 import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VStack } from "@chakra-ui/react";
 
@@ -21,7 +20,6 @@ export default function StudentExtensionsTable() {
   const extensions = useStudentDeadlineExtensions();
   const students = useAllStudentProfiles();
   const { studentDeadlineExtensions } = useCourseController();
-  const supabase = createClient();
 
   const createOpen = useModalManager<AddExtensionDefaults>();
   const editOpen = useModalManager<StudentDeadlineExtension>();
@@ -30,11 +28,14 @@ export default function StudentExtensionsTable() {
 
   const handleUpdate = async (row: StudentDeadlineExtension, updates: { hours?: number; includes_lab?: boolean }) => {
     try {
-      const { error } = await supabase
-        .from("student_deadline_extensions")
-        .update({ hours: updates.hours ?? row.hours, includes_lab: updates.includes_lab ?? row.includes_lab })
-        .eq("id", row.id);
-      if (error) throw error;
+      // Update through the TableController so the change is applied to the
+      // local cache optimistically, for the same reason as handleDelete: a
+      // raw client update left the UI relying on the gated course-broadcast
+      // realtime event, which can race the staff-channel subscription lease.
+      await studentDeadlineExtensions.update(row.id, {
+        hours: updates.hours ?? row.hours,
+        includes_lab: updates.includes_lab ?? row.includes_lab
+      });
       toaster.create({
         title: "Extension updated",
         description: "Note: updates do not retroactively modify existing exceptions.",
