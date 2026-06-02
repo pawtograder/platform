@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { createClient } from "@/utils/supabase/client";
 import { StudentDeadlineExtension } from "@/utils/supabase/DatabaseTypes";
@@ -20,6 +20,7 @@ import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionM
 export default function StudentExtensionsTable() {
   const extensions = useStudentDeadlineExtensions();
   const students = useAllStudentProfiles();
+  const { studentDeadlineExtensions } = useCourseController();
   const supabase = createClient();
 
   const createOpen = useModalManager<AddExtensionDefaults>();
@@ -47,8 +48,14 @@ export default function StudentExtensionsTable() {
 
   const handleDelete = async (row: StudentDeadlineExtension) => {
     try {
-      const { error } = await supabase.from("student_deadline_extensions").delete().eq("id", row.id);
-      if (error) throw error;
+      // Delete through the TableController so the row is removed from the
+      // local cache optimistically (matching how create() and the
+      // consolidated exceptions table's hardDelete work). The raw client
+      // delete used previously left the UI relying on the course-broadcast
+      // realtime event to drop the row — and that broadcast is gated by
+      // `channel_has_subscribers`, so a just-issued delete could race the
+      // staff-channel lease and never update the table.
+      await studentDeadlineExtensions.hardDelete(row.id);
       toaster.create({
         title: "Extension deleted",
         description: "Note: deletions do not retroactively modify existing exceptions.",
