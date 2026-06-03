@@ -25,8 +25,12 @@ spec:
           containers:
             - name: backup
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              # Run under bash, not sh: the supabase/postgres image's /bin/sh is
+              # dash, which rejects `set -o pipefail` ("Illegal option -o
+              # pipefail", exit 2) — without pipefail a failing pg_dump piped to
+              # gzip would also be masked. bash ships in the image.
               command:
-                - sh
+                - bash
                 - -c
                 - |
                   set -euo pipefail
