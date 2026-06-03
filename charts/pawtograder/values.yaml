@@ -639,6 +639,11 @@ edgeFunctions:
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
     cpuSoftMs: 2000 # graceful-retire signal (matches hosted's 2s) — drives frequent recycling
     cpuHardMs: 5000 # hard kill; headroom above soft so in-flight requests finish
+    # Memory early-drop (hosted "EarlyDrop"): isolate finishes the current request
+    # and retires once memory crosses ~memoryLimitMb/lowMemoryMultiplier. 2 ≈ the
+    # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
+    # request finish + return instead of being force-killed at the hard cap.
+    lowMemoryMultiplier: 2
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }

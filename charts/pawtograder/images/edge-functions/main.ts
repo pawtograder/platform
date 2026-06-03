@@ -20,6 +20,7 @@
 //   EDGE_WORKER_TIMEOUT_MS      (default 400000 = 400s worker lifetime)
 //   EDGE_WORKER_CPU_SOFT_MS     (default 2000 — matches hosted's 2s; graceful retire → frequent recycling)
 //   EDGE_WORKER_CPU_HARD_MS     (default 5000 — hard kill with headroom; CPU time excludes async I/O)
+//   EDGE_WORKER_LOW_MEMORY_MULTIPLIER (default 2 — memory early-drop at ~50%, the hosted "EarlyDrop")
 //
 // This file is COPYed into /home/deno/functions/main/index.ts at image
 // build time.
@@ -30,6 +31,14 @@ const MEMORY_LIMIT_MB = Number(Deno.env.get("EDGE_WORKER_MEMORY_LIMIT_MB")) || 2
 const WORKER_TIMEOUT_MS = Number(Deno.env.get("EDGE_WORKER_TIMEOUT_MS")) || 400 * 1000;
 const CPU_SOFT_MS = Number(Deno.env.get("EDGE_WORKER_CPU_SOFT_MS")) || 2000;
 const CPU_HARD_MS = Number(Deno.env.get("EDGE_WORKER_CPU_HARD_MS")) || 5000;
+// Memory early-drop (the hosted "EarlyDrop" behaviour). When an isolate's memory
+// crosses ~memoryLimitMb/lowMemoryMultiplier it FINISHES the current request and
+// then retires — so a memory-heavy request (e.g. a grader tarball download)
+// completes and returns a valid response instead of being force-killed when it
+// would otherwise reach the hard memoryLimitMb mid-request. 2 ≈ hosted's "50% of
+// any resource" threshold (~128MB at a 256MB limit). Without this the isolate
+// has no memory soft limit and runs straight into the hard cap.
+const LOW_MEMORY_MULTIPLIER = Number(Deno.env.get("EDGE_WORKER_LOW_MEMORY_MULTIPLIER")) || 2;
 // Bound the retry recursion so a genuinely broken function can't loop forever.
 const MAX_RETIRED_RETRIES = 5;
 
@@ -64,6 +73,7 @@ Deno.serve(async (req: Request) => {
     EdgeRuntime.userWorkers.create({
       servicePath,
       memoryLimitMb: MEMORY_LIMIT_MB,
+      lowMemoryMultiplier: LOW_MEMORY_MULTIPLIER,
       workerTimeoutMs: WORKER_TIMEOUT_MS,
       cpuTimeSoftLimitMs: CPU_SOFT_MS,
       cpuTimeHardLimitMs: CPU_HARD_MS,

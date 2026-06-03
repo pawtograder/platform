@@ -96,6 +96,8 @@ spec:
               value: {{ .Values.edgeFunctions.worker.cpuSoftMs | quote }}
             - name: EDGE_WORKER_CPU_HARD_MS
               value: {{ .Values.edgeFunctions.worker.cpuHardMs | quote }}
+            - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
+              value: {{ .Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:

@@ -158,17 +158,20 @@ realtime:
     limits:   { cpu: "2",    memory: "2Gi" }
 
 edgeFunctions:
-  replicas: 3
+  # Baseline; replicas are managed live by a HorizontalPodAutoscaler
+  # (min 4 / max 20, memory+cpu) applied out-of-band. TODO: fold the HPA into
+  # the chart so it's not a separate live object.
+  replicas: 4
   image:
     repository: ghcr.io/pawtograder/edge-functions
-    # STOPGAP: helm-branch build. `main-latest` predates (a) the REDIS_URL/ioredis
-    # support in _shared/Redis.ts (createRedis() returns null → "Redis client
-    # not available" in github-repo-webhook) and (b) GitHubWrapper's
-    # toPublicSupabaseUrl() rebase of grader signed URLs onto SUPABASE_PUBLIC_URL
-    # (without it the GitHub Actions runner can't resolve the in-cluster
-    # pawtograder-kong host → "getaddrinfo ENOTFOUND pawtograder-kong"). Track the
-    # helm branch until #741 merges, then switch back to main-latest.
-    tag: helm-95aeb6c3-graderurl
+    # STOPGAP: helm-branch build carrying the self-hosted edge fixes that
+    # `main-latest` lacks: (a) REDIS_URL/ioredis in _shared/Redis.ts; (b)
+    # GitHubWrapper.toPublicSupabaseUrl() (grader signed-URL host rebase, else
+    # the runner hits "ENOTFOUND pawtograder-kong"); (c) the main.ts worker
+    # lifecycle — retry retired workers, 2s CPU soft limit, and lowMemoryMultiplier
+    # early-drop — without which isolates run to the 256MB hard cap and get killed
+    # mid-request under load. Track helm until #741 merges, then main-latest.
+    tag: helm-1f394575-earlydrop
   # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
   # 10s/20s CPU), matching supabase.com. The earlier "memory limit reached"
   # OOMs were a worker-lifecycle gap (no retry onto fresh workers), not a real
