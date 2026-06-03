@@ -629,13 +629,16 @@ edgeFunctions:
   # across requests and retires it gracefully as it nears these limits; main.ts
   # retries retired workers on a fresh isolate. memoryLimitMb is intentionally
   # modest (hosted runs 150–256) — under load the lifecycle handling matters far
-  # more than the ceiling. CPU time excludes async I/O, so 10s/20s is generous
-  # for these mostly I/O-bound functions while still retiring runaway compute.
+  # more than the ceiling. The 2s CPU soft limit (matching hosted's documented
+  # 2s) is the key knob: it retires busy workers frequently so memory never
+  # accumulates toward the 256MB cap. cpuHardMs keeps headroom above soft so an
+  # in-flight request that crosses 2s can finish rather than being force-cancelled
+  # (CPU time excludes async I/O, so 2s of real compute is ample here).
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
-    cpuSoftMs: 10000 # graceful-retire signal
-    cpuHardMs: 20000 # hard kill
+    cpuSoftMs: 2000 # graceful-retire signal (matches hosted's 2s) — drives frequent recycling
+    cpuHardMs: 5000 # hard kill; headroom above soft so in-flight requests finish
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }

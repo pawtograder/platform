@@ -18,8 +18,8 @@
 // All limits are env-tunable (no rebuild needed to adjust):
 //   EDGE_WORKER_MEMORY_LIMIT_MB (default 256, matches supabase.com)
 //   EDGE_WORKER_TIMEOUT_MS      (default 400000 = 400s worker lifetime)
-//   EDGE_WORKER_CPU_SOFT_MS     (default 10000 — graceful retire signal)
-//   EDGE_WORKER_CPU_HARD_MS     (default 20000 — hard kill; CPU time excludes async I/O)
+//   EDGE_WORKER_CPU_SOFT_MS     (default 2000 — matches hosted's 2s; graceful retire → frequent recycling)
+//   EDGE_WORKER_CPU_HARD_MS     (default 5000 — hard kill with headroom; CPU time excludes async I/O)
 //
 // This file is COPYed into /home/deno/functions/main/index.ts at image
 // build time.
@@ -28,8 +28,8 @@ console.log("pawtograder edge-functions main started");
 
 const MEMORY_LIMIT_MB = Number(Deno.env.get("EDGE_WORKER_MEMORY_LIMIT_MB")) || 256;
 const WORKER_TIMEOUT_MS = Number(Deno.env.get("EDGE_WORKER_TIMEOUT_MS")) || 400 * 1000;
-const CPU_SOFT_MS = Number(Deno.env.get("EDGE_WORKER_CPU_SOFT_MS")) || 10000;
-const CPU_HARD_MS = Number(Deno.env.get("EDGE_WORKER_CPU_HARD_MS")) || 20000;
+const CPU_SOFT_MS = Number(Deno.env.get("EDGE_WORKER_CPU_SOFT_MS")) || 2000;
+const CPU_HARD_MS = Number(Deno.env.get("EDGE_WORKER_CPU_HARD_MS")) || 5000;
 // Bound the retry recursion so a genuinely broken function can't loop forever.
 const MAX_RETIRED_RETRIES = 5;
 
