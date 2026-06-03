@@ -125,7 +125,8 @@ auth:
     # one's LXC port ends at Dreamhost — Postmark needs its own LXC listener).
     #
     # Wiring (see README "Deploying staging" → SMTP):
-    #   - LXC ripley-ts-gw: socat :1588 → smtp.postmarkapp.com:587
+    #   - LXC smtp-egress (CTID 101, 10.201.13.218): socat :1588 →
+    #     autossh ssh -L → orion (home, off-NU) → smtp.postmarkapp.com:587
     #   - CoreDNS: rewrite smtp.postmarkapp.com → pawtograder-smtp-relay svc
     #   - smtp Secret: SMTP_HOST=smtp.postmarkapp.com (real host, for cert)
     relay:
@@ -135,11 +136,14 @@ auth:
       # which forwards to the LXC listener (1588 → smtp.postmarkapp.com:587).
       # Port per hop is independent; STARTTLS terminates at Postmark.
       port: 2525
-      downstream: "10.201.12.131:1588"
-      # NOTE: mail through this relay is currently unreliable due to an
-      # intermittent Cilium pod-egress packet-loss issue on the pod→campus-VLAN
-      # leg (NOT MTU — that was ruled out). See
-      # k8s/apps/cilium/INTERMITTENT-POD-EGRESS-LOSS.md.
+      downstream: "10.201.13.218:1588"
+      # Root cause of the old breakage: NU's DPI on STARTTLS submission ports
+      # silently drops multi-segment (post-quantum, X25519MLKEM768) TLS
+      # ClientHellos — NOT Cilium, NOT MTU. Fixed by routing through the
+      # dedicated smtp-egress LXC which autossh-tunnels to orion (off-NU).
+      # See k8s/apps/cilium/INTERMITTENT-POD-EGRESS-LOSS.md.
+      # NOTE: 10.201.13.218 is currently a DHCP lease — set a UniFi reservation
+      # for CTID 101's MAC so this pointer doesn't break on lease renewal.
 
 rest:
   replicas: 3
