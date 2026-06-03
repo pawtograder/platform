@@ -248,12 +248,15 @@ supavisor:
   enabled: false
 
 # ----- Shared in-cluster Redis (same instance previews use) -----------------
-# Intentional: staging and PR previews share keyspace so Bottleneck rate
-# limiter state amortises across deploys. Bootstrap manifests live in
+# Staging deliberately uses `shared`, NOT the chart's `internal` Redis: staging
+# and PR previews share one cluster-wide Redis so Bottleneck rate-limiter state
+# amortises across deploys. Bootstrap manifests live in
 # charts/pawtograder/examples/shared-redis/; the OpenBao path
 # apps/pawtograder/redis-shared is provisioned once per cluster via
 # scripts/setup-openbao-redis-shared.sh and consumed by both namespaces'
 # pawtograder-redis ExternalSecrets.
+# (Production, with no external shared Redis, would set `provider: internal` to
+# have the chart deploy its own — see redis.internal.* in values.yaml.)
 redis:
   provider: shared
 

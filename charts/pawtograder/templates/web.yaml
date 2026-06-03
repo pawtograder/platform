@@ -119,10 +119,11 @@ spec:
                 name: {{ . }}
                 optional: true
             {{- end }}
-            {{- if eq (.Values.redis.provider | default "external") "shared" }}
-            # Shared in-cluster Redis URL (REDIS_URL) for the cross-replica
-            # Next.js cache handler. Synced from OpenBao by
-            # templates/redis-externalsecret.yaml; optional so a missing sync
+            {{- if ne (.Values.redis.provider | default "external") "external" }}
+            # In-cluster Redis URL (REDIS_URL) for the cross-replica Next.js
+            # cache handler. provider=shared syncs it via
+            # templates/redis-externalsecret.yaml; provider=internal writes it in
+            # templates/redis-secret.yaml. optional so a missing/late sync
             # doesn't block web startup (handler degrades to per-pod memory).
             - secretRef:
                 name: pawtograder-redis

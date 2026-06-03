@@ -594,12 +594,56 @@ studio:
 #     before use and degrade gracefully (rate-limiting falls back to
 #     local-only, webhook tracking returns null, etc.).
 redis:
+  # How web + edge functions obtain REDIS_URL (cross-replica Next.js SSR cache,
+  # GitHub/Discord rate limiters, and webhook dedup). Redis state here is
+  # RECONSTRUCTABLE — losing it is not data loss — so the internal Redis may run
+  # without persistence.
+  #   external — you provide a `pawtograder-redis` Secret with REDIS_URL out of
+  #              band (Upstash, or a cluster Redis you manage yourself).
+  #   shared   — sync REDIS_URL from a secret store (ESO) pointing at a
+  #              cluster-wide shared Redis you run OUTSIDE this release.
+  #   internal — deploy a Redis with THIS chart and wire REDIS_URL to it.
   provider: external
   shared:
     storeName: openbao
     storeKind: ClusterSecretStore
     path: apps/pawtograder/redis-shared
     refreshInterval: 1h
+  # Used only when provider=internal. Deploys a single-replica Redis, owns the
+  # `pawtograder-redis` Secret (REDIS_URL [+ REDIS_PASSWORD]) that web/edge mount.
+  internal:
+    image:
+      repository: redis
+      tag: "7.4.2-alpine"
+      pullPolicy: IfNotPresent
+    service:
+      port: 6379
+    # AUTH. When enabled, the chart generates a password ONCE and preserves it
+    # across upgrades (lookup of the existing pawtograder-redis Secret), embeds
+    # it in REDIS_URL, and starts redis with --requirepass. With GitOps/Fleet
+    # the helm render runs server-side so the lookup keeps the password stable;
+    # `helm template` with no cluster regenerates it (fine for dry-run only).
+    # Disable for a no-auth in-namespace cache (gate with a NetworkPolicy).
+    auth:
+      enabled: true
+      # Optional explicit override. Leave empty to auto-generate; do NOT commit
+      # a real secret here in a GitOps repo.
+      password: ""
+    # OPTIONAL — the data is reconstructable. Off = pure in-memory (RDB+AOF
+    # disabled, no volume). On = a PVC with append-only persistence.
+    persistence:
+      enabled: false
+      storageClass: ""
+      size: 8Gi
+    # maxmemory bounds the pod; allkeys-lru evicts coldest keys when full —
+    # safe for a cache + limiter store.
+    maxmemory: "768mb"
+    maxmemoryPolicy: "allkeys-lru"
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits: { cpu: "1", memory: "1Gi" }
+    nodeSelector: {}
+    tolerations: []
 
 # -----------------------------------------------------------------------------
 # The functions themselves are baked into a per-release image by the
