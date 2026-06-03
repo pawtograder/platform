@@ -30,6 +30,20 @@ import * as Sentry from "npm:@sentry/deno";
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);
 
+// Safety guards for the in-memory repo unzip further below. create-submission
+// downloads the student repo as a zipball and unzips it inside the edge isolate,
+// whose heap is capped (256MB, matching supabase.com). A repo with committed
+// build artifacts/caches (.gradle/, build/, target/, node_modules/, bin/, a
+// Gradle/Maven cache) can blow that cap and get the worker killed mid-request,
+// which surfaces to the student as an opaque failure. Real code submissions are
+// a few MB; these limits reject the pathological case early with an actionable
+// message instead of OOMing the isolate. Both are env-tunable so an instructor
+// with genuinely large (e.g. data-heavy) assignments can raise them.
+const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
+const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_MB")) || 300;
+const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
+const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;
+
 /**
  * User-facing explanation when the student's workflow file hash does not match the course handout.
  * Same text is shown to students (API error) and recorded for instructors (workflow_run_error).
@@ -42,6 +56,22 @@ function formatGradeYmlWorkflowMismatchMessage(syncedRepoSha: string | null): st
     `Your ${GRADE_WORKFLOW_PATH} file does not match the expected contents for this assignment (it may have been edited, or your copy may differ from the handout).`,
     "Restore the file from your repository's initial commit, then commit and push. From your assignment repo:",
     restoreOneLiner
+  ].join(" ");
+}
+
+/**
+ * User-facing explanation when the submission repository is too large to safely
+ * unzip in the grading isolate. Shown to students (API error) so the fix is
+ * self-serve. `kind` is "download" (compressed zipball) or "extracted" (sum of
+ * uncompressed entry sizes).
+ */
+function formatSubmissionTooLargeMessage(observedMb: number, limitMb: number, kind: "download" | "extracted"): string {
+  return [
+    `Your submission repository is too large to process (${observedMb} MB ${kind}, limit ${limitMb} MB).`,
+    "This usually means build artifacts or caches were committed to the repository",
+    "(for example .gradle/, build/, target/, node_modules/, bin/, or a Gradle/Maven cache).",
+    "Add a .gitignore that excludes them, remove them from the repo with",
+    "`git rm -r --cached <dir>` and commit, then push to resubmit — only your source files need to be committed."
   ].join(" ");
 }
 
@@ -1306,7 +1336,58 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           adminSupabase,
           scope
         );
+
+        // Reject + clean up a submission that's too large to safely unzip in the
+        // isolate (see MAX_SUBMISSION_* above). Mirrors the no-matching-files
+        // rejection path: drop the just-created submission row, then surface an
+        // actionable 400 to the student.
+        const rejectOversizedSubmission = async (
+          tag: string,
+          observedMb: number,
+          limitMb: number,
+          kind: "download" | "extracted"
+        ): Promise<never> => {
+          scope.setTag("submission_rejected", tag);
+          scope.setTag("submission_size_mb", String(observedMb));
+          if (submission_id !== undefined) {
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+              submission_id = undefined;
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+          }
+          throw new UserVisibleError(formatSubmissionTooLargeMessage(observedMb, limitMb, kind), 400);
+        };
+
+        // First guard: reject an oversized zipball BEFORE unzipping it into the
+        // heap (openZip.buffer holds the whole compressed buffer + parsed graph).
+        if (repo.length > MAX_SUBMISSION_ZIP_BYTES) {
+          await rejectOversizedSubmission(
+            "zip_too_large",
+            Math.ceil(repo.length / (1024 * 1024)),
+            MAX_SUBMISSION_ZIP_MB,
+            "download"
+          );
+        }
+
         const zip = await openZip.buffer(repo);
+
+        // Second guard (zip-bomb / expansion): sum the central-directory
+        // uncompressed sizes — no decompression — and reject before buffering
+        // any file contents.
+        const totalUncompressedBytes = zip.files.reduce(
+          (sum: number, f: { uncompressedSize?: number }) => sum + (f.uncompressedSize ?? 0),
+          0
+        );
+        if (totalUncompressedBytes > MAX_SUBMISSION_UNZIPPED_BYTES) {
+          await rejectOversizedSubmission(
+            "unzipped_too_large",
+            Math.ceil(totalUncompressedBytes / (1024 * 1024)),
+            MAX_SUBMISSION_UNZIPPED_MB,
+            "extracted"
+          );
+        }
         const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
 
         // Check the SHA
