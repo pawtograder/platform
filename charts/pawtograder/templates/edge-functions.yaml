@@ -58,6 +58,13 @@ spec:
           env:
             - name: SUPABASE_URL
               value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
+            # Public-facing origin for storage signed URLs that are consumed
+            # OUTSIDE the cluster (e.g. grader tarballs handed to the GitHub
+            # Actions runner). SUPABASE_URL points at the in-cluster Kong
+            # service, which external consumers can't resolve; GitHubWrapper's
+            # toPublicSupabaseUrl() rebases signed URLs onto this origin.
+            - name: SUPABASE_PUBLIC_URL
+              value: {{ include "pawtograder.api.url" . | quote }}
             - name: SUPABASE_ANON_KEY
               valueFrom:
                 secretKeyRef:

@@ -406,6 +406,26 @@ export async function resolveRef(action_repository: string, action_ref: string, 
   }
   throw new UserVisibleError(`Ref not found: ${action_ref} in ${action_repository}`);
 }
+/**
+ * Rebase a storage signed URL from the internal SUPABASE_URL origin onto the
+ * public API origin.
+ *
+ * Edge functions talk to storage through the in-cluster Kong service
+ * (SUPABASE_URL=http://pawtograder-kong:8000), so signed URLs come back with
+ * that host — which the external grading runner (GitHub Actions) can't resolve
+ * ("getaddrinfo ENOTFOUND pawtograder-kong"). The signature covers only the
+ * object path + expiry, not the host, so we can safely swap the origin to
+ * SUPABASE_PUBLIC_URL (e.g. https://api.staging.pawtograder.net) before handing
+ * the link to an external consumer. No-op when SUPABASE_PUBLIC_URL is unset
+ * (e.g. supabase.com hosting, where SUPABASE_URL is already public).
+ */
+export function toPublicSupabaseUrl(url: string): string {
+  const publicBase = Deno.env.get("SUPABASE_PUBLIC_URL");
+  const internalBase = Deno.env.get("SUPABASE_URL");
+  if (!publicBase || !internalBase || !url.startsWith(internalBase)) return url;
+  return publicBase.replace(/\/+$/, "") + url.slice(internalBase.length);
+}
+
 export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_tarball_url");
   scope?.setTag("repository", repo);
@@ -448,7 +468,7 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
     if (linkAge < fiftyFiveMinutes) {
       scope?.setTag("cache_hit", "true");
       return {
-        download_link: cachedLink.signed_url,
+        download_link: toPublicSupabaseUrl(cachedLink.signed_url),
         sha: resolved_sha
       };
     }
@@ -510,7 +530,7 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
   // Ignore errors from cache update (optimistic concurrency)
 
   return {
-    download_link: signedUrl,
+    download_link: toPublicSupabaseUrl(signedUrl),
     sha: resolved_sha
   };
 }
