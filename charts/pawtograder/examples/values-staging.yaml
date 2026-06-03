@@ -247,6 +247,12 @@ studio:
     #   htpasswd -nbB admin <pass> | kubectl -n pawtograder-staging \
     #     create secret generic pawtograder-studio-auth --from-file=auth=/dev/stdin
     secretName: pawtograder-studio-auth
+    # Dedicated TLS secret for the studio ingress so cert-manager issues it a
+    # SEPARATE Certificate. The studio + app/api ingresses must not share one
+    # TLS secret: cert-manager's ingress-shim builds one Certificate per secret
+    # and can't merge hosts across ingresses, so a shared secret drops the
+    # studio SAN. One secret per ingress keeps each Certificate clean.
+    tlsSecretName: pawtograder-studio-tls
 
 # ----- Nightly Postgres backups to S3 ---------------------------------------
 backup:
