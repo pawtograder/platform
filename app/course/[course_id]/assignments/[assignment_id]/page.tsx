@@ -28,6 +28,7 @@ import { CrudFilter, useList } from "@refinedev/core";
 import { format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
+import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 
@@ -60,7 +61,7 @@ export default function AssignmentPage() {
     }
     return filters;
   }, [assignment_id, assignmentGroup, private_profile_id]);
-  const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
+  const { data: submissionsData, refetch: refetchSubmissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
       select:
@@ -138,7 +139,18 @@ export default function AssignmentPage() {
 
           <Markdown>{assignment.description}</Markdown>
 
-          {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
+          {assignment.repo_mode === "none" ? (
+            <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
+          ) : assignment.repo_mode === "no_submission" ? (
+            <Alert.Root status="info" flexDirection="column" m={4} maxW="4xl">
+              <Alert.Title>No submission required</Alert.Title>
+              <Alert.Description>
+                There is nothing to submit here. Your instructor will grade this assignment manually (for example, a
+                presentation or oral exam). Complete the task as your instructor described — your grade will appear
+                below once it is released.
+              </Alert.Description>
+            </Alert.Root>
+          ) : !assignment.template_repo || !assignment.template_repo.includes("/") ? (
             <Alert.Root status="error" flexDirection="column">
               <Alert.Title>No repositories configured for this assignment</Alert.Title>
               <Alert.Description>
@@ -151,7 +163,11 @@ export default function AssignmentPage() {
             <></>
           )}
           <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
-            <ManageGroupWidget assignment={assignment} repositories={repositories ?? []} />
+            <ManageGroupWidget
+              assignment={assignment}
+              repositories={repositories ?? []}
+              showRepositories={assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"}
+            />
           </Box>
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}

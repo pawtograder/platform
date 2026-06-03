@@ -8,12 +8,14 @@ import dotenv from "dotenv";
 import {
   createAuthenticatedClient,
   createClass,
+  createUserInClass,
   createUsersInClass,
   getTestRunPrefix,
   insertAssignment,
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { randomBytes } from "node:crypto";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -25,9 +27,9 @@ type AssignmentWithRubric = Assignment & { rubricParts: RubricPart[]; rubricChec
  * here want to assert on the raw PostgREST/PostgreSQL error message, so we
  * call the RPC directly and surface the result/error pair.
  *
- * The generated `Database` type doesn't yet include the new RPC (the typegen
- * runs against the schema in `utils/supabase/SupabaseTypes.d.ts`), so we cast
- * `rpc` to a callable to mirror what edgeFunctions.ts does internally.
+ * We cast `rpc` to a callable to mirror what edgeFunctions.ts does internally:
+ * it lets us pass explicit `null` arguments without fighting the strict
+ * generated arg typing.
  */
 async function rpcCreateManualSubmission(
   client: SupabaseClient<Database>,
@@ -41,10 +43,9 @@ async function rpcCreateManualSubmission(
   return { data: data as number | null, error: error as { message: string; code?: string } | null };
 }
 
-// The generated `Database` type predates this PR, so it doesn't yet include
-// the `submitted_via` column on `submissions`. The migration in this PR adds
-// the column; once `npm run client-local` is run post-merge the cast can be
-// removed. Until then we shape the result manually.
+// A trimmed-down view of the `submissions` row shape that these tests assert
+// against. We keep a local type (rather than deriving from the generated
+// `Database` type) so the tests document exactly which columns they rely on.
 type ManualSubmissionRow = {
   id: number;
   assignment_id: number;
@@ -69,9 +70,7 @@ async function fetchActiveSubmissionsFor(params: {
   assignment_id: number;
   profile_id?: string;
   assignment_group_id?: number;
-}): Promise<
-  Array<Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active" | "submitted_via">>
-> {
+}): Promise<Array<Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active">>> {
   let q = supabase
     .from("submissions")
     .select("id, profile_id, assignment_group_id, is_active")
@@ -82,7 +81,7 @@ async function fetchActiveSubmissionsFor(params: {
   const { data, error } = await q;
   if (error) throw new Error(`Failed to list active submissions: ${error.message}`);
   return (data ?? []) as unknown as Array<
-    Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active" | "submitted_via">
+    Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active">
   >;
 }
 
@@ -571,5 +570,183 @@ test.describe("Manual submission RPC (repo_mode='no_submission')", () => {
       expect(error).not.toBeNull();
       expect(error!.message.toLowerCase()).toMatch(/exactly one|p_profile_id|p_assignment_group_id/);
     });
+  });
+});
+
+// The stub submissions are created automatically (not by an instructor calling
+// the RPC) when a no_submission assignment is released, when a student enrolls
+// afterwards, and when a group forms — so graders see a row for everyone.
+test.describe("Auto-create stub submissions for no_submission (PR #781 follow-up)", () => {
+  test.describe.configure({ mode: "serial", timeout: 180_000 });
+
+  const APREFIX = getTestRunPrefix();
+  const AID = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
+
+  let acClassId: number;
+  let acInstructor: TestingUser;
+  let s1: TestingUser;
+  let s2: TestingUser;
+  let indAssignment: AssignmentWithRubric;
+
+  async function activeSubmissionsFor(assignmentId: number, profileId: string) {
+    const { data } = await supabase
+      .from("submissions")
+      .select("id, is_active, submitted_via, repository, sha, assignment_group_id, grading_review_id")
+      .eq("assignment_id", assignmentId)
+      .eq("profile_id", profileId)
+      .is("assignment_group_id", null);
+    return (data ?? []).filter((r) => r.is_active);
+  }
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E AutoCreate ${APREFIX}` });
+    acClassId = cls.id;
+    acInstructor = await createUserInClass({
+      role: "instructor",
+      class_id: acClassId,
+      name: `AC Instr ${APREFIX}`,
+      email: `e2e-ac-instr-${AID}@pawtograder.net`
+    });
+    s1 = await createUserInClass({
+      role: "student",
+      class_id: acClassId,
+      name: `AC S1 ${APREFIX}`,
+      email: `e2e-ac-s1-${AID}@pawtograder.net`
+    });
+    s2 = await createUserInClass({
+      role: "student",
+      class_id: acClassId,
+      name: `AC S2 ${APREFIX}`,
+      email: `e2e-ac-s2-${AID}@pawtograder.net`
+    });
+  });
+
+  test("releasing a no_submission assignment auto-creates one active stub per student", async () => {
+    indAssignment = await insertAssignment({
+      class_id: acClassId,
+      due_date: addDays(new Date(), 7).toUTCString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `AC Individual ${APREFIX}`,
+      repo_mode: "no_submission"
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    for (const s of [s1, s2]) {
+      const active = await activeSubmissionsFor(indAssignment.id, s.private_profile_id);
+      expect(active).toHaveLength(1);
+      expect(active[0].submitted_via).toBe("manual");
+      expect(active[0].repository).toBeNull();
+      expect(active[0].sha).toBeNull();
+    }
+  });
+
+  test("a student enrolled after release gets a stub", async () => {
+    const s3 = await createUserInClass({
+      role: "student",
+      class_id: acClassId,
+      name: `AC S3 ${APREFIX}`,
+      email: `e2e-ac-s3-${AID}@pawtograder.net`
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    const active = await activeSubmissionsFor(indAssignment.id, s3.private_profile_id);
+    expect(active).toHaveLength(1);
+    expect(active[0].submitted_via).toBe("manual");
+  });
+
+  test("group no_submission: one active stub per group; members' individual stubs deactivated", async () => {
+    const groupAssignment = await insertAssignment({
+      class_id: acClassId,
+      due_date: addDays(new Date(), 7).toUTCString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `AC Group ${APREFIX}`,
+      repo_mode: "no_submission",
+      group_config: "groups"
+    });
+
+    const { data: grp, error: grpErr } = await supabase
+      .from("assignment_groups")
+      .insert({ name: `AC Grp ${APREFIX}`, class_id: acClassId, assignment_id: groupAssignment.id })
+      .select("id")
+      .single();
+    expect(grpErr).toBeNull();
+    const groupId = grp!.id;
+
+    for (const s of [s1, s2]) {
+      const { error } = await supabase.from("assignment_groups_members").insert({
+        assignment_group_id: groupId,
+        profile_id: s.private_profile_id,
+        assignment_id: groupAssignment.id,
+        class_id: acClassId,
+        added_by: acInstructor.private_profile_id
+      });
+      expect(error).toBeNull();
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    const { data: groupSubs } = await supabase
+      .from("submissions")
+      .select("id, is_active, submitted_via, profile_id")
+      .eq("assignment_id", groupAssignment.id)
+      .eq("assignment_group_id", groupId);
+    const activeGroup = (groupSubs ?? []).filter((r) => r.is_active);
+    expect(activeGroup).toHaveLength(1);
+    expect(activeGroup[0].submitted_via).toBe("manual");
+    expect(activeGroup[0].profile_id).toBeNull();
+
+    // The members' individual stubs (auto-created at insert) are now inactive.
+    for (const s of [s1, s2]) {
+      const active = await activeSubmissionsFor(groupAssignment.id, s.private_profile_id);
+      expect(active).toHaveLength(0);
+    }
+  });
+
+  test("auto-created stub: grade + release; student reads released grade, hidden before", async () => {
+    const sub = (await activeSubmissionsFor(indAssignment.id, s1.private_profile_id))[0];
+    expect(sub).toBeDefined();
+    const reviewId = sub.grading_review_id!;
+    const studentClient = await createAuthenticatedClient(s1);
+
+    const { data: pre } = await studentClient
+      .from("submission_reviews")
+      .select("released")
+      .eq("id", reviewId)
+      .maybeSingle();
+    expect(pre?.released ?? false).toBe(false);
+
+    const gradingCheck = indAssignment.rubricChecks.find((c) => c.name === "Grading Review Check 2");
+    expect(gradingCheck).toBeDefined();
+    const { error: commentErr } = await supabase.from("submission_comments").insert({
+      submission_id: sub.id,
+      submission_review_id: reviewId,
+      rubric_check_id: gradingCheck!.id,
+      class_id: acClassId,
+      author: acInstructor.private_profile_id,
+      comment: "Auto-created stub graded",
+      points: 8,
+      released: true,
+      eventually_visible: true,
+      regrade_request_id: null
+    });
+    expect(commentErr).toBeNull();
+    await new Promise((r) => setTimeout(r, 750));
+    const { error: releaseErr } = await supabase
+      .from("submission_reviews")
+      .update({
+        released: true,
+        completed_at: new Date().toISOString(),
+        completed_by: acInstructor.private_profile_id,
+        grader: acInstructor.private_profile_id
+      })
+      .eq("id", reviewId);
+    expect(releaseErr).toBeNull();
+
+    const { data: post, error: postErr } = await studentClient
+      .from("submission_reviews")
+      .select("released, total_score")
+      .eq("id", reviewId)
+      .single();
+    expect(postErr).toBeNull();
+    expect(post!.released).toBe(true);
+    expect(post!.total_score).toBeGreaterThanOrEqual(8);
   });
 });

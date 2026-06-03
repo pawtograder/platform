@@ -11183,6 +11183,10 @@ export type Database = {
         };
         Returns: number;
       };
+      attach_no_repo_submission_files: {
+        Args: { p_submission_id: number; p_files: Json };
+        Returns: undefined;
+      };
       create_no_repo_submission: {
         Args: { p_assignment_id: number; p_files: Json };
         Returns: number;

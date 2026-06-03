@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addDays } from "date-fns";
+import { randomBytes } from "node:crypto";
 import {
   createAuthenticatedClient,
   createClass,
@@ -9,6 +10,8 @@ import {
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
+
+type AssignmentWithRubric = Awaited<ReturnType<typeof insertAssignment>>;
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
@@ -146,10 +149,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
       .single();
     expect(submissionErr).toBeNull();
     expect(submission).not.toBeNull();
-    // submitted_via is added to submissions by PR #781 but the generated types
-    // are stale w.r.t. that migration (it lives on assignments in the .d.ts),
-    // so cast through unknown to read it.
-    expect((submission as unknown as { submitted_via: string }).submitted_via).toBe("upload");
+    expect(submission!.submitted_via).toBe("upload");
     expect(submission!.repository).toBeNull();
     expect(submission!.sha).toBeNull();
     expect(submission!.is_active).toBe(true);
@@ -224,17 +224,14 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
 
     const { data: submission } = await supabase
       .from("submissions")
-      .select("id, is_active, ordinal, profile_id, assignment_group_id")
+      .select("id, is_active, ordinal, profile_id, assignment_group_id, submitted_via")
       .eq("id", submissionId)
       .single();
     expect(submission).not.toBeNull();
     expect(submission!.is_active).toBe(true);
     expect(submission!.profile_id).toBe(studentB.private_profile_id);
     expect(submission!.assignment_group_id).toBeNull();
-
-    // Also assert submitted_via via a separate select (generated types lag).
-    const { data: viaRow } = await supabase.from("submissions").select("*").eq("id", submissionId).single();
-    expect((viaRow as unknown as { submitted_via: string }).submitted_via).toBe("upload");
+    expect(submission!.submitted_via).toBe("upload");
 
     const { data: files } = await supabase.from("submission_files").select("id").eq("submission_id", submissionId);
     expect(files).toHaveLength(0);
@@ -538,5 +535,178 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     const inactive = rows!.filter((r) => !r.is_active);
     expect(inactive).toHaveLength(1);
     expect(inactive[0].ordinal).toBe(1);
+  });
+});
+
+// Full two-phase upload flow: create empty submission -> upload bytes to the
+// submission-files bucket under the submission-id-scoped key -> attach file
+// rows, then verify storage read RLS and end-to-end grading + release.
+test.describe("Two-phase upload flow: storage + grading (PR #781)", () => {
+  test.describe.configure({ mode: "serial", timeout: 180_000 });
+
+  const UPREFIX = getTestRunPrefix();
+  const UID = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
+
+  let upClassId: number;
+  let upStudent: TestingUser;
+  let otherStudent: TestingUser;
+  let upInstructor: TestingUser;
+  let upAssignment: AssignmentWithRubric;
+  let submissionId: number;
+  let storageKey: string;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E Upload Flow ${UPREFIX}` });
+    upClassId = cls.id;
+    upStudent = await createUserInClass({
+      role: "student",
+      class_id: upClassId,
+      name: `Upload Student ${UPREFIX}`,
+      email: `e2e-upload-stu-${UID}@pawtograder.net`
+    });
+    otherStudent = await createUserInClass({
+      role: "student",
+      class_id: upClassId,
+      name: `Upload Other ${UPREFIX}`,
+      email: `e2e-upload-other-${UID}@pawtograder.net`
+    });
+    upInstructor = await createUserInClass({
+      role: "instructor",
+      class_id: upClassId,
+      name: `Upload Instructor ${UPREFIX}`,
+      email: `e2e-upload-instr-${UID}@pawtograder.net`
+    });
+    upAssignment = await insertAssignment({
+      class_id: upClassId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `Upload Flow ${UPREFIX}`,
+      assignment_slug: `e2e-upload-${UID}`,
+      repo_mode: "none"
+    });
+  });
+
+  test("upload bytes + attach: file is readable by student and grader, not other students", async () => {
+    const studentClient = await createAuthenticatedClient(upStudent);
+
+    // Phase 1: create the empty active submission.
+    const { data: sid, error: createErr } = await callRpc(studentClient, upAssignment.id, []);
+    expect(createErr).toBeNull();
+    expect(typeof sid).toBe("number");
+    submissionId = sid!;
+
+    // Phase 2a: upload the bytes to the submission-id-scoped key (owner-write RLS).
+    const contents = `hello-upload-${UID}`;
+    storageKey = `classes/${upClassId}/profiles/${upStudent.private_profile_id}/submissions/${submissionId}/files/essay.txt`;
+    const { error: uploadErr } = await studentClient.storage
+      .from("submission-files")
+      .upload(storageKey, Buffer.from(contents), { contentType: "text/plain", upsert: true });
+    expect(uploadErr).toBeNull();
+
+    // Phase 2b: register the file row.
+    const { error: attachErr } = await (studentClient.rpc as CallableFunction)("attach_no_repo_submission_files", {
+      p_submission_id: submissionId,
+      p_files: [{ name: "essay.txt", storage_key: storageKey, file_size: contents.length, mime_type: "text/plain" }]
+    });
+    expect(attachErr).toBeNull();
+
+    const { data: files } = await supabase
+      .from("submission_files")
+      .select("name, storage_key, submission_id")
+      .eq("submission_id", submissionId);
+    expect(files).toHaveLength(1);
+    expect(files![0].storage_key).toBe(storageKey);
+
+    // The owner can read their bytes through a signed URL.
+    const { data: studentSigned, error: studentSignErr } = await studentClient.storage
+      .from("submission-files")
+      .createSignedUrl(storageKey, 60);
+    expect(studentSignErr).toBeNull();
+    const studentResp = await fetch(studentSigned!.signedUrl);
+    expect(studentResp.ok).toBe(true);
+    expect(await studentResp.text()).toBe(contents);
+
+    // A class grader (instructor) can read it too.
+    const instructorClient = await createAuthenticatedClient(upInstructor);
+    const { data: instrSigned, error: instrSignErr } = await instructorClient.storage
+      .from("submission-files")
+      .createSignedUrl(storageKey, 60);
+    expect(instrSignErr).toBeNull();
+    expect(instrSigned?.signedUrl).toBeTruthy();
+
+    // An unrelated student cannot.
+    const otherClient = await createAuthenticatedClient(otherStudent);
+    const { data: otherSigned, error: otherSignErr } = await otherClient.storage
+      .from("submission-files")
+      .createSignedUrl(storageKey, 60);
+    expect(otherSigned?.signedUrl ?? null).toBeNull();
+    expect(otherSignErr).not.toBeNull();
+  });
+
+  test("attach rejects a storage_key whose submission_id segment doesn't match", async () => {
+    const studentClient = await createAuthenticatedClient(upStudent);
+    const badKey = `classes/${upClassId}/profiles/${upStudent.private_profile_id}/submissions/${submissionId + 999999}/files/evil.txt`;
+    const { error } = await (studentClient.rpc as CallableFunction)("attach_no_repo_submission_files", {
+      p_submission_id: submissionId,
+      p_files: [{ name: "evil.txt", storage_key: badKey, file_size: 1, mime_type: "text/plain" }]
+    });
+    expect(error).not.toBeNull();
+    expect(error!.message.toLowerCase()).toMatch(/outside this submission|scope/);
+  });
+
+  test("grade + release: student reads the released grade, hidden before release", async () => {
+    const { data: subRow } = await supabase
+      .from("submissions")
+      .select("grading_review_id")
+      .eq("id", submissionId)
+      .single();
+    const reviewId = subRow!.grading_review_id!;
+    const studentClient = await createAuthenticatedClient(upStudent);
+
+    // Before release the student cannot see a released grade.
+    const { data: pre } = await studentClient
+      .from("submission_reviews")
+      .select("released, total_score")
+      .eq("id", reviewId)
+      .maybeSingle();
+    expect(pre?.released ?? false).toBe(false);
+
+    // Grade via a rubric-check comment (triggers the total_score recompute), then release.
+    const gradingCheck = upAssignment.rubricChecks.find((c) => c.name === "Grading Review Check 2");
+    expect(gradingCheck).toBeDefined();
+    const { error: commentErr } = await supabase.from("submission_comments").insert({
+      submission_id: submissionId,
+      submission_review_id: reviewId,
+      rubric_check_id: gradingCheck!.id,
+      class_id: upClassId,
+      author: upInstructor.private_profile_id,
+      comment: "Upload submission graded",
+      points: 8,
+      released: true,
+      eventually_visible: true,
+      regrade_request_id: null
+    });
+    expect(commentErr).toBeNull();
+    await new Promise((r) => setTimeout(r, 750));
+    const { error: releaseErr } = await supabase
+      .from("submission_reviews")
+      .update({
+        released: true,
+        completed_at: new Date().toISOString(),
+        completed_by: upInstructor.private_profile_id,
+        grader: upInstructor.private_profile_id
+      })
+      .eq("id", reviewId);
+    expect(releaseErr).toBeNull();
+
+    // The student now sees the released grade.
+    const { data: post, error: postErr } = await studentClient
+      .from("submission_reviews")
+      .select("released, total_score")
+      .eq("id", reviewId)
+      .single();
+    expect(postErr).toBeNull();
+    expect(post!.released).toBe(true);
+    expect(post!.total_score).toBeGreaterThanOrEqual(8);
   });
 });

@@ -179,6 +179,85 @@ export async function createNoRepoSubmission(
 }
 
 /**
+ * Phase two of the no-repo upload flow: register the uploaded files against an
+ * already-created `upload` submission. The storage keys must live under the
+ * submission-id-scoped prefix so the `submission-files` read RLS applies.
+ */
+export async function attachNoRepoSubmissionFiles(
+  params: { submission_id: number; files: NoRepoSubmissionFile[] },
+  supabase: SupabaseClient<Database>
+): Promise<void> {
+  const { error } = await supabase.rpc("attach_no_repo_submission_files", {
+    p_submission_id: params.submission_id,
+    p_files: params.files
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to attach uploaded files to submission",
+      recoverable: false
+    });
+  }
+}
+
+/** A file the student picked in the browser, plus its target storage path. */
+export type PendingUploadFile = { name: string; file: Blob; size: number; mimeType: string | null };
+
+/**
+ * Orchestrate a student file-upload submission for a `repo_mode='none'`
+ * assignment: create an empty active submission, upload each file to the
+ * `submission-files` bucket under `classes/{class}/profiles/{profile_or_group}/
+ * submissions/{submission_id}/files/{name}`, then register the file rows.
+ * Returns the new submission id.
+ */
+export async function uploadNoRepoSubmission(
+  params: { assignment_id: number; files: PendingUploadFile[] },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  const submissionId = await createNoRepoSubmission({ assignment_id: params.assignment_id, files: [] }, supabase);
+
+  const { data: sub, error: subErr } = await supabase
+    .from("submissions")
+    .select("class_id, profile_id, assignment_group_id")
+    .eq("id", submissionId)
+    .single();
+  if (subErr || !sub) {
+    throw new EdgeFunctionError({
+      details: subErr?.message ?? "submission not found after creation",
+      message: "Failed to resolve submission for upload",
+      recoverable: false
+    });
+  }
+
+  const scopeId = sub.assignment_group_id ?? sub.profile_id;
+  const prefix = `classes/${sub.class_id}/profiles/${scopeId}/submissions/${submissionId}/files`;
+  const attached: NoRepoSubmissionFile[] = [];
+  for (const f of params.files) {
+    // Keep the on-disk name but strip path separators so a malicious / odd name
+    // can't escape the submission's prefix.
+    const safeName = f.name.replace(/[/\\]/g, "_");
+    const storageKey = `${prefix}/${safeName}`;
+    const { error: uploadErr } = await supabase.storage.from("submission-files").upload(storageKey, f.file, {
+      contentType: f.mimeType ?? undefined,
+      upsert: true
+    });
+    if (uploadErr) {
+      Sentry.captureException(uploadErr);
+      throw new EdgeFunctionError({
+        details: uploadErr.message,
+        message: `Failed to upload ${f.name}`,
+        recoverable: false
+      });
+    }
+    attached.push({ name: safeName, storage_key: storageKey, file_size: f.size, mime_type: f.mimeType });
+  }
+
+  await attachNoRepoSubmissionFiles({ submission_id: submissionId, files: attached }, supabase);
+  return submissionId;
+}
+
+/**
  * Create an instructor-authored stub submission for an assignment with
  * repo_mode='no_submission' (e.g. presentations / oral exams). Returns the
  * submission id — either the newly-created one or, if a manual submission was
@@ -201,7 +280,14 @@ export async function createManualSubmission(
       recoverable: false
     });
   }
-  return data as number;
+  if (typeof data !== "number" || !Number.isFinite(data)) {
+    throw new EdgeFunctionError({
+      details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+      message: "Failed to create manual submission",
+      recoverable: false
+    });
+  }
+  return data;
 }
 
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {

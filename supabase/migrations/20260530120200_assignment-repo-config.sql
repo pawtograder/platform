@@ -780,9 +780,6 @@ declare
   v_user_id uuid := auth.uid();
   v_class_id bigint;
   v_repo_mode public.assignment_repo_mode;
-  v_existing bigint;
-  v_submission_id bigint;
-  v_ordinal int;
   v_group_assignment_id bigint;
 begin
   if v_user_id is null then
@@ -824,83 +821,10 @@ begin
     end if;
   end if;
 
-  -- Serialize concurrent creates for this assignment + submitter scope so we
-  -- can't produce duplicate ordinals or end up with multiple active rows.
-  perform pg_advisory_xact_lock(
-    hashtextextended(
-      format(
-        'create_manual_submission:%s:%s:%s',
-        p_assignment_id,
-        coalesce(p_assignment_group_id::text, ''),
-        coalesce(p_profile_id::text, '')
-      ),
-      0
-    )
-  );
-
-  -- Reuse the existing active submission if one is already in place — keeps
-  -- the call idempotent so instructors can re-trigger setup without making
-  -- duplicate rows.
-  select id into v_existing
-    from public.submissions
-   where assignment_id = p_assignment_id
-     and is_active = true
-     and (
-       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
-     )
-   limit 1;
-  if v_existing is not null then
-    return v_existing;
-  end if;
-
-  -- Deactivate any conflicting active submission in the *other* scope for the
-  -- same target, so a student can't end up with both a per-profile and a
-  -- per-group active manual submission on this assignment. (Group entry already
-  -- deactivates individual submissions, but enforce it here too since manual
-  -- submissions can be created independently of group membership changes.)
-  if p_assignment_group_id is not null then
-    update public.submissions s
-       set is_active = false
-     where s.assignment_id = p_assignment_id
-       and s.is_active = true
-       and s.assignment_group_id is null
-       and s.profile_id in (
-         select agm.profile_id
-           from public.assignment_groups_members agm
-          where agm.assignment_group_id = p_assignment_group_id
-       );
-  else
-    update public.submissions s
-       set is_active = false
-     where s.assignment_id = p_assignment_id
-       and s.is_active = true
-       and s.assignment_group_id in (
-         select agm.assignment_group_id
-           from public.assignment_groups_members agm
-          where agm.profile_id = p_profile_id
-       );
-  end if;
-
-  -- Otherwise create one as the new active submission for the target.
-  select coalesce(max(ordinal), 0) + 1 into v_ordinal
-    from public.submissions
-   where assignment_id = p_assignment_id
-     and (
-       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
-     );
-
-  insert into public.submissions(
-    assignment_id, class_id, profile_id, assignment_group_id,
-    repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via
-  ) values (
-    p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
-    null, null, 1, v_ordinal, v_ordinal, true, 'manual'
-  )
-  returning id into v_submission_id;
-
-  return v_submission_id;
+  -- Validation done; the idempotent create itself lives in the no-auth internal
+  -- helper (defined later in this migration) so the auto-create triggers for
+  -- no_submission assignments share one source of truth.
+  return public.create_manual_submission_internal(p_assignment_id, p_profile_id, p_assignment_group_id);
 end;
 $$;
 
@@ -1141,8 +1065,15 @@ begin
     raise exception 'Invalid class/assignment (class_id %, assignment_id %)', course_id, assignment_id;
   end if;
 
-  if v_repo_mode in ('none', 'no_submission') then
-    raise notice 'Assignment % has repo_mode=%; nothing to enqueue', v_assignment_id, v_repo_mode;
+  if v_repo_mode = 'no_submission' then
+    -- No git repos for this mode; instead make sure every student/group has an
+    -- empty 'manual' submission so graders see a row for everyone.
+    perform public.create_all_manual_submissions_for_assignment(v_course_id, v_assignment_id);
+    return;
+  end if;
+
+  if v_repo_mode = 'none' then
+    raise notice 'Assignment % has repo_mode=none; nothing to enqueue', v_assignment_id;
     return;
   end if;
 
@@ -1681,3 +1612,444 @@ $$;
 
 revoke all on function public.publish_assignment_group_changes(bigint, bigint, jsonb, jsonb) from public;
 grant execute on function public.publish_assignment_group_changes(bigint, bigint, jsonb, jsonb) to authenticated;
+
+
+-- ============================================================================
+-- section: no_submission auto-create + no-repo upload attach
+--
+-- Two gaps filled here:
+--   (A) repo_mode='no_submission' assignments never create per-student repos,
+--       and nothing called create_manual_submission automatically, so students
+--       were invisible to graders (the grader roster view inner-joins the
+--       active submission). We auto-create one empty 'manual' submission per
+--       student / per group on release, on enrollment, and on group formation.
+--   (B) repo_mode='none' (upload) needs a two-phase flow whose storage keys
+--       embed the submission id (so the existing can_access_submission_storage_path
+--       read RLS applies): create empty submission -> upload bytes ->
+--       attach_no_repo_submission_files. Plus owner-scoped storage RLS so the
+--       student can write/read their own bytes.
+-- ============================================================================
+
+-- (A1) No-auth, idempotent core of create_manual_submission. Returns the
+-- existing active submission for the (assignment, profile|group) scope, else
+-- creates a new empty 'manual' stub. Trusted callers only (create_manual_submission
+-- after its auth/mode checks, and the auto-create triggers below); it does NOT
+-- check repo_mode or authorization.
+create or replace function public.create_manual_submission_internal(
+  p_assignment_id bigint,
+  p_profile_id uuid default null,
+  p_assignment_group_id bigint default null
+) returns bigint
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_class_id bigint;
+  v_existing bigint;
+  v_submission_id bigint;
+  v_ordinal int;
+begin
+  if (p_profile_id is null) = (p_assignment_group_id is null) then
+    raise exception 'Exactly one of p_profile_id or p_assignment_group_id must be provided';
+  end if;
+
+  select a.class_id into v_class_id from public.assignments a where a.id = p_assignment_id;
+  if v_class_id is null then
+    raise exception 'Assignment % not found', p_assignment_id;
+  end if;
+
+  -- Serialize concurrent creates for this assignment + submitter scope so we
+  -- can't produce duplicate ordinals or end up with multiple active rows.
+  perform pg_advisory_xact_lock(
+    hashtextextended(
+      format(
+        'create_manual_submission:%s:%s:%s',
+        p_assignment_id,
+        coalesce(p_assignment_group_id::text, ''),
+        coalesce(p_profile_id::text, '')
+      ),
+      0
+    )
+  );
+
+  -- Idempotent: reuse the existing active submission if one is already in place.
+  select id into v_existing
+    from public.submissions
+   where assignment_id = p_assignment_id
+     and is_active = true
+     and (
+       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
+       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
+     )
+   limit 1;
+  if v_existing is not null then
+    return v_existing;
+  end if;
+
+  -- Deactivate any conflicting active submission in the *other* scope for the
+  -- same target, so a student can't end up with both a per-profile and a
+  -- per-group active submission on this assignment.
+  if p_assignment_group_id is not null then
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id is null
+       and s.profile_id in (
+         select agm.profile_id
+           from public.assignment_groups_members agm
+          where agm.assignment_group_id = p_assignment_group_id
+       );
+  else
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id in (
+         select agm.assignment_group_id
+           from public.assignment_groups_members agm
+          where agm.profile_id = p_profile_id
+       );
+  end if;
+
+  select coalesce(max(ordinal), 0) + 1 into v_ordinal
+    from public.submissions
+   where assignment_id = p_assignment_id
+     and (
+       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
+       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
+     );
+
+  insert into public.submissions(
+    assignment_id, class_id, profile_id, assignment_group_id,
+    repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via
+  ) values (
+    p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
+    null, null, 1, v_ordinal, v_ordinal, true, 'manual'
+  )
+  returning id into v_submission_id;
+
+  return v_submission_id;
+end;
+$$;
+
+revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from public;
+revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from authenticated;
+grant execute on function public.create_manual_submission_internal(bigint, uuid, bigint) to postgres;
+
+-- (A2) Ensure every student (individual) and every group on a no_submission
+-- assignment has an active empty 'manual' submission. Idempotent; no-op for
+-- other repo_modes.
+create or replace function public.create_all_manual_submissions_for_assignment(
+  p_class_id bigint, p_assignment_id bigint
+) returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_repo_mode public.assignment_repo_mode;
+  v_class_id bigint;
+  r_profile_id uuid;
+  r_group_id bigint;
+begin
+  if p_assignment_id is null then
+    return;
+  end if;
+  select a.repo_mode, a.class_id into v_repo_mode, v_class_id
+    from public.assignments a where a.id = p_assignment_id;
+  if v_repo_mode is distinct from 'no_submission' then
+    return;
+  end if;
+  if p_class_id is not null and p_class_id <> v_class_id then
+    return;
+  end if;
+
+  -- Individual stubs for students not in a group on this assignment.
+  for r_profile_id in
+    select ur.private_profile_id
+      from public.user_roles ur
+     where ur.class_id = v_class_id
+       and ur.role = 'student'
+       and ur.disabled = false
+       and ur.private_profile_id is not null
+       and not exists (
+         select 1 from public.assignment_groups_members agm
+         join public.assignment_groups ag on ag.id = agm.assignment_group_id
+         where ag.assignment_id = p_assignment_id and agm.profile_id = ur.private_profile_id
+       )
+  loop
+    perform public.create_manual_submission_internal(p_assignment_id, r_profile_id, null);
+  end loop;
+
+  -- Group stubs.
+  for r_group_id in
+    select ag.id from public.assignment_groups ag where ag.assignment_id = p_assignment_id
+  loop
+    perform public.create_manual_submission_internal(p_assignment_id, null, r_group_id);
+  end loop;
+end;
+$$;
+
+revoke all on function public.create_all_manual_submissions_for_assignment(bigint, bigint) from public;
+revoke all on function public.create_all_manual_submissions_for_assignment(bigint, bigint) from authenticated;
+grant execute on function public.create_all_manual_submissions_for_assignment(bigint, bigint) to postgres;
+
+-- (A3) Fire the fan-out when a no_submission assignment reaches its release
+-- date. The repo-creation trigger/cron filter on template_repo IS NOT NULL, so
+-- no_submission assignments need their own (pure-SQL) detection.
+create or replace function public.tg_create_manual_submissions_on_release()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  now_utc timestamptz := now();
+begin
+  if NEW.repo_mode is distinct from 'no_submission' or NEW.release_date is null then
+    return NEW;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    if NEW.release_date <= now_utc then
+      perform public.create_all_manual_submissions_for_assignment(NEW.class_id, NEW.id);
+    end if;
+  elsif TG_OP = 'UPDATE' then
+    -- Released now/in the past, and either the release just transitioned to the
+    -- past or the assignment just switched into no_submission mode.
+    if NEW.release_date <= now_utc
+       and (
+         OLD.release_date is null
+         or OLD.release_date > now_utc
+         or OLD.repo_mode is distinct from 'no_submission'
+       ) then
+      perform public.create_all_manual_submissions_for_assignment(NEW.class_id, NEW.id);
+    end if;
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trigger_create_manual_submissions_on_release on public.assignments;
+create trigger trigger_create_manual_submissions_on_release
+  after insert or update on public.assignments
+  for each row execute function public.tg_create_manual_submissions_on_release();
+
+-- (A4) Catch-up cron for no_submission assignments whose release_date passes
+-- while idle (no UPDATE fires). Mirrors check_assignment_release_dates but
+-- without the template_repo filter that excludes no_submission.
+create or replace function public.check_no_submission_release_dates()
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  r record;
+begin
+  for r in
+    select a.id, a.class_id
+      from public.assignments a
+     where a.repo_mode = 'no_submission'
+       and a.release_date is not null
+       and a.release_date <= now()
+       and a.release_date > now() - interval '2 minutes'
+  loop
+    perform public.create_all_manual_submissions_for_assignment(r.class_id, r.id);
+  end loop;
+end;
+$$;
+
+revoke all on function public.check_no_submission_release_dates() from public;
+revoke all on function public.check_no_submission_release_dates() from authenticated;
+grant execute on function public.check_no_submission_release_dates() to postgres;
+
+select cron.schedule(
+  'check-no-submission-release-dates',
+  '* * * * *',
+  'select public.check_no_submission_release_dates();'
+);
+
+-- (A5) When a student is enrolled (or a role flips to student) after a
+-- no_submission assignment has been released, give them their individual stub.
+-- Group members are handled by the group trigger below.
+create or replace function public.tg_create_manual_submissions_on_enrollment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  r_assignment_id bigint;
+begin
+  if NEW.role <> 'student' or NEW.disabled = true or NEW.private_profile_id is null then
+    return NEW;
+  end if;
+  for r_assignment_id in
+    select a.id
+      from public.assignments a
+     where a.class_id = NEW.class_id
+       and a.repo_mode = 'no_submission'
+       and a.release_date is not null
+       and a.release_date <= now()
+  loop
+    if not exists (
+      select 1 from public.assignment_groups_members agm
+      join public.assignment_groups ag on ag.id = agm.assignment_group_id
+      where ag.assignment_id = r_assignment_id and agm.profile_id = NEW.private_profile_id
+    ) then
+      perform public.create_manual_submission_internal(r_assignment_id, NEW.private_profile_id, null);
+    end if;
+  end loop;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trigger_create_manual_submissions_on_enrollment on public.user_roles;
+create trigger trigger_create_manual_submissions_on_enrollment
+  after insert or update on public.user_roles
+  for each row execute function public.tg_create_manual_submissions_on_enrollment();
+
+-- (A6) When a student joins a group on a released no_submission assignment,
+-- ensure the group has its stub (which also deactivates members' individual
+-- stubs via create_manual_submission_internal).
+create or replace function public.tg_create_manual_submissions_on_group_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_assignment_id bigint;
+  v_repo_mode public.assignment_repo_mode;
+  v_release timestamptz;
+begin
+  select ag.assignment_id into v_assignment_id
+    from public.assignment_groups ag where ag.id = NEW.assignment_group_id;
+  if v_assignment_id is null then
+    return NEW;
+  end if;
+  select a.repo_mode, a.release_date into v_repo_mode, v_release
+    from public.assignments a where a.id = v_assignment_id;
+  if v_repo_mode is distinct from 'no_submission' or v_release is null or v_release > now() then
+    return NEW;
+  end if;
+  perform public.create_manual_submission_internal(v_assignment_id, null, NEW.assignment_group_id);
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trigger_create_manual_submissions_on_group_change on public.assignment_groups_members;
+create trigger trigger_create_manual_submissions_on_group_change
+  after insert on public.assignment_groups_members
+  for each row execute function public.tg_create_manual_submissions_on_group_change();
+
+-- (B1) Phase two of the upload flow: register file rows for an already-created
+-- empty 'upload' submission. Keys must live under the submission-id-scoped
+-- prefix so the can_access_submission_storage_path read RLS applies.
+create or replace function public.attach_no_repo_submission_files(
+  p_submission_id bigint,
+  p_files jsonb  -- array of { name, storage_key, file_size, mime_type }
+) returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_class_id bigint;
+  v_profile_id uuid;
+  v_assignment_group_id bigint;
+  v_submitted_via text;
+  v_is_active boolean;
+  v_expected_prefix text;
+  v_file jsonb;
+  v_storage_key text;
+begin
+  if v_user_id is null then
+    raise exception 'Must be authenticated' using errcode = '42501';
+  end if;
+
+  select s.class_id, s.profile_id, s.assignment_group_id, s.submitted_via, s.is_active
+    into v_class_id, v_profile_id, v_assignment_group_id, v_submitted_via, v_is_active
+    from public.submissions s
+   where s.id = p_submission_id;
+
+  if v_class_id is null then
+    raise exception 'Submission % not found', p_submission_id;
+  end if;
+  if not public.authorize_for_submission(p_submission_id) then
+    raise exception 'Access denied for submission %', p_submission_id using errcode = '42501';
+  end if;
+  if v_submitted_via is distinct from 'upload' then
+    raise exception 'Submission % is not an upload submission', p_submission_id;
+  end if;
+  if not v_is_active then
+    raise exception 'Submission % is not active', p_submission_id;
+  end if;
+
+  v_expected_prefix := format(
+    'classes/%s/profiles/%s/submissions/%s/files/',
+    v_class_id,
+    coalesce(v_assignment_group_id::text, v_profile_id::text),
+    p_submission_id
+  );
+
+  if p_files is not null and jsonb_array_length(p_files) > 0 then
+    for v_file in select * from jsonb_array_elements(p_files) loop
+      v_storage_key := v_file->>'storage_key';
+      if v_storage_key is null
+         or left(v_storage_key, length(v_expected_prefix)) <> v_expected_prefix then
+        raise exception 'storage_key % is outside this submission''s scope (expected prefix %)',
+          coalesce(v_storage_key, '(null)'), v_expected_prefix
+          using errcode = '42501';
+      end if;
+      insert into public.submission_files(
+        class_id, submission_id, profile_id, assignment_group_id,
+        name, contents, is_binary, file_size, mime_type, storage_key
+      ) values (
+        v_class_id,
+        p_submission_id,
+        v_profile_id,
+        v_assignment_group_id,
+        v_file->>'name',
+        null,
+        true,
+        coalesce((v_file->>'file_size')::bigint, 0),
+        v_file->>'mime_type',
+        v_storage_key
+      );
+    end loop;
+  end if;
+end;
+$$;
+
+grant execute on function public.attach_no_repo_submission_files(bigint, jsonb) to authenticated;
+
+-- (B2) Owner-scoped read/write on the submission-files bucket for student
+-- uploads. Gated by the existing can_access_submission_storage_path helper
+-- (authorizes the submission owner, group members, and class graders).
+-- Mirrors the storage.objects policy pattern used by 20250729000001_uploads-rls.sql.
+--
+-- Wrapped in a DO block because CREATE POLICY on storage.objects can raise
+-- "must be owner of table objects" in some environments (the migration runner
+-- isn't always the storage owner). If that happens, apply these two policies
+-- manually as superuser — same workaround as 20260217000000_binary_submission_files.sql.
+do $$
+begin
+  drop policy if exists "submission-files owner can read" on storage.objects;
+  create policy "submission-files owner can read"
+    on storage.objects for select to authenticated
+    using (bucket_id = 'submission-files' and public.can_access_submission_storage_path(name));
+
+  drop policy if exists "submission-files owner can insert" on storage.objects;
+  create policy "submission-files owner can insert"
+    on storage.objects for insert to authenticated
+    with check (bucket_id = 'submission-files' and public.can_access_submission_storage_path(name));
+exception
+  when insufficient_privilege then
+    raise warning 'Could not create submission-files storage policies (insufficient privilege); apply them manually as superuser';
+end
+$$;

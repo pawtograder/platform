@@ -1601,6 +1601,12 @@ export async function insertAssignment({
   // template_repo lives outside repo-mode (every assignment has a handout for
   // staff) for everything EXCEPT the explicitly-no-repo modes, where the
   // DB constraint is happier with a null template_repo.
+  if (
+    repo_mode === "fork_from_prior_assignment" &&
+    (source_assignment_id === undefined || source_assignment_id === null)
+  ) {
+    throw new Error("insertAssignment: source_assignment_id is required when repo_mode='fork_from_prior_assignment'");
+  }
   const noRepoMode = repo_mode === "none" || repo_mode === "no_submission";
   // assignments_no_protection_when_no_repo requires the protect_* fields be
   // false/false/0 when repo_mode is none/no_submission. The DB column defaults
