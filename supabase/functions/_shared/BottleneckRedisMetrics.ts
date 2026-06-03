@@ -100,9 +100,11 @@ function parseEvalTriple(raw: unknown): { running: number; concurrent_clients: n
 }
 
 /**
- * Snapshot Bottleneck limiters from the shared Upstash store.
+ * Snapshot Bottleneck limiters from the shared Redis store.
  *
- * Requires `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Returns [] if unset.
+ * Connects via `createRedis()` — the same env-based factory the app's limiters
+ * use: `REDIS_URL` (real ioredis) first, then `UPSTASH_REDIS_REST_*`. Returns []
+ * if neither is configured.
  *
  * Discovery is capped per scrape (default 200, max 5000) via `METRICS_MAX_BOTTLENECK_LIMITERS`
  * to bound Prometheus cardinality and scrape time.

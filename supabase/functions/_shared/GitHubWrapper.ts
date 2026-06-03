@@ -213,12 +213,18 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
   const opts = { reservoir: 40, maxConcurrent: 40, reservoirRefreshAmount: 40, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+  // Use the shared Redis store whenever ANY backend is configured — REDIS_URL
+  // first, then Upstash — which is exactly what bottleneckRedisOptions() (and
+  // buildRedisBottleneck below) already encode. Gating on UPSTASH_* SPECIFICALLY
+  // made this fall back to a LOCAL per-isolate limiter on REDIS_URL-only
+  // deployments, so each of the N edge replicas independently granted the full
+  // 40/min content quota → real GitHub secondary-rate-limit risk under load.
+  if (bottleneckRedisOptions()) {
     limiter = buildRedisBottleneck(id, opts, false);
     withSettingsKeyRecovery(limiter, id, opts, createContentLimiters, key);
   } else {
-    console.log("No Upstash URL or token found, using local limiter");
-    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
+    console.log("No Redis backend (REDIS_URL or UPSTASH_*) found, using local create-content limiter");
+    Sentry.captureMessage("No Redis backend (REDIS_URL or UPSTASH_*) found, using local create-content limiter");
     limiter = new Bottleneck({ id, ...opts });
   }
   createContentLimiters.set(key, limiter);
@@ -296,22 +302,24 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   });
   if (installations.length === 0) {
     let connection: Bottleneck.IORedisConnection | undefined;
-    if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
-      const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
-      const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+    // Back the GitHub API throttle with the shared Redis whenever ANY backend is
+    // configured (REDIS_URL first, then Upstash), via the same env-based factory
+    // the rest of the app uses. Previously this only built a connection when
+    // UPSTASH_* was set; on a REDIS_URL-only deployment `connection` stayed
+    // undefined, so @octokit/plugin-throttling fell back to a LOCAL per-isolate
+    // limiter — the GitHub rate limit was NOT coordinated across the (12-20)
+    // edge replicas, and no `b_pawtograder-production_*` state landed in the
+    // shared Redis for the metrics function to read. (The old UPSTASH_* branch
+    // also referenced an unimported `Redis` identifier, so it would have thrown
+    // a ReferenceError if ever taken.)
+    const throttleRedisOpts = bottleneckRedisOptions();
+    if (throttleRedisOpts) {
       connection = new Bottleneck.IORedisConnection({
-        clientOptions: {
-          host,
-          password,
-          username: "default",
-          tls: {},
-          port: 6379
-        },
-        Redis
+        clientOptions: throttleRedisOpts.clientOptions,
+        Redis: throttleRedisOpts.Redis
       });
       try {
         // Log connection lifecycle for verification
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         connection.ready
           .then(() => {
             console.log("IORedisConnection ready for GitHub throttling");
@@ -323,7 +331,6 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
       } catch (e) {
         console.error("Failed to attach IORedisConnection logging", e);
       }
-      connection.on("error", (err: Error) => console.error(err));
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
