@@ -855,6 +855,8 @@ monitoring:
     realtimeFanout:   true
     edgeFunctions:    true
     appBusiness:      true
+    rateLimiting:     true
+    edgeSoak:         true
 
   # Logs are NOT deployed by this chart. Log collection (Alloy
   # DaemonSet shipping into a central Loki) is a cluster-level concern

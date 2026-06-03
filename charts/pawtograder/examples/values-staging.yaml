@@ -292,3 +292,23 @@ backup:
     endpoint: https://s3.talos.ripley.cloud
     region: us-east-1
     bucket: pawtograder-staging-backups
+
+# ----- Observability: ServiceMonitors + Grafana dashboards ------------------
+# Turns on the chart's monitoring CRs: ServiceMonitors for edge-functions,
+# postgres-exporter, kong, auth, realtime, supavisor, and web, plus the Grafana
+# dashboards (all enabled by default in chart values, incl. `rate-limiting`,
+# which surfaces the GitHub-API Bottleneck limiter state read from the shared
+# Redis via the `metrics` edge function, and `edge-soak`). The cluster's
+# kube-prometheus-stack auto-discovers ServiceMonitors and its Grafana sidecar
+# picks up the dashboard ConfigMaps (label grafana_dashboard=1, folder
+# "Pawtograder").
+#
+# NOTE: enabling adds the postgres_exporter SIDECAR to the postgres pod, so the
+# first `helm upgrade` that flips this RESTARTS postgres (a brief DB blip) —
+# apply it when NOT mid-load-test. The realtime/supavisor/web ServiceMonitors
+# need bearer tokens in the pawtograder-jwt secret (REALTIME_METRICS_BEARER,
+# SUPAVISOR_METRICS_BEARER, METRICS_SCRAPE_TOKEN); without them those targets
+# 401, but everything else works — incl. the edge /metrics endpoint, which is
+# unauthed (no METRICS_TOKEN set) and is the rate-limiting metrics source.
+monitoring:
+  enabled: true
