@@ -624,6 +624,18 @@ edgeFunctions:
     pullPolicy: IfNotPresent
   policy: per_worker # matches supabase/config.toml
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
+  # Per-isolate worker limits (the main.ts demuxer reads these from env),
+  # matching supabase.com's hosted edge runtime. The runtime reuses a worker
+  # across requests and retires it gracefully as it nears these limits; main.ts
+  # retries retired workers on a fresh isolate. memoryLimitMb is intentionally
+  # modest (hosted runs 150–256) — under load the lifecycle handling matters far
+  # more than the ceiling. CPU time excludes async I/O, so 10s/20s is generous
+  # for these mostly I/O-bound functions while still retiring runaway compute.
+  worker:
+    memoryLimitMb: 256
+    timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
+    cpuSoftMs: 10000 # graceful-retire signal
+    cpuHardMs: 20000 # hard kill
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }

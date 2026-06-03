@@ -87,6 +87,15 @@ spec:
               value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
             - name: VERIFY_JWT
               value: {{ .Values.edgeFunctions.verifyJwt | quote }}
+            # Per-isolate worker limits read by the main.ts demuxer.
+            - name: EDGE_WORKER_MEMORY_LIMIT_MB
+              value: {{ .Values.edgeFunctions.worker.memoryLimitMb | quote }}
+            - name: EDGE_WORKER_TIMEOUT_MS
+              value: {{ .Values.edgeFunctions.worker.timeoutMs | quote }}
+            - name: EDGE_WORKER_CPU_SOFT_MS
+              value: {{ .Values.edgeFunctions.worker.cpuSoftMs | quote }}
+            - name: EDGE_WORKER_CPU_HARD_MS
+              value: {{ .Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:

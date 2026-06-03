@@ -165,6 +165,10 @@ edgeFunctions:
     # pawtograder-kong host → "getaddrinfo ENOTFOUND pawtograder-kong"). Track the
     # helm branch until #741 merges, then switch back to main-latest.
     tag: helm-95aeb6c3-graderurl
+  # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
+  # 10s/20s CPU), matching supabase.com. The earlier "memory limit reached"
+  # OOMs were a worker-lifecycle gap (no retry onto fresh workers), not a real
+  # 256 MB shortfall — fixed in main.ts — so no per-isolate override here.
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
