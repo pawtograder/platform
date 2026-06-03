@@ -6,3 +6,8 @@ playwright-report
 test-results
 screenshots
 supabase/.temp
+# Never ship a host-generated deno.lock into images. A newer host Deno writes
+# lockfile v5, which edge-runtime v1.69.5's older Deno can't read — it crashes
+# the worker at boot ("Unsupported lockfile version 5"). Deps resolve from
+# deno.json (and functions are vendored into eszips), so the lock isn't needed.
+supabase/functions/deno.lock
