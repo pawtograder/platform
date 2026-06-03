@@ -189,7 +189,7 @@ edgeFunctions:
     # size exceeds MAX_SUBMISSION_ZIP_MB/UNZIPPED_MB before the in-isolate unzip,
     # so a repo with committed build artifacts can't OOM the worker.
     # Track helm until #741 merges, then main-latest.
-    tag: helm-07ba6c40-eszip-guard
+    tag: helm-8bc29fc6-eszip-guard
   # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
   # 2s/5s CPU), matching supabase.com. With eszip bundling the per-isolate
   # baseline sits ~10x below the 256MB cap, so per_request isolation is cheap
