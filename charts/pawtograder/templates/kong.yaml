@@ -63,6 +63,18 @@ spec:
             # fixed count.
             - name: KONG_NGINX_WORKER_PROCESSES
               value: "2"
+            # Upstream keepalive tuning for autoscaled upstreams (edge functions).
+            # Default pool (60) lets kong reuse connections pinned to whichever
+            # pods it first dialed, so a burst never opens new connections and
+            # concentrates load on a stale subset — starving HPA-added pods and
+            # piling concurrent requests onto a few isolates. A small pool +
+            # short idle timeout forces bursts to open fresh connections, which
+            # cilium spreads across ALL current endpoints (incl. newly scaled
+            # pods). Intra-cluster reconnects are cheap.
+            - name: KONG_UPSTREAM_KEEPALIVE_POOL_SIZE
+              value: {{ .Values.kong.upstreamKeepalive.poolSize | quote }}
+            - name: KONG_UPSTREAM_KEEPALIVE_IDLE_TIMEOUT
+              value: {{ .Values.kong.upstreamKeepalive.idleTimeoutSeconds | quote }}
             - name: KONG_DECLARATIVE_CONFIG
               value: /var/lib/kong/kong.yml
             - name: KONG_DNS_ORDER

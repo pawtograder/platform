@@ -688,6 +688,14 @@ edgeFunctions:
 kong:
   enabled: true
   replicas: 2
+  # Upstream keepalive. A small pool + short idle timeout keeps kong from
+  # pinning load onto a stale subset of upstream pods — important for the
+  # autoscaled edge-functions upstream, where the default pool (60) makes
+  # bursts reuse pinned connections and starve HPA-added pods. Small pool ⇒
+  # bursts open fresh connections that cilium spreads across all endpoints.
+  upstreamKeepalive:
+    poolSize: 16
+    idleTimeoutSeconds: 15
   image:
     repository: kong
     tag: "3.9.1" # stock supabase docker-compose pin
