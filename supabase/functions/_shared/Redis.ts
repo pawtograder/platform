@@ -52,12 +52,80 @@ export type RedisClient = any;
  * github-repo-webhook to build a client from supabase-stored creds and
  * by BottleneckRedisMetrics to construct a metrics-only client).
  */
+/**
+ * Wrap a raw ioredis client so the Upstash-style call signatures used
+ * throughout the codebase work unchanged on real Redis (TCP). The app was
+ * written against @upstash/redis, which differs from ioredis in three ways
+ * we hit: `set(k, v, { ex })` (vs positional `EX`), `scan(cursor, { match,
+ * count })` (vs positional MATCH/COUNT, and a string cursor instead of a
+ * number), and `eval(script, keys[], args[])` (vs `eval(script, numkeys,
+ * ...keys, ...args)`). `get` is also made to auto-JSON-parse like Upstash.
+ * Everything else forwards straight through to ioredis.
+ */
+// deno-lint-ignore no-explicit-any
+function ioredisUpstashCompat(client: any): any {
+  // deno-lint-ignore no-explicit-any
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (prop === "set") {
+        // deno-lint-ignore no-explicit-any
+        return (key: string, value: any, opts?: Record<string, unknown>) => {
+          const v = typeof value === "string" ? value : JSON.stringify(value);
+          const extra: (string | number)[] = [];
+          if (opts && typeof opts === "object") {
+            if (opts.ex != null) extra.push("EX", opts.ex as number);
+            else if (opts.px != null) extra.push("PX", opts.px as number);
+            else if (opts.exat != null) extra.push("EXAT", opts.exat as number);
+            else if (opts.pxat != null) extra.push("PXAT", opts.pxat as number);
+            if (opts.keepTtl) extra.push("KEEPTTL");
+            if (opts.nx) extra.push("NX");
+            else if (opts.xx) extra.push("XX");
+          }
+          return target.set(key, v, ...extra);
+        };
+      }
+      if (prop === "get") {
+        return async (key: string) => {
+          const r = await target.get(key);
+          if (r == null || typeof r !== "string") return r;
+          try {
+            return JSON.parse(r);
+          } catch {
+            return r;
+          }
+        };
+      }
+      if (prop === "scan") {
+        return async (cursor: number | string, opts?: Record<string, unknown>) => {
+          const extra: (string | number)[] = [];
+          if (opts && typeof opts === "object") {
+            if (opts.match) extra.push("MATCH", opts.match as string);
+            if (opts.count) extra.push("COUNT", opts.count as number);
+            if (opts.type) extra.push("TYPE", opts.type as string);
+          }
+          const [next, keys] = await target.scan(cursor, ...extra);
+          // Upstash returns the cursor as a number; callers loop `while
+          // (cursor !== 0)`, so coerce ioredis's string cursor to match.
+          return [Number(next), keys];
+        };
+      }
+      if (prop === "eval") {
+        // deno-lint-ignore no-explicit-any
+        return (script: string, keys: any[] = [], args: any[] = []) =>
+          target.eval(script, keys.length, ...keys, ...args);
+      }
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === "function" ? val.bind(target) : val;
+    }
+  });
+}
+
 export function createRedis(
   opts: { redisUrl?: string; upstashUrl?: string; upstashToken?: string } = {}
 ): RedisClient | null {
   const redisUrl = opts.redisUrl || Deno.env.get("REDIS_URL");
   if (redisUrl) {
-    return new IORedisCtor(redisUrl) as IORedisInstance;
+    return ioredisUpstashCompat(new IORedisCtor(redisUrl));
   }
   const upstashUrl = opts.upstashUrl || Deno.env.get("UPSTASH_REDIS_REST_URL");
   const upstashToken = opts.upstashToken || Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
