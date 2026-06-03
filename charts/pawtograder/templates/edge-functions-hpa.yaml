@@ -1,0 +1,45 @@
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "pawtograder.edgeFunctions.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "pawtograder.edgeFunctions.host" . }}
+  minReplicas: {{ .Values.edgeFunctions.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.edgeFunctions.autoscaling.maxReplicas }}
+  metrics:
+    {{- with .Values.edgeFunctions.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with .Values.edgeFunctions.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+  behavior:
+    # Scale up fast (bursts), scale down slowly (avoid flapping mid-soak).
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - { type: Pods, value: 4, periodSeconds: 30 }
+        - { type: Percent, value: 100, periodSeconds: 30 }
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Pods, value: 2, periodSeconds: 60 }
+{{- end }}

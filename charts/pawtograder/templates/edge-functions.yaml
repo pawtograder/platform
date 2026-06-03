@@ -26,7 +26,9 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
 spec:
+  {{- if not .Values.edgeFunctions.autoscaling.enabled }}
   replicas: {{ .Values.edgeFunctions.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
@@ -55,6 +57,12 @@ spec:
             - "{{ .Values.edgeFunctions.service.port }}"
             - --policy
             - {{ .Values.edgeFunctions.policy | quote }}
+            {{- if .Values.edgeFunctions.maxParallelism }}
+            # Cap on simultaneous isolates; under per_request this bounds max
+            # concurrent requests/pod (excess queue via --request-wait-timeout).
+            - --max-parallelism
+            - {{ .Values.edgeFunctions.maxParallelism | quote }}
+            {{- end }}
             {{- with .Values.edgeFunctions.beforeUnload }}
             # EarlyDrop: retire+recycle a per_worker isolate at this % of a
             # resource limit so memory is reclaimed before the hard cap (default

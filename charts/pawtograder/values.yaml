@@ -622,7 +622,14 @@ edgeFunctions:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
     pullPolicy: IfNotPresent
-  policy: per_worker # matches supabase/config.toml
+  policy: per_worker # per_worker | per_request | oneshot. per_request gives each
+                     # request its own isolate (no concurrent co-location → no shared-heap
+                     # memory pile-up under bursts); per_worker co-locates for efficiency.
+  # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
+  # derives it from CPU cores, which is low on small pods and forces co-location.
+  # Under per_request this is effectively the max concurrent requests per pod
+  # (excess queue up to request-wait-timeout). Empty = runtime default.
+  maxParallelism: ""
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
   # When a per_worker isolate crosses the ratio the runtime tells it to finish
@@ -659,6 +666,16 @@ edgeFunctions:
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }
+  # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
+  # replica count (and the Deployment's static `replicas` is omitted so the two
+  # don't fight). minReplicas should be high enough that a sudden burst spreads
+  # ~1 request per isolate rather than concentrating on a few pods.
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetMemoryUtilizationPercentage: 100
+    targetCPUUtilizationPercentage: 200
   service:
     port: 9000
   nodeSelector: {}
