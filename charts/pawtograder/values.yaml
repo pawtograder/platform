@@ -624,6 +624,18 @@ edgeFunctions:
     pullPolicy: IfNotPresent
   policy: per_worker # matches supabase/config.toml
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
+  # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
+  # When a per_worker isolate crosses the ratio the runtime tells it to finish
+  # the current request and retire, then replaces it with a fresh isolate — this
+  # is the ONLY way per_worker memory gets reclaimed (V8 never returns heap to
+  # the OS). The runtime default is 90%, which is too late: a concurrent burst
+  # overshoots the hard cap before the worker drains and gets hard-killed
+  # (request cancelled). supabase.com uses ~50% of any resource; matching that
+  # gives workers headroom to finish in-flight requests and recycle cleanly.
+  beforeUnload:
+    memoryRatio: 50
+    cpuRatio: 50
+    wallClockRatio: 50
   # Per-isolate worker limits (the main.ts demuxer reads these from env),
   # matching supabase.com's hosted edge runtime. The runtime reuses a worker
   # across requests and retires it gracefully as it nears these limits; main.ts

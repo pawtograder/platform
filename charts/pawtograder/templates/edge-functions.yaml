@@ -55,6 +55,17 @@ spec:
             - "{{ .Values.edgeFunctions.service.port }}"
             - --policy
             - {{ .Values.edgeFunctions.policy | quote }}
+            {{- with .Values.edgeFunctions.beforeUnload }}
+            # EarlyDrop: retire+recycle a per_worker isolate at this % of a
+            # resource limit so memory is reclaimed before the hard cap (default
+            # 90% is too late under bursty load). ~50% mirrors supabase.com.
+            - --dispatch-beforeunload-memory-ratio
+            - {{ .memoryRatio | quote }}
+            - --dispatch-beforeunload-cpu-ratio
+            - {{ .cpuRatio | quote }}
+            - --dispatch-beforeunload-wall-clock-ratio
+            - {{ .wallClockRatio | quote }}
+            {{- end }}
           env:
             - name: SUPABASE_URL
               value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
