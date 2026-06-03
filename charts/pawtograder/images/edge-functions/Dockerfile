@@ -15,7 +15,7 @@
 #   2. runtime — the shipped image: raw functions (fallback + servicePath
 #      base), the prebuilt eszips, and the demuxer main service.
 
-FROM supabase/edge-runtime:v1.69.5 AS bundler
+FROM supabase/edge-runtime:v1.74.0 AS bundler
 
 # deno.json (the import map) lives at the functions root; the bundler relies on
 # Deno auto-discovering it by walking up from each entrypoint.
@@ -43,7 +43,7 @@ RUN set -eu; \
     done; \
     echo "[bundle] done: $(ls -1 /home/deno/eszips | wc -l) eszips, $(du -sh /home/deno/eszips | cut -f1) total"
 
-FROM supabase/edge-runtime:v1.69.5
+FROM supabase/edge-runtime:v1.74.0
 
 # Raw functions stay in the image: they're the servicePath base every worker
 # is created against, and main.ts falls back to raw .ts if an eszip is missing.

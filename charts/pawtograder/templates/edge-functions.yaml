@@ -47,7 +47,7 @@ spec:
             - name: http
               containerPort: {{ .Values.edgeFunctions.service.port }}
           command: ["edge-runtime"]
-          # NOTE: --no-verify-jwt isn't supported by edge-runtime v1.69.5;
+          # NOTE: --no-verify-jwt isn't supported by edge-runtime (as of v1.74.0);
           # JWT verification (or lack thereof) is handled inside main.ts.
           args:
             - start
