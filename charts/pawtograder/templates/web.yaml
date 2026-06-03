@@ -102,6 +102,11 @@ spec:
             - name: E2E_ENABLE
               value: "true"
             {{- end }}
+            # Namespaces the shared Next.js cache (cache-handler.cjs) in Redis so
+            # staging and PR previews — which share one Redis instance — don't
+            # cross-pollinate cache entries or tag-revalidation markers.
+            - name: NEXT_CACHE_PREFIX
+              value: {{ printf "nextcache:%s" .Release.Namespace | quote }}
             {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -112,6 +117,15 @@ spec:
             {{- range .Values.web.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
+                optional: true
+            {{- end }}
+            {{- if eq (.Values.redis.provider | default "external") "shared" }}
+            # Shared in-cluster Redis URL (REDIS_URL) for the cross-replica
+            # Next.js cache handler. Synced from OpenBao by
+            # templates/redis-externalsecret.yaml; optional so a missing sync
+            # doesn't block web startup (handler degrades to per-pod memory).
+            - secretRef:
+                name: pawtograder-redis
                 optional: true
             {{- end }}
           readinessProbe:
