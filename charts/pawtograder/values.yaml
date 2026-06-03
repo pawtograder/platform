@@ -353,6 +353,9 @@ auth:
   enableEmailSignup: true
   enableEmailAutoconfirm: true
   enableAnonymousUsers: false
+  # The web app links GitHub/Discord identities via supabase.auth.linkIdentity,
+  # which needs GoTrue manual linking on (else `manual_linking_disabled`).
+  manualLinkingEnabled: true
 
   # custom_access_token_hook — pawtograder requires this for role/class claims.
   customAccessTokenHook:
@@ -362,11 +365,16 @@ auth:
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
   external:
+    # Provider OAuth client id/secret are read from the `web` Secret as
+    # <PROVIDER>_OAUTH_CLIENT_ID / <PROVIDER>_OAUTH_CLIENT_SECRET.
     github:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
     azure:
       enabled: false
+    discord:
+      enabled: false
+      redirectUri: "" # default: https://<hostname>/auth/v1/callback
 
   smtp:
     enabled: false

@@ -125,6 +125,11 @@ spec:
               value: {{ .Values.auth.enableEmailAutoconfirm | quote }}
             - name: GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED
               value: {{ .Values.auth.enableAnonymousUsers | quote }}
+            # Required for the web app's account-linking flows
+            # (supabase.auth.linkIdentity / unlinkIdentity for GitHub + Discord).
+            # Without it GoTrue returns `manual_linking_disabled`.
+            - name: GOTRUE_SECURITY_MANUAL_LINKING_ENABLED
+              value: {{ .Values.auth.manualLinkingEnabled | quote }}
             {{- if .Values.auth.customAccessTokenHook.enabled }}
             - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED
               value: "true"
@@ -163,6 +168,24 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.web }}
                   key: AZURE_OAUTH_CLIENT_SECRET
+                  optional: true
+            {{- end }}
+            {{- if .Values.auth.external.discord.enabled }}
+            - name: GOTRUE_EXTERNAL_DISCORD_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_DISCORD_REDIRECT_URI
+              value: {{ default (printf "%s/auth/v1/callback" (include "pawtograder.api.url" .)) .Values.auth.external.discord.redirectUri | quote }}
+            - name: GOTRUE_EXTERNAL_DISCORD_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: DISCORD_OAUTH_CLIENT_ID
+                  optional: true
+            - name: GOTRUE_EXTERNAL_DISCORD_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: DISCORD_OAUTH_CLIENT_SECRET
                   optional: true
             {{- end }}
             {{- if .Values.auth.smtp.enabled }}
