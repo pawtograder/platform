@@ -2,10 +2,50 @@
 #
 # Build context: repository root.
 #   docker build -f charts/pawtograder/images/edge-functions/Dockerfile -t <ref> .
+#
+# Two stages:
+#   1. bundler — pre-compiles every function into an `.eszip` (vendored,
+#      pre-transpiled module graph). This is the per-isolate memory fix: raw
+#      servicePath mode makes each isolate fetch its remote deps and run the
+#      Deno transpiler, holding the whole TS source graph in heap (~150–250MB
+#      for a heavy function, right at the 256MB cap). eszip ships the graph
+#      ready-to-run, cutting marginal isolate memory ~10x. Bundling needs
+#      network (it fetches esm.sh / jsr / npm deps once, here, instead of on
+#      every cold isolate at runtime).
+#   2. runtime — the shipped image: raw functions (fallback + servicePath
+#      base), the prebuilt eszips, and the demuxer main service.
+
+FROM supabase/edge-runtime:v1.69.5 AS bundler
+
+# deno.json (the import map) lives at the functions root; the bundler relies on
+# Deno auto-discovering it by walking up from each entrypoint.
+COPY supabase/functions /home/deno/functions
+
+# Bundle every function directory (skip _shared — it's a library, not an
+# entrypoint — and main, which runs raw as the demuxer). One eszip per
+# function, keyed under file:///home/deno/functions/<name>/index.ts so main.ts
+# can pass maybeEntrypoint with that exact path at runtime.
+RUN set -eu; \
+    mkdir -p /home/deno/eszips; \
+    for d in /home/deno/functions/*/; do \
+      name="$(basename "$d")"; \
+      case "$name" in _shared|main) continue ;; esac; \
+      [ -f "${d}index.ts" ] || continue; \
+      echo "[bundle] $name"; \
+      edge-runtime bundle \
+        --entrypoint "${d}index.ts" \
+        --output "/home/deno/eszips/${name}.eszip"; \
+    done; \
+    echo "[bundle] done: $(ls -1 /home/deno/eszips | wc -l) eszips, $(du -sh /home/deno/eszips | cut -f1) total"
+
 FROM supabase/edge-runtime:v1.69.5
 
-# Bake all 49 pawtograder edge functions into the image.
+# Raw functions stay in the image: they're the servicePath base every worker
+# is created against, and main.ts falls back to raw .ts if an eszip is missing.
 COPY supabase/functions /home/deno/functions
+
+# Prebuilt eszips — main.ts loads these via maybeEszip for the memory win.
+COPY --from=bundler /home/deno/eszips /home/deno/eszips
 
 # Drop in the demux/main service that routes inbound requests by URL path.
 COPY charts/pawtograder/images/edge-functions/main.ts /home/deno/functions/main/index.ts
