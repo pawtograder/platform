@@ -99,6 +99,14 @@ auth:
     #   https://api.staging.pawtograder.net/auth/v1/callback
     azure:
       enabled: true
+    # GitHub + Discord OAuth (sign-in / identity-linking). Client id+secret are
+    # read from the pawtograder-web Secret as {GITHUB,DISCORD}_OAUTH_CLIENT_ID /
+    # _CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web). GitHub reuses
+    # the GitHub App's OAuth creds. Both providers' callback URL on the
+    # GitHub/Discord app side must include
+    # https://api.staging.pawtograder.net/auth/v1/callback.
+    discord:
+      enabled: true
   # Confirm signups via email (real round-trip) rather than auto-confirming.
   # Requires working SMTP below.
   enableEmailAutoconfirm: false
@@ -149,11 +157,14 @@ edgeFunctions:
   replicas: 3
   image:
     repository: ghcr.io/pawtograder/edge-functions
-    # STOPGAP: helm-branch build. `main-latest` predates the REDIS_URL/ioredis
+    # STOPGAP: helm-branch build. `main-latest` predates (a) the REDIS_URL/ioredis
     # support in _shared/Redis.ts (createRedis() returns null → "Redis client
-    # not available" in github-repo-webhook). Track the helm branch until #741
-    # merges, then switch back to main-latest.
-    tag: helm-2fe9ca9
+    # not available" in github-repo-webhook) and (b) GitHubWrapper's
+    # toPublicSupabaseUrl() rebase of grader signed URLs onto SUPABASE_PUBLIC_URL
+    # (without it the GitHub Actions runner can't resolve the in-cluster
+    # pawtograder-kong host → "getaddrinfo ENOTFOUND pawtograder-kong"). Track the
+    # helm branch until #741 merges, then switch back to main-latest.
+    tag: helm-95aeb6c3-graderurl
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
@@ -170,12 +181,14 @@ edgeFunctions:
 web:
   image:
     repository: ghcr.io/pawtograder/web
-    # STOPGAP: pinned to a locally-built image that bakes the CURRENT cluster
-    # anon key. `main-latest` ships a stale baked NEXT_PUBLIC_SUPABASE_ANON_KEY
-    # and 401s browser login (NEXT_PUBLIC_* is build-time inlined). Once
-    # release-images.yml (now reads the anon key from the cluster) produces a
-    # fresh main-latest, switch this back to `main-latest`.
-    tag: staging-manual-2fe9ca94
+    # STOPGAP: locally-built image that (a) bakes the CURRENT cluster anon key
+    # (`main-latest` ships a stale baked NEXT_PUBLIC_SUPABASE_ANON_KEY and 401s
+    # browser login, since NEXT_PUBLIC_* is build-time inlined) and (b) ships the
+    # shared Redis-backed Next.js cache handler (cache-handler.cjs) so
+    # revalidateTag() invalidates across all web replicas. Once release-images.yml
+    # (now reads the anon key from the cluster) produces a fresh main-latest with
+    # the cache-handler change merged, switch this back to `main-latest`.
+    tag: staging-manual-95aeb6c3-ssrcache
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
