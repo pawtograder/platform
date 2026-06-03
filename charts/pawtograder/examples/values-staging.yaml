@@ -185,8 +185,11 @@ edgeFunctions:
     # isolate. Measured: heavy autograder-create-submission dropped from ~150–250MB
     # to ~16–20MB marginal per isolate (4 isolates: 243MB→100MB), which is what
     # lets the 256MB cap actually hold under burst — matching supabase.com.
+    # (e) create-submission size guard — reject repos whose zipball/unzipped
+    # size exceeds MAX_SUBMISSION_ZIP_MB/UNZIPPED_MB before the in-isolate unzip,
+    # so a repo with committed build artifacts can't OOM the worker.
     # Track helm until #741 merges, then main-latest.
-    tag: helm-103e32a5-eszip
+    tag: helm-07ba6c40-eszip-guard
   # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
   # 2s/5s CPU), matching supabase.com. With eszip bundling the per-isolate
   # baseline sits ~10x below the 256MB cap, so per_request isolation is cheap
