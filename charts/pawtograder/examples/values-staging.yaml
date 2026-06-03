@@ -171,7 +171,7 @@ edgeFunctions:
     # lifecycle — retry retired workers, 2s CPU soft limit, and lowMemoryMultiplier
     # early-drop — without which isolates run to the 256MB hard cap and get killed
     # mid-request under load. Track helm until #741 merges, then main-latest.
-    tag: helm-1f394575-earlydrop
+    tag: helm-3da01abb-ratelimitmem
   # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
   # 10s/20s CPU), matching supabase.com. The earlier "memory limit reached"
   # OOMs were a worker-lifecycle gap (no retry onto fresh workers), not a real

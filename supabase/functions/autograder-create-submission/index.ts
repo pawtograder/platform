@@ -963,9 +963,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const ownershipFilter = repoData.assignment_group_id
             ? `assignment_group_id.eq.${repoData.assignment_group_id}`
             : `profile_id.eq.${repoData.profile_id}`;
+          // Only created_at + grader_results.score are needed below; selecting
+          // full rows + full grader_results here loads every prior in-window
+          // submission into the isolate, so per-request memory grows with
+          // submission volume and can push the worker past its memory limit
+          // under load. Keep this projection minimal.
           const { data: submissions, error: submissionsError } = await adminSupabase
             .from("submissions")
-            .select("*, grader_results!grader_results_submission_id_fkey(*)")
+            .select("created_at, grader_results!grader_results_submission_id_fkey(score)")
             .or(ownershipFilter)
             .eq("assignment_id", repoData.assignment_id)
             .gte(
