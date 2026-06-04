@@ -55,12 +55,12 @@ function toDateTimeLocal(date: Date): string {
 async function fillBaselineAssignmentFields(page: Page, slug: string) {
   await page.getByLabel("Slug", { exact: false }).fill(slug);
   // Select date inputs by label rather than positionally: the form has three
-  // datetime-local inputs (Release, the optional Suggested Due Date from #791,
+  // datetime-local inputs (Release, the optional Suggested due date from #791,
   // then Due) so positional .first()/.nth() are order-fragile. Anchor the
-  // regex so "Due Date" does not also match "Suggested Due Date".
-  await page.getByLabel(/^Release Date \(/).fill(toDateTimeLocal(futureRelease));
-  await page.getByLabel(/^Due Date \(/).fill(toDateTimeLocal(futureDue));
-  await page.getByLabel("Points Possible", { exact: false }).fill("100");
+  // regex so "Due date" does not also match "Suggested due date".
+  await page.getByLabel(/^Release date/i).fill(toDateTimeLocal(futureRelease));
+  await page.getByLabel(/^Due date/i).fill(toDateTimeLocal(futureDue));
+  await page.getByLabel("Points possible", { exact: false }).fill("100");
 }
 
 // Click a chakra Checkbox by its visible label text. The label markup is
