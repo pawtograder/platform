@@ -1,0 +1,37 @@
+{{- /* gotemplate */ -}}
+Pawtograder has been installed.
+
+  Release:    {{ .Release.Name }}
+  Namespace:  {{ .Release.Namespace }}
+  Hostname:   {{ .Values.global.hostname }}
+  Web URL:    {{ include "pawtograder.web.url" . }}
+  API URL:    {{ include "pawtograder.api.url" . }}
+
+Components enabled:
+{{- range $k, $v := dict "postgres" .Values.postgres.enabled "supavisor" .Values.supavisor.enabled "auth" .Values.auth.enabled "rest" .Values.rest.enabled "realtime" .Values.realtime.enabled "storage" .Values.storage.enabled "imgproxy" .Values.imgproxy.enabled "meta" .Values.meta.enabled "studio" .Values.studio.enabled "edgeFunctions" .Values.edgeFunctions.enabled "kong" .Values.kong.enabled "web" .Values.web.enabled }}
+  - {{ $k }}: {{ ternary "yes" "no" $v }}
+{{- end }}
+
+Next steps:
+
+1. Verify pods are healthy:
+     kubectl --namespace {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Watch the migrations job complete (it runs as a pre-install hook):
+     kubectl --namespace {{ .Release.Namespace }} logs -l app.kubernetes.io/component=migrations,app.kubernetes.io/instance={{ .Release.Name }} -f
+
+3. After DNS resolves and TLS is issued, browse to:
+     {{ include "pawtograder.web.url" . }}
+
+{{- if not .Values.secrets.create }}
+
+NOTE: secrets.create=false — the chart expects these Secrets to already exist:
+  - {{ .Values.secrets.names.postgres }}
+  - {{ .Values.secrets.names.jwt }}
+{{- if .Values.auth.smtp.enabled }}
+  - {{ .Values.secrets.names.smtp }}
+{{- end }}
+{{- if eq .Values.storage.backend "s3" }}
+  - {{ .Values.secrets.names.s3 }}
+{{- end }}
+{{- end }}

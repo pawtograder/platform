@@ -130,6 +130,24 @@ export interface SeedingConfiguration {
   gradingScheme?: "current" | "specification";
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
+  /** Fixed e-mail addresses pinned to the first user of each role created
+   * during this seed run. Lets reviewers log in to a freshly-seeded preview
+   * with predictable accounts that have already produced realistic
+   * submissions / grading data (because they ARE the first instructor /
+   * grader / student in the simulation, not a post-hoc bolt-on).
+   *
+   * The seeder substitutes these emails for the random faker-generated
+   * ones at user-creation time; everything downstream — assignments,
+   * submissions, grading, discussions — references the same user objects,
+   * so the fixed accounts participate fully in the seeded class.
+   *
+   * Unset roles fall back to the existing faker-generated emails.
+   */
+  fixedUsers?: {
+    instructor?: string;
+    grader?: string;
+    student?: string;
+  };
   // -------- Demo-mode opt-ins (all optional; null/undef preserves test behavior) --------
   /** LLM-authored fixture bundle. When set, takes precedence over the
    * hardcoded HELP_REQUEST_TEMPLATES / topicSubjects / questionBodies arrays. */
@@ -1081,6 +1099,18 @@ export class DatabaseSeeder {
     return this;
   }
 
+  /**
+   * Pin one or more roles to fixed e-mail addresses. The first user of each
+   * provided role is created with the given email instead of a random one,
+   * so reviewers can log in with predictable accounts that are fully woven
+   * into the seeded class (real submissions, real grading assignments,
+   * etc. — not post-hoc bolt-ons).
+   */
+  withFixedUsers(fixed: { instructor?: string; grader?: string; student?: string }): this {
+    this.config.fixedUsers = fixed;
+    return this;
+  }
+
   withUserRecycling(enabled: boolean = true): this {
     this.config.recycleUsers = enabled;
     return this;
@@ -1215,6 +1245,7 @@ export class DatabaseSeeder {
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
+      fixedUsers: this.config.fixedUsers,
       demoFixtures: this.config.demoFixtures,
       perAssignmentRepos: this.config.perAssignmentRepos,
       handoutStrategy: this.config.handoutStrategy,
@@ -1644,15 +1675,22 @@ export class DatabaseSeeder {
     );
 
     const newInstructorsNeeded = Math.max(0, config.numInstructors - existingInstructors.length);
+    // When fixedUsers.instructor is set, the first new instructor uses
+    // that email (a real-name placeholder kept stable across runs so
+    // reviewers can recognise the account in screenshots). All other
+    // instructors keep the recyclable faker emails so cleanup scripts
+    // can still find them.
+    const fixedInstructorEmail = existingInstructors.length === 0 ? config.fixedUsers?.instructor : undefined;
     const newInstructors = await Promise.all(
-      Array.from({ length: newInstructorsNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newInstructorsNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedInstructorEmail;
+        const name = useFixed ? "Pat Instructor" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "instructor",
           class_id,
           name,
-          email: `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedInstructorEmail : `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );
@@ -1672,15 +1710,17 @@ export class DatabaseSeeder {
     );
 
     const newGradersNeeded = Math.max(0, config.numGraders - existingGraders.length);
+    const fixedGraderEmail = existingGraders.length === 0 ? config.fixedUsers?.grader : undefined;
     const newGraders = await Promise.all(
-      Array.from({ length: newGradersNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newGradersNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedGraderEmail;
+        const name = useFixed ? "Sam Grader" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "grader",
           class_id,
           name,
-          email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedGraderEmail : `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );
@@ -1693,15 +1733,17 @@ export class DatabaseSeeder {
     );
 
     const newStudentsNeeded = Math.max(0, config.numStudents - existingStudents.length);
+    const fixedStudentEmail = existingStudents.length === 0 ? config.fixedUsers?.student : undefined;
     const newStudents = await Promise.all(
-      Array.from({ length: newStudentsNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newStudentsNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedStudentEmail;
+        const name = useFixed ? "Alex Student" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "student",
           class_id,
           name,
-          email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedStudentEmail : `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );

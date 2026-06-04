@@ -119,7 +119,7 @@ export function CodeLineCommentsPortal({
     ret.sort((a, b) => {
       if (a.rubric_check_id && !b.rubric_check_id) return -1;
       if (!a.rubric_check_id && b.rubric_check_id) return 1;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id;
     });
     return ret;
   }, [comments, isGraderOrInstructor, submission.released]);
