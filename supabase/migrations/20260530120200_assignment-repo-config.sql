@@ -645,11 +645,6 @@ declare
   v_profile_id uuid;
   v_assignment_group_id bigint;
   v_submission_id bigint;
-  v_run_number int;
-  v_ordinal int;
-  v_file jsonb;
-  v_expected_prefix text;
-  v_storage_key text;
 begin
   if v_user_id is null then
     raise exception 'Must be authenticated' using errcode = '42501';
@@ -699,47 +694,19 @@ begin
    where ag.assignment_id = p_assignment_id and agm.profile_id = v_profile_id
    limit 1;
 
+  -- Files are registered in a second phase (attach_no_repo_submission_files)
+  -- once the submission id exists, so their storage keys can be scoped to the
+  -- submission and satisfy the submission-files read RLS. Reject inline files
+  -- here so a caller can't persist keys that would never be readable.
+  if p_files is not null and jsonb_array_length(p_files) > 0 then
+    raise exception 'Pass files to attach_no_repo_submission_files after creating the submission, not to create_no_repo_submission'
+      using errcode = '22023';
+  end if;
+
   -- Create the empty active 'upload' submission (deactivating any prior active
   -- one for this scope) via the shared internal helper, so the staff
   -- "create on behalf of a student" RPC produces identical rows.
   v_submission_id := public.create_no_repo_submission_internal(p_assignment_id, v_profile_id, v_assignment_group_id);
-
-  if p_files is not null and jsonb_array_length(p_files) > 0 then
-    -- Defense-in-depth: a malicious client could pass a storage_key pointing at
-    -- another class's / another student's submission tree. Storage RLS still
-    -- gates the bytes at signed-URL time, but reject keys outside this caller's
-    -- documented scope prefix so we never persist a cross-scope reference.
-    -- Convention (see header): classes/{class_id}/profiles/{profile_or_group_id}/...
-    v_expected_prefix := format(
-      'classes/%s/profiles/%s/',
-      v_class_id,
-      coalesce(v_assignment_group_id::text, v_profile_id::text)
-    );
-    for v_file in select * from jsonb_array_elements(p_files) loop
-      v_storage_key := v_file->>'storage_key';
-      if v_storage_key is null
-         or left(v_storage_key, length(v_expected_prefix)) <> v_expected_prefix then
-        raise exception 'storage_key % is outside this submission''s scope (expected prefix %)',
-          coalesce(v_storage_key, '(null)'), v_expected_prefix
-          using errcode = '42501';
-      end if;
-      insert into public.submission_files(
-        class_id, submission_id, profile_id, assignment_group_id,
-        name, contents, is_binary, file_size, mime_type, storage_key
-      ) values (
-        v_class_id,
-        v_submission_id,
-        v_profile_id,
-        v_assignment_group_id,
-        v_file->>'name',
-        null,
-        true,
-        coalesce((v_file->>'file_size')::bigint, 0),
-        v_file->>'mime_type',
-        v_storage_key
-      );
-    end loop;
-  end if;
 
   return v_submission_id;
 end;
@@ -2003,6 +1970,12 @@ begin
         end if;
       else
         v_storage_key := null;  -- inline text has no storage object
+        -- Cap inline text so a direct RPC caller can't bloat the row store
+        -- (the browser already only inlines files under ~1 MB).
+        if char_length(coalesce(v_file->>'contents', '')) > 5 * 1024 * 1024 then
+          raise exception 'Inline file % is too large (max 5 MB); upload larger files as binary', v_file->>'name'
+            using errcode = '22001';
+        end if;
       end if;
       insert into public.submission_files(
         class_id, submission_id, profile_id, assignment_group_id,

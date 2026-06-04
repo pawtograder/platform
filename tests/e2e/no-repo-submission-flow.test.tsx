@@ -123,19 +123,12 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     happyPathClassId = classId;
   });
 
-  test("happy path: single student creates an upload submission with one file", async () => {
+  test("happy path: creates an empty active upload submission", async () => {
     const studentClient = await createAuthenticatedClient(studentA);
 
-    // Note: we don't actually upload to the submission-files bucket — the RPC
-    // only writes metadata. The companion UI test (#10) covers the upload step.
-    const { data, error } = await callRpc(studentClient, happyPathAssignmentId, [
-      {
-        name: "essay.pdf",
-        storage_key: `classes/${happyPathClassId}/profiles/${studentA.private_profile_id}/submissions/upload/files/essay.pdf`,
-        file_size: 12345,
-        mime_type: "application/pdf"
-      }
-    ]);
+    // Files are registered in a second phase (attach_no_repo_submission_files)
+    // once the submission id exists; this RPC just creates the active row.
+    const { data, error } = await callRpc(studentClient, happyPathAssignmentId, []);
 
     expect(error).toBeNull();
     expect(typeof data).toBe("number");
@@ -166,52 +159,24 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
       .select("*")
       .eq("submission_id", submissionId);
     expect(filesErr).toBeNull();
-    expect(files).toHaveLength(1);
-    const file = files![0];
-    expect(file.name).toBe("essay.pdf");
-    expect(file.storage_key).toBe(
-      `classes/${happyPathClassId}/profiles/${studentA.private_profile_id}/submissions/upload/files/essay.pdf`
-    );
-    expect(Number(file.file_size)).toBe(12345);
-    expect(file.mime_type).toBe("application/pdf");
-    expect(file.is_binary).toBe(true);
-    expect(file.profile_id).toBe(studentA.private_profile_id);
-    expect(file.assignment_group_id).toBeNull();
+    expect(files).toHaveLength(0);
   });
 
-  test("rejects a storage_key outside the caller's class/profile scope (S2)", async () => {
+  test("rejects non-empty p_files (files must be attached after creation)", async () => {
     const studentClient = await createAuthenticatedClient(studentA);
 
-    // Key pointing at a different class's tree → rejected.
-    const wrongClass = await callRpc(studentClient, happyPathAssignmentId, [
+    // create_no_repo_submission is create-only; files go through
+    // attach_no_repo_submission_files so their keys can be submission-scoped.
+    const { error } = await callRpc(studentClient, happyPathAssignmentId, [
       {
-        name: "evil.pdf",
-        storage_key: `classes/99999999/profiles/${studentA.private_profile_id}/submissions/upload/files/evil.pdf`,
+        name: "essay.pdf",
+        storage_key: `classes/${happyPathClassId}/profiles/${studentA.private_profile_id}/submissions/upload/files/essay.pdf`,
         file_size: 1,
         mime_type: "application/pdf"
       }
     ]);
-    expect(wrongClass.error).not.toBeNull();
-    expect(wrongClass.error!.message).toMatch(/outside this submission's scope/i);
-
-    // Key in the right class but another profile's tree → also rejected.
-    const wrongProfile = await callRpc(studentClient, happyPathAssignmentId, [
-      {
-        name: "evil2.pdf",
-        storage_key: `classes/${happyPathClassId}/profiles/00000000-0000-0000-0000-000000000000/submissions/upload/files/evil2.pdf`,
-        file_size: 1,
-        mime_type: "application/pdf"
-      }
-    ]);
-    expect(wrongProfile.error).not.toBeNull();
-
-    // The rejected call must not leave an orphan file row (the RPC is one
-    // transaction, so the raise rolls back the submission insert too).
-    const { data: leftovers } = await supabase
-      .from("submission_files")
-      .select("id")
-      .eq("storage_key", `classes/99999999/profiles/${studentA.private_profile_id}/submissions/upload/files/evil.pdf`);
-    expect(leftovers ?? []).toHaveLength(0);
+    expect(error).not.toBeNull();
+    expect(error!.message.toLowerCase()).toMatch(/attach_no_repo_submission_files|after creating/);
   });
 
   test("empty p_files is allowed: creates submission with zero file rows", async () => {
@@ -253,14 +218,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     const priorId = priorActive!.id;
     const priorOrdinal = priorActive!.ordinal;
 
-    const { data: newId, error } = await callRpc(studentClient, happyPathAssignmentId, [
-      {
-        name: "revised-essay.pdf",
-        storage_key: `classes/${happyPathClassId}/profiles/${studentA.private_profile_id}/submissions/upload/files/revised-essay.pdf`,
-        file_size: 9876,
-        mime_type: "application/pdf"
-      }
-    ]);
+    const { data: newId, error } = await callRpc(studentClient, happyPathAssignmentId, []);
     expect(error).toBeNull();
     expect(typeof newId).toBe("number");
 
@@ -419,14 +377,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
 
     // Student A submits.
     const clientA = await createAuthenticatedClient(groupStudentA);
-    const { data: subA, error: subAErr } = await callRpc(clientA, groupAssignment.id, [
-      {
-        name: "groupwork.pdf",
-        storage_key: `classes/${classId}/profiles/${groupId}/submissions/upload/files/group-a.pdf`,
-        file_size: 1000,
-        mime_type: "application/pdf"
-      }
-    ]);
+    const { data: subA, error: subAErr } = await callRpc(clientA, groupAssignment.id, []);
     expect(subAErr).toBeNull();
     expect(typeof subA).toBe("number");
 
@@ -444,14 +395,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
 
     // Student B (same group) submits — A's prior should flip inactive.
     const clientB = await createAuthenticatedClient(groupStudentB);
-    const { data: subB, error: subBErr } = await callRpc(clientB, groupAssignment.id, [
-      {
-        name: "groupwork-v2.pdf",
-        storage_key: `classes/${classId}/profiles/${groupId}/submissions/upload/files/group-b.pdf`,
-        file_size: 2000,
-        mime_type: "application/pdf"
-      }
-    ]);
+    const { data: subB, error: subBErr } = await callRpc(clientB, groupAssignment.id, []);
     expect(subBErr).toBeNull();
     expect(typeof subB).toBe("number");
 
@@ -497,22 +441,8 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     const client2 = await createAuthenticatedClient(concurrencyStudent);
 
     const [r1, r2] = await Promise.all([
-      callRpc(client1, concurrentAssignment.id, [
-        {
-          name: "race-1.pdf",
-          storage_key: `classes/${classId}/profiles/${concurrencyStudent.private_profile_id}/submissions/upload/files/race-1.pdf`,
-          file_size: 100,
-          mime_type: "application/pdf"
-        }
-      ]),
-      callRpc(client2, concurrentAssignment.id, [
-        {
-          name: "race-2.pdf",
-          storage_key: `classes/${classId}/profiles/${concurrencyStudent.private_profile_id}/submissions/upload/files/race-2.pdf`,
-          file_size: 200,
-          mime_type: "application/pdf"
-        }
-      ])
+      callRpc(client1, concurrentAssignment.id, []),
+      callRpc(client2, concurrentAssignment.id, [])
     ]);
 
     expect(r1.error).toBeNull();

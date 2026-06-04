@@ -10822,6 +10822,10 @@ export type Database = {
         };
         Returns: number;
       };
+      attach_no_repo_submission_files: {
+        Args: { p_files: Json; p_submission_id: number };
+        Returns: undefined;
+      };
       audit_maintain_partitions: { Args: never; Returns: undefined };
       authorize_for_admin: { Args: { p_user_id?: string }; Returns: boolean };
       authorize_for_private_discussion_thread: {
@@ -11015,6 +11019,7 @@ export type Database = {
           total_incomplete: number;
         }[];
       };
+      check_no_submission_release_dates: { Args: never; Returns: undefined };
       check_required_check_satisfied_for_uncovered: {
         Args: {
           p_is_individual: boolean;
@@ -11092,6 +11097,10 @@ export type Database = {
           p_target_assignment_id: number;
         };
         Returns: Json;
+      };
+      create_all_manual_submissions_for_assignment: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: undefined;
       };
       create_all_repos_for_assignment:
         | {
@@ -11183,11 +11192,7 @@ export type Database = {
         };
         Returns: number;
       };
-      attach_no_repo_submission_files: {
-        Args: { p_submission_id: number; p_files: Json };
-        Returns: undefined;
-      };
-      create_submission_for_student: {
+      create_manual_submission_internal: {
         Args: {
           p_assignment_group_id?: number;
           p_assignment_id: number;
@@ -11197,6 +11202,14 @@ export type Database = {
       };
       create_no_repo_submission: {
         Args: { p_assignment_id: number; p_files: Json };
+        Returns: number;
+      };
+      create_no_repo_submission_internal: {
+        Args: {
+          p_assignment_group_id: number;
+          p_assignment_id: number;
+          p_profile_id: string;
+        };
         Returns: number;
       };
       create_regrade_request: {
@@ -11219,6 +11232,14 @@ export type Database = {
       create_repos_for_student: {
         Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
+      };
+      create_submission_for_student: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id: number;
+          p_profile_id?: string;
+        };
+        Returns: number;
       };
       create_survey_assignments: {
         Args: { p_profile_ids: string[]; p_survey_id: string };
@@ -11374,58 +11395,27 @@ export type Database = {
         };
         Returns: number;
       };
-      enqueue_github_create_repo:
-        | {
-            Args: {
-              p_class_id: number;
-              p_course_slug: string;
-              p_debug_id?: string;
-              p_github_usernames: string[];
-              p_is_template_repo?: boolean;
-              p_org: string;
-              p_repo_name: string;
-              p_template_repo: string;
-            };
-            Returns: number;
-          }
-        | {
-            Args: {
-              p_assignment_group_id?: number;
-              p_assignment_id?: number;
-              p_class_id: number;
-              p_course_slug: string;
-              p_debug_id?: string;
-              p_github_usernames: string[];
-              p_is_template_repo?: boolean;
-              p_latest_template_sha?: string;
-              p_org: string;
-              p_profile_id?: string;
-              p_repo_name: string;
-              p_template_repo: string;
-            };
-            Returns: number;
-          }
-        | {
-            Args: {
-              p_assignment_group_id?: number;
-              p_assignment_id?: number;
-              p_branch_protection?: Json;
-              p_class_id: number;
-              p_course_slug: string;
-              p_creation_method?: string;
-              p_debug_id?: string;
-              p_github_usernames: string[];
-              p_is_template_repo?: boolean;
-              p_latest_template_sha?: string;
-              p_org: string;
-              p_profile_id?: string;
-              p_repo_name: string;
-              p_source_repo?: string;
-              p_student_team_permission?: string;
-              p_template_repo: string;
-            };
-            Returns: number;
-          };
+      enqueue_github_create_repo: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id?: number;
+          p_branch_protection?: Json;
+          p_class_id: number;
+          p_course_slug: string;
+          p_creation_method?: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_is_template_repo?: boolean;
+          p_latest_template_sha?: string;
+          p_org: string;
+          p_profile_id?: string;
+          p_repo_name: string;
+          p_source_repo?: string;
+          p_student_team_permission?: string;
+          p_template_repo: string;
+        };
+        Returns: number;
+      };
       enqueue_github_sync_repo_permissions: {
         Args: {
           p_class_id: number;
@@ -11504,6 +11494,7 @@ export type Database = {
       };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
+      get_assessment_export_pepper: { Args: never; Returns: string };
       get_assignment_llm_metrics: { Args: never; Returns: Json };
       get_assignments_for_student_dashboard: {
         Args: { p_class_id: number; p_student_profile_id: string };
@@ -12061,6 +12052,39 @@ export type Database = {
       merge_duplicate_class_enrollments: {
         Args: { p_class_id?: number };
         Returns: number;
+      };
+      metrics_workflow_errors_by_name: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          count: number;
+          name: string;
+        }[];
+      };
+      metrics_workflow_queue_percentiles: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          p50: number;
+          p95: number;
+          p99: number;
+        }[];
+      };
+      metrics_workflow_run_percentiles: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          p50: number;
+          p95: number;
+        }[];
+      };
+      metrics_workflow_runs_by_conclusion: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          conclusion: string;
+          count: number;
+        }[];
       };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
