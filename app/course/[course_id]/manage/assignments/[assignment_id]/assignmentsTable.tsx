@@ -330,7 +330,7 @@ export default function AssignmentsTable({
       lab_section_name: false,
       late_due_date: false,
       created_at: false,
-      gradername: false,
+      gradername: true,
       checkername: false,
       grading_complete: false
     };
@@ -631,7 +631,7 @@ export default function AssignmentsTable({
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          if (!row.original.gradername) return values.includes("Not assigned");
+          if (!row.original.gradername) return values.includes("Not Graded");
           return values.some((val) => row.original.gradername!.toLowerCase().includes(val.toLowerCase()));
         }
       },
@@ -1114,7 +1114,7 @@ export default function AssignmentsTable({
                                       }, new Map())
                                       .values()
                                   ).map((name) => ({ label: name, value: name })),
-                                  { label: "Not assigned", value: "Not assigned" }
+                                  { label: "Not Graded", value: "Not Graded" }
                                 ]}
                                 placeholder="Filter by grader..."
                               />

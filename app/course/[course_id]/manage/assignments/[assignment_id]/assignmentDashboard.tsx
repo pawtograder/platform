@@ -93,13 +93,15 @@ function ScoreHistogram({
   data,
   fill,
   tickColor,
-  tooltipBg
+  tooltipBg,
+  xLabel
 }: {
   title: string;
   data: HistogramBin[];
   fill: string;
   tickColor: string;
   tooltipBg: string;
+  xLabel?: string;
 }) {
   return (
     <Box>
@@ -108,13 +110,13 @@ function ScoreHistogram({
       </Heading>
       {data.length > 0 ? (
         <Box w="100%">
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={240}>
             <BarChart data={data}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 dataKey="name"
                 tick={{ fill: tickColor }}
-                label={{ value: "Score", position: "insideBottom", offset: -5 }}
+                label={{ value: xLabel ?? "Score", position: "insideBottom", offset: -5 }}
               />
               <YAxis tick={{ fill: tickColor }} label={{ value: "Students", angle: -90, position: "insideLeft" }} />
               <Tooltip
@@ -126,8 +128,60 @@ function ScoreHistogram({
           </ResponsiveContainer>
         </Box>
       ) : (
-        <Text color="fg.muted">No score data available.</Text>
+        <Text color="fg.muted">No data available.</Text>
       )}
+    </Box>
+  );
+}
+
+/** A tiny axis-less bar chart used as a sparkline inside the compact stat tiles. */
+function Sparkbars({ data, fill }: { data: HistogramBin[]; fill: string }) {
+  if (data.length === 0) {
+    return (
+      <Box h="40px" display="flex" alignItems="center">
+        <Text fontSize="xs" color="fg.muted">
+          no data
+        </Text>
+      </Box>
+    );
+  }
+  return (
+    <Box w="100%" h="40px">
+      <ResponsiveContainer width="100%" height={40}>
+        <BarChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+          <Bar dataKey="value" fill={fill} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </Box>
+  );
+}
+
+/** Compact stat tile: label, average (big), min–max + n, and a sparkline. */
+function StatTile({
+  label,
+  stats,
+  data,
+  fill
+}: {
+  label: string;
+  stats: ScoreStats;
+  data: HistogramBin[];
+  fill: string;
+}) {
+  return (
+    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" px={3} py={2}>
+      <Text fontSize="xs" color="fg.muted">
+        {label}
+      </Text>
+      <HStack align="baseline" gap={1.5} mb={1}>
+        <Text fontSize="lg" fontWeight="semibold" lineHeight="1.1">
+          {formatStat(stats.mean)}
+        </Text>
+        <Text fontSize="xs" color="fg.muted">
+          avg · {formatStat(stats.min)}–{formatStat(stats.max)} · n={stats.count}
+        </Text>
+      </HStack>
+      <Sparkbars data={data} fill={fill} />
     </Box>
   );
 }
@@ -143,6 +197,7 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   const isReady = useIsTableControllerReady(tableController ?? undefined);
 
   const [filter, setFilter] = useState<string>(ALL_SECTIONS_FILTER);
+  const [statsExpanded, setStatsExpanded] = useState(false);
   // Rubric breakdown is collapsed by default and only mounts (and hits its RPC) once opened.
   const [rubricOpen, setRubricOpen] = useState(false);
   const [rubricEverOpened, setRubricEverOpened] = useState(false);
@@ -155,11 +210,13 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
 
   const totalScoreStats = useMemo(() => computeScoreStats(filteredRows.map((r) => r.total_score)), [filteredRows]);
   const autograderStats = useMemo(() => computeScoreStats(filteredRows.map((r) => r.autograder_score)), [filteredRows]);
+  const submissionStats = useMemo(() => computeScoreStats(filteredRows.map((r) => r.ordinal)), [filteredRows]);
   const totalHistogram = useMemo(() => buildScoreHistogram(filteredRows.map((r) => r.total_score)), [filteredRows]);
   const autograderHistogram = useMemo(
     () => buildScoreHistogram(filteredRows.map((r) => r.autograder_score)),
     [filteredRows]
   );
+  const submissionHistogram = useMemo(() => buildScoreHistogram(filteredRows.map((r) => r.ordinal)), [filteredRows]);
 
   if (!isReady) {
     return <Spinner />;
@@ -209,26 +266,51 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
             </NativeSelect.Root>
           </HStack>
         </HStack>
-        <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
-          <StatRow label="Total score" stats={totalScoreStats} />
-          <StatRow label="Autograder score" stats={autograderStats} />
+        {/* Compact, single-row summary (sparklines). */}
+        <SimpleGrid columns={{ base: 1, sm: 3 }} gap={3}>
+          <StatTile label="Total score" stats={totalScoreStats} data={totalHistogram} fill="#8884d8" />
+          <StatTile label="Autograder score" stats={autograderStats} data={autograderHistogram} fill="#82ca9d" />
+          <StatTile label="Submissions / student" stats={submissionStats} data={submissionHistogram} fill="#f6ad55" />
         </SimpleGrid>
-        <SimpleGrid columns={{ base: 1, md: 2 }} gap={6} mt={6}>
-          <ScoreHistogram
-            title="Total score distribution"
-            data={totalHistogram}
-            fill="#8884d8"
-            tickColor={tickColor}
-            tooltipBg={tooltipBg}
-          />
-          <ScoreHistogram
-            title="Autograder score distribution"
-            data={autograderHistogram}
-            fill="#82ca9d"
-            tickColor={tickColor}
-            tooltipBg={tooltipBg}
-          />
-        </SimpleGrid>
+
+        <Collapsible.Root open={statsExpanded} onOpenChange={(e) => setStatsExpanded(e.open)}>
+          <Collapsible.Trigger asChild>
+            <Button size="xs" variant="ghost" mt={2}>
+              {statsExpanded ? "Hide detailed distributions ▾" : "Show detailed distributions ▸"}
+            </Button>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <SimpleGrid columns={{ base: 1, md: 3 }} gap={4} mt={3}>
+              <StatRow label="Total score" stats={totalScoreStats} />
+              <StatRow label="Autograder score" stats={autograderStats} />
+              <StatRow label="Submissions / student" stats={submissionStats} />
+            </SimpleGrid>
+            <SimpleGrid columns={{ base: 1, md: 3 }} gap={6} mt={6}>
+              <ScoreHistogram
+                title="Total score"
+                data={totalHistogram}
+                fill="#8884d8"
+                tickColor={tickColor}
+                tooltipBg={tooltipBg}
+              />
+              <ScoreHistogram
+                title="Autograder score"
+                data={autograderHistogram}
+                fill="#82ca9d"
+                tickColor={tickColor}
+                tooltipBg={tooltipBg}
+              />
+              <ScoreHistogram
+                title="Submissions per student"
+                data={submissionHistogram}
+                fill="#f6ad55"
+                tickColor={tickColor}
+                tooltipBg={tooltipBg}
+                xLabel="# submissions"
+              />
+            </SimpleGrid>
+          </Collapsible.Content>
+        </Collapsible.Root>
       </Box>
 
       <CardRoot variant="subtle">
