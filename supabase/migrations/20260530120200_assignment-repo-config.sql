@@ -31,26 +31,44 @@
 --     instructors via create_manual_submission so the grading flow still has
 --     a row to attach reviews to.
 
-create type public.assignment_repo_mode as enum (
-  'none',
-  'template_only_staff',
-  'template_with_student_forks',
-  'fork_from_prior_assignment',
-  'no_submission'
-);
+do $$
+begin
+  if not exists (
+    select 1 from pg_type t join pg_namespace n on n.oid = t.typnamespace
+    where t.typname = 'assignment_repo_mode' and n.nspname = 'public'
+  ) then
+    create type public.assignment_repo_mode as enum (
+      'none',
+      'template_only_staff',
+      'template_with_student_forks',
+      'fork_from_prior_assignment',
+      'no_submission'
+    );
+  end if;
+end $$;
 
 alter table public.assignments
-  add column repo_mode public.assignment_repo_mode not null default 'template_only_staff',
-  add column source_assignment_id bigint references public.assignments(id) on delete restrict,
-  add column protect_block_force_push     boolean not null default true,
-  add column protect_require_pull_request boolean not null default false,
-  add column protect_required_reviewers   smallint not null default 0,
+  add column if not exists repo_mode public.assignment_repo_mode not null default 'template_only_staff',
+  add column if not exists source_assignment_id bigint references public.assignments(id) on delete restrict,
+  add column if not exists protect_block_force_push     boolean not null default true,
+  add column if not exists protect_require_pull_request boolean not null default false,
+  add column if not exists protect_required_reviewers   smallint not null default 0;
+
+-- ADD CONSTRAINT has no IF NOT EXISTS, so drop-then-add to stay idempotent.
+alter table public.assignments drop constraint if exists assignments_required_reviewers_range;
+alter table public.assignments
   add constraint assignments_required_reviewers_range
-    check (protect_required_reviewers between 0 and 5),
+  check (protect_required_reviewers between 0 and 5);
+
+alter table public.assignments drop constraint if exists assignments_source_assignment_iff_fork;
+alter table public.assignments
   add constraint assignments_source_assignment_iff_fork check (
     (repo_mode = 'fork_from_prior_assignment' and source_assignment_id is not null)
     or (repo_mode <> 'fork_from_prior_assignment' and source_assignment_id is null)
-  ),
+  );
+
+alter table public.assignments drop constraint if exists assignments_no_protection_when_no_repo;
+alter table public.assignments
   add constraint assignments_no_protection_when_no_repo check (
     repo_mode not in ('none', 'no_submission') or (
       protect_block_force_push = false
@@ -89,6 +107,7 @@ begin
 end;
 $$;
 
+drop trigger if exists assignments_source_assignment_same_class on public.assignments;
 create trigger assignments_source_assignment_same_class
   before insert or update of source_assignment_id, class_id on public.assignments
   for each row
@@ -103,6 +122,7 @@ alter table public.submissions alter column sha drop not null;
 
 -- Enforce repository/sha as both-present or both-absent. The upload-based
 -- (no-repo) flow inserts both as null; everything else must carry both.
+alter table public.submissions drop constraint if exists submissions_repository_and_sha_match;
 alter table public.submissions
   add constraint submissions_repository_and_sha_match
   check ((repository is null) = (sha is null));
@@ -112,7 +132,9 @@ alter table public.submissions
 -- "manual" for instructor-created stubs on no_submission assignments
 -- (create_manual_submission). Used by graders to route processing.
 alter table public.submissions
-  add column submitted_via text null,
+  add column if not exists submitted_via text null;
+alter table public.submissions drop constraint if exists submissions_submitted_via_valid;
+alter table public.submissions
   add constraint submissions_submitted_via_valid check (
     submitted_via is null or submitted_via in ('git', 'upload', 'manual')
   );
