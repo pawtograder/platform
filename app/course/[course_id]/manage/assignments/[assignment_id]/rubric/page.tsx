@@ -1,5 +1,6 @@
 "use client";
 import { Alert } from "@/components/ui/alert";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useColorMode } from "@/components/ui/color-mode";
 import { PreviewRubricProvider } from "@/components/ui/preview-rubric-provider";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
@@ -973,6 +974,56 @@ function InnerRubricPage() {
     ]
   );
 
+  const handleResetEditor = useCallback(async () => {
+    if (initialActiveRubricSnapshot) {
+      setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+      setGuiEditorEpoch((e) => e + 1);
+      setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
+      toaster.create({
+        title: "Reset",
+        description: "Editor reset to last saved state for this tab.",
+        type: "info"
+      });
+    } else {
+      if (assignmentDetails && activeReviewRound) {
+        const minimal = createMinimalNewHydratedRubric(
+          assignment_id as string,
+          assignmentDetails.class_id,
+          activeReviewRound
+        );
+        setActiveRubric(minimal);
+        setGuiEditorEpoch((e) => e + 1);
+        setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
+        // Serialize the minimal rubric so the editor shows the template immediately,
+        // rather than briefly showing empty content until the reconciling effect runs.
+        setValue(YAML.stringify(HydratedRubricToYamlRubric(minimal)));
+      } else {
+        setActiveRubric(undefined);
+        setGuiEditorEpoch((e) => e + 1);
+        setInitialActiveRubricSnapshot(undefined);
+        setValue("");
+      }
+      toaster.create({
+        title: "Reset",
+        description: "Editor reset to an empty state for this tab.",
+        type: "info"
+      });
+    }
+    setHasUnsavedChanges(false);
+    if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+    setStashedEditorStates((prev) => {
+      const newState = { ...prev };
+      if (activeReviewRound) delete newState[activeReviewRound];
+      return newState;
+    });
+  }, [
+    initialActiveRubricSnapshot,
+    assignmentDetails,
+    activeReviewRound,
+    assignment_id,
+    createMinimalNewHydratedRubric
+  ]);
+
   useEffect(() => {
     if (wasRestoredFromStashRef.current) {
       // Content was from stash, value is already set. Debounced parse might still be needed for sidebar.
@@ -1559,54 +1610,21 @@ function InnerRubricPage() {
             </Button>
           </HStack>
           <HStack>
-            <Button
-              variant="ghost"
-              colorPalette="red"
-              size="xs"
-              onClick={() => {
-                if (initialActiveRubricSnapshot) {
-                  setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
-                  setGuiEditorEpoch((e) => e + 1);
-                  setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
-                  toaster.create({
-                    title: "Reset",
-                    description: "Editor reset to last saved state for this tab.",
-                    type: "info"
-                  });
-                } else {
-                  if (assignmentDetails && activeReviewRound) {
-                    const minimal = createMinimalNewHydratedRubric(
-                      assignment_id as string,
-                      assignmentDetails.class_id,
-                      activeReviewRound
-                    );
-                    setActiveRubric(minimal);
-                    setGuiEditorEpoch((e) => e + 1);
-                    setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
-                    setValue("");
-                  } else {
-                    setActiveRubric(undefined);
-                    setGuiEditorEpoch((e) => e + 1);
-                    setInitialActiveRubricSnapshot(undefined);
-                    setValue("");
-                  }
-                  toaster.create({
-                    title: "Reset",
-                    description: "Editor reset to an empty state for this tab.",
-                    type: "info"
-                  });
-                }
-                setHasUnsavedChanges(false);
-                if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
-                setStashedEditorStates((prev) => {
-                  const newState = { ...prev };
-                  if (activeReviewRound) delete newState[activeReviewRound];
-                  return newState;
-                });
-              }}
-            >
-              Reset
-            </Button>
+            <PopConfirm
+              triggerLabel="Reset rubric editor"
+              confirmHeader="Reset Rubric Editor"
+              confirmText={
+                initialActiveRubricSnapshot
+                  ? "Discard unsaved changes and reset this tab to the last saved rubric?"
+                  : "Discard unsaved changes and reset this tab to an empty rubric?"
+              }
+              onConfirm={handleResetEditor}
+              trigger={
+                <Button variant="ghost" colorPalette="red" size="xs">
+                  Reset
+                </Button>
+              }
+            />
             <Button
               colorPalette="green"
               loadingText="Saving..."
@@ -1750,147 +1768,149 @@ function InnerRubricPage() {
               </Box>
             </VStack>
           </Box>
-          <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
-            {updatePaused && (
-              <Alert variant="surface" position="sticky" top={0} zIndex={2}>
-                Preview paused while typing
-              </Alert>
-            )}
-            {pointsWarnings.length > 0 && viewMode === "source" && (
-              <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
-                <VStack gap={1} align="stretch">
-                  {pointsWarnings.map((w) => (
-                    <Text key={w.path} fontSize="sm">
-                      {w.message}
-                    </Text>
-                  ))}
-                </VStack>
-              </Alert>
-            )}
+          <Box w="lg" h="calc(100vh - 100px)" overflowY="auto">
+            <VStack align="stretch" gap={0} px={0}>
+              {updatePaused && (
+                <Alert variant="surface" position="sticky" top={0} zIndex={2}>
+                  Preview paused while typing
+                </Alert>
+              )}
+              {pointsWarnings.length > 0 && viewMode === "source" && (
+                <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
+                  <VStack gap={1} align="stretch">
+                    {pointsWarnings.map((w) => (
+                      <Text key={w.path} fontSize="sm">
+                        {w.message}
+                      </Text>
+                    ))}
+                  </VStack>
+                </Alert>
+              )}
 
-            {/* Points summary for autograder vs grading rubric vs assignment total */}
-            {rubric?.review_round === "grading-review" && (
-              <Box
-                role="region"
-                border="1px solid"
-                borderColor="border.subtle"
-                aria-label="Grading Rubric Points Summary"
-                mt={2}
-                mb={4}
-                p={3}
-                borderRadius="md"
-                bg={
-                  gradingRubricBreakdown?.assignToStudentUnbalanced ? "bg.warning" : addsUp ? "bg.info" : "bg.warning"
-                }
-              >
-                <Heading size="sm" mb={1}>
-                  Grading Rubric Points Summary
-                </Heading>
-                <Text fontSize="sm" color="fg.muted">
-                  The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
-                  configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
-                  {gradingRubricPoints} points per student. {addsUp && <Icon as={FaCheck} color="fg.success" />}
-                </Text>
-                {gradingRubricBreakdown &&
-                  (gradingRubricBreakdown.individual > 0 || gradingRubricBreakdown.assignToStudentParts.length > 0) && (
-                    <Text fontSize="xs" mt={1} color="fg.muted">
-                      Per-student total breakdown: {gradingRubricBreakdown.standard} from shared parts
-                      {gradingRubricBreakdown.individual > 0 &&
-                        ` + ${gradingRubricBreakdown.individual} from individual-grading parts (each student earns independently)`}
-                      {gradingRubricBreakdown.assignToStudentParts.length > 0 &&
-                        ` + up to ${gradingRubricBreakdown.assignToStudentPerStudent} from assign-to-student parts (assuming each student is assigned at most one of the ${gradingRubricBreakdown.assignToStudentParts.length} such part${gradingRubricBreakdown.assignToStudentParts.length === 1 ? "" : "s"}, ${gradingRubricBreakdown.assignToStudentTotal} points total distributed across the group)`}
-                      .
+              {/* Points summary for autograder vs grading rubric vs assignment total */}
+              {activeReviewRound === "grading-review" && (
+                <Box
+                  role="region"
+                  border="1px solid"
+                  borderColor="border.subtle"
+                  aria-label="Grading Rubric Points Summary"
+                  mt={2}
+                  mb={4}
+                  p={3}
+                  borderRadius="md"
+                  bg={
+                    gradingRubricBreakdown?.assignToStudentUnbalanced ? "bg.warning" : addsUp ? "bg.info" : "bg.warning"
+                  }
+                >
+                  <Heading size="sm" mb={1}>
+                    Grading Rubric Points Summary
+                  </Heading>
+                  <Text fontSize="sm" color="fg.muted">
+                    The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
+                    configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
+                    {gradingRubricPoints} points per student. {addsUp && <Icon as={FaCheck} color="fg.success" />}
+                  </Text>
+                  {gradingRubricBreakdown &&
+                    (gradingRubricBreakdown.individual > 0 ||
+                      gradingRubricBreakdown.assignToStudentParts.length > 0) && (
+                      <Text fontSize="xs" mt={1} color="fg.muted">
+                        Per-student total breakdown: {gradingRubricBreakdown.standard} from shared parts
+                        {gradingRubricBreakdown.individual > 0 &&
+                          ` + ${gradingRubricBreakdown.individual} from individual-grading parts (each student earns independently)`}
+                        {gradingRubricBreakdown.assignToStudentParts.length > 0 &&
+                          ` + up to ${gradingRubricBreakdown.assignToStudentPerStudent} from assign-to-student parts (assuming each student is assigned at most one of the ${gradingRubricBreakdown.assignToStudentParts.length} such part${gradingRubricBreakdown.assignToStudentParts.length === 1 ? "" : "s"}, ${gradingRubricBreakdown.assignToStudentTotal} points total distributed across the group)`}
+                        .
+                      </Text>
+                    )}
+                  {gradingRubricBreakdown?.assignToStudentUnbalanced && (
+                    <Alert status="warning" variant="surface" mt={2} title="Assign-to-student parts are unbalanced">
+                      <Text fontSize="sm">
+                        Multiple <code>is_assign_to_student</code> parts have different point totals, so students will
+                        have different maxes depending on which part they receive (
+                        {gradingRubricBreakdown.assignToStudentParts.map((p) => `${p.name}: ${p.max}`).join(", ")}
+                        ). Rebalance them so every student is graded against the same max.
+                      </Text>
+                    </Alert>
+                  )}
+                  {isCapped && (
+                    <Text fontSize="sm" mt={1} color="fg.muted">
+                      Score capping is enabled. Manual grading can be used as a fallback when autograder fails, with the
+                      final score capped to {assignmentMaxPoints} points.
                     </Text>
                   )}
-                {gradingRubricBreakdown?.assignToStudentUnbalanced && (
-                  <Alert status="warning" variant="surface" mt={2} title="Assign-to-student parts are unbalanced">
-                    <Text fontSize="sm">
-                      Multiple <code>is_assign_to_student</code> parts have different point totals, so students will
-                      have different maxes depending on which part they receive (
-                      {gradingRubricBreakdown.assignToStudentParts.map((p) => `${p.name}: ${p.max}`).join(", ")}
-                      ). Rebalance them so every student is graded against the same max.
+                  {!addsUp && gradingRubricPoints !== undefined && !isCapped && (
+                    <Text fontSize="sm" mt={1}>
+                      These do not add up to the assignment max points.{" "}
+                      {gradingRubricPoints < assignmentMaxPoints - autograderPoints
+                        ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
+                        : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
                     </Text>
-                  </Alert>
-                )}
-                {isCapped && (
-                  <Text fontSize="sm" mt={1} color="fg.muted">
-                    Score capping is enabled. Manual grading can be used as a fallback when autograder fails, with the
-                    final score capped to {assignmentMaxPoints} points.
-                  </Text>
-                )}
-                {!addsUp && gradingRubricPoints !== undefined && !isCapped && (
-                  <Text fontSize="sm" mt={1}>
-                    These do not add up to the assignment max points.{" "}
-                    {gradingRubricPoints < assignmentMaxPoints - autograderPoints
-                      ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
-                      : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
-                  </Text>
-                )}
-                {!addsUp && gradingRubricPoints !== undefined && isCapped && (
-                  <Text fontSize="sm" mt={1}>
-                    The maximum of autograder points ({autograderPoints}) and rubric points ({gradingRubricPoints})
-                    exceeds the assignment total ({assignmentMaxPoints}). Consider reducing one or both to fit within
-                    the cap.
-                  </Text>
-                )}
-              </Box>
-            )}
+                  )}
+                  {!addsUp && gradingRubricPoints !== undefined && isCapped && (
+                    <Text fontSize="sm" mt={1}>
+                      The maximum of autograder points ({autograderPoints}) and rubric points ({gradingRubricPoints})
+                      exceeds the assignment total ({assignmentMaxPoints}). Consider reducing one or both to fit within
+                      the cap.
+                    </Text>
+                  )}
+                </Box>
+              )}
 
-            {isLoadingCurrentRubric && !rubricForSidebar && (
-              <Center h="100%">
-                {" "}
-                <Spinner />{" "}
-              </Center>
-            )}
+              {isLoadingCurrentRubric && !rubricForSidebar && (
+                <Center h="100%">
+                  {" "}
+                  <Spinner />{" "}
+                </Center>
+              )}
 
-            {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
-              <Center h="100%">
-                <VStack>
-                  <Text>No rubric configured for {activeReviewRound}.</Text>
-                  <Text fontSize="sm">Load a demo template or start typing in the editor to see a preview.</Text>
-                </VStack>
-              </Center>
-            )}
+              {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
+                <Center h="100%">
+                  <VStack>
+                    <Text>No rubric configured for {activeReviewRound}.</Text>
+                    <Text fontSize="sm">Load a demo template or start typing in the editor to see a preview.</Text>
+                  </VStack>
+                </Center>
+              )}
 
-            {!error && rubricForSidebar && (
-              <PreviewRubricProvider rubricData={rubricForSidebar}>
-                <VStack gap={4} align="stretch">
-                  <MemoizedRubricSidebar rubricId={rubricForSidebar.id} />
-                </VStack>
-              </PreviewRubricProvider>
-            )}
-            {error && (
-              <Box
-                position="absolute"
-                top="0"
-                left="0"
-                width="100%"
-                height="100%"
-                backgroundColor="bg.surface"
-                p={4}
-                display="flex"
-                flexDirection="column"
-                zIndex="1"
-              >
-                <Heading size="sm" color="fg.error" mb={2}>
-                  YAML Error
-                </Heading>
-                <Text color="fg.error" mb={2}>
-                  {error}
-                </Text>
-                {errorMarkers.length > 0 && (
-                  <List.Root>
-                    {errorMarkers.map((marker, index) => (
-                      <List.Item key={index}>
-                        <Text color="fg.error" fontSize="sm">
-                          Line {marker.startLineNumber}: {marker.message}
-                        </Text>
-                      </List.Item>
-                    ))}
-                  </List.Root>
-                )}
-              </Box>
-            )}
+              {!error && rubricForSidebar && (
+                <PreviewRubricProvider rubricData={rubricForSidebar}>
+                  <VStack gap={4} align="stretch">
+                    <MemoizedRubricSidebar rubricId={rubricForSidebar.id} />
+                  </VStack>
+                </PreviewRubricProvider>
+              )}
+              {error && (
+                <Box
+                  border="1px solid"
+                  borderColor="border.error"
+                  borderRadius="md"
+                  bg="bg.surface"
+                  mt={2}
+                  mb={4}
+                  p={4}
+                  display="flex"
+                  flexDirection="column"
+                >
+                  <Heading size="sm" color="fg.error" mb={2}>
+                    YAML Error
+                  </Heading>
+                  <Text color="fg.error" mb={2}>
+                    {error}
+                  </Text>
+                  {errorMarkers.length > 0 && (
+                    <List.Root>
+                      {errorMarkers.map((marker, index) => (
+                        <List.Item key={index}>
+                          <Text color="fg.error" fontSize="sm">
+                            Line {marker.startLineNumber}: {marker.message}
+                          </Text>
+                        </List.Item>
+                      ))}
+                    </List.Root>
+                  )}
+                </Box>
+              )}
+            </VStack>
           </Box>
         </Flex>
       </VStack>

@@ -1,24 +1,27 @@
 "use client";
-import { Field } from "@/components/ui/field";
+import { Field as BaseField, type FieldProps } from "@/components/ui/field";
 import {
+  Accordion,
   Box,
   CardBody,
   CardHeader,
   CardRoot,
   CardTitle,
   Checkbox,
+  Field as CkField,
   Fieldset,
   Input,
   NativeSelectField,
   NativeSelectRoot,
   Table,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
-import { Controller, FieldValues } from "react-hook-form";
+import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
 import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -27,13 +30,55 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
+
+/**
+ * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
+ * 3-column grid — label | control | helper/error — so that across every field in a section
+ * the labels, inputs, and helper text line up in consistent columns. Vertical fields (e.g.
+ * checkboxes) fall through to the shared Field unchanged. Scoped to this form so the shared
+ * `@/components/ui/field` (used elsewhere) is untouched.
+ */
+function Field({ orientation, ...props }: FieldProps) {
+  if (orientation !== "horizontal") {
+    return <BaseField orientation={orientation} {...props} />;
+  }
+  const { label, children, helperText, errorText, optionalText, required, invalid, ...rest } = props;
+  return (
+    <CkField.Root
+      required={required}
+      invalid={invalid}
+      display="grid"
+      gridTemplateColumns={{ base: "1fr", md: "minmax(150px, 220px) minmax(0, 1fr) minmax(0, 1.1fr)" }}
+      alignItems="start"
+      columnGap={4}
+      rowGap={1}
+      {...rest}
+    >
+      {label ? (
+        <CkField.Label m={0} pt={2}>
+          {label}
+          <CkField.RequiredIndicator fallback={optionalText} />
+        </CkField.Label>
+      ) : (
+        <span />
+      )}
+      <Box minW={0} w="100%">
+        {children}
+      </Box>
+      <Box minW={0} gridColumn={{ base: "1", md: "3" }}>
+        {helperText ? <CkField.HelperText mt={0}>{helperText}</CkField.HelperText> : null}
+        {errorText ? <CkField.ErrorText>{errorText}</CkField.ErrorText> : null}
+      </Box>
+    </CkField.Root>
+  );
+}
 
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
@@ -199,13 +244,17 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
   return (
     <CardRoot>
       <CardHeader>
-        <CardTitle>Group Configuration</CardTitle>
+        <CardTitle>Groups</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          Whether students submit individually or as a group, group size limits, and how groups are formed.
+        </Text>
       </CardHeader>
       <CardBody gap="5px">
         <Fieldset.Content>
           <Field
-            label="Group configuration"
-            helperText="If you want to use groups for this assignment, select the group configuration you want to use."
+            orientation="horizontal"
+            label="Submission type"
+            helperText="Choose whether students submit individually or as a group."
             errorText={errors.group_config?.message?.toString()}
             invalid={errors.group_config ? true : false}
             required={true}
@@ -229,7 +278,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
           <>
             <Fieldset.Content>
               <Field
-                label="Minimum Group Size"
+                orientation="horizontal"
+                label="Minimum group size"
                 helperText="The minimum number of students allowed in a group"
                 errorText={errors.min_group_size?.message?.toString()}
                 invalid={errors.min_group_size ? true : false}
@@ -249,7 +299,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
-                label="Maximum Group Size"
+                orientation="horizontal"
+                label="Maximum group size"
                 helperText="The maximum number of students allowed in a group"
                 errorText={errors.max_group_size?.message?.toString()}
                 invalid={errors.max_group_size ? true : false}
@@ -269,7 +320,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
-                label="Group Formation Method"
+                orientation="horizontal"
+                label="Group formation method"
                 helperText="Choose whether students can form their own groups or if all groups will be assigned by instructors"
                 errorText={errors.allow_student_formed_groups?.message?.toString()}
                 invalid={errors.allow_student_formed_groups ? true : false}
@@ -306,7 +358,11 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>
-              <Field label="Copy groups from assignment" helperText="Copy groups from another assignment">
+              <Field
+                orientation="horizontal"
+                label="Copy groups from assignment"
+                helperText="Copy groups from another assignment"
+              >
                 <NativeSelectRoot>
                   <NativeSelectField {...register("copy_groups_from_assignment", { required: false })}>
                     <option value="">None</option>
@@ -321,7 +377,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
-                label="Group Formation Deadline"
+                orientation="horizontal"
+                label="Group formation deadline"
                 helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
                 errorText={errors.group_formation_deadline?.message?.toString()}
                 invalid={errors.group_formation_deadline ? true : false}
@@ -387,61 +444,57 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   }, [watch]);
 
   return (
-    <CardRoot>
-      <CardHeader>
-        <CardTitle>Lab-Based Due Date</CardTitle>
-      </CardHeader>
-      <CardBody gap="5px">
+    <>
+      <Fieldset.Content>
+        <Field helperText="When enabled, the assignment due date will be calculated as a number of minutes after the student's most recent lab section meeting before the original due date. This allows for flexible due dates that align with each student's lab schedule.">
+          <Checkbox.Root
+            checked={withLabDueDate}
+            onCheckedChange={(checked) => {
+              setWithLabDueDate(!!checked.checked);
+              if (!checked.checked) {
+                // Clear the minutes_due_after_lab field when unchecked
+                form.setValue("minutes_due_after_lab", null, { shouldDirty: true });
+              } else {
+                // Set a default value when checked - use string since valueAsNumber will convert it
+                form.setValue("minutes_due_after_lab", "60", { shouldValidate: true, shouldDirty: true });
+              }
+            }}
+          >
+            <Checkbox.HiddenInput />
+            <Checkbox.Control>
+              <LuCheck />
+            </Checkbox.Control>
+            <Checkbox.Label>Custom due date based on lab meeting time</Checkbox.Label>
+          </Checkbox.Root>
+        </Field>
+      </Fieldset.Content>
+      {withLabDueDate && (
         <Fieldset.Content>
-          <Field helperText="When enabled, the assignment due date will be calculated as a number of minutes after the student's most recent lab section meeting before the original due date. This allows for flexible due dates that align with each student's lab schedule.">
-            <Checkbox.Root
-              checked={withLabDueDate}
-              onCheckedChange={(checked) => {
-                setWithLabDueDate(!!checked.checked);
-                if (!checked.checked) {
-                  // Clear the minutes_due_after_lab field when unchecked
-                  form.setValue("minutes_due_after_lab", null, { shouldDirty: true });
-                } else {
-                  // Set a default value when checked - use string since valueAsNumber will convert it
-                  form.setValue("minutes_due_after_lab", "60", { shouldValidate: true, shouldDirty: true });
-                }
-              }}
-            >
-              <Checkbox.HiddenInput />
-              <Checkbox.Control>
-                <LuCheck />
-              </Checkbox.Control>
-              <Checkbox.Label>Custom due date based on lab meeting time</Checkbox.Label>
-            </Checkbox.Root>
+          <Field
+            orientation="horizontal"
+            label="Minutes due after lab meeting"
+            helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
+            errorText={errors.minutes_due_after_lab?.message?.toString()}
+            invalid={errors.minutes_due_after_lab ? true : false}
+            required={withLabDueDate}
+          >
+            <Input
+              type="number"
+              {...register("minutes_due_after_lab", {
+                required: withLabDueDate ? "This is required when using lab-based due dates" : false,
+                min: { value: 0, message: "Minutes must be at least 0" },
+                valueAsNumber: true
+              })}
+            />
           </Field>
         </Fieldset.Content>
-        {withLabDueDate && (
-          <Fieldset.Content>
-            <Field
-              label="Minutes due after lab meeting"
-              helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
-              errorText={errors.minutes_due_after_lab?.message?.toString()}
-              invalid={errors.minutes_due_after_lab ? true : false}
-              required={withLabDueDate}
-            >
-              <Input
-                type="number"
-                {...register("minutes_due_after_lab", {
-                  required: withLabDueDate ? "This is required when using lab-based due dates" : false,
-                  min: { value: 0, message: "Minutes must be at least 0" },
-                  valueAsNumber: true
-                })}
-              />
-            </Field>
-          </Fieldset.Content>
-        )}
-        {withLabDueDate && (
-          <Fieldset.Content>
-            <LabDueDatePreview form={form} timezone={timezone} />
-          </Fieldset.Content>
-        )}
-      </CardBody>
-    </CardRoot>
+      )}
+      {withLabDueDate && (
+        <Fieldset.Content>
+          <LabDueDatePreview form={form} timezone={timezone} />
+        </Fieldset.Content>
+      )}
+    </>
   );
 }
 
@@ -479,12 +532,16 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
   return (
     <CardRoot>
       <CardHeader>
-        <CardTitle>Self Evaluation Configuration</CardTitle>
+        <CardTitle>Self-evaluation</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          Optionally require students to complete a self-evaluation after this assignment&apos;s deadline.
+        </Text>
       </CardHeader>
       <CardBody gap="5px">
         <Fieldset.Content>
           <Field
-            label="Assignment setting"
+            orientation="horizontal"
+            label="Require self-evaluation"
             errorText={errors.group_config?.message?.toString()}
             invalid={errors.group_config ? true : false}
             required={true}
@@ -496,8 +553,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                   setWithEval(e.target.value == "use_eval");
                 }}
               >
-                <option value="base_only">Programming assignment only</option>
-                <option value="use_eval">Programming assignment and self evaluation</option>
+                <option value="base_only">Assignment only</option>
+                <option value="use_eval">Assignment and self-evaluation</option>
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -506,8 +563,9 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
           <>
             <Fieldset.Content>
               <Field
-                label="Hours due after programming assignment"
-                helperText="The number of hours between the deadline of the programming assignment and when the self evaluation is due"
+                orientation="horizontal"
+                label="Hours due after this assignment"
+                helperText="The number of hours between this assignment's deadline and when the self-evaluation is due"
                 errorText={errors.min_group_size?.message?.toString()}
                 invalid={errors.min_group_size ? true : false}
                 required={withEval}
@@ -525,7 +583,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
               </Field>
             </Fieldset.Content>
             <Field
-              helperText="Students can submit self evaluation before programming assignment deadline"
+              helperText="Students can submit the self-evaluation before this assignment's deadline"
               required={withEval}
             >
               <Checkbox.Root {...register("allow_early")} checked={allowEarly}>
@@ -539,8 +597,9 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
             </Field>
             <Fieldset.Content>
               <Field
-                label={`Release self-review at (${timezone}, optional)`}
-                helperText="If set, the self-review is assigned and becomes visible to all students at this exact wall-clock time, ignoring per-student due-date exceptions. Leave blank to release when the programming assignment's due date passes (current behavior). Pairs with the rubric option 'Hide from students until assigned'."
+                orientation="horizontal"
+                label={`Release self-evaluation at (${timezone}, optional)`}
+                helperText="If set, the self-evaluation is released to all students at this wall-clock time, ignoring per-student due-date exceptions. Leave blank to release when this assignment's due date passes."
               >
                 <Controller
                   name="self_review_release_at"
@@ -601,6 +660,31 @@ export default function AssignmentForm({
   );
   const timezone = course.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // Called by react-hook-form when Save is pressed but validation fails. Without
+  // this the submit handler never runs and the only signal is inline error text
+  // that is usually scrolled off-screen, so the page appears to do nothing.
+  const onInvalid = useCallback((formErrors: FieldErrors<Assignment>) => {
+    const invalidKeys = Object.keys(formErrors);
+    if (invalidKeys.length === 0) return;
+    const { names, hasAdvancedError } = summarizeInvalidFields(invalidKeys);
+    // Reveal the Advanced section if a hidden field is the problem.
+    if (hasAdvancedError) {
+      setAdvancedOpen(true);
+    }
+    toaster.error({
+      title: "Couldn't save — please fix the highlighted fields",
+      description: `Check: ${names.join(", ")}`
+    });
+    // Defer to the next frame so a just-expanded Advanced field is in the DOM, and
+    // scope the query to this form so we never grab an unrelated invalid input elsewhere.
+    requestAnimationFrame(() => {
+      const firstInvalid = formRef.current?.querySelector('[aria-invalid="true"]');
+      firstInvalid?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   // Keep checkbox state synced with form value
   useEffect(() => {
@@ -655,368 +739,388 @@ export default function AssignmentForm({
   return (
     <div>
       <Toaster />
-      <form onSubmit={handleSubmit(onSubmitWrapper)}>
-        <Fieldset.Root maxW="lg">
-          <Fieldset.Content>
-            <Field
-              label="Title"
-              errorText={errors.title?.message?.toString()}
-              invalid={errors.title ? true : false}
-              required={true}
-            >
-              <Input {...register("title", { required: "This is required" })} />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label="Slug"
-              helperText={
-                isEditing
-                  ? "Slug cannot be changed when editing an assignment"
-                  : "A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
-              }
-              errorText={errors.slug?.message?.toString()}
-              invalid={errors.slug ? true : false}
-              required={true}
-            >
-              <Input
-                {...register("slug", {
-                  required: "This is required",
-                  pattern: {
-                    value: /^[a-z0-9_-]+$/,
-                    message: "Slug must contain only lowercase letters, numbers, underscores, and hyphens"
-                  },
-                  maxLength: { value: 16, message: "Slug must be less than 16 characters" }
-                })}
-                disabled={isEditing}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label={`Release Date (${course.time_zone})`}
-              helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
-              errorText={errors.release_date?.message?.toString()}
-              invalid={errors.release_date ? true : false}
-              required={true}
-            >
-              <Controller
-                name="release_date"
-                control={control}
-                rules={{
-                  required: "This is required",
-                  validate: (value: string) => {
-                    if (!value) return "This is required";
-                    // Only enforce future date requirement when creating new assignments
-                    if (!isEditing) {
-                      const selected = new TZDate(value, timezone).getTime();
-                      const now = TZDate.tz(timezone).getTime();
-                      return selected > now || "Release date must be in the future";
+      <form ref={formRef} onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
+        <Fieldset.Root>
+          <VStack align="stretch" gap={6} w="100%">
+            <CardRoot>
+              <CardHeader>
+                <CardTitle>Basics</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  The assignment&apos;s title, its short URL identifier, and the total points possible.
+                </Text>
+              </CardHeader>
+              <CardBody gap="5px">
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Title"
+                    errorText={errors.title?.message?.toString()}
+                    invalid={errors.title ? true : false}
+                    required={true}
+                  >
+                    <Input {...register("title", { required: "This is required" })} />
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Slug"
+                    helperText={
+                      isEditing
+                        ? "Slug cannot be changed when editing an assignment"
+                        : "A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
                     }
-                    return true;
-                  }
-                }}
-                render={({ field }) => {
-                  const hasATimezoneOffset =
-                    field.value &&
-                    (field.value.charAt(field.value.length - 6) === "+" ||
-                      field.value.charAt(field.value.length - 6) === "-");
-                  const localValue =
-                    field.value && hasATimezoneOffset
-                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                      : field.value;
-                  return (
-                    <Input
-                      type="datetime-local"
-                      min={isEditing ? undefined : minReleaseLocal}
-                      value={localValue || ""}
-                      onChange={field.onChange}
-                      onBlur={field.onBlur}
-                    />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Alert status="warning" variant="subtle" title="Student repositories will be created at the release date">
-              Ensure all handout materials are in place before this time. Repositories for students are created at the
-              release date.
-            </Alert>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label={`Suggested Due Date (${course.time_zone})`}
-              helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
-              errorText={errors.suggested_due_date?.message?.toString()}
-              invalid={errors.suggested_due_date ? true : false}
-            >
-              <Controller
-                name="suggested_due_date"
-                control={control}
-                rules={{
-                  validate: (value: string) => {
-                    if (!value) return true;
-                    const dueDate = form.getValues("due_date");
-                    if (!dueDate) return true;
-                    const suggested = new TZDate(value, timezone).getTime();
-                    const due = new TZDate(dueDate, timezone).getTime();
-                    return suggested <= due || "Suggested due date must be on or before the due date";
-                  },
-                  deps: ["due_date"]
-                }}
-                render={({ field }) => {
-                  const hasATimezoneOffset =
-                    field.value &&
-                    (field.value.charAt(field.value.length - 6) === "+" ||
-                      field.value.charAt(field.value.length - 6) === "-");
-                  const localValue =
-                    field.value && hasATimezoneOffset
-                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                      : field.value;
-                  return (
-                    <Input
-                      type="datetime-local"
-                      value={localValue || ""}
-                      onChange={field.onChange}
-                      onBlur={field.onBlur}
-                    />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label={`Due Date (${course.time_zone})`}
-              helperText="No submissions accepted after this time unless late submissions are allowed"
-              errorText={errors.due_date?.message?.toString()}
-              invalid={errors.due_date ? true : false}
-              required={true}
-            >
-              <Controller
-                name="due_date"
-                control={control}
-                rules={{ required: "This is required" }}
-                render={({ field }) => {
-                  const hasATimezoneOffset =
-                    field.value &&
-                    (field.value.charAt(field.value.length - 6) === "+" ||
-                      field.value.charAt(field.value.length - 6) === "-");
-                  const localValue =
-                    field.value && hasATimezoneOffset
-                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                      : field.value;
-                  return (
-                    <Input
-                      type="datetime-local"
-                      value={localValue || ""}
-                      onChange={field.onChange}
-                      onBlur={field.onBlur}
-                    />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
-          <LabDueDateSubform form={form} />
-          <Fieldset.Content>
-            <Field
-              label="Max Late Tokens"
-              helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
-              invalid={!!errors.max_late_tokens}
-              errorText={errors.max_late_tokens?.message?.toString()}
-            >
-              <Input
-                type="number"
-                defaultValue={0}
-                {...register("max_late_tokens", {
-                  required: false,
-                  min: { value: 0, message: "Max late tokens must be at least 0" },
-                  validate: (value) =>
-                    !form.getValues("require_tokens_before_due_date") && (!value || value <= 0)
-                      ? "Max late tokens must be greater than 0 when 'Require students to apply late tokens before the original due date' is unchecked"
-                      : undefined
-                })}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="When checked, students must apply late tokens manually before the original due date. When unchecked, a late token is applied automatically when a student submits after the deadline.">
-              <Checkbox.Root {...register("require_tokens_before_due_date")} checked={requireTokensBeforeDueDate}>
-                <Checkbox.HiddenInput />
-                <Checkbox.Control>
-                  <LuCheck />
-                </Checkbox.Control>
-                <Checkbox.Label>Require students to apply late tokens before the original due date</Checkbox.Label>
-              </Checkbox.Root>
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="Allow students to submit after the deadline by including #NOT-GRADED in their commit message. These submissions will not be graded and cannot become active, but students can still see autograder feedback.">
-              <Checkbox.Root {...register("allow_not_graded_submissions")} checked={allowNotGradedSubmissions}>
-                <Checkbox.HiddenInput />
-                <Checkbox.Control>
-                  <LuCheck />
-                </Checkbox.Control>
-                <Checkbox.Label>Allow NOT-GRADED submissions after deadline</Checkbox.Label>
-              </Checkbox.Root>
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="When enabled, students can submit even if their files match the handout (starter) exactly. When disabled, such empty submissions are rejected with a message asking them to commit their changes.">
-              <Controller
-                name="permit_empty_submissions"
-                control={control}
-                render={({ field }) => (
-                  <Checkbox.Root
-                    checked={field.value !== false}
-                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                    errorText={errors.slug?.message?.toString()}
+                    invalid={errors.slug ? true : false}
+                    required={true}
                   >
-                    <Checkbox.HiddenInput />
-                    <Checkbox.Control>
-                      <LuCheck />
-                    </Checkbox.Control>
-                    <Checkbox.Label>Permit empty submissions (match handout exactly)</Checkbox.Label>
-                  </Checkbox.Root>
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label="Handout URL"
-              helperText="A link to the assignment handout or instructions document. This URL will be provided to AI assistants helping students with this assignment."
-              errorText={errors.handout_url?.message?.toString()}
-              invalid={!!errors.handout_url}
-            >
-              <Input
-                type="url"
-                placeholder="https://..."
-                {...register("handout_url", {
-                  pattern: {
-                    value: /^https?:\/\/.+/,
-                    message: "Please enter a valid URL starting with http:// or https://"
-                  }
-                })}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label="Points Possible"
-              errorText={errors.total_points?.message?.toString()}
-              invalid={!!errors.total_points}
-              required={true}
-            >
-              <Input
-                type="number"
-                {...register("total_points", {
-                  required: "This is required",
-                  min: { value: 0, message: "Points possible must be at least 0" }
-                })}
-              />
-            </Field>
-          </Fieldset.Content>
-          <GroupConfigurationSubform form={form} timezone={timezone} />
-          <SelfEvaluationSubform form={form} timezone={timezone} />
-          <Fieldset.Content>
-            <Field
-              label={`Regrade Request Deadline (${course.time_zone})`}
-              helperText="The deadline after which students cannot submit new regrade requests. Leave empty for no deadline."
-              errorText={errors.regrade_deadline?.message?.toString()}
-              invalid={!!errors.regrade_deadline}
-            >
-              <Controller
-                name="regrade_deadline"
-                control={control}
-                rules={{ required: false }}
-                render={({ field }) => {
-                  const hasATimezoneOffset =
-                    field.value &&
-                    (field.value.charAt(field.value.length - 6) === "+" ||
-                      field.value.charAt(field.value.length - 6) === "-");
-                  const localValue =
-                    field.value && hasATimezoneOffset
-                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                      : field.value;
-                  return (
                     <Input
-                      type="datetime-local"
-                      value={localValue || ""}
-                      onChange={field.onChange}
-                      onBlur={field.onBlur}
+                      {...register("slug", {
+                        required: "This is required",
+                        pattern: {
+                          value: /^[a-z0-9_-]+$/,
+                          message: "Slug must contain only lowercase letters, numbers, underscores, and hyphens"
+                        },
+                        maxLength: { value: 16, message: "Slug must be less than 16 characters" }
+                      })}
+                      disabled={isEditing}
                     />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="When enabled, graders' names will appear as pseudonyms to students. Staff members will still see the real name of the grader.">
-              <Controller
-                name="grader_pseudonymous_mode"
-                control={control}
-                render={({ field }) => (
-                  <Checkbox.Root
-                    checked={field.value || false}
-                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Points possible"
+                    errorText={errors.total_points?.message?.toString()}
+                    invalid={!!errors.total_points}
+                    required={true}
                   >
-                    <Checkbox.HiddenInput />
-                    <Checkbox.Control>
-                      <LuCheck />
-                    </Checkbox.Control>
-                    <Checkbox.Label>Anonymous grading (show grader pseudonyms to students)</Checkbox.Label>
-                  </Checkbox.Root>
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="When enabled, students can see a leaderboard showing top autograder scores using pseudonyms.">
-              <Controller
-                name="show_leaderboard"
-                control={control}
-                render={({ field }) => (
-                  <Checkbox.Root
-                    checked={field.value || false}
-                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                    <Input
+                      type="number"
+                      {...register("total_points", {
+                        required: "This is required",
+                        min: { value: 0, message: "Points possible must be at least 0" }
+                      })}
+                    />
+                  </Field>
+                </Fieldset.Content>
+              </CardBody>
+            </CardRoot>
+            <CardRoot>
+              <CardHeader>
+                <CardTitle>Schedule</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  When students can see and submit the assignment, including optional lab-based due dates. All times are
+                  in <strong>{course.time_zone}</strong> — students see this time zone by default, or times converted to
+                  their own local time.
+                </Text>
+              </CardHeader>
+              <CardBody gap="5px">
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Release date"
+                    helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
+                    errorText={errors.release_date?.message?.toString()}
+                    invalid={errors.release_date ? true : false}
+                    required={true}
                   >
-                    <Checkbox.HiddenInput />
-                    <Checkbox.Control>
-                      <LuCheck />
-                    </Checkbox.Control>
-                    <Checkbox.Label>Show autograder leaderboard to students</Checkbox.Label>
-                  </Checkbox.Root>
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field helperText="When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission.">
-              <Controller
-                name="enable_repo_analytics"
-                control={control}
-                render={({ field }) => (
-                  <Checkbox.Root
-                    checked={field.value || false}
-                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                    <Controller
+                      name="release_date"
+                      control={control}
+                      rules={{
+                        required: "This is required",
+                        validate: (value: string) => {
+                          if (!value) return "This is required";
+                          // Only enforce future date requirement when creating new assignments
+                          if (!isEditing) {
+                            const selected = new TZDate(value, timezone).getTime();
+                            const now = TZDate.tz(timezone).getTime();
+                            return selected > now || "Release date must be in the future";
+                          }
+                          return true;
+                        }
+                      }}
+                      render={({ field }) => {
+                        const hasATimezoneOffset =
+                          field.value &&
+                          (field.value.charAt(field.value.length - 6) === "+" ||
+                            field.value.charAt(field.value.length - 6) === "-");
+                        const localValue =
+                          field.value && hasATimezoneOffset
+                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                            : field.value;
+                        return (
+                          <Input
+                            type="datetime-local"
+                            min={isEditing ? undefined : minReleaseLocal}
+                            value={localValue || ""}
+                            onChange={field.onChange}
+                            onBlur={field.onBlur}
+                          />
+                        );
+                      }}
+                    />
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Suggested due date"
+                    helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
+                    errorText={errors.suggested_due_date?.message?.toString()}
+                    invalid={errors.suggested_due_date ? true : false}
                   >
-                    <Checkbox.HiddenInput />
-                    <Checkbox.Control>
-                      <LuCheck />
-                    </Checkbox.Control>
-                    <Checkbox.Label>Enable repository analytics</Checkbox.Label>
-                  </Checkbox.Root>
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
+                    <Controller
+                      name="suggested_due_date"
+                      control={control}
+                      rules={{
+                        validate: (value: string) => {
+                          if (!value) return true;
+                          const dueDate = form.getValues("due_date");
+                          if (!dueDate) return true;
+                          const suggested = new TZDate(value, timezone).getTime();
+                          const due = new TZDate(dueDate, timezone).getTime();
+                          return suggested <= due || "Suggested due date must be on or before the due date";
+                        },
+                        deps: ["due_date"]
+                      }}
+                      render={({ field }) => {
+                        const hasATimezoneOffset =
+                          field.value &&
+                          (field.value.charAt(field.value.length - 6) === "+" ||
+                            field.value.charAt(field.value.length - 6) === "-");
+                        const localValue =
+                          field.value && hasATimezoneOffset
+                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                            : field.value;
+                        return (
+                          <Input
+                            type="datetime-local"
+                            value={localValue || ""}
+                            onChange={field.onChange}
+                            onBlur={field.onBlur}
+                          />
+                        );
+                      }}
+                    />
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Due date"
+                    helperText="No submissions accepted after this time unless late submissions are allowed"
+                    errorText={errors.due_date?.message?.toString()}
+                    invalid={errors.due_date ? true : false}
+                    required={true}
+                  >
+                    <Controller
+                      name="due_date"
+                      control={control}
+                      rules={{ required: "This is required" }}
+                      render={({ field }) => {
+                        const hasATimezoneOffset =
+                          field.value &&
+                          (field.value.charAt(field.value.length - 6) === "+" ||
+                            field.value.charAt(field.value.length - 6) === "-");
+                        const localValue =
+                          field.value && hasATimezoneOffset
+                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                            : field.value;
+                        return (
+                          <Input
+                            type="datetime-local"
+                            value={localValue || ""}
+                            onChange={field.onChange}
+                            onBlur={field.onBlur}
+                          />
+                        );
+                      }}
+                    />
+                  </Field>
+                </Fieldset.Content>
+                <LabDueDateSubform form={form} />
+              </CardBody>
+            </CardRoot>
+            <CardRoot>
+              <CardHeader>
+                <CardTitle>Late submissions</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  How work submitted after the due date is handled — late tokens and ungraded late submissions.
+                </Text>
+              </CardHeader>
+              <CardBody gap="5px">
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Max late tokens"
+                    helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
+                    invalid={!!errors.max_late_tokens}
+                    errorText={errors.max_late_tokens?.message?.toString()}
+                  >
+                    <Input
+                      type="number"
+                      defaultValue={0}
+                      {...register("max_late_tokens", {
+                        required: false,
+                        min: { value: 0, message: "Max late tokens must be at least 0" },
+                        validate: (value) =>
+                          !form.getValues("require_tokens_before_due_date") && (!value || value <= 0)
+                            ? "Max late tokens must be greater than 0 when 'Require students to apply late tokens before the original due date' is unchecked"
+                            : undefined
+                      })}
+                    />
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field helperText="When checked, students must apply late tokens manually before the original due date. When unchecked, a late token is applied automatically when a student submits after the deadline.">
+                    <Checkbox.Root {...register("require_tokens_before_due_date")} checked={requireTokensBeforeDueDate}>
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control>
+                        <LuCheck />
+                      </Checkbox.Control>
+                      <Checkbox.Label>
+                        Require students to apply late tokens before the original due date
+                      </Checkbox.Label>
+                    </Checkbox.Root>
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field helperText="Allow students to submit after the deadline by including #NOT-GRADED in their commit message. These submissions will not be graded and cannot become active, but students can still see autograder feedback.">
+                    <Checkbox.Root {...register("allow_not_graded_submissions")} checked={allowNotGradedSubmissions}>
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control>
+                        <LuCheck />
+                      </Checkbox.Control>
+                      <Checkbox.Label>Allow NOT-GRADED submissions after deadline</Checkbox.Label>
+                    </Checkbox.Root>
+                  </Field>
+                </Fieldset.Content>
+              </CardBody>
+            </CardRoot>
+            <GroupConfigurationSubform form={form} timezone={timezone} />
+            <SelfEvaluationSubform form={form} timezone={timezone} />
+            <CardRoot>
+              <Accordion.Root
+                collapsible
+                value={advancedOpen ? ["advanced"] : []}
+                onValueChange={(details) => setAdvancedOpen(details.value.includes("advanced"))}
+              >
+                <Accordion.Item value="advanced">
+                  <Accordion.ItemTrigger p={4}>
+                    <Box flex="1" textAlign="left">
+                      <CardTitle>Advanced settings</CardTitle>
+                      <Text fontSize="sm" color="fg.muted">
+                        Regrade deadline, anonymous grading, leaderboard, repository analytics
+                      </Text>
+                    </Box>
+                    <Accordion.ItemIndicator />
+                  </Accordion.ItemTrigger>
+                  <Accordion.ItemContent>
+                    <Box px={4} pb={4}>
+                      <Fieldset.Content>
+                        <Field
+                          orientation="horizontal"
+                          label={`Regrade Request Deadline (${course.time_zone})`}
+                          helperText="The deadline after which students cannot submit new regrade requests. Leave empty for no deadline."
+                          errorText={errors.regrade_deadline?.message?.toString()}
+                          invalid={!!errors.regrade_deadline}
+                        >
+                          <Controller
+                            name="regrade_deadline"
+                            control={control}
+                            rules={{ required: false }}
+                            render={({ field }) => {
+                              const hasATimezoneOffset =
+                                field.value &&
+                                (field.value.charAt(field.value.length - 6) === "+" ||
+                                  field.value.charAt(field.value.length - 6) === "-");
+                              const localValue =
+                                field.value && hasATimezoneOffset
+                                  ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                                  : field.value;
+                              return (
+                                <Input
+                                  type="datetime-local"
+                                  value={localValue || ""}
+                                  onChange={field.onChange}
+                                  onBlur={field.onBlur}
+                                />
+                              );
+                            }}
+                          />
+                        </Field>
+                      </Fieldset.Content>
+                      <Fieldset.Content>
+                        <Field helperText="When enabled, graders' names will appear as pseudonyms to students. Staff members will still see the real name of the grader.">
+                          <Controller
+                            name="grader_pseudonymous_mode"
+                            control={control}
+                            render={({ field }) => (
+                              <Checkbox.Root
+                                checked={field.value || false}
+                                onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  <LuCheck />
+                                </Checkbox.Control>
+                                <Checkbox.Label>Anonymous grading (show grader pseudonyms to students)</Checkbox.Label>
+                              </Checkbox.Root>
+                            )}
+                          />
+                        </Field>
+                      </Fieldset.Content>
+                      <Fieldset.Content>
+                        <Field helperText="When enabled, students can see a leaderboard showing top autograder scores using pseudonyms.">
+                          <Controller
+                            name="show_leaderboard"
+                            control={control}
+                            render={({ field }) => (
+                              <Checkbox.Root
+                                checked={field.value || false}
+                                onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  <LuCheck />
+                                </Checkbox.Control>
+                                <Checkbox.Label>Show autograder leaderboard to students</Checkbox.Label>
+                              </Checkbox.Root>
+                            )}
+                          />
+                        </Field>
+                      </Fieldset.Content>
+                      <Fieldset.Content>
+                        <Field helperText="When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission.">
+                          <Controller
+                            name="enable_repo_analytics"
+                            control={control}
+                            render={({ field }) => (
+                              <Checkbox.Root
+                                checked={field.value || false}
+                                onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  <LuCheck />
+                                </Checkbox.Control>
+                                <Checkbox.Label>Enable repository analytics</Checkbox.Label>
+                              </Checkbox.Root>
+                            )}
+                          />
+                        </Field>
+                      </Fieldset.Content>
+                    </Box>
+                  </Accordion.ItemContent>
+                </Accordion.Item>
+              </Accordion.Root>
+            </CardRoot>
+            <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate alignSelf="flex-start">
               Save
             </Button>
-          </Fieldset.Content>
+          </VStack>
         </Fieldset.Root>
       </form>
     </div>

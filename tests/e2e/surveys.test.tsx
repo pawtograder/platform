@@ -412,7 +412,9 @@ test.describe("Surveys Page", () => {
     await page.getByRole("button", { name: "Open Visual Builder" }).click();
     await page.getByRole("button", { name: "Use This Survey" }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     expect(parsed.meta?.title).toBe("Survey Name");
@@ -835,7 +837,9 @@ test.describe("Surveys Page", () => {
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     const metaTitle = parsed.meta?.title ?? parsed.title ?? "Survey Name";
@@ -898,7 +902,9 @@ test.describe("Surveys Page", () => {
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     expect(parsed.pages[0].name).toBe("Custom Page Name");
