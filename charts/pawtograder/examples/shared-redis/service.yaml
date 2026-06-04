@@ -1,0 +1,19 @@
+# ClusterIP service so previews (and any other cluster-internal client)
+# can reach the shared Redis at
+#   redis.pawtograder-shared-redis.svc.cluster.local:6379
+#
+# The chart's pawtograder-redis ExternalSecret ships exactly that host
+# in the REDIS_URL value it pulls from OpenBao — see
+# scripts/setup-openbao-redis-shared.sh.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pawtograder-shared-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

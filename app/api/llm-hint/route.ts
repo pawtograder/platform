@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { GraderResultTestExtraData, LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { timeHttp } from "@/lib/metrics";
 
 type GradrResultTestWithGraderResults = GetResult<
   Database["public"],
@@ -290,7 +291,11 @@ async function checkRateLimits(
   return null; // No rate limiting issues
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: NextRequest): Promise<Response> {
+  return timeHttp("/api/llm-hint", "POST", () => llmHintHandler(request));
+}
+
+async function llmHintHandler(request: NextRequest) {
   try {
     const { testId } = await request.json();
     // eslint-disable-next-line no-console
