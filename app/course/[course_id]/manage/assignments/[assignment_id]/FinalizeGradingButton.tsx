@@ -1,8 +1,9 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import { createClient } from "@/utils/supabase/client";
-import { Button, HStack, Icon, IconButton, Popover, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, HStack, Icon, IconButton, Popover, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useState } from "react";
 import { BsCheck, BsX } from "react-icons/bs";
 
@@ -22,12 +23,14 @@ export default function FinalizeGradingButton({
   assignmentId,
   supabase,
   onCompleted,
-  disabled
+  disabled,
+  tooltip
 }: {
   assignmentId: number;
   supabase: ReturnType<typeof createClient>;
   onCompleted?: () => void | Promise<void>;
   disabled?: boolean;
+  tooltip?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [eligibilityData, setEligibilityData] = useState<EligibilityData | null>(null);
@@ -96,7 +99,7 @@ export default function FinalizeGradingButton({
 
   const canComplete = (eligibilityData?.completable ?? 0) > 0;
 
-  return (
+  const popover = (
     <Popover.Root open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <Popover.Trigger asChild>
         <Button colorPalette="blue" variant="subtle" size="sm" loading={isFinalizing} disabled={disabled}>
@@ -152,5 +155,14 @@ export default function FinalizeGradingButton({
         </Popover.Content>
       </Popover.Positioner>
     </Popover.Root>
+  );
+
+  if (!tooltip) return popover;
+  return (
+    <Tooltip content={tooltip} showArrow positioning={{ placement: "top" }}>
+      <Box as="span" display="inline-flex">
+        {popover}
+      </Box>
+    </Tooltip>
   );
 }

@@ -2,8 +2,9 @@
 
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
 import { toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import { createClient } from "@/utils/supabase/client";
-import { Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import FinalizeGradingButton from "./FinalizeGradingButton";
 
@@ -18,18 +19,20 @@ function ConfirmButton({
   confirmTitle,
   confirmBody,
   colorPalette,
+  tooltip,
   onConfirm
 }: {
   label: string;
   confirmTitle: string;
   confirmBody: string;
   colorPalette?: string;
+  tooltip?: string;
   onConfirm: () => Promise<void>;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
 
-  return (
+  const popover = (
     <Popover.Root open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <Popover.Trigger asChild>
         <Button size="sm" variant="subtle" colorPalette={colorPalette} loading={isRunning}>
@@ -71,6 +74,15 @@ function ConfirmButton({
         </Popover.Content>
       </Popover.Positioner>
     </Popover.Root>
+  );
+
+  if (!tooltip) return popover;
+  return (
+    <Tooltip content={tooltip} showArrow positioning={{ placement: "top" }}>
+      <Box as="span" display="inline-flex">
+        {popover}
+      </Box>
+    </Tooltip>
   );
 }
 
@@ -129,12 +141,18 @@ export default function GradingStatusPanel({
             </Text>
           </HStack>
           <HStack gap={2} wrap="wrap">
-            <FinalizeGradingButton assignmentId={assignmentId} supabase={supabase} onCompleted={onChanged} />
+            <FinalizeGradingButton
+              assignmentId={assignmentId}
+              supabase={supabase}
+              onCompleted={onChanged}
+              tooltip="Mark every eligible submission review complete — those whose required rubric checks are all applied. This does not release grades to students."
+            />
             <ConfirmButton
               label="Release all"
               colorPalette="green"
               confirmTitle="Release all grading reviews"
               confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+              tooltip="Make grades visible to students for every submission in this assignment."
               onConfirm={() => runReleaseAll("release_all_grading_reviews_for_assignment", "released")}
             />
             <ConfirmButton
@@ -142,6 +160,7 @@ export default function GradingStatusPanel({
               colorPalette="red"
               confirmTitle="Unrelease all grading reviews"
               confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+              tooltip="Hide grades from students again for every submission (reverses Release all)."
               onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
             />
           </HStack>

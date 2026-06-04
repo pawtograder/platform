@@ -310,6 +310,17 @@ export default function RubricReport({
 
   return (
     <Box>
+      <Box mb={3} p={3} bg="bg.muted" borderRadius="md">
+        <Text fontSize="sm" color="fg.muted">
+          How often each rubric check was applied across a <strong>cohort</strong> of submissions. Use the quick filter
+          (or <em>Advanced filter</em> for AND/OR/NOT) to define the cohort, <em>Rubric items</em> to choose which
+          checks appear, and the buttons to switch how it&apos;s shown or <em>Export CSV</em>. Click any bar, option, or
+          row — or <em>Filter table to these N</em> — to filter the submissions table below to the matching students.
+          {isInstructor ? " Save the current setup as the shared default for all staff with " : ""}
+          {isInstructor ? <em>Save as default</em> : null}
+          {isInstructor ? "." : ""}
+        </Text>
+      </Box>
       <HStack justify="space-between" align="center" mb={2} wrap="wrap" gap={3}>
         <Text fontSize="sm" color="fg.muted">
           {cohortTotal} submission{cohortTotal === 1 ? "" : "s"} in cohort
