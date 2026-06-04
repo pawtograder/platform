@@ -5,12 +5,13 @@ import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssi
 import { useCourseController } from "@/hooks/useCourseController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, Tabs, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import AssignmentDashboard from "./assignmentDashboard";
 import AssignmentsTable from "./assignmentsTable";
+import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
@@ -128,9 +129,19 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Handout repo</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
-                    {assignment.template_repo}
-                  </Link>
+                  {assignment.repo_mode === "fork_from_prior_assignment" ? (
+                    <Text fontStyle="italic" color="fg.muted">
+                      Copied from a prior assignment
+                    </Text>
+                  ) : assignment.template_repo ? (
+                    <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
+                      {assignment.template_repo}
+                    </Link>
+                  ) : (
+                    <Text fontStyle="italic" color="fg.muted">
+                      No handout repository
+                    </Text>
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
@@ -146,6 +157,12 @@ export default function AssignmentHome() {
               </DataList.Item>
             </DataList.Root>
           </VStack>
+          {assignment.repo_mode === "none" && (
+            <CreateSubmissionForStudentDialog
+              assignmentId={assignment.id}
+              groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
+            />
+          )}
         </HStack>
       </Box>
       <Suspense fallback={null}>

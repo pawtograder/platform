@@ -112,6 +112,9 @@ export default function AssignmentPage() {
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
   }
+  // No-repo / no-submission assignments have no autograder by convention, so an
+  // autograder score is not meaningful — show "N/A" instead of progress/score.
+  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission";
   return (
     <Box p={4}>
       <LinkAccount />
@@ -260,11 +263,13 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {!submission.grader_results
-                        ? "In Progress"
-                        : submission.grader_results && submission.grader_results.errors
-                          ? "Error"
-                          : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                      {noAutograder
+                        ? "N/A"
+                        : !submission.grader_results
+                          ? "In Progress"
+                          : submission.grader_results && submission.grader_results.errors
+                            ? "Error"
+                            : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>

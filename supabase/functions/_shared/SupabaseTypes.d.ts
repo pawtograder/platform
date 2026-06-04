@@ -11187,6 +11187,14 @@ export type Database = {
         Args: { p_submission_id: number; p_files: Json };
         Returns: undefined;
       };
+      create_submission_for_student: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id: number;
+          p_profile_id?: string;
+        };
+        Returns: number;
+      };
       create_no_repo_submission: {
         Args: { p_assignment_id: number; p_files: Json };
         Returns: number;

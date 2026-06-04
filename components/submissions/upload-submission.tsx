@@ -14,17 +14,26 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Student-facing drag-and-drop / click-to-upload control for assignments with
+ * Drag-and-drop / click-to-upload control for assignments with
  * `repo_mode='none'`. Each upload creates a new active submission with the
- * selected files attached. Calls `onUploaded` after a successful submission so
- * the caller can refresh the submission history.
+ * selected files attached. Calls `onUploaded(submissionId)` after a successful
+ * submission so the caller can refresh the submission history.
+ *
+ * Omit `target` for the student self-submit flow. Pass `target` (a profile or
+ * group) for the instructor/grader "submit on behalf of a student" flow.
  */
 export default function UploadSubmission({
   assignmentId,
+  target,
+  helperText = "Your instructor accepts file uploads for this assignment instead of a Git repository.",
+  buttonLabel = "Upload submission",
   onUploaded
 }: {
   assignmentId: number;
-  onUploaded?: () => void;
+  target?: { profile_id?: string; assignment_group_id?: number };
+  helperText?: string;
+  buttonLabel?: string;
+  onUploaded?: (submissionId: number) => void;
 }) {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -56,13 +65,16 @@ export default function UploadSubmission({
         size: f.size,
         mimeType: f.type || null
       }));
-      await uploadNoRepoSubmission({ assignment_id: assignmentId, files: pending }, supabase);
+      const submissionId = await uploadNoRepoSubmission(
+        { assignment_id: assignmentId, files: pending, target },
+        supabase
+      );
       toaster.success({
         title: "Submission uploaded",
         description: `Uploaded ${files.length} file${files.length === 1 ? "" : "s"}.`
       });
       setFiles([]);
-      onUploaded?.();
+      onUploaded?.(submissionId);
     } catch (e) {
       toaster.error({
         title: "Upload failed",
@@ -109,7 +121,7 @@ export default function UploadSubmission({
           <Icon as={FaUpload} boxSize={6} color="fg.muted" />
           <Text fontWeight="medium">Drag and drop files here, or click to choose</Text>
           <Text fontSize="sm" color="fg.muted">
-            Your instructor accepts file uploads for this assignment instead of a Git repository.
+            {helperText}
           </Text>
         </VStack>
         <input
@@ -161,7 +173,7 @@ export default function UploadSubmission({
 
       <HStack mt={3}>
         <Button colorPalette="green" loading={isUploading} disabled={files.length === 0} onClick={handleUpload}>
-          <Icon as={FaUpload} /> Upload submission
+          <Icon as={FaUpload} /> {buttonLabel}
         </Button>
       </HStack>
     </Box>

@@ -709,4 +709,229 @@ test.describe("Two-phase upload flow: storage + grading (PR #781)", () => {
     expect(post!.released).toBe(true);
     expect(post!.total_score).toBeGreaterThanOrEqual(8);
   });
+
+  test("attach stores text files inline (contents populated, is_binary=false, no storage object)", async () => {
+    const studentClient = await createAuthenticatedClient(upStudent);
+    const { data: sid, error: createErr } = await callRpc(studentClient, upAssignment.id, []);
+    expect(createErr).toBeNull();
+    const mdSubmissionId = sid!;
+    const { error: attachErr } = await (studentClient.rpc as CallableFunction)("attach_no_repo_submission_files", {
+      p_submission_id: mdSubmissionId,
+      p_files: [
+        {
+          name: "notes.md",
+          is_binary: false,
+          contents: "# Title\n\nHello world",
+          file_size: 20,
+          mime_type: "text/markdown"
+        }
+      ]
+    });
+    expect(attachErr).toBeNull();
+    const { data: rows } = await supabase
+      .from("submission_files")
+      .select("name, is_binary, contents, storage_key")
+      .eq("submission_id", mdSubmissionId);
+    expect(rows).toHaveLength(1);
+    expect(rows![0].is_binary).toBe(false);
+    expect(rows![0].contents).toContain("# Title");
+    expect(rows![0].storage_key).toBeNull();
+  });
+});
+
+// Instructors/graders can create an upload submission on behalf of a student or
+// group (create_submission_for_student), then attach files (attach also
+// authorizes graders).
+test.describe("Staff create submission on behalf of a student (PR #781)", () => {
+  test.describe.configure({ mode: "serial", timeout: 180_000 });
+
+  const SPREFIX = getTestRunPrefix();
+  const SID = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
+
+  let sClassId: number;
+  let sOtherClassId: number;
+  let sInstructor: TestingUser;
+  let sGrader: TestingUser;
+  let sStudent: TestingUser;
+  let sOtherStudent: TestingUser;
+  let sOutsideInstructor: TestingUser;
+  let sAssignment: AssignmentWithRubric;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E Staff Upload ${SPREFIX}` });
+    sClassId = cls.id;
+    const other = await createClass({ name: `E2E Staff Upload Other ${SPREFIX}` });
+    sOtherClassId = other.id;
+    sInstructor = await createUserInClass({
+      role: "instructor",
+      class_id: sClassId,
+      name: `SU Instr ${SPREFIX}`,
+      email: `e2e-su-instr-${SID}@pawtograder.net`
+    });
+    sGrader = await createUserInClass({
+      role: "grader",
+      class_id: sClassId,
+      name: `SU Grader ${SPREFIX}`,
+      email: `e2e-su-grader-${SID}@pawtograder.net`
+    });
+    sStudent = await createUserInClass({
+      role: "student",
+      class_id: sClassId,
+      name: `SU Stu ${SPREFIX}`,
+      email: `e2e-su-stu-${SID}@pawtograder.net`
+    });
+    sOtherStudent = await createUserInClass({
+      role: "student",
+      class_id: sClassId,
+      name: `SU Stu2 ${SPREFIX}`,
+      email: `e2e-su-stu2-${SID}@pawtograder.net`
+    });
+    sOutsideInstructor = await createUserInClass({
+      role: "instructor",
+      class_id: sOtherClassId,
+      name: `SU Outsider ${SPREFIX}`,
+      email: `e2e-su-out-${SID}@pawtograder.net`
+    });
+    sAssignment = await insertAssignment({
+      class_id: sClassId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `SU Upload ${SPREFIX}`,
+      assignment_slug: `e2e-su-${SID}`,
+      repo_mode: "none"
+    });
+  });
+
+  test("instructor creates an upload submission for a student", async () => {
+    const ic = await createAuthenticatedClient(sInstructor);
+    const { data, error } = await (ic.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: sAssignment.id,
+      p_profile_id: sStudent.private_profile_id
+    });
+    expect(error).toBeNull();
+    expect(typeof data).toBe("number");
+    const { data: sub } = await supabase
+      .from("submissions")
+      .select("*")
+      .eq("id", data as number)
+      .single();
+    expect(sub!.submitted_via).toBe("upload");
+    expect(sub!.profile_id).toBe(sStudent.private_profile_id);
+    expect(sub!.is_active).toBe(true);
+    expect(sub!.repository).toBeNull();
+  });
+
+  test("grader can create + attach a binary file on behalf of a student (owner can read it)", async () => {
+    const gc = await createAuthenticatedClient(sGrader);
+    const { data: sid, error: createErr } = await (gc.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: sAssignment.id,
+      p_profile_id: sOtherStudent.private_profile_id
+    });
+    expect(createErr).toBeNull();
+    const submissionId = sid as number;
+    const key = `classes/${sClassId}/profiles/${sOtherStudent.private_profile_id}/submissions/${submissionId}/files/scan.bin`;
+    const bytes = `grader-bytes-${SID}`;
+    const { error: upErr } = await gc.storage
+      .from("submission-files")
+      .upload(key, Buffer.from(bytes), { contentType: "application/octet-stream", upsert: true });
+    expect(upErr).toBeNull();
+    const { error: attachErr } = await (gc.rpc as CallableFunction)("attach_no_repo_submission_files", {
+      p_submission_id: submissionId,
+      p_files: [
+        {
+          name: "scan.bin",
+          storage_key: key,
+          is_binary: true,
+          file_size: bytes.length,
+          mime_type: "application/octet-stream"
+        }
+      ]
+    });
+    expect(attachErr).toBeNull();
+
+    // The student the submission belongs to can read the bytes.
+    const studentClient = await createAuthenticatedClient(sOtherStudent);
+    const { data: signed, error: signErr } = await studentClient.storage
+      .from("submission-files")
+      .createSignedUrl(key, 60);
+    expect(signErr).toBeNull();
+    const resp = await fetch(signed!.signedUrl);
+    expect(resp.ok).toBe(true);
+    expect(await resp.text()).toBe(bytes);
+  });
+
+  test("a student cannot create a submission on behalf of others", async () => {
+    const sc = await createAuthenticatedClient(sStudent);
+    const { error } = await (sc.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: sAssignment.id,
+      p_profile_id: sOtherStudent.private_profile_id
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("an instructor from a different class is rejected", async () => {
+    const oc = await createAuthenticatedClient(sOutsideInstructor);
+    const { error } = await (oc.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: sAssignment.id,
+      p_profile_id: sStudent.private_profile_id
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("wrong repo_mode (no_submission) is rejected", async () => {
+    const noSub = await insertAssignment({
+      class_id: sClassId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `SU NoSub ${SPREFIX}`,
+      repo_mode: "no_submission"
+    });
+    const ic = await createAuthenticatedClient(sInstructor);
+    const { error } = await (ic.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: noSub.id,
+      p_profile_id: sStudent.private_profile_id
+    });
+    expect(error).not.toBeNull();
+    expect(error!.message.toLowerCase()).toMatch(/does not accept uploads|repo_mode/);
+  });
+
+  test("instructor creates an upload submission for a group", async () => {
+    const groupAssignment = await insertAssignment({
+      class_id: sClassId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `SU Group ${SPREFIX}`,
+      repo_mode: "none",
+      group_config: "groups"
+    });
+    const { data: grp, error: grpErr } = await supabase
+      .from("assignment_groups")
+      .insert({ name: `SU Grp ${SPREFIX}`, class_id: sClassId, assignment_id: groupAssignment.id })
+      .select("id")
+      .single();
+    expect(grpErr).toBeNull();
+    const groupId = grp!.id;
+    await supabase.from("assignment_groups_members").insert({
+      assignment_group_id: groupId,
+      profile_id: sStudent.private_profile_id,
+      assignment_id: groupAssignment.id,
+      class_id: sClassId,
+      added_by: sInstructor.private_profile_id
+    });
+
+    const ic = await createAuthenticatedClient(sInstructor);
+    const { data, error } = await (ic.rpc as CallableFunction)("create_submission_for_student", {
+      p_assignment_id: groupAssignment.id,
+      p_assignment_group_id: groupId
+    });
+    expect(error).toBeNull();
+    const { data: sub } = await supabase
+      .from("submissions")
+      .select("*")
+      .eq("id", data as number)
+      .single();
+    expect(sub!.assignment_group_id).toBe(groupId);
+    expect(sub!.submitted_via).toBe("upload");
+    expect(sub!.profile_id).toBeNull();
+  });
 });

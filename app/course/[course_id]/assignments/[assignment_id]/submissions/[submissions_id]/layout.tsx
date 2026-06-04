@@ -25,6 +25,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import UploadSubmissionDialog from "@/components/submissions/upload-submission-dialog";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
@@ -1261,11 +1262,13 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {!historical_submission.grader_results
-                        ? "In Progress"
-                        : historical_submission.grader_results && historical_submission.grader_results.errors
-                          ? "Error"
-                          : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                      {assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission"
+                        ? "N/A"
+                        : !historical_submission.grader_results
+                          ? "In Progress"
+                          : historical_submission.grader_results && historical_submission.grader_results.errors
+                            ? "Error"
+                            : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -2196,6 +2199,7 @@ function Comments() {
 
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
@@ -2359,6 +2363,30 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {assignment.repo_mode === "none" && (
+            <UploadSubmissionDialog
+              assignmentId={assignment.id}
+              // Staff submit on behalf of the submission's owner/group; the
+              // student (viewing their own submission) submits for themselves.
+              target={
+                isGraderOrInstructor
+                  ? submission.assignment_group_id
+                    ? { assignment_group_id: submission.assignment_group_id }
+                    : submission.profile_id
+                      ? { profile_id: submission.profile_id }
+                      : undefined
+                  : undefined
+              }
+              triggerLabel={isGraderOrInstructor ? "Upload submission for student" : "Upload new submission"}
+              helperText={
+                isGraderOrInstructor
+                  ? "Upload the file(s) this student submitted. They will become the student's active submission."
+                  : "Upload file(s) for a new submission. This will become your active submission."
+              }
+              buttonLabel={isGraderOrInstructor ? "Create submission" : "Upload submission"}
+              onUploaded={(id) => router.push(`/course/${course_id}/assignments/${assignment.id}/submissions/${id}`)}
+            />
+          )}
           {/* ExportSubmissionMetadataButton is instructor-only: UI gate + RLS policies enforce instructor-only access */}
           {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>

@@ -677,48 +677,10 @@ begin
    where ag.assignment_id = p_assignment_id and agm.profile_id = v_profile_id
    limit 1;
 
-  -- Serialize concurrent creates for this assignment + submitter scope so we
-  -- can't produce duplicate ordinals or end up with multiple active rows.
-  perform pg_advisory_xact_lock(
-    hashtextextended(
-      format(
-        'create_no_repo_submission:%s:%s:%s',
-        p_assignment_id,
-        coalesce(v_assignment_group_id::text, ''),
-        coalesce(v_profile_id::text, '')
-      ),
-      0
-    )
-  );
-
-  -- Deactivate any prior active submission for this profile/group on this assignment.
-  update public.submissions
-     set is_active = false
-   where assignment_id = p_assignment_id
-     and is_active = true
-     and (
-       (v_assignment_group_id is not null and assignment_group_id = v_assignment_group_id)
-       or (v_assignment_group_id is null and profile_id = v_profile_id)
-     );
-
-  -- Next ordinal / run_number for this profile/group on this assignment.
-  select coalesce(max(ordinal), 0) + 1 into v_ordinal
-    from public.submissions
-   where assignment_id = p_assignment_id
-     and (
-       (v_assignment_group_id is not null and assignment_group_id = v_assignment_group_id)
-       or (v_assignment_group_id is null and profile_id = v_profile_id)
-     );
-  v_run_number := v_ordinal;  -- uploads have no GitHub workflow run, so reuse ordinal.
-
-  insert into public.submissions(
-    assignment_id, class_id, profile_id, assignment_group_id,
-    repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via
-  ) values (
-    p_assignment_id, v_class_id, v_profile_id, v_assignment_group_id,
-    null, null, 1, v_run_number, v_ordinal, true, 'upload'
-  )
-  returning id into v_submission_id;
+  -- Create the empty active 'upload' submission (deactivating any prior active
+  -- one for this scope) via the shared internal helper, so the staff
+  -- "create on behalf of a student" RPC produces identical rows.
+  v_submission_id := public.create_no_repo_submission_internal(p_assignment_id, v_profile_id, v_assignment_group_id);
 
   if p_files is not null and jsonb_array_length(p_files) > 0 then
     -- Defense-in-depth: a malicious client could pass a storage_key pointing at
@@ -1967,6 +1929,7 @@ declare
   v_expected_prefix text;
   v_file jsonb;
   v_storage_key text;
+  v_is_binary boolean;
 begin
   if v_user_id is null then
     raise exception 'Must be authenticated' using errcode = '42501';
@@ -1980,7 +1943,9 @@ begin
   if v_class_id is null then
     raise exception 'Submission % not found', p_submission_id;
   end if;
-  if not public.authorize_for_submission(p_submission_id) then
+  -- The submission owner / group members can attach their own uploads;
+  -- instructors and graders can attach when submitting on behalf of a student.
+  if not (public.authorize_for_submission(p_submission_id) or public.authorizeforclassgrader(v_class_id)) then
     raise exception 'Access denied for submission %', p_submission_id using errcode = '42501';
   end if;
   if v_submitted_via is distinct from 'upload' then
@@ -2000,11 +1965,22 @@ begin
   if p_files is not null and jsonb_array_length(p_files) > 0 then
     for v_file in select * from jsonb_array_elements(p_files) loop
       v_storage_key := v_file->>'storage_key';
-      if v_storage_key is null
-         or left(v_storage_key, length(v_expected_prefix)) <> v_expected_prefix then
-        raise exception 'storage_key % is outside this submission''s scope (expected prefix %)',
-          coalesce(v_storage_key, '(null)'), v_expected_prefix
-          using errcode = '42501';
+      -- Text files (e.g. markdown, source) are stored inline in `contents` with
+      -- is_binary=false, exactly like git-pushed text files, so the existing
+      -- file viewer renders them (markdown source + preview). Binary files keep
+      -- their bytes in storage and must reference a key under this submission.
+      -- A binary file always carries a storage_key and an inline file never
+      -- does, so infer from that when the explicit is_binary flag is absent.
+      v_is_binary := coalesce((v_file->>'is_binary')::boolean, v_storage_key is not null);
+      if v_is_binary then
+        if v_storage_key is null
+           or left(v_storage_key, length(v_expected_prefix)) <> v_expected_prefix then
+          raise exception 'storage_key % is outside this submission''s scope (expected prefix %)',
+            coalesce(v_storage_key, '(null)'), v_expected_prefix
+            using errcode = '42501';
+        end if;
+      else
+        v_storage_key := null;  -- inline text has no storage object
       end if;
       insert into public.submission_files(
         class_id, submission_id, profile_id, assignment_group_id,
@@ -2015,8 +1991,8 @@ begin
         v_profile_id,
         v_assignment_group_id,
         v_file->>'name',
-        null,
-        true,
+        case when v_is_binary then null else v_file->>'contents' end,
+        v_is_binary,
         coalesce((v_file->>'file_size')::bigint, 0),
         v_file->>'mime_type',
         v_storage_key
@@ -2053,3 +2029,143 @@ exception
     raise warning 'Could not create submission-files storage policies (insufficient privilege); apply them manually as superuser';
 end
 $$;
+
+-- (B3) No-auth core that creates an empty active 'upload' submission for a
+-- given scope (deactivating any prior active one). Shared by the student
+-- self-submit RPC (create_no_repo_submission) and the staff create-on-behalf
+-- RPC below, so both produce identical rows. Trusted callers only — no auth /
+-- repo_mode checks here.
+create or replace function public.create_no_repo_submission_internal(
+  p_assignment_id bigint,
+  p_profile_id uuid,
+  p_assignment_group_id bigint
+) returns bigint
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_class_id bigint;
+  v_submission_id bigint;
+  v_ordinal int;
+begin
+  select a.class_id into v_class_id from public.assignments a where a.id = p_assignment_id;
+  if v_class_id is null then
+    raise exception 'Assignment % not found', p_assignment_id;
+  end if;
+
+  -- Serialize concurrent creates for this assignment + submitter scope so we
+  -- can't produce duplicate ordinals or end up with multiple active rows.
+  perform pg_advisory_xact_lock(
+    hashtextextended(
+      format(
+        'create_no_repo_submission:%s:%s:%s',
+        p_assignment_id,
+        coalesce(p_assignment_group_id::text, ''),
+        coalesce(p_profile_id::text, '')
+      ),
+      0
+    )
+  );
+
+  update public.submissions
+     set is_active = false
+   where assignment_id = p_assignment_id
+     and is_active = true
+     and (
+       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
+       or (p_assignment_group_id is null and profile_id = p_profile_id)
+     );
+
+  select coalesce(max(ordinal), 0) + 1 into v_ordinal
+    from public.submissions
+   where assignment_id = p_assignment_id
+     and (
+       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
+       or (p_assignment_group_id is null and profile_id = p_profile_id)
+     );
+
+  insert into public.submissions(
+    assignment_id, class_id, profile_id, assignment_group_id,
+    repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via
+  ) values (
+    p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
+    null, null, 1, v_ordinal, v_ordinal, true, 'upload'
+  )
+  returning id into v_submission_id;
+
+  return v_submission_id;
+end;
+$$;
+
+revoke all on function public.create_no_repo_submission_internal(bigint, uuid, bigint) from public;
+revoke all on function public.create_no_repo_submission_internal(bigint, uuid, bigint) from authenticated;
+grant execute on function public.create_no_repo_submission_internal(bigint, uuid, bigint) to postgres;
+
+-- (B4) Instructor/grader RPC: create an empty 'upload' submission on behalf of
+-- a student (p_profile_id) or group (p_assignment_group_id) for a repo_mode=
+-- 'none' assignment. Files are then uploaded + registered via
+-- attach_no_repo_submission_files (which also authorizes graders). Returns the
+-- new submission id.
+create or replace function public.create_submission_for_student(
+  p_assignment_id bigint,
+  p_profile_id uuid default null,
+  p_assignment_group_id bigint default null
+) returns bigint
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_class_id bigint;
+  v_repo_mode public.assignment_repo_mode;
+  v_group_assignment_id bigint;
+begin
+  if v_user_id is null then
+    raise exception 'Must be authenticated' using errcode = '42501';
+  end if;
+  if (p_profile_id is null) = (p_assignment_group_id is null) then
+    raise exception 'Exactly one of p_profile_id or p_assignment_group_id must be provided';
+  end if;
+
+  select a.class_id, a.repo_mode into v_class_id, v_repo_mode
+    from public.assignments a where a.id = p_assignment_id;
+  if v_class_id is null then
+    raise exception 'Assignment % not found', p_assignment_id;
+  end if;
+  if v_repo_mode <> 'none' then
+    raise exception 'Assignment % does not accept uploads (repo_mode=%)', p_assignment_id, v_repo_mode;
+  end if;
+  if not public.authorizeforclassgrader(v_class_id::bigint) then
+    raise exception 'Access denied: only graders/instructors can create submissions on behalf of students for class %', v_class_id
+      using errcode = '42501';
+  end if;
+
+  if p_assignment_group_id is not null then
+    select ag.assignment_id into v_group_assignment_id
+      from public.assignment_groups ag where ag.id = p_assignment_group_id;
+    if v_group_assignment_id is null then
+      raise exception 'Assignment group % not found', p_assignment_group_id;
+    end if;
+    if v_group_assignment_id <> p_assignment_id then
+      raise exception 'Assignment group % belongs to assignment %, not %',
+        p_assignment_group_id, v_group_assignment_id, p_assignment_id;
+    end if;
+  else
+    if not exists (
+      select 1 from public.user_roles ur
+      where ur.private_profile_id = p_profile_id
+        and ur.class_id = v_class_id
+        and ur.role = 'student'
+        and ur.disabled = false
+    ) then
+      raise exception 'Profile % is not an active student in class %', p_profile_id, v_class_id;
+    end if;
+  end if;
+
+  return public.create_no_repo_submission_internal(p_assignment_id, p_profile_id, p_assignment_group_id);
+end;
+$$;
+
+grant execute on function public.create_submission_for_student(bigint, uuid, bigint) to authenticated;
