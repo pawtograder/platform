@@ -244,7 +244,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
   return (
     <CardRoot>
       <CardHeader>
-        <CardTitle>Group Configuration</CardTitle>
+        <CardTitle>Groups</CardTitle>
         <Text fontSize="sm" color="fg.muted">
           Whether students submit individually or as a group, group size limits, and how groups are formed.
         </Text>
@@ -253,8 +253,8 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
         <Fieldset.Content>
           <Field
             orientation="horizontal"
-            label="Group configuration"
-            helperText="If you want to use groups for this assignment, select the group configuration you want to use."
+            label="Submission type"
+            helperText="Choose whether students submit individually or as a group."
             errorText={errors.group_config?.message?.toString()}
             invalid={errors.group_config ? true : false}
             required={true}
@@ -279,7 +279,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Minimum Group Size"
+                label="Minimum group size"
                 helperText="The minimum number of students allowed in a group"
                 errorText={errors.min_group_size?.message?.toString()}
                 invalid={errors.min_group_size ? true : false}
@@ -300,7 +300,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Maximum Group Size"
+                label="Maximum group size"
                 helperText="The maximum number of students allowed in a group"
                 errorText={errors.max_group_size?.message?.toString()}
                 invalid={errors.max_group_size ? true : false}
@@ -321,7 +321,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Group Formation Method"
+                label="Group formation method"
                 helperText="Choose whether students can form their own groups or if all groups will be assigned by instructors"
                 errorText={errors.allow_student_formed_groups?.message?.toString()}
                 invalid={errors.allow_student_formed_groups ? true : false}
@@ -378,7 +378,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Group Formation Deadline"
+                label="Group formation deadline"
                 helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
                 errorText={errors.group_formation_deadline?.message?.toString()}
                 invalid={errors.group_formation_deadline ? true : false}
@@ -532,16 +532,16 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
   return (
     <CardRoot>
       <CardHeader>
-        <CardTitle>Self Evaluation Configuration</CardTitle>
+        <CardTitle>Self-evaluation</CardTitle>
         <Text fontSize="sm" color="fg.muted">
-          Optionally require students to complete a self-evaluation after the programming assignment deadline.
+          Optionally require students to complete a self-evaluation after this assignment&apos;s deadline.
         </Text>
       </CardHeader>
       <CardBody gap="5px">
         <Fieldset.Content>
           <Field
             orientation="horizontal"
-            label="Assignment setting"
+            label="Require self-evaluation"
             errorText={errors.group_config?.message?.toString()}
             invalid={errors.group_config ? true : false}
             required={true}
@@ -553,8 +553,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                   setWithEval(e.target.value == "use_eval");
                 }}
               >
-                <option value="base_only">Programming assignment only</option>
-                <option value="use_eval">Programming assignment and self evaluation</option>
+                <option value="base_only">Assignment only</option>
+                <option value="use_eval">Assignment and self-evaluation</option>
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -564,8 +564,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Hours due after programming assignment"
-                helperText="The number of hours between the deadline of the programming assignment and when the self evaluation is due"
+                label="Hours due after this assignment"
+                helperText="The number of hours between this assignment's deadline and when the self-evaluation is due"
                 errorText={errors.min_group_size?.message?.toString()}
                 invalid={errors.min_group_size ? true : false}
                 required={withEval}
@@ -583,7 +583,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
               </Field>
             </Fieldset.Content>
             <Field
-              helperText="Students can submit self evaluation before programming assignment deadline"
+              helperText="Students can submit the self-evaluation before this assignment's deadline"
               required={withEval}
             >
               <Checkbox.Root {...register("allow_early")} checked={allowEarly}>
@@ -598,8 +598,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label={`Release self-review at (${timezone}, optional)`}
-                helperText="If set, the self-review is assigned and becomes visible to all students at this exact wall-clock time, ignoring per-student due-date exceptions. Leave blank to release when the programming assignment's due date passes (current behavior). Pairs with the rubric option 'Hide from students until assigned'."
+                label={`Release self-evaluation at (${timezone}, optional)`}
+                helperText="If set, the self-evaluation is released to all students at this wall-clock time, ignoring per-student due-date exceptions. Leave blank to release when this assignment's due date passes."
               >
                 <Controller
                   name="self_review_release_at"
@@ -790,7 +790,7 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
-                    label="Points Possible"
+                    label="Points possible"
                     errorText={errors.total_points?.message?.toString()}
                     invalid={!!errors.total_points}
                     required={true}
@@ -808,18 +808,18 @@ export default function AssignmentForm({
             </CardRoot>
             <CardRoot>
               <CardHeader>
-                <CardTitle>Schedule & Late Policy</CardTitle>
+                <CardTitle>Schedule</CardTitle>
                 <Text fontSize="sm" color="fg.muted">
-                  When students can see and submit the assignment, and how late submissions and late tokens are handled.
-                  Includes optional lab-based due dates. All times are in <strong>{course.time_zone}</strong> — students
-                  see this time zone by default, or times converted to their own local time.
+                  When students can see and submit the assignment, including optional lab-based due dates. All times are
+                  in <strong>{course.time_zone}</strong> — students see this time zone by default, or times converted to
+                  their own local time.
                 </Text>
               </CardHeader>
               <CardBody gap="5px">
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
-                    label="Release Date"
+                    label="Release date"
                     helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
                     errorText={errors.release_date?.message?.toString()}
                     invalid={errors.release_date ? true : false}
@@ -866,7 +866,7 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
-                    label="Suggested Due Date"
+                    label="Suggested due date"
                     helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
                     errorText={errors.suggested_due_date?.message?.toString()}
                     invalid={errors.suggested_due_date ? true : false}
@@ -909,7 +909,7 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
-                    label="Due Date"
+                    label="Due date"
                     helperText="No submissions accepted after this time unless late submissions are allowed"
                     errorText={errors.due_date?.message?.toString()}
                     invalid={errors.due_date ? true : false}
@@ -940,10 +940,21 @@ export default function AssignmentForm({
                     />
                   </Field>
                 </Fieldset.Content>
+                <LabDueDateSubform form={form} />
+              </CardBody>
+            </CardRoot>
+            <CardRoot>
+              <CardHeader>
+                <CardTitle>Late submissions</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  How work submitted after the due date is handled — late tokens and ungraded late submissions.
+                </Text>
+              </CardHeader>
+              <CardBody gap="5px">
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
-                    label="Max Late Tokens"
+                    label="Max late tokens"
                     helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
                     invalid={!!errors.max_late_tokens}
                     errorText={errors.max_late_tokens?.message?.toString()}
@@ -986,7 +997,6 @@ export default function AssignmentForm({
                     </Checkbox.Root>
                   </Field>
                 </Fieldset.Content>
-                <LabDueDateSubform form={form} />
               </CardBody>
             </CardRoot>
             <GroupConfigurationSubform form={form} timezone={timezone} />
