@@ -107,6 +107,14 @@ echo "[seed] running scripts/SeedDB.ts --template ${SEED_TEMPLATE}"
 # tolerates a missing .env.local — so DON'T create one here: the image runs as
 # USER node but WORKDIR /app is root-owned, and writing into it fails with
 # "Permission denied", which aborts the whole seed.
-npx tsx scripts/SeedDB.ts --template "${SEED_TEMPLATE}"
+# DIAGNOSTIC (temporary — REMOVE after capture): the preview deploy tears down
+# the namespace the instant the seed hook fails, so the pod's stderr is never
+# readable. On failure, hold the pod alive so it can be read live.
+if ! npx tsx scripts/SeedDB.ts --template "${SEED_TEMPLATE}"; then
+  rc=$?
+  echo "[seed] DIAGNOSTIC: SeedDB.ts exited ${rc}; holding pod 900s for log capture"
+  sleep 900
+  exit "${rc}"
+fi
 
 echo "[seed] done"
