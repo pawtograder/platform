@@ -265,6 +265,14 @@ jobs:
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
             "SELECT public.audit_maintain_partitions();"
 
+          # Storage RLS policies live in supabase/storage-policies.sql because
+          # storage.objects is owned by supabase_storage_admin and migrations run
+          # as the non-superuser `postgres` (can't CREATE POLICY on it). Apply
+          # them now as the superuser, same connection pattern as the tuning above.
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U supabase_admin -d postgres \
+            < supabase/storage-policies.sql
+
       # Jest integration tests that hit the local Supabase API directly
       # (no Next.js / edge-functions needed). Convention: files named
       # tests/unit/issue*.test.ts gate on RUN_SUPABASE_INTEGRATION_TESTS=true
