@@ -83,7 +83,7 @@ export default function UploadSubmission({
     } finally {
       setIsUploading(false);
     }
-  }, [files, assignmentId, onUploaded]);
+  }, [files, assignmentId, target, onUploaded]);
 
   return (
     <Box m={4} maxW="4xl">

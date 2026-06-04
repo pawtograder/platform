@@ -360,10 +360,22 @@ export async function uploadNoRepoSubmission(
   const scopeId = sub.assignment_group_id ?? sub.profile_id;
   const prefix = `classes/${sub.class_id}/profiles/${scopeId}/submissions/${submissionId}/files`;
   const attached: AttachSubmissionFile[] = [];
+  const usedNames = new Set<string>();
   for (const f of params.files) {
     // Keep the on-disk name but strip path separators so a malicious / odd name
     // can't escape the submission's prefix.
-    const safeName = f.name.replace(/[/\\]/g, "_");
+    let safeName = f.name.replace(/[/\\]/g, "_");
+    // Two distinct files can sanitize to the same name; disambiguate so neither
+    // the storage key nor the file row overwrites the other (e.g. `foo (2).md`).
+    if (usedNames.has(safeName)) {
+      const dot = safeName.lastIndexOf(".");
+      const base = dot > 0 ? safeName.slice(0, dot) : safeName;
+      const ext = dot > 0 ? safeName.slice(dot) : "";
+      let n = 2;
+      while (usedNames.has(`${base} (${n})${ext}`)) n++;
+      safeName = `${base} (${n})${ext}`;
+    }
+    usedNames.add(safeName);
     if (isInlineTextUpload(safeName, f.mimeType, f.size)) {
       // Store text inline (like git text files) so the file viewer renders it.
       const contents = await f.file.text();

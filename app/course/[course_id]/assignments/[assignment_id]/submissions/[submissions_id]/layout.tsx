@@ -777,9 +777,15 @@ function generateSubmissionMarkdown(
     lines.push(
       `- **Submitted:** ${sub.created_at ? format(new Date(sub.created_at), "MMMM d, yyyy 'at' h:mm:ss a") : "Unknown"}`
     );
-    lines.push(`- **Commit:** \`${sub.sha}\``);
-    lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
-    lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    // No-repo (upload / manual) submissions have null sha/repository — emit the
+    // submission origin instead of bogus `null` commit/link fields.
+    if (sub.sha && sub.repository) {
+      lines.push(`- **Commit:** \`${sub.sha}\``);
+      lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
+      lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    } else {
+      lines.push(`- **Submitted via:** ${sub.submitted_via === "manual" ? "Manual (instructor)" : "File upload"}`);
+    }
     lines.push(
       `- **Status:** ${sub.is_active ? "Active (will be graded)" : sub.is_not_graded ? "Not for grading" : "Historical"}`
     );
