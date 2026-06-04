@@ -9,12 +9,13 @@ import { Box, DataList, HStack, Link, Tabs, Text, VStack } from "@chakra-ui/reac
 import * as Sentry from "@sentry/nextjs";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import AssignmentDashboard from "./assignmentDashboard";
-import AssignmentsTable from "./assignmentsTable";
+import { AssignmentExportControls } from "./assignmentsTable";
 import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
-const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
+const VALID_TABS = ["dashboard", "assigned-grading"] as const;
 
 function AssignmentHomeTabs({
   hasReviewAssignments,
@@ -33,7 +34,7 @@ function AssignmentHomeTabs({
 
   return (
     <Tabs.Root
-      value={tabFromUrl ?? (hasReviewAssignments ? "assigned-grading" : "all-submissions")}
+      value={tabFromUrl ?? (hasReviewAssignments ? "assigned-grading" : "dashboard")}
       onValueChange={(details) => {
         const tab = details.value as (typeof VALID_TABS)[number];
         if (VALID_TABS.includes(tab)) {
@@ -47,18 +48,14 @@ function AssignmentHomeTabs({
       unmountOnExit
     >
       <Tabs.List>
-        <Tabs.Trigger value="assigned-grading">Grading Assigned to You</Tabs.Trigger>
-        <Tabs.Trigger value="all-submissions">All Submissions</Tabs.Trigger>
         <Tabs.Trigger value="dashboard">Dashboard</Tabs.Trigger>
+        <Tabs.Trigger value="assigned-grading">Grading assigned to me</Tabs.Trigger>
       </Tabs.List>
-      <Tabs.Content value="assigned-grading">
-        <ReviewAssignmentsTable />
-      </Tabs.Content>
-      <Tabs.Content value="all-submissions">
-        <AssignmentsTable tableController={tableController} />
-      </Tabs.Content>
       <Tabs.Content value="dashboard">
         <AssignmentDashboard tableController={tableController} />
+      </Tabs.Content>
+      <Tabs.Content value="assigned-grading">
+        <ReviewAssignmentsTable />
       </Tabs.Content>
     </Tabs.Root>
   );
@@ -71,6 +68,7 @@ export default function AssignmentHome() {
   const hasReviewAssignments = myReviewAssignments.length > 0;
   const { course, classRealTimeController } = useCourseController();
   const { assignment_id } = useParams();
+  const isInstructor = useIsInstructor();
   const supabase = useMemo(() => createClient(), []);
 
   const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
@@ -157,12 +155,15 @@ export default function AssignmentHome() {
               </DataList.Item>
             </DataList.Root>
           </VStack>
-          {assignment.repo_mode === "none" && (
-            <CreateSubmissionForStudentDialog
-              assignmentId={assignment.id}
-              groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
-            />
-          )}
+          <HStack>
+            {assignment.repo_mode === "none" && (
+              <CreateSubmissionForStudentDialog
+                assignmentId={assignment.id}
+                groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
+              />
+            )}
+            {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
+          </HStack>
         </HStack>
       </Box>
       <Suspense fallback={null}>
