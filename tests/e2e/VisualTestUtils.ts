@@ -135,6 +135,40 @@ export async function waitForVisualIdle(page: Page) {
         // test's domain assertions when it matters.
       });
   }
+
+  await waitForSubmissionReviewCompletionSettled(page);
+}
+
+/**
+ * On submission pages where the hand grading review is already released, completion
+ * happened earlier in the suite. Realtime hydration of completed_by/completed_at can
+ * lag behind the pre-completion ReviewActions block ("Submission Review Actions",
+ * "Other graders", "Complete Review"), which shifts layout and causes large visual
+ * diffs on instructor regrade views. Only runs when "Released to studentYes" is
+ * visible so in-progress grading screenshots and unreleased grader views are skipped.
+ */
+export async function waitForSubmissionReviewCompletionSettled(page: Page) {
+  const releasedToStudent = page.getByText("Released to studentYes");
+  if (!(await releasedToStudent.isVisible().catch(() => false))) {
+    return;
+  }
+
+  // Best-effort, like every other wait in waitForVisualIdle: block until the completed block
+  // hydrates (it almost always already has, since completion happened earlier in the suite), but
+  // never FAIL the screenshot if realtime is momentarily behind — a hard assertion here would add
+  // up to ~24s and time tests out on every released screenshot under load. retries=2 + Argos review
+  // cover the rare unsettled capture.
+  await expect(page.getByRole("heading", { name: "Submission Review Actions" }))
+    .toBeHidden({ timeout: 15_000 })
+    .catch(() => {
+      /* realtime still behind — capture proceeds rather than failing the test */
+    });
+  await expect(page.getByText("Completed by", { exact: true }))
+    .toBeVisible({ timeout: 15_000 })
+    .catch(() => {});
+  await expect(page.getByText("Completed at", { exact: true }))
+    .toBeVisible({ timeout: 15_000 })
+    .catch(() => {});
 }
 
 export async function stabilizeRubricSidebar(page: Page, rubricName: string | RegExp) {
