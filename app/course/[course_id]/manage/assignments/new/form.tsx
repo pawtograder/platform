@@ -203,6 +203,9 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
     <CardRoot>
       <CardHeader>
         <CardTitle>Group Configuration</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          Whether students submit individually or as a group, group size limits, and how groups are formed.
+        </Text>
       </CardHeader>
       <CardBody gap="5px">
         <Fieldset.Content>
@@ -390,61 +393,56 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   }, [watch]);
 
   return (
-    <CardRoot>
-      <CardHeader>
-        <CardTitle>Lab-Based Due Date</CardTitle>
-      </CardHeader>
-      <CardBody gap="5px">
+    <>
+      <Fieldset.Content>
+        <Field helperText="When enabled, the assignment due date will be calculated as a number of minutes after the student's most recent lab section meeting before the original due date. This allows for flexible due dates that align with each student's lab schedule.">
+          <Checkbox.Root
+            checked={withLabDueDate}
+            onCheckedChange={(checked) => {
+              setWithLabDueDate(!!checked.checked);
+              if (!checked.checked) {
+                // Clear the minutes_due_after_lab field when unchecked
+                form.setValue("minutes_due_after_lab", null, { shouldDirty: true });
+              } else {
+                // Set a default value when checked - use string since valueAsNumber will convert it
+                form.setValue("minutes_due_after_lab", "60", { shouldValidate: true, shouldDirty: true });
+              }
+            }}
+          >
+            <Checkbox.HiddenInput />
+            <Checkbox.Control>
+              <LuCheck />
+            </Checkbox.Control>
+            <Checkbox.Label>Custom due date based on lab meeting time</Checkbox.Label>
+          </Checkbox.Root>
+        </Field>
+      </Fieldset.Content>
+      {withLabDueDate && (
         <Fieldset.Content>
-          <Field helperText="When enabled, the assignment due date will be calculated as a number of minutes after the student's most recent lab section meeting before the original due date. This allows for flexible due dates that align with each student's lab schedule.">
-            <Checkbox.Root
-              checked={withLabDueDate}
-              onCheckedChange={(checked) => {
-                setWithLabDueDate(!!checked.checked);
-                if (!checked.checked) {
-                  // Clear the minutes_due_after_lab field when unchecked
-                  form.setValue("minutes_due_after_lab", null, { shouldDirty: true });
-                } else {
-                  // Set a default value when checked - use string since valueAsNumber will convert it
-                  form.setValue("minutes_due_after_lab", "60", { shouldValidate: true, shouldDirty: true });
-                }
-              }}
-            >
-              <Checkbox.HiddenInput />
-              <Checkbox.Control>
-                <LuCheck />
-              </Checkbox.Control>
-              <Checkbox.Label>Custom due date based on lab meeting time</Checkbox.Label>
-            </Checkbox.Root>
+          <Field
+            label="Minutes due after lab meeting"
+            helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
+            errorText={errors.minutes_due_after_lab?.message?.toString()}
+            invalid={errors.minutes_due_after_lab ? true : false}
+            required={withLabDueDate}
+          >
+            <Input
+              type="number"
+              {...register("minutes_due_after_lab", {
+                required: withLabDueDate ? "This is required when using lab-based due dates" : false,
+                min: { value: 0, message: "Minutes must be at least 0" },
+                valueAsNumber: true
+              })}
+            />
           </Field>
         </Fieldset.Content>
-        {withLabDueDate && (
-          <Fieldset.Content>
-            <Field
-              label="Minutes due after lab meeting"
-              helperText="The number of minutes after the lab meeting ends when the assignment becomes due. For example, 60 minutes means the assignment is due 1 hour after the lab meeting ends."
-              errorText={errors.minutes_due_after_lab?.message?.toString()}
-              invalid={errors.minutes_due_after_lab ? true : false}
-              required={withLabDueDate}
-            >
-              <Input
-                type="number"
-                {...register("minutes_due_after_lab", {
-                  required: withLabDueDate ? "This is required when using lab-based due dates" : false,
-                  min: { value: 0, message: "Minutes must be at least 0" },
-                  valueAsNumber: true
-                })}
-              />
-            </Field>
-          </Fieldset.Content>
-        )}
-        {withLabDueDate && (
-          <Fieldset.Content>
-            <LabDueDatePreview form={form} timezone={timezone} />
-          </Fieldset.Content>
-        )}
-      </CardBody>
-    </CardRoot>
+      )}
+      {withLabDueDate && (
+        <Fieldset.Content>
+          <LabDueDatePreview form={form} timezone={timezone} />
+        </Fieldset.Content>
+      )}
+    </>
   );
 }
 
@@ -483,6 +481,9 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
     <CardRoot>
       <CardHeader>
         <CardTitle>Self Evaluation Configuration</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          Optionally require students to complete a self-evaluation after the programming assignment deadline.
+        </Text>
       </CardHeader>
       <CardBody gap="5px">
         <Fieldset.Content>
@@ -687,6 +688,9 @@ export default function AssignmentForm({
             <CardRoot>
               <CardHeader>
                 <CardTitle>Basics</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  The assignment&apos;s title, its short URL identifier, and the total points possible.
+                </Text>
               </CardHeader>
               <CardBody gap="5px">
                 <Fieldset.Content>
@@ -726,11 +730,32 @@ export default function AssignmentForm({
                     />
                   </Field>
                 </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Points Possible"
+                    errorText={errors.total_points?.message?.toString()}
+                    invalid={!!errors.total_points}
+                    required={true}
+                  >
+                    <Input
+                      type="number"
+                      {...register("total_points", {
+                        required: "This is required",
+                        min: { value: 0, message: "Points possible must be at least 0" }
+                      })}
+                    />
+                  </Field>
+                </Fieldset.Content>
               </CardBody>
             </CardRoot>
             <CardRoot>
               <CardHeader>
                 <CardTitle>Schedule & Late Policy</CardTitle>
+                <Text fontSize="sm" color="fg.muted">
+                  When students can see and submit the assignment, and how late submissions and late tokens are handled.
+                  Includes optional lab-based due dates.
+                </Text>
               </CardHeader>
               <CardBody gap="5px">
                 <Fieldset.Content>
@@ -913,51 +938,7 @@ export default function AssignmentForm({
                     </Checkbox.Root>
                   </Field>
                 </Fieldset.Content>
-              </CardBody>
-            </CardRoot>
-            <LabDueDateSubform form={form} />
-            <CardRoot>
-              <CardHeader>
-                <CardTitle>Submission & Grading</CardTitle>
-              </CardHeader>
-              <CardBody gap="5px">
-                <Fieldset.Content>
-                  <Field
-                    orientation="horizontal"
-                    label="Handout URL"
-                    helperText="A link to the assignment handout or instructions document. This URL will be provided to AI assistants helping students with this assignment."
-                    errorText={errors.handout_url?.message?.toString()}
-                    invalid={!!errors.handout_url}
-                  >
-                    <Input
-                      type="url"
-                      placeholder="https://..."
-                      {...register("handout_url", {
-                        pattern: {
-                          value: /^https?:\/\/.+/,
-                          message: "Please enter a valid URL starting with http:// or https://"
-                        }
-                      })}
-                    />
-                  </Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                  <Field
-                    orientation="horizontal"
-                    label="Points Possible"
-                    errorText={errors.total_points?.message?.toString()}
-                    invalid={!!errors.total_points}
-                    required={true}
-                  >
-                    <Input
-                      type="number"
-                      {...register("total_points", {
-                        required: "This is required",
-                        min: { value: 0, message: "Points possible must be at least 0" }
-                      })}
-                    />
-                  </Field>
-                </Fieldset.Content>
+                <LabDueDateSubform form={form} />
               </CardBody>
             </CardRoot>
             <GroupConfigurationSubform form={form} timezone={timezone} />
