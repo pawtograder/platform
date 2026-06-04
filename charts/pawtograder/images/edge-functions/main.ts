@@ -70,6 +70,11 @@ const MAX_RETIRED_RETRIES = 5;
 // servicePath and don't keep re-stat-ing the filesystem.
 const eszipCache = new Map<string, Promise<Uint8Array | null>>();
 
+// Snapshot the process env ONCE at startup. It's static for the lifetime of the
+// pod, and this runs on the gateway hot path — recomputing it per request would
+// churn allocations needlessly. Workers created below all receive this same array.
+const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
+
 function loadEszip(name: string): Promise<Uint8Array | null> {
   let pending = eszipCache.get(name);
   if (!pending) {
@@ -108,8 +113,6 @@ Deno.serve(async (req: Request) => {
   }
 
   const servicePath = `/home/deno/functions/${serviceName}`;
-  const envVarsObj = Deno.env.toObject();
-  const envVars = Object.keys(envVarsObj).map((k) => [k, envVarsObj[k]] as [string, string]);
 
   const eszip = await loadEszip(serviceName);
 
@@ -164,8 +167,11 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      // Log the real error server-side, but return a fixed generic message — the
+      // raw error can carry worker/runtime internals (paths, stack frames) and
+      // this gateway is public-facing (CodeQL: information exposure via stack trace).
       console.error(`error invoking ${serviceName}:`, e);
-      return new Response(JSON.stringify({ msg: msg }), {
+      return new Response(JSON.stringify({ msg: "internal edge function error" }), {
         status: 500,
         headers: { "content-type": "application/json" }
       });

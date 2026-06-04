@@ -167,6 +167,14 @@ export function bottleneckRedisOptions(): {
     if (u.password) clientOptions.password = decodeURIComponent(u.password);
     if (u.username) clientOptions.username = decodeURIComponent(u.username);
     if (u.protocol === "rediss:") clientOptions.tls = {};
+    // Preserve the logical DB index from the URL path (redis://host:6379/N).
+    // Without this ioredis defaults to db 0, so a Bottleneck limiter would
+    // coordinate on a DIFFERENT db than createRedis() (which gets the URL whole,
+    // incl. the db) — splitting limiter state from the metrics reader.
+    if (u.pathname.length > 1) {
+      const db = Number(u.pathname.slice(1));
+      if (Number.isInteger(db) && db >= 0) clientOptions.db = db;
+    }
     return { datastore: "ioredis", Redis: IORedisCtor, clientOptions };
   }
   const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");

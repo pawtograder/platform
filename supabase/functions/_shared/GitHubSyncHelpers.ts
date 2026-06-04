@@ -289,9 +289,13 @@ export async function getTreeBlobSizes(
 
   if (redis) {
     try {
+      // createRedis()'s get() auto-JSON-parses values that round-trip as JSON
+      // (the ioredis-compat proxy and the Upstash adapter both do), so a hit can
+      // arrive already parsed. Only JSON.parse when it's still a raw string —
+      // otherwise the old `typeof === "string"` guard silently missed every hit.
       const cached = await redis.get(cacheKey);
-      if (cached && typeof cached === "string") {
-        const arr = JSON.parse(cached) as [string, number][];
+      if (cached != null) {
+        const arr = (typeof cached === "string" ? JSON.parse(cached) : cached) as [string, number][];
         return new Map(arr);
       }
     } catch (error) {
@@ -365,14 +369,16 @@ export async function getChangedFiles(
 
   if (redis) {
     try {
+      // get() may return an already-parsed value (see tree-sizes note above);
+      // only JSON.parse a raw string so REDIS_URL deploys actually hit the cache.
       const cached = await redis.get(cacheKey);
-      if (cached && typeof cached === "string") {
+      if (cached != null) {
         scope?.addBreadcrumb({
           message: `Cache hit for changed files: ${cacheKey}`,
           category: "cache",
           level: "info"
         });
-        return JSON.parse(cached) as FileChange[];
+        return (typeof cached === "string" ? JSON.parse(cached) : cached) as FileChange[];
       }
     } catch (error) {
       console.error("Redis cache read error:", error);

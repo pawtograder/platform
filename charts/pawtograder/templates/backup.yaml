@@ -66,9 +66,9 @@ spec:
                       name: {{ .Values.secrets.names.postgres }}
                       key: POSTGRES_PASSWORD
                 - name: S3_ENDPOINT
-                  value: {{ .Values.backup.s3.endpoint | quote }}
+                  value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
                 - name: S3_BUCKET
-                  value: {{ .Values.backup.s3.bucket | quote }}
+                  value: {{ required "backup.s3.bucket is required when backup.enabled=true" .Values.backup.s3.bucket | quote }}
                 - name: AWS_ACCESS_KEY_ID
                   valueFrom:
                     secretKeyRef:

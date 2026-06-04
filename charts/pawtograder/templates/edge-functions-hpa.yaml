@@ -1,4 +1,7 @@
 {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled }}
+{{- if not (or .Values.edgeFunctions.autoscaling.targetMemoryUtilizationPercentage .Values.edgeFunctions.autoscaling.targetCPUUtilizationPercentage) }}
+{{- fail "edgeFunctions.autoscaling is enabled but no target set: configure targetMemoryUtilizationPercentage and/or targetCPUUtilizationPercentage (an HPA with an empty metrics list is invalid)" }}
+{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
