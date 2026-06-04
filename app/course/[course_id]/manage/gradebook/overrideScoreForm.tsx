@@ -139,6 +139,17 @@ export function OverrideScoreForm({
                 ? "There are very, very few cases where you should override the score. However, you CAN do so here. Note that other instructors and graders, AS WELL AS THE STUDENT will see that it was overriden from the default calculated value. Your override will persist through recalculation."
                 : "This score was imported from an external source and you are overriding it. You and other graders will be able to see that it was overriden from the import, but students will not. Your override will persist through re-imports."}
             </Text>
+            {showWarning && (
+              <Text
+                fontSize="sm"
+                fontWeight="medium"
+                color={studentGradebookColumn.released ? "fg.success" : "fg.muted"}
+              >
+                {studentGradebookColumn.released
+                  ? "Student visibility: this override is visible to the student now."
+                  : "Student visibility: this override is hidden from the student until this column's dependencies are released."}
+              </Text>
+            )}
             <HStack gap={0}>
               <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
                 <Input

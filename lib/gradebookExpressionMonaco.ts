@@ -34,6 +34,20 @@ export const GRADEBOOK_BUILTIN_FUNCTIONS: GradebookBuiltinFunction[] = [
     insertText: 'assignments("${1:slug}")'
   },
   {
+    name: "is_released",
+    signature: "is_released(value)",
+    description:
+      'True when a gradebook column value is released (visible) to the student. Use to branch on release, e.g. case_when([is_released(gradebook_columns("hw1")), gradebook_columns("hw1"), ...]).',
+    insertText: 'is_released(${1:gradebook_columns("slug")})'
+  },
+  {
+    name: "assignment_released",
+    signature: 'assignment_released("assignment-slug", round?)',
+    description:
+      "True when the student can see the assignment's grade for the given round (defaults to 'grading-review'). Companion to assignments(); use literal slugs (no glob).",
+    insertText: 'assignment_released("${1:slug}")'
+  },
+  {
     name: "add",
     signature: "add(a, b)",
     description: "Add; unwraps gradebook value operands to their numeric score.",

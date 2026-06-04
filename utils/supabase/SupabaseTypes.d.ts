@@ -10820,10 +10820,6 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
-      auto_assign_self_reviews: {
-        Args: { this_assignment_id: number; this_profile_id: string };
-        Returns: undefined;
-      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -11393,6 +11389,7 @@ export type Database = {
       };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
+      get_assessment_export_pepper: { Args: never; Returns: string };
       get_assignment_llm_metrics: { Args: never; Returns: Json };
       get_assignments_for_student_dashboard: {
         Args: { p_class_id: number; p_student_profile_id: string };
@@ -11951,6 +11948,39 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: number;
       };
+      metrics_workflow_errors_by_name: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          count: number;
+          name: string;
+        }[];
+      };
+      metrics_workflow_queue_percentiles: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          p50: number;
+          p95: number;
+          p99: number;
+        }[];
+      };
+      metrics_workflow_run_percentiles: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          p50: number;
+          p95: number;
+        }[];
+      };
+      metrics_workflow_runs_by_conclusion: {
+        Args: { window_hours?: number };
+        Returns: {
+          class_id: string;
+          conclusion: string;
+          count: number;
+        }[];
+      };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
         Returns: boolean;
@@ -12120,6 +12150,10 @@ export type Database = {
       };
       set_discussion_thread_visibility: {
         Args: { p_instructors_only: boolean; p_thread_id: number };
+        Returns: undefined;
+      };
+      set_gradebook_column_students_released: {
+        Args: { p_column_id: number; p_released: boolean; p_student_ids: Json };
         Returns: undefined;
       };
       sis_sync_enrollment: {

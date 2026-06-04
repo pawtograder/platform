@@ -30,7 +30,12 @@ export type ExpressionContext = {
   class_id: number;
 };
 //These functions should be called with a context object as the first argument
-export const ContextFunctions = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments"];
+export const ContextFunctions = [
+  ...COMMON_CONTEXT_FUNCTIONS,
+  "gradebook_columns",
+  "assignments",
+  "assignment_released"
+];
 
 export type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
@@ -487,6 +492,14 @@ class GradebookWhatIfController {
           const ret = findOne(assignmentSlug);
           return ret;
         }
+      }) as ImportFunction;
+      // assignment_released(slug): in the student-facing what-if, every visible assignment value
+      // is by definition released, so a non-null lookup means released.
+      imports["assignment_released"] = ((_context: ExpressionContext, assignmentSlug: string | string[]) => {
+        const assignmentsFn = imports["assignments"] as (ctx: ExpressionContext, slug: string | string[]) => unknown;
+        const releasedFor = (slug: string) => assignmentsFn(_context, slug) != null;
+        if (Array.isArray(assignmentSlug)) return assignmentSlug.map(releasedFor);
+        return releasedFor(assignmentSlug);
       }) as ImportFunction;
       // Client what-if runs in the student UI: users only see public-facing grades and
       // is_private_calculation is always false here. Server-side recalculation sets

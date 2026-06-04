@@ -204,9 +204,22 @@ abstract class DependencySourceBase implements DependencySource {
   }
 }
 
+/**
+ * Pure release check for an assignment round: a round is "released" to the student exactly when
+ * the public (student-visible) score for that round is present. Unreleased rounds are omitted from
+ * `scores_by_round_public`, so an undefined/missing public value means not-yet-released.
+ * Exported for unit testing.
+ */
+export function assignmentRoundReleased(
+  publicByRound: Record<string, number | undefined> | undefined,
+  round: string
+): boolean {
+  return !!publicByRound && publicByRound[round] !== undefined;
+}
+
 class AssignmentsDependencySource extends DependencySourceBase {
   getFunctionNames(): string[] {
-    return ["assignments"];
+    return ["assignments", "assignment_released"];
   }
   expandKey({ key, class_id }: { key: string; class_id: number }): string[] {
     const matchingAssignments = Array.from(this.assignmentMap.values()).filter(
@@ -215,9 +228,18 @@ class AssignmentsDependencySource extends DependencySourceBase {
     return matchingAssignments.map((assignment) => assignment.slug ?? "ERROR");
   }
   private assignmentMap: Map<number, Assignment> = new Map();
+  // student_id → slug → round → released. Populated alongside value retrieval so
+  // assignment_released() can report student-visibility independent of the private/public calc.
+  private releaseMap: Map<string, Map<string, Record<string, boolean>>> = new Map();
+
+  private lookupReleased(student_id: string, slug: string, round: string): boolean {
+    const byRound = this.releaseMap.get(student_id)?.get(slug);
+    return byRound ? !!byRound[round] : false;
+  }
 
   // Execute with optional review round argument. Defaults to 'grading-review'.
   override execute({
+    function_name,
     context,
     key,
     class_id,
@@ -230,6 +252,17 @@ class AssignmentsDependencySource extends DependencySourceBase {
     args?: unknown[];
   }): unknown {
     const requestedRound = (args && typeof args[0] === "string" ? (args[0] as string) : "grading-review") as string;
+
+    // assignment_released("slug" | ["slug", ...], round?) → boolean(s) indicating whether the
+    // student can see the assignment's grade. Literal slugs only (no glob expansion).
+    if (function_name === "assignment_released") {
+      const checkOne = (k: unknown) =>
+        typeof k === "string" ? this.lookupReleased(context.student_id, k, requestedRound) : false;
+      if (Array.isArray(key)) return key.map(checkOne);
+      if (isDenseMatrix(key)) return (key as unknown as Matrix<unknown>).toArray().map(checkOne);
+      return checkOne(key);
+    }
+
     const coerceRoundValue = (val: unknown): number | undefined => {
       if (val === null || val === undefined) return undefined;
       if (typeof val === "number") return val;
@@ -355,6 +388,15 @@ class AssignmentsDependencySource extends DependencySourceBase {
           }
         }
       }
+      // Record per-round release (public score present ⇒ released) for assignment_released().
+      const studentRelease = this.releaseMap.get(row.student_private_profile_id) ?? new Map();
+      const roundsReleased: Record<string, boolean> = {};
+      for (const round of Object.keys(publicByRound)) {
+        roundsReleased[round] = assignmentRoundReleased(publicByRound, round);
+      }
+      studentRelease.set(slug, roundsReleased);
+      this.releaseMap.set(row.student_private_profile_id, studentRelease);
+
       results.push({
         key: slug,
         student_id: row.student_private_profile_id,
@@ -547,7 +589,8 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
             ...studentRecord,
             score: studentRecord.score_override ?? studentRecord.score ?? null,
             max_score: col?.max_score ?? 0,
-            column_slug: col?.slug ?? "unknown"
+            column_slug: col?.slug ?? "unknown",
+            is_released: studentRecord.released ?? false
           },
           display: studentRecord.score?.toString() ?? "",
           class_id: studentRecord.class_id,

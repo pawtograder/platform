@@ -88,7 +88,7 @@ import { Select } from "chakra-react-select";
 import { LucideInfo } from "lucide-react";
 import { useParams } from "next/navigation";
 import pluralize from "pluralize";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { FieldValues } from "react-hook-form";
 import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
@@ -1680,6 +1680,276 @@ function GenericGradebookColumnHeader({
   );
 }
 
+type ReleaseSectionGroup = { id: number | null; name: string; studentIds: string[]; released: number };
+
+/**
+ * Detailed release breakdown for a single (normal) gradebook column: overall released/not totals
+ * plus a per class-section and per lab-section breakdown, with inline release/unrelease actions.
+ * Surfaces exactly which students can see their grade so instructors can reconcile a "mixed" column.
+ */
+function ReleaseStatsModal({
+  columnId,
+  visibleStudentIds,
+  onClose
+}: {
+  columnId: number;
+  visibleStudentIds: string[];
+  onClose: () => void;
+}) {
+  const { course_id } = useParams();
+  const column = useGradebookColumn(columnId);
+  const grades = useGradebookColumnGrades(columnId);
+  const students = useAllStudentRoles();
+  const courseController = useCourseController();
+  const supabase = useMemo(() => createClient(), []);
+  const [isBusy, setIsBusy] = useState(false);
+
+  const { data: classSections } = useList<ClassSection>({
+    resource: "class_sections",
+    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
+    queryOptions: { staleTime: Infinity, cacheTime: Infinity },
+    pagination: { pageSize: 1000 }
+  });
+  const { data: labSections } = courseController.listLabSections();
+
+  // One released flag per student (grades may carry both private and public rows; the private row
+  // holds the authoritative instructor-set release state).
+  const releasedByStudent = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const g of grades) {
+      if (!g.student_id) continue;
+      if (!m.has(g.student_id) || g.is_private) m.set(g.student_id, !!g.released);
+    }
+    return m;
+  }, [grades]);
+
+  const sectionByStudent = useMemo(() => {
+    const m = new Map<string, { classId: number | null; className: string; labId: number | null; labName: string }>();
+    students.forEach((role) => {
+      if (role.role !== "student") return;
+      const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
+      const labSection = labSections?.find((s) => s.id === role.lab_section_id);
+      m.set(role.private_profile_id, {
+        classId: role.class_section_id ?? null,
+        className: classSection?.name ?? "No Section",
+        labId: role.lab_section_id ?? null,
+        labName: labSection?.name ?? "No Lab Section"
+      });
+    });
+    return m;
+  }, [students, classSections?.data, labSections]);
+
+  const buildGroups = useCallback(
+    (kind: "class" | "lab"): ReleaseSectionGroup[] => {
+      const byKey = new Map<string, ReleaseSectionGroup>();
+      for (const [studentId, released] of releasedByStudent) {
+        const sec = sectionByStudent.get(studentId);
+        const id = kind === "class" ? (sec?.classId ?? null) : (sec?.labId ?? null);
+        const name = kind === "class" ? (sec?.className ?? "No Section") : (sec?.labName ?? "No Lab Section");
+        const key = String(id ?? `none:${name}`);
+        const group = byKey.get(key) ?? { id, name, studentIds: [], released: 0 };
+        group.studentIds.push(studentId);
+        if (released) group.released += 1;
+        byKey.set(key, group);
+      }
+      return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
+    },
+    [releasedByStudent, sectionByStudent]
+  );
+
+  const totalStudents = releasedByStudent.size;
+  const totalReleased = useMemo(
+    () => Array.from(releasedByStudent.values()).filter(Boolean).length,
+    [releasedByStudent]
+  );
+  const classGroups = useMemo(() => buildGroups("class"), [buildGroups]);
+  const labGroups = useMemo(() => buildGroups("lab"), [buildGroups]);
+
+  const apply = useCallback(
+    async (studentIds: string[], released: boolean) => {
+      if (studentIds.length === 0) return;
+      setIsBusy(true);
+      try {
+        const { error } = await supabase.rpc("set_gradebook_column_students_released", {
+          p_column_id: columnId,
+          p_student_ids: studentIds,
+          p_released: released
+        });
+        if (error) throw error;
+        toaster.create({
+          title: released ? "Released" : "Unreleased",
+          description: `${released ? "Released" : "Unreleased"} for ${studentIds.length} student${
+            studentIds.length === 1 ? "" : "s"
+          }.`,
+          type: "success"
+        });
+      } catch (error) {
+        toaster.create({
+          title: "Update failed",
+          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          type: "error"
+        });
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [columnId, supabase]
+  );
+
+  const renderSectionTable = (label: string, groups: ReleaseSectionGroup[]) => (
+    <Box>
+      <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        {label}
+      </Text>
+      <Table.Root size="sm" variant="outline">
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeader>Section</Table.ColumnHeader>
+            <Table.ColumnHeader textAlign="end">Released</Table.ColumnHeader>
+            <Table.ColumnHeader textAlign="end">Actions</Table.ColumnHeader>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {groups.map((g) => {
+            const allReleased = g.released === g.studentIds.length;
+            const noneReleased = g.released === 0;
+            return (
+              <Table.Row key={`${label}-${g.id ?? g.name}`}>
+                <Table.Cell>{g.name}</Table.Cell>
+                <Table.Cell textAlign="end">
+                  <Text
+                    as="span"
+                    color={allReleased ? "fg.success" : noneReleased ? "fg.muted" : "fg.warning"}
+                    fontWeight="medium"
+                  >
+                    {g.released}/{g.studentIds.length}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell textAlign="end">
+                  <HStack gap={1} justify="flex-end">
+                    <Button
+                      size="2xs"
+                      variant="outline"
+                      colorPalette="green"
+                      disabled={isBusy || allReleased}
+                      onClick={() => apply(g.studentIds, true)}
+                    >
+                      Release
+                    </Button>
+                    <Button
+                      size="2xs"
+                      variant="outline"
+                      colorPalette="orange"
+                      disabled={isBusy || noneReleased}
+                      onClick={() => apply(g.studentIds, false)}
+                    >
+                      Unrelease
+                    </Button>
+                  </HStack>
+                </Table.Cell>
+              </Table.Row>
+            );
+          })}
+        </Table.Body>
+      </Table.Root>
+    </Box>
+  );
+
+  return (
+    <Dialog.Root open onOpenChange={(d) => (!d.open ? onClose() : undefined)} size="lg" lazyMount>
+      <Dialog.Backdrop />
+      <Dialog.Positioner>
+        <Dialog.Content>
+          <Dialog.Header>
+            <Dialog.Title>Release details — {column?.name}</Dialog.Title>
+          </Dialog.Header>
+          <Dialog.Body>
+            <VStack align="stretch" gap={4}>
+              <HStack justify="space-between">
+                <Text fontSize="sm" color="fg.muted">
+                  {totalReleased === totalStudents
+                    ? "All students can see their grade."
+                    : totalReleased === 0
+                      ? "No students can see their grade yet."
+                      : `${totalReleased} of ${totalStudents} students can see their grade (mixed).`}
+                </Text>
+                <HStack gap={1}>
+                  <Button
+                    size="xs"
+                    colorPalette="green"
+                    variant="subtle"
+                    disabled={isBusy}
+                    onClick={() => apply(Array.from(releasedByStudent.keys()), true)}
+                  >
+                    Release all
+                  </Button>
+                  <Button
+                    size="xs"
+                    colorPalette="orange"
+                    variant="subtle"
+                    disabled={isBusy}
+                    onClick={() => apply(Array.from(releasedByStudent.keys()), false)}
+                  >
+                    Unrelease all
+                  </Button>
+                </HStack>
+              </HStack>
+              {visibleStudentIds.length > 0 && visibleStudentIds.length < totalStudents && (
+                <HStack justify="space-between">
+                  <Text fontSize="sm" color="fg.muted">
+                    Currently filtered view: {visibleStudentIds.length} student
+                    {visibleStudentIds.length === 1 ? "" : "s"}
+                  </Text>
+                  <HStack gap={1}>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      colorPalette="green"
+                      disabled={isBusy}
+                      onClick={() => apply(visibleStudentIds, true)}
+                    >
+                      Release visible
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      colorPalette="orange"
+                      disabled={isBusy}
+                      onClick={() => apply(visibleStudentIds, false)}
+                    >
+                      Unrelease visible
+                    </Button>
+                  </HStack>
+                </HStack>
+              )}
+              {classGroups.length > 0 && renderSectionTable("By class section", classGroups)}
+              {labGroups.length > 0 && renderSectionTable("By lab section", labGroups)}
+            </VStack>
+          </Dialog.Body>
+          <Dialog.Footer>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </Dialog.Footer>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * Provides the student private_profile_ids currently visible after row filters (e.g. a section
+ * filter) to column headers, without threading props through the drag-and-drop header wrappers.
+ */
+type GradebookVisibleStudents = { visibleStudentIds: string[]; totalStudentCount: number };
+const GradebookVisibleStudentsContext = createContext<GradebookVisibleStudents>({
+  visibleStudentIds: [],
+  totalStudentCount: 0
+});
+function useGradebookVisibleStudents(): GradebookVisibleStudents {
+  return useContext(GradebookVisibleStudentsContext);
+}
+
 function GradebookColumnHeader({
   column_id,
   isSorted,
@@ -1695,6 +1965,7 @@ function GradebookColumnHeader({
   columnModel: Column<UserProfile, unknown>;
   dragHandle?: React.ReactNode;
 }) {
+  const { visibleStudentIds } = useGradebookVisibleStudents();
   const column = useGradebookColumn(column_id);
   const gradebookController = useGradebookController();
   const areAllDependenciesReleased = useAreAllDependenciesReleased(column_id);
@@ -1710,6 +1981,27 @@ function GradebookColumnHeader({
     // Mixed status: some but not all grades are released
     return releasedCount > 0 && releasedCount < totalCount;
   }, [allGrades]);
+
+  // Unified release status used by the header badge. Applies to every column type so instructors
+  // can tell at a glance what students see (issue #524). For normal columns it is derived from the
+  // per-student rows (so a per-section release reads as "mixed"); calculated columns follow their
+  // dependencies; staff-only columns are hidden until released.
+  const releaseStatus = useMemo(():
+    | { kind: "staff_only" }
+    | { kind: "calculated"; allReleased: boolean }
+    | { kind: "released" }
+    | { kind: "not_released" }
+    | { kind: "mixed"; released: number; total: number } => {
+    if (column.instructor_only) return { kind: "staff_only" };
+    if (column.score_expression) return { kind: "calculated", allReleased: areAllDependenciesReleased };
+    const total = allGrades.length;
+    const releasedCount = allGrades.filter((g) => g.released).length;
+    if (total === 0) return { kind: column.released ? "released" : "not_released" };
+    if (releasedCount === 0) return { kind: "not_released" };
+    if (releasedCount === total) return { kind: "released" };
+    return { kind: "mixed", released: releasedCount, total };
+  }, [column.instructor_only, column.score_expression, column.released, areAllDependenciesReleased, allGrades]);
+  const isNormalColumn = !column.instructor_only && !column.score_expression;
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
@@ -1718,6 +2010,8 @@ function GradebookColumnHeader({
   const [isMovingRight, setIsMovingRight] = useState(false);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isUnreleasing, setIsUnreleasing] = useState(false);
+  const [isReleasingVisible, setIsReleasingVisible] = useState(false);
+  const [showReleaseStats, setShowReleaseStats] = useState(false);
   const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
   const isMovingRef = useRef(false);
@@ -1858,6 +2152,49 @@ function GradebookColumnHeader({
     }
   }, [column_id, column, supabase, gradebookController]);
 
+  // Per-section / per-visible release: acts on the students currently visible after row filters
+  // (e.g. a lab-section filter). Only valid for normal columns — calculated columns derive their
+  // release from dependencies, and instructor-only columns use the permanent atomic release path.
+  const canReleasePerStudent = !column.score_expression && !column.instructor_only;
+  const releaseVisible = useCallback(
+    async (released: boolean) => {
+      const studentIds = visibleStudentIds ?? [];
+      if (studentIds.length === 0) {
+        toaster.create({
+          title: "No visible students",
+          description: "There are no students in the current filtered view to update.",
+          type: "warning"
+        });
+        return;
+      }
+      setIsReleasingVisible(true);
+      try {
+        const { error } = await supabase.rpc("set_gradebook_column_students_released", {
+          p_column_id: column_id,
+          p_student_ids: studentIds,
+          p_released: released
+        });
+        if (error) throw error;
+        toaster.create({
+          title: released ? "Released to visible students" : "Unreleased for visible students",
+          description: `${released ? "Released" : "Unreleased"} "${column.name}" for ${studentIds.length} student${
+            studentIds.length === 1 ? "" : "s"
+          }.`,
+          type: "success"
+        });
+      } catch (error) {
+        toaster.create({
+          title: released ? "Failed to release" : "Failed to unrelease",
+          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          type: "error"
+        });
+      } finally {
+        setIsReleasingVisible(false);
+      }
+    },
+    [column_id, column.name, supabase, visibleStudentIds]
+  );
+
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
     if (column.description) {
@@ -1885,8 +2222,10 @@ function GradebookColumnHeader({
       ret.push(`Rendered as ${column.render_expression}`);
     }
     if (!column.score_expression && !column.instructor_only) {
-      if (column.released) {
-        ret.push("Released to students");
+      if (releaseStatus.kind === "mixed") {
+        ret.push(`Mixed: ${releaseStatus.released}/${releaseStatus.total} students can see their grade`);
+      } else if (releaseStatus.kind === "released") {
+        ret.push("Released to all students");
       } else {
         ret.push("Not released to students");
       }
@@ -1898,7 +2237,7 @@ function GradebookColumnHeader({
         ))}
       </VStack>
     );
-  }, [column, areAllDependenciesReleased, hasMixedReleaseStatus, allGrades]);
+  }, [column, areAllDependenciesReleased, hasMixedReleaseStatus, allGrades, releaseStatus]);
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
@@ -1924,6 +2263,13 @@ function GradebookColumnHeader({
           onClose={() => {
             setIsConvertingMissing(false);
           }}
+        />
+      )}
+      {showReleaseStats && (
+        <ReleaseStatsModal
+          columnId={column_id}
+          visibleStudentIds={visibleStudentIds}
+          onClose={() => setShowReleaseStats(false)}
         />
       )}
 
@@ -2023,6 +2369,32 @@ function GradebookColumnHeader({
                     {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
                     Unrelease Column
                   </MenuItem>
+                  {canReleasePerStudent && (
+                    <>
+                      <MenuItem
+                        value="releaseVisible"
+                        onClick={() => releaseVisible(true)}
+                        disabled={isReleasingVisible || (visibleStudentIds?.length ?? 0) === 0}
+                        _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                      >
+                        {isReleasingVisible ? <Spinner size="xs" mr={2} /> : <Icon as={TbEye} boxSize={3} mr={2} />}
+                        Release visible students ({visibleStudentIds?.length ?? 0})
+                      </MenuItem>
+                      <MenuItem
+                        value="unreleaseVisible"
+                        onClick={() => releaseVisible(false)}
+                        disabled={isReleasingVisible || (visibleStudentIds?.length ?? 0) === 0}
+                        _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                      >
+                        {isReleasingVisible ? <Spinner size="xs" mr={2} /> : <Icon as={TbEyeOff} boxSize={3} mr={2} />}
+                        Unrelease visible students ({visibleStudentIds?.length ?? 0})
+                      </MenuItem>
+                      <MenuItem value="releaseDetails" onClick={() => setShowReleaseStats(true)}>
+                        <Icon as={LucideInfo} boxSize={3} mr={2} />
+                        Release details…
+                      </MenuItem>
+                    </>
+                  )}
                 </>
               )}
               <MenuSeparator />
@@ -2103,32 +2475,62 @@ function GradebookColumnHeader({
                   </Tooltip.Root>
                 </Box>
               )}
-              {column.instructor_only ? (
+              {releaseStatus.kind === "staff_only" ? (
                 <Box position="relative" zIndex={10000}>
                   <WrappedTooltip content="Staff-only: hidden from students until released">
                     <Icon as={LucideInfo} size="sm" color="purple.500" />
                   </WrappedTooltip>
                 </Box>
-              ) : column.score_expression ? (
+              ) : releaseStatus.kind === "calculated" ? (
                 <Box position="relative" zIndex={10000}>
-                  <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
-                    <Icon as={LucideInfo} size="sm" color="blue.500" />
+                  <WrappedTooltip
+                    content={
+                      releaseStatus.allReleased
+                        ? "Calculated: students see the same value (all dependencies are released)"
+                        : "Calculated: partially visible — some dependencies are not released, so students see a different value than you"
+                    }
+                  >
+                    <Icon
+                      as={releaseStatus.allReleased ? FaLockOpen : LucideInfo}
+                      size="sm"
+                      color={releaseStatus.allReleased ? "green.500" : "yellow.600"}
+                    />
                   </WrappedTooltip>
                 </Box>
-              ) : hasMixedReleaseStatus ? (
-                <Box position="relative" zIndex={100}>
-                  <WrappedTooltip content="Some students have released grades, others don't">
+              ) : releaseStatus.kind === "mixed" ? (
+                <Box
+                  position="relative"
+                  zIndex={100}
+                  cursor="pointer"
+                  onClick={() => setShowReleaseStats(true)}
+                  aria-label="View release details"
+                >
+                  <WrappedTooltip
+                    content={`Mixed: ${releaseStatus.released} of ${releaseStatus.total} students can see their grade — click for details`}
+                  >
                     <Icon as={LucideInfo} size="sm" color="red.500" />
                   </WrappedTooltip>
                 </Box>
-              ) : column.released ? (
-                <Box position="relative" zIndex={100}>
-                  <WrappedTooltip content="Released to students">
+              ) : releaseStatus.kind === "released" ? (
+                <Box
+                  position="relative"
+                  zIndex={100}
+                  cursor={isNormalColumn ? "pointer" : undefined}
+                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
+                  aria-label={isNormalColumn ? "View release details" : undefined}
+                >
+                  <WrappedTooltip content="Released to all students">
                     <Icon as={FaLockOpen} size="sm" color="green.500" />
                   </WrappedTooltip>
                 </Box>
               ) : (
-                <Box position="relative" zIndex={100}>
+                <Box
+                  position="relative"
+                  zIndex={100}
+                  cursor={isNormalColumn ? "pointer" : undefined}
+                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
+                  aria-label={isNormalColumn ? "View release details" : undefined}
+                >
                   <WrappedTooltip content="Not released to students">
                     <Icon as={FaLock} size="sm" color="orange.500" />
                   </WrappedTooltip>
@@ -2988,6 +3390,16 @@ export default function GradebookTable() {
   const rowModel = table.getRowModel();
   const coreRowModel = table.getCoreRowModel();
 
+  // Students currently visible after row filters (e.g. a section filter). Used by the per-column
+  // "Release/Unrelease visible students" actions and the release-details modal.
+  const filteredRows = table.getFilteredRowModel().rows;
+  const visibleStudentIds = useMemo(() => filteredRows.map((r) => r.original.id), [filteredRows]);
+  const totalStudentCount = coreRowModel.rows.length;
+  const visibleStudentsCtx = useMemo<GradebookVisibleStudents>(
+    () => ({ visibleStudentIds, totalStudentCount }),
+    [visibleStudentIds, totalStudentCount]
+  );
+
   const visibleLeafColumns = table.getVisibleLeafColumns();
   const firstGradeColIdx = visibleLeafColumns.findIndex((c) => c.id.startsWith("grade_"));
   const frozenColumnCount = firstGradeColIdx === -1 ? visibleLeafColumns.length : firstGradeColIdx;
@@ -3527,100 +3939,101 @@ export default function GradebookTable() {
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={0} position="relative">
-      {/* Gradebook data loading overlay */}
-      {!isGradebookDataReady && (
-        <Box
-          position="absolute"
-          top={0}
-          left={0}
-          right={0}
-          bottom={0}
-          bg="rgba(255, 255, 255, 0.8)"
-          zIndex={1000}
-          display="flex"
-          alignItems="center"
-          justifyContent="center"
-          borderRadius="md"
-        >
-          <VStack gap={2}>
-            <Spinner size="lg" color="blue.500" />
-            <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
-              {isRefetching ? "Refreshing gradebook data..." : "Loading gradebook index..."}
-            </Text>
-          </VStack>
-        </Box>
-      )}
-
-      <style jsx global>{`
-        [data-gradebook-container] tbody tr:hover td,
-        [data-gradebook-container] tbody tr:hover [data-gradebook-scroll-cell] {
-          background-color: var(--chakra-colors-bg-info) !important;
-        }
-        @keyframes gradebook-pulse {
-          0%,
-          100% {
-            opacity: 0.4;
-          }
-          50% {
-            opacity: 1;
-          }
-        }
-        .gradebook-cell-pulse {
-          animation: gradebook-pulse 2s ease-in-out infinite;
-        }
-      `}</style>
-      <Toaster />
-      <StudentDetailDialog />
-      <GradebookPopoverProvider>
-        <DndContext
-          sensors={dndSensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleGradebookColumnDragStart}
-          onDragOver={handleGradebookColumnDragOver}
-          onDragEnd={handleGradebookColumnDragEnd}
-          onDragCancel={handleGradebookColumnDragCancel}
-          modifiers={[restrictToHorizontalAxis]}
-        >
-          <GradebookPointerOpener
-            ref={parentRef}
-            data-gradebook-container=""
-            overflowX="auto"
-            overflowY="auto"
-            maxW="100%"
-            maxH="80vh"
-            height="80vh"
-            position="relative"
-            role="region"
-            aria-label="Instructor Gradebook Table"
-            tabIndex={0}
+    <GradebookVisibleStudentsContext.Provider value={visibleStudentsCtx}>
+      <VStack align="stretch" w="100%" gap={0} position="relative">
+        {/* Gradebook data loading overlay */}
+        {!isGradebookDataReady && (
+          <Box
+            position="absolute"
+            top={0}
+            left={0}
+            right={0}
+            bottom={0}
+            bg="rgba(255, 255, 255, 0.8)"
+            zIndex={1000}
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            borderRadius="md"
           >
-            <Table.Root
-              minW={`${firstColumnWidth + visibleLeafColumns.slice(1, frozenColumnCount).reduce((s, c) => s + getColWidth(c.id), 0) + scrollableWidth}px`}
-              w="100%"
-              role="table"
-              aria-label="Student grades by assignment"
-              style={{
-                tableLayout: "fixed",
-                width: "100%",
-                margin: 0,
-                padding: 0,
-                borderSpacing: 0,
-                position: "relative"
-              }}
+            <VStack gap={2}>
+              <Spinner size="lg" color="blue.500" />
+              <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+                {isRefetching ? "Refreshing gradebook data..." : "Loading gradebook index..."}
+              </Text>
+            </VStack>
+          </Box>
+        )}
+
+        <style jsx global>{`
+          [data-gradebook-container] tbody tr:hover td,
+          [data-gradebook-container] tbody tr:hover [data-gradebook-scroll-cell] {
+            background-color: var(--chakra-colors-bg-info) !important;
+          }
+          @keyframes gradebook-pulse {
+            0%,
+            100% {
+              opacity: 0.4;
+            }
+            50% {
+              opacity: 1;
+            }
+          }
+          .gradebook-cell-pulse {
+            animation: gradebook-pulse 2s ease-in-out infinite;
+          }
+        `}</style>
+        <Toaster />
+        <StudentDetailDialog />
+        <GradebookPopoverProvider>
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleGradebookColumnDragStart}
+            onDragOver={handleGradebookColumnDragOver}
+            onDragEnd={handleGradebookColumnDragEnd}
+            onDragCancel={handleGradebookColumnDragCancel}
+            modifiers={[restrictToHorizontalAxis]}
+          >
+            <GradebookPointerOpener
+              ref={parentRef}
+              data-gradebook-container=""
+              overflowX="auto"
+              overflowY="auto"
+              maxW="100%"
+              maxH="80vh"
+              height="80vh"
+              position="relative"
+              role="region"
+              aria-label="Instructor Gradebook Table"
+              tabIndex={0}
             >
-              <Table.Header
-                ref={headerRef}
+              <Table.Root
+                minW={`${firstColumnWidth + visibleLeafColumns.slice(1, frozenColumnCount).reduce((s, c) => s + getColWidth(c.id), 0) + scrollableWidth}px`}
+                w="100%"
+                role="table"
+                aria-label="Student grades by assignment"
                 style={{
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 20,
-                  backgroundColor: "var(--chakra-colors-bg-subtle)",
-                  borderBottom: "2px solid var(--chakra-colors-border-muted)",
-                  boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+                  tableLayout: "fixed",
+                  width: "100%",
+                  margin: 0,
+                  padding: 0,
+                  borderSpacing: 0,
+                  position: "relative"
                 }}
               >
-                {/* 
+                <Table.Header
+                  ref={headerRef}
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 20,
+                    backgroundColor: "var(--chakra-colors-bg-subtle)",
+                    borderBottom: "2px solid var(--chakra-colors-border-muted)",
+                    boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+                  }}
+                >
+                  {/* 
               Group Header Row - This row contains the collapsible group headers
               
               Key behaviors:
@@ -3631,134 +4044,14 @@ export default function GradebookTable() {
               5. Expanded groups have emphasized styling for clear visual grouping
               6. Expand/collapse all buttons are positioned discretely above the Student Name header
             */}
-                <Table.Row>
-                  {headerGroups[0].headers
-                    .filter(filterHeader)
-                    .slice(0, frozenColumnCount)
-                    .map((header, colIdx) => (
-                      <Table.ColumnHeader
-                        key={header.id}
-                        bg="bg.subtle"
-                        style={{
-                          position: "sticky",
-                          top: 0,
-                          left: colIdx === 0 ? 0 : undefined,
-                          zIndex: colIdx === 0 ? 21 : 19,
-                          minWidth: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
-                          width: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
-                          backgroundColor: "var(--chakra-colors-bg-subtle)"
-                        }}
-                      >
-                        {colIdx === 0 &&
-                          Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
-                            0 && (
-                            <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                              <WrappedTooltip content="Auto-layout columns">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={autoLayout}
-                                  colorPalette="blue"
-                                  aria-label="Auto-layout columns"
-                                  disabled={isAutoLayouting}
-                                  _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-                                >
-                                  {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
-                                </IconButton>
-                              </WrappedTooltip>
-
-                              <WrappedTooltip content="Expand all groups">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={expandAll}
-                                  colorPalette="blue"
-                                  aria-label="Expand all groups"
-                                >
-                                  <Icon as={LuChevronDown} boxSize={3} />
-                                </IconButton>
-                              </WrappedTooltip>
-                              <WrappedTooltip content="Collapse all groups">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={collapseAll}
-                                  colorPalette="blue"
-                                  aria-label="Collapse all groups"
-                                >
-                                  <Icon as={LuChevronRight} boxSize={3} />
-                                </IconButton>
-                              </WrappedTooltip>
-                            </HStack>
-                          )}
-                      </Table.ColumnHeader>
-                    ))}
-                  <Table.ColumnHeader
-                    key="gradebook-h1-scroll"
-                    p={0}
-                    bg="bg.subtle"
-                    verticalAlign="top"
-                    style={{
-                      width: scrollableWidth,
-                      minWidth: scrollableWidth,
-                      maxWidth: scrollableWidth,
-                      position: "relative",
-                      zIndex: 19
-                    }}
-                  >
-                    <Box position="relative" w={`${scrollableWidth}px`} minH="36px">
-                      {scrollableRow1Segments.map((seg) => (
-                        <Box
-                          key={seg.key}
-                          position="absolute"
-                          left={`${seg.left}px`}
-                          top={0}
-                          w={`${seg.width}px`}
-                          minH="36px"
-                          bg={seg.isCollapsed ? "bg.warning" : "bg.emphasized"}
-                          cursor="pointer"
-                          onClick={() => toggleGroup(seg.groupName)}
-                          _hover={{ bg: "bg.info" }}
-                          borderBottom="1px solid"
-                          borderColor="border.emphasized"
-                          display="flex"
-                          alignItems="center"
-                          justifyContent="center"
-                        >
-                          <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
-                            <Icon
-                              as={collapsedGroups.has(seg.groupName) ? LuChevronRight : LuChevronDown}
-                              boxSize={3}
-                              color="fg.muted"
-                            />
-                            <Text fontWeight="bold" fontSize="sm" color="fg.muted">
-                              {seg.groupColumnsLen}{" "}
-                              {pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))}
-                              ...
-                            </Text>
-                          </HStack>
-                        </Box>
-                      ))}
-                    </Box>
-                  </Table.ColumnHeader>
-                </Table.Row>
-                {/* Regular header row */}
-                {headerGroups.map((headerGroup) => {
-                  const row2Filtered = headerGroup.headers.filter(filterHeader);
-                  const h2Frozen = row2Filtered.slice(0, frozenColumnCount);
-                  const h2Scroll = row2Filtered.slice(frozenColumnCount);
-                  return (
-                    <Table.Row key={headerGroup.id}>
-                      {h2Frozen.map((header, colIdx) => (
+                  <Table.Row>
+                    {headerGroups[0].headers
+                      .filter(filterHeader)
+                      .slice(0, frozenColumnCount)
+                      .map((header, colIdx) => (
                         <Table.ColumnHeader
                           key={header.id}
-                          bg="bg.muted"
-                          p={0}
-                          borderBottom="1px solid"
-                          borderLeft="1px solid"
-                          borderColor="border.emphasized"
-                          verticalAlign="top"
-                          data-col-id={header.column.id}
+                          bg="bg.subtle"
                           style={{
                             position: "sticky",
                             top: 0,
@@ -3766,222 +4059,350 @@ export default function GradebookTable() {
                             zIndex: colIdx === 0 ? 21 : 19,
                             minWidth: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
                             width: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
+                            backgroundColor: "var(--chakra-colors-bg-subtle)"
+                          }}
+                        >
+                          {colIdx === 0 &&
+                            Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
+                              0 && (
+                              <HStack
+                                gap={1}
+                                justifyContent="flex-end"
+                                position="absolute"
+                                top={1}
+                                right={1}
+                                zIndex={22}
+                              >
+                                <WrappedTooltip content="Auto-layout columns">
+                                  <IconButton
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={autoLayout}
+                                    colorPalette="blue"
+                                    aria-label="Auto-layout columns"
+                                    disabled={isAutoLayouting}
+                                    _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                                  >
+                                    {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                                  </IconButton>
+                                </WrappedTooltip>
+
+                                <WrappedTooltip content="Expand all groups">
+                                  <IconButton
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={expandAll}
+                                    colorPalette="blue"
+                                    aria-label="Expand all groups"
+                                  >
+                                    <Icon as={LuChevronDown} boxSize={3} />
+                                  </IconButton>
+                                </WrappedTooltip>
+                                <WrappedTooltip content="Collapse all groups">
+                                  <IconButton
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={collapseAll}
+                                    colorPalette="blue"
+                                    aria-label="Collapse all groups"
+                                  >
+                                    <Icon as={LuChevronRight} boxSize={3} />
+                                  </IconButton>
+                                </WrappedTooltip>
+                              </HStack>
+                            )}
+                        </Table.ColumnHeader>
+                      ))}
+                    <Table.ColumnHeader
+                      key="gradebook-h1-scroll"
+                      p={0}
+                      bg="bg.subtle"
+                      verticalAlign="top"
+                      style={{
+                        width: scrollableWidth,
+                        minWidth: scrollableWidth,
+                        maxWidth: scrollableWidth,
+                        position: "relative",
+                        zIndex: 19
+                      }}
+                    >
+                      <Box position="relative" w={`${scrollableWidth}px`} minH="36px">
+                        {scrollableRow1Segments.map((seg) => (
+                          <Box
+                            key={seg.key}
+                            position="absolute"
+                            left={`${seg.left}px`}
+                            top={0}
+                            w={`${seg.width}px`}
+                            minH="36px"
+                            bg={seg.isCollapsed ? "bg.warning" : "bg.emphasized"}
+                            cursor="pointer"
+                            onClick={() => toggleGroup(seg.groupName)}
+                            _hover={{ bg: "bg.info" }}
+                            borderBottom="1px solid"
+                            borderColor="border.emphasized"
+                            display="flex"
+                            alignItems="center"
+                            justifyContent="center"
+                          >
+                            <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
+                              <Icon
+                                as={collapsedGroups.has(seg.groupName) ? LuChevronRight : LuChevronDown}
+                                boxSize={3}
+                                color="fg.muted"
+                              />
+                              <Text fontWeight="bold" fontSize="sm" color="fg.muted">
+                                {seg.groupColumnsLen}{" "}
+                                {pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))}
+                                ...
+                              </Text>
+                            </HStack>
+                          </Box>
+                        ))}
+                      </Box>
+                    </Table.ColumnHeader>
+                  </Table.Row>
+                  {/* Regular header row */}
+                  {headerGroups.map((headerGroup) => {
+                    const row2Filtered = headerGroup.headers.filter(filterHeader);
+                    const h2Frozen = row2Filtered.slice(0, frozenColumnCount);
+                    const h2Scroll = row2Filtered.slice(frozenColumnCount);
+                    return (
+                      <Table.Row key={headerGroup.id}>
+                        {h2Frozen.map((header, colIdx) => (
+                          <Table.ColumnHeader
+                            key={header.id}
+                            bg="bg.muted"
+                            p={0}
+                            borderBottom="1px solid"
+                            borderLeft="1px solid"
+                            borderColor="border.emphasized"
+                            verticalAlign="top"
+                            data-col-id={header.column.id}
+                            style={{
+                              position: "sticky",
+                              top: 0,
+                              left: colIdx === 0 ? 0 : undefined,
+                              zIndex: colIdx === 0 ? 21 : 19,
+                              minWidth: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
+                              width: colIdx === 0 ? firstColumnWidth : getColWidth(header.column.id),
+                              height: "auto",
+                              backgroundColor: "var(--chakra-colors-bg-subtle)"
+                            }}
+                          >
+                            {header.column.id.startsWith("grade_") ? (
+                              <GradebookColumnHeader
+                                column_id={Number(header.column.id.slice(6))}
+                                isSorted={header.column.getIsSorted()}
+                                toggleSorting={header.column.toggleSorting}
+                                clearSorting={header.column.clearSorting}
+                                columnModel={header.column}
+                              />
+                            ) : header.isPlaceholder ? null : (
+                              <GenericGradebookColumnHeader
+                                columnName={header.column.id}
+                                isSorted={header.column.getIsSorted()}
+                                toggleSorting={header.column.toggleSorting}
+                                clearSorting={header.column.clearSorting}
+                                columnModel={header.column}
+                                header={header}
+                                coreRowModel={coreRowModel}
+                                classSections={classSections?.data}
+                                labSections={labSections}
+                              />
+                            )}
+                            {isInstructor && (
+                              <ColumnResizeHandle
+                                columnId={header.column.id}
+                                liveWidthsRef={liveWidthsRef}
+                                getColWidth={colIdx === 0 ? () => firstColumnWidth : getColWidth}
+                                onResizeEnd={handleColumnResizeEnd}
+                              />
+                            )}
+                          </Table.ColumnHeader>
+                        ))}
+                        <Table.ColumnHeader
+                          key={`${headerGroup.id}-scroll-h2`}
+                          p={0}
+                          borderBottom="1px solid"
+                          borderColor="border.emphasized"
+                          verticalAlign="top"
+                          style={{
+                            width: scrollableWidth,
+                            minWidth: scrollableWidth,
+                            maxWidth: scrollableWidth,
+                            position: "relative",
                             height: "auto",
                             backgroundColor: "var(--chakra-colors-bg-subtle)"
                           }}
                         >
-                          {header.column.id.startsWith("grade_") ? (
-                            <GradebookColumnHeader
-                              column_id={Number(header.column.id.slice(6))}
-                              isSorted={header.column.getIsSorted()}
-                              toggleSorting={header.column.toggleSorting}
-                              clearSorting={header.column.clearSorting}
-                              columnModel={header.column}
-                            />
-                          ) : header.isPlaceholder ? null : (
-                            <GenericGradebookColumnHeader
-                              columnName={header.column.id}
-                              isSorted={header.column.getIsSorted()}
-                              toggleSorting={header.column.toggleSorting}
-                              clearSorting={header.column.clearSorting}
-                              columnModel={header.column}
-                              header={header}
-                              coreRowModel={coreRowModel}
-                              classSections={classSections?.data}
-                              labSections={labSections}
-                            />
-                          )}
-                          {isInstructor && (
-                            <ColumnResizeHandle
-                              columnId={header.column.id}
-                              liveWidthsRef={liveWidthsRef}
-                              getColWidth={colIdx === 0 ? () => firstColumnWidth : getColWidth}
-                              onResizeEnd={handleColumnResizeEnd}
-                            />
+                          {isInstructor && scrollableLeafColumns.length > 0 ? (
+                            <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
+                              {Array.from({ length: visibleReorderUnits.length + 1 }, (_, gapIndex) => {
+                                let boundary = 0;
+                                for (let g = 0; g < gapIndex && g < scrollableLeafColumns.length; g++) {
+                                  boundary += getColWidth(scrollableLeafColumns[g].id);
+                                }
+                                return (
+                                  <GradebookGapDropTarget
+                                    key={`gradebook-gap-${gapIndex}`}
+                                    gapIndex={gapIndex}
+                                    boundaryLeftPx={boundary}
+                                    leafHeaderHeight={leafHeaderHeight}
+                                    showHitLayer={Boolean(activeDragColumnId)}
+                                    lineVisible={activeDropGapIndex === gapIndex}
+                                  />
+                                );
+                              })}
+                              {columnVirtualizer.getVirtualItems().map((vc) => {
+                                const header = h2Scroll[vc.index];
+                                if (!header) return null;
+                                return (
+                                  <DraggableGradebookHeaderBox
+                                    key={header.id}
+                                    header={header}
+                                    vc={vc}
+                                    leafHeaderHeight={leafHeaderHeight}
+                                    coreRowModel={coreRowModel}
+                                    classSections={classSections?.data}
+                                    labSections={labSections}
+                                    showDragHandle
+                                    reorderDisabled={isReorderingColumns}
+                                    isDraggingThis={activeDragColumnId === header.column.id}
+                                    anyColumnDragging={Boolean(activeDragColumnId)}
+                                    liveWidthsRef={liveWidthsRef}
+                                    getColWidth={getColWidth}
+                                    onResizeEnd={handleColumnResizeEnd}
+                                  />
+                                );
+                              })}
+                            </Box>
+                          ) : (
+                            <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
+                              {columnVirtualizer.getVirtualItems().map((vc) => {
+                                const header = h2Scroll[vc.index];
+                                if (!header) return null;
+                                return (
+                                  <Box
+                                    key={header.id}
+                                    position="absolute"
+                                    left={`${vc.start}px`}
+                                    top={0}
+                                    w={`${vc.size}px`}
+                                    role="columnheader"
+                                    bg="bg.muted"
+                                    px={0}
+                                    pt={0}
+                                    pb={0}
+                                    borderBottom="1px solid"
+                                    borderLeft="1px solid"
+                                    borderColor="border.emphasized"
+                                    verticalAlign="top"
+                                    minH={`${leafHeaderHeight}px`}
+                                  >
+                                    {header.column.id.startsWith("grade_") ? (
+                                      <GradebookColumnHeader
+                                        column_id={Number(header.column.id.slice(6))}
+                                        isSorted={header.column.getIsSorted()}
+                                        toggleSorting={header.column.toggleSorting}
+                                        clearSorting={header.column.clearSorting}
+                                        columnModel={header.column}
+                                      />
+                                    ) : header.isPlaceholder ? null : (
+                                      <GenericGradebookColumnHeader
+                                        columnName={header.column.id}
+                                        isSorted={header.column.getIsSorted()}
+                                        toggleSorting={header.column.toggleSorting}
+                                        clearSorting={header.column.clearSorting}
+                                        columnModel={header.column}
+                                        header={header}
+                                        coreRowModel={coreRowModel}
+                                        classSections={classSections?.data}
+                                        labSections={labSections}
+                                      />
+                                    )}
+                                  </Box>
+                                );
+                              })}
+                            </Box>
                           )}
                         </Table.ColumnHeader>
-                      ))}
-                      <Table.ColumnHeader
-                        key={`${headerGroup.id}-scroll-h2`}
-                        p={0}
-                        borderBottom="1px solid"
-                        borderColor="border.emphasized"
-                        verticalAlign="top"
-                        style={{
-                          width: scrollableWidth,
-                          minWidth: scrollableWidth,
-                          maxWidth: scrollableWidth,
-                          position: "relative",
-                          height: "auto",
-                          backgroundColor: "var(--chakra-colors-bg-subtle)"
-                        }}
+                      </Table.Row>
+                    );
+                  })}
+                </Table.Header>
+                <Table.Body
+                  style={{
+                    height: `${virtualizer.getTotalSize() + (isSafari ? headerHeight || 120 : 0)}px`,
+                    position: "relative",
+                    margin: 0,
+                    padding: 0,
+                    borderSpacing: 0,
+                    marginTop: 0,
+                    paddingTop: 0
+                  }}
+                >
+                  {virtualRows.map((virtualRow) => renderVirtualRow(virtualRow))}
+                </Table.Body>
+              </Table.Root>
+            </GradebookPointerOpener>
+            <DragOverlay dropAnimation={null}>
+              {dragOverlayColumn ? (
+                <Box
+                  bg="bg.muted"
+                  border="1px solid"
+                  borderColor="border.emphasized"
+                  borderRadius="md"
+                  p={2}
+                  minW={`${GRADE_COL_WIDTH}px`}
+                  boxShadow="md"
+                >
+                  <Text fontWeight="semibold" fontSize="sm">
+                    {dragOverlayColumn.name}
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted">
+                    Max: {dragOverlayColumn.max_score ?? "N/A"}
+                  </Text>
+                </Box>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </GradebookPopoverProvider>
+        {/* Show row count info */}
+        <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
+          <Text fontSize="sm" color="fg.muted">
+            Showing {rowModel.rows.length} {pluralize("student", rowModel.rows.length)}
+          </Text>
+          {isInstructor && (
+            <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
+              <PopoverRoot positioning={{ placement: "top-end" }}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Icon as={FiDownload} mr={2} /> Download Gradebook
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent maxW="300px">
+                  <PopoverBody p={3}>
+                    <VStack align="start" gap={3}>
+                      <Checkbox
+                        checked={exportWithRenderExpressions}
+                        onCheckedChange={(details) => setExportWithRenderExpressions(details.checked === true)}
                       >
-                        {isInstructor && scrollableLeafColumns.length > 0 ? (
-                          <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
-                            {Array.from({ length: visibleReorderUnits.length + 1 }, (_, gapIndex) => {
-                              let boundary = 0;
-                              for (let g = 0; g < gapIndex && g < scrollableLeafColumns.length; g++) {
-                                boundary += getColWidth(scrollableLeafColumns[g].id);
-                              }
-                              return (
-                                <GradebookGapDropTarget
-                                  key={`gradebook-gap-${gapIndex}`}
-                                  gapIndex={gapIndex}
-                                  boundaryLeftPx={boundary}
-                                  leafHeaderHeight={leafHeaderHeight}
-                                  showHitLayer={Boolean(activeDragColumnId)}
-                                  lineVisible={activeDropGapIndex === gapIndex}
-                                />
-                              );
-                            })}
-                            {columnVirtualizer.getVirtualItems().map((vc) => {
-                              const header = h2Scroll[vc.index];
-                              if (!header) return null;
-                              return (
-                                <DraggableGradebookHeaderBox
-                                  key={header.id}
-                                  header={header}
-                                  vc={vc}
-                                  leafHeaderHeight={leafHeaderHeight}
-                                  coreRowModel={coreRowModel}
-                                  classSections={classSections?.data}
-                                  labSections={labSections}
-                                  showDragHandle
-                                  reorderDisabled={isReorderingColumns}
-                                  isDraggingThis={activeDragColumnId === header.column.id}
-                                  anyColumnDragging={Boolean(activeDragColumnId)}
-                                  liveWidthsRef={liveWidthsRef}
-                                  getColWidth={getColWidth}
-                                  onResizeEnd={handleColumnResizeEnd}
-                                />
-                              );
-                            })}
-                          </Box>
-                        ) : (
-                          <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
-                            {columnVirtualizer.getVirtualItems().map((vc) => {
-                              const header = h2Scroll[vc.index];
-                              if (!header) return null;
-                              return (
-                                <Box
-                                  key={header.id}
-                                  position="absolute"
-                                  left={`${vc.start}px`}
-                                  top={0}
-                                  w={`${vc.size}px`}
-                                  role="columnheader"
-                                  bg="bg.muted"
-                                  px={0}
-                                  pt={0}
-                                  pb={0}
-                                  borderBottom="1px solid"
-                                  borderLeft="1px solid"
-                                  borderColor="border.emphasized"
-                                  verticalAlign="top"
-                                  minH={`${leafHeaderHeight}px`}
-                                >
-                                  {header.column.id.startsWith("grade_") ? (
-                                    <GradebookColumnHeader
-                                      column_id={Number(header.column.id.slice(6))}
-                                      isSorted={header.column.getIsSorted()}
-                                      toggleSorting={header.column.toggleSorting}
-                                      clearSorting={header.column.clearSorting}
-                                      columnModel={header.column}
-                                    />
-                                  ) : header.isPlaceholder ? null : (
-                                    <GenericGradebookColumnHeader
-                                      columnName={header.column.id}
-                                      isSorted={header.column.getIsSorted()}
-                                      toggleSorting={header.column.toggleSorting}
-                                      clearSorting={header.column.clearSorting}
-                                      columnModel={header.column}
-                                      header={header}
-                                      coreRowModel={coreRowModel}
-                                      classSections={classSections?.data}
-                                      labSections={labSections}
-                                    />
-                                  )}
-                                </Box>
-                              );
-                            })}
-                          </Box>
-                        )}
-                      </Table.ColumnHeader>
-                    </Table.Row>
-                  );
-                })}
-              </Table.Header>
-              <Table.Body
-                style={{
-                  height: `${virtualizer.getTotalSize() + (isSafari ? headerHeight || 120 : 0)}px`,
-                  position: "relative",
-                  margin: 0,
-                  padding: 0,
-                  borderSpacing: 0,
-                  marginTop: 0,
-                  paddingTop: 0
-                }}
-              >
-                {virtualRows.map((virtualRow) => renderVirtualRow(virtualRow))}
-              </Table.Body>
-            </Table.Root>
-          </GradebookPointerOpener>
-          <DragOverlay dropAnimation={null}>
-            {dragOverlayColumn ? (
-              <Box
-                bg="bg.muted"
-                border="1px solid"
-                borderColor="border.emphasized"
-                borderRadius="md"
-                p={2}
-                minW={`${GRADE_COL_WIDTH}px`}
-                boxShadow="md"
-              >
-                <Text fontWeight="semibold" fontSize="sm">
-                  {dragOverlayColumn.name}
-                </Text>
-                <Text fontSize="xs" color="fg.muted">
-                  Max: {dragOverlayColumn.max_score ?? "N/A"}
-                </Text>
-              </Box>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-      </GradebookPopoverProvider>
-      {/* Show row count info */}
-      <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
-        <Text fontSize="sm" color="fg.muted">
-          Showing {rowModel.rows.length} {pluralize("student", rowModel.rows.length)}
-        </Text>
-        {isInstructor && (
-          <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
-            <PopoverRoot positioning={{ placement: "top-end" }}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Icon as={FiDownload} mr={2} /> Download Gradebook
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent maxW="300px">
-                <PopoverBody p={3}>
-                  <VStack align="start" gap={3}>
-                    <Checkbox
-                      checked={exportWithRenderExpressions}
-                      onCheckedChange={(details) => setExportWithRenderExpressions(details.checked === true)}
-                    >
-                      Use render expressions in CSV
-                    </Checkbox>
-                    <Button size="sm" variant="subtle" colorPalette="green" onClick={downloadGradebookCsv}>
-                      Download CSV
-                    </Button>
-                  </VStack>
-                </PopoverBody>
-              </PopoverContent>
-            </PopoverRoot>
-            <ImportGradebookColumn />
-            <AddColumnDialog />
-          </HStack>
-        )}
-      </HStack>
-    </VStack>
+                        Use render expressions in CSV
+                      </Checkbox>
+                      <Button size="sm" variant="subtle" colorPalette="green" onClick={downloadGradebookCsv}>
+                        Download CSV
+                      </Button>
+                    </VStack>
+                  </PopoverBody>
+                </PopoverContent>
+              </PopoverRoot>
+              <ImportGradebookColumn />
+              <AddColumnDialog />
+            </HStack>
+          )}
+        </HStack>
+      </VStack>
+    </GradebookVisibleStudentsContext.Provider>
   );
 }

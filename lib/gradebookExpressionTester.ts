@@ -26,7 +26,7 @@ import type { AssignmentNode, FunctionNode, MathNode } from "mathjs";
 import { minimatch } from "minimatch";
 import type { GradebookController } from "@/hooks/useGradebook";
 
-const CONTEXT_FUNCTIONS = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments"];
+const CONTEXT_FUNCTIONS = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments", "assignment_released"];
 
 export type IntermediateValue = {
   /** Original substring of the expression (e.g. `mean(gradebook_columns("hw-*"))`) */
@@ -406,7 +406,8 @@ function buildImports(math: MathJSInstance, gradebookController: GradebookContro
           column_slug: thisColumn.slug ?? "",
           is_private: columnStudent?.is_private ?? false,
           incomplete_values: columnStudent?.incomplete_values ?? null,
-          released
+          released,
+          is_released: released
         };
         // Propagate not_released / missing for report_only policy so the
         // caller can see which slugs caused undefined intermediates.
@@ -452,6 +453,22 @@ function buildImports(math: MathJSInstance, gradebookController: GradebookContro
     };
     if (Array.isArray(slugInput)) return slugInput.map(findOne);
     return findOne(slugInput);
+  }) as ImportFunction;
+
+  // assignment_released(slug): the static preview tester has no per-student release data, so it
+  // optimistically reports any existing assignment as released. Real release is enforced by the
+  // recalc edge function (AssignmentsDependencySource) and reflected in the live what-if.
+  imports["assignment_released"] = ((_context: unknown, slugInput: string | string[]) => {
+    const assignments = (() => {
+      try {
+        return gradebookController.assignments ?? [];
+      } catch {
+        return [];
+      }
+    })();
+    const releasedFor = (slug: string) => assignments.some((a) => a.slug && minimatch(a.slug, slug));
+    if (Array.isArray(slugInput)) return slugInput.map(releasedFor);
+    return releasedFor(slugInput);
   }) as ImportFunction;
 
   addCommonExpressionFunctions(imports, {

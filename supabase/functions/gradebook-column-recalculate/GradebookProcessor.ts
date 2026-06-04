@@ -446,7 +446,12 @@ export async function processGradebookRowCalculation(
           fn.args = newArgs;
           return node;
         }
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (
+          (fn.fn.name === "assignments" ||
+            fn.fn.name === "gradebook_columns" ||
+            fn.fn.name === "assignment_released") &&
+          fn.args.length > 0
+        ) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
@@ -757,7 +762,12 @@ export async function processGradebookRowsCalculation(
           fn.args = newArgs;
           return node;
         }
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (
+          (fn.fn.name === "assignments" ||
+            fn.fn.name === "gradebook_columns" ||
+            fn.fn.name === "assignment_released") &&
+          fn.args.length > 0
+        ) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
@@ -1105,7 +1115,12 @@ async function processCellBatch(
           return node;
         }
         // Check if this is a dependency function (assignments or gradebook_columns)
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (
+          (fn.fn.name === "assignments" ||
+            fn.fn.name === "gradebook_columns" ||
+            fn.fn.name === "assignment_released") &&
+          fn.args.length > 0
+        ) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
