@@ -1,0 +1,28 @@
+# Bootstrap manifests for the cluster-shared Redis that every Pawtograder
+# preview points at. Not part of the per-PR helm release — apply once at
+# cluster level (same pattern as MinIO and OpenBao):
+#
+#   kubectl apply -k charts/pawtograder/examples/shared-redis/
+#
+# Prereqs (one-time per cluster):
+#   - OpenBao reachable via the existing ClusterSecretStore `openbao`
+#   - The Bao path kv/apps/pawtograder/redis-shared exists with the
+#     `redis_password` key. Provision with:
+#         scripts/setup-openbao-redis-shared.sh
+#     That same path also carries REDIS_URL for the chart's
+#     pawtograder-redis ExternalSecret. The password is generated
+#     once and reused across the Redis pod + every preview consumer.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: pawtograder-shared-redis
+
+resources:
+  - namespace.yaml
+  - externalsecret.yaml
+  - statefulset.yaml
+  - service.yaml
+
+commonLabels:
+  app.kubernetes.io/name: pawtograder-shared-redis
+  app.kubernetes.io/part-of: pawtograder
