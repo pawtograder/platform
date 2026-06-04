@@ -80,6 +80,14 @@ LABEL org.opencontainers.image.source="https://github.com/pawtograder/platform" 
       org.opencontainers.image.revision="$GIT_SHA" \
       org.opencontainers.image.version="$VERSION"
 
+# WORKDIR created /app as root. The seeder runs as `node` (below) and writes
+# transient files into its CWD at runtime — tsx's on-disk cache and a few
+# demo-fixture/manifest helpers in scripts/. With a root-owned /app those
+# writes fail ("Permission denied") and abort the whole seed, so make the
+# working directory writable by the runtime user. Non-recursive: the copied
+# contents are already --chown=node:node.
+RUN chown node:node /app
+
 # Drop privileges. The node:bookworm-slim base image ships a non-root
 # `node` user (uid/gid 1000). The image is a short-lived post-install
 # Job but defense-in-depth still applies.
