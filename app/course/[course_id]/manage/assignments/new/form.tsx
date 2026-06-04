@@ -330,24 +330,21 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                 <Controller
                   name="allow_student_formed_groups"
                   control={control}
-                  rules={{
-                    validate: (v) => {
-                      const gc = getValues("group_config");
-                      if (gc !== "groups" && gc !== "both") return true;
-                      return v === true || v === false ? true : "This is required for group assignments";
-                    }
-                  }}
                   render={({ field }) => (
+                    // The select has no empty option, so an unset value (new
+                    // assignment, or a legacy row with null) must still render a
+                    // concrete choice. Treat anything other than `true` as
+                    // "Instructor only" — matching how the rest of the app reads
+                    // this column (`allow_student_formed_groups !== true`). A null
+                    // value is therefore valid (= instructor-formed), so no
+                    // required validation is needed.
                     <NativeSelectRoot>
                       <NativeSelectField
                         name={field.name}
                         ref={field.ref}
-                        value={field.value === true ? "true" : field.value === false ? "false" : ""}
+                        value={field.value === true ? "true" : "false"}
                         onBlur={field.onBlur}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          field.onChange(raw === "true" ? true : raw === "false" ? false : null);
-                        }}
+                        onChange={(e) => field.onChange(e.target.value === "true")}
                       >
                         <option value="true">Students can form groups</option>
                         <option value="false">Instructor only</option>
