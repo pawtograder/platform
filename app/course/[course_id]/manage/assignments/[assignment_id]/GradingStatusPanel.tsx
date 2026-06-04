@@ -3,7 +3,7 @@
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { Box, Button, CardBody, CardRoot, HStack, Popover, Progress, Stat, Text, VStack } from "@chakra-ui/react";
+import { Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import FinalizeGradingButton from "./FinalizeGradingButton";
 
@@ -106,71 +106,46 @@ export default function GradingStatusPanel({
     });
   };
 
-  const gradedPct = counts.total > 0 ? (counts.graded / counts.total) * 100 : 0;
-  const releasedPct = counts.total > 0 ? (counts.released / counts.total) * 100 : 0;
-
   return (
     <CardRoot>
-      <CardBody>
-        <VStack align="stretch" gap={4}>
-          <HStack justify="space-between" align="flex-start" wrap="wrap" gap={4}>
-            <HStack gap={8} wrap="wrap">
-              <Stat.Root>
-                <Stat.Label>Graded</Stat.Label>
-                <Stat.ValueText>
-                  {counts.graded}
-                  <Text as="span" fontSize="md" color="fg.muted">
-                    {" "}
-                    / {counts.total}
-                  </Text>
-                </Stat.ValueText>
-              </Stat.Root>
-              <Stat.Root>
-                <Stat.Label>Released</Stat.Label>
-                <Stat.ValueText>{counts.released}</Stat.ValueText>
-              </Stat.Root>
-              <Stat.Root>
-                <Stat.Label>Not released</Stat.Label>
-                <Stat.ValueText>{counts.notReleased}</Stat.ValueText>
-              </Stat.Root>
-            </HStack>
-            <HStack gap={2} wrap="wrap">
-              <FinalizeGradingButton assignmentId={assignmentId} supabase={supabase} onCompleted={onChanged} />
-              <ConfirmButton
-                label="Release all"
-                colorPalette="green"
-                confirmTitle="Release all grading reviews"
-                confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
-                onConfirm={() => runReleaseAll("release_all_grading_reviews_for_assignment", "released")}
-              />
-              <ConfirmButton
-                label="Unrelease all"
-                colorPalette="red"
-                confirmTitle="Unrelease all grading reviews"
-                confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
-                onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
-              />
-            </HStack>
+      <CardBody py={2.5}>
+        <HStack justify="space-between" align="center" wrap="wrap" gap={3}>
+          <HStack gap={5} wrap="wrap">
+            <Text fontSize="sm">
+              <Text as="span" color="fg.muted">
+                Graded
+              </Text>{" "}
+              <Text as="span" fontWeight="semibold">
+                {counts.graded}/{counts.total}
+              </Text>
+            </Text>
+            <Text fontSize="sm">
+              <Text as="span" color="fg.muted">
+                Released
+              </Text>{" "}
+              <Text as="span" fontWeight="semibold">
+                {counts.released}/{counts.total}
+              </Text>
+            </Text>
           </HStack>
-          <Box>
-            <Text fontSize="xs" color="fg.muted" mb={1}>
-              Grading progress
-            </Text>
-            <Progress.Root value={gradedPct} colorPalette="blue" size="sm">
-              <Progress.Track>
-                <Progress.Range />
-              </Progress.Track>
-            </Progress.Root>
-            <Text fontSize="xs" color="fg.muted" mb={1} mt={3}>
-              Release progress
-            </Text>
-            <Progress.Root value={releasedPct} colorPalette="green" size="sm">
-              <Progress.Track>
-                <Progress.Range />
-              </Progress.Track>
-            </Progress.Root>
-          </Box>
-        </VStack>
+          <HStack gap={2} wrap="wrap">
+            <FinalizeGradingButton assignmentId={assignmentId} supabase={supabase} onCompleted={onChanged} />
+            <ConfirmButton
+              label="Release all"
+              colorPalette="green"
+              confirmTitle="Release all grading reviews"
+              confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+              onConfirm={() => runReleaseAll("release_all_grading_reviews_for_assignment", "released")}
+            />
+            <ConfirmButton
+              label="Unrelease all"
+              colorPalette="red"
+              confirmTitle="Unrelease all grading reviews"
+              confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+              onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
+            />
+          </HStack>
+        </HStack>
       </CardBody>
     </CardRoot>
   );

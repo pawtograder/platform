@@ -176,13 +176,10 @@ export default function RubricReport({
 
   return (
     <Box>
-      <HStack justify="space-between" align="center" mb={3} wrap="wrap" gap={3}>
-        <HStack gap={3} align="baseline">
-          <Heading size="md">Rubric breakdown</Heading>
-          <Text fontSize="sm" color="fg.muted">
-            {cohortTotal} submission{cohortTotal === 1 ? "" : "s"} in cohort
-          </Text>
-        </HStack>
+      <HStack justify="space-between" align="center" mb={2} wrap="wrap" gap={3}>
+        <Text fontSize="sm" color="fg.muted">
+          {cohortTotal} submission{cohortTotal === 1 ? "" : "s"} in cohort
+        </Text>
         <HStack gap={2} wrap="wrap">
           <NativeQuickFilter criteria={criteria} checks={checkOptions} onChange={onQuickFilter} />
           <ButtonGroup size="xs" variant="outline" attached>

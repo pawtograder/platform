@@ -27,6 +27,14 @@ describe("computeGradingCounts", () => {
     expect(counts.released).toBe(1);
     expect(counts.notReleased).toBe(3);
   });
+
+  it("counts a timestamp release value (the real view shape) as released", () => {
+    // submissions_with_grades_for_assignment_nice.released is a timestamp, not a boolean.
+    const rows = [{ released: "2026-01-01T00:00:00Z" }, { released: null }, { released: "2026-02-02T00:00:00Z" }];
+    const counts = computeGradingCounts(rows);
+    expect(counts.released).toBe(2);
+    expect(counts.notReleased).toBe(1);
+  });
 });
 
 describe("buildScoreHistogram", () => {

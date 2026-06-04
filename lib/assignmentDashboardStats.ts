@@ -9,7 +9,9 @@ export const ALL_SECTIONS_FILTER = "all";
 
 export type GradingStatusRow = {
   completed_at?: string | null;
-  released?: boolean | null;
+  // In submissions_with_grades_for_assignment_nice this is a timestamp (release time),
+  // not a boolean — so "released" means a non-null/truthy value.
+  released?: boolean | string | null;
 };
 
 export type GradingCounts = {
@@ -23,7 +25,7 @@ export type GradingCounts = {
 export function computeGradingCounts(rows: readonly GradingStatusRow[]): GradingCounts {
   const total = rows.length;
   const graded = rows.filter((r) => r.completed_at != null).length;
-  const released = rows.filter((r) => r.released === true).length;
+  const released = rows.filter((r) => Boolean(r.released)).length;
   return { total, graded, released, notReleased: total - released };
 }
 

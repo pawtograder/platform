@@ -22,8 +22,10 @@ import TableController, { useIsTableControllerReady, useTableControllerTableValu
 import { createClient } from "@/utils/supabase/client";
 import {
   Box,
+  Button,
   CardBody,
   CardRoot,
+  Collapsible,
   Heading,
   HStack,
   Link,
@@ -50,7 +52,7 @@ type DashboardRow = {
   total_score?: number | null;
   autograder_score?: number | null;
   completed_at?: string | null;
-  released?: boolean | null;
+  released?: boolean | string | null;
   class_section_name?: string | null;
   lab_section_name?: string | null;
   ordinal?: number | null;
@@ -141,6 +143,9 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   const isReady = useIsTableControllerReady(tableController ?? undefined);
 
   const [filter, setFilter] = useState<string>(ALL_SECTIONS_FILTER);
+  // Rubric breakdown is collapsed by default and only mounts (and hits its RPC) once opened.
+  const [rubricOpen, setRubricOpen] = useState(false);
+  const [rubricEverOpened, setRubricEverOpened] = useState(false);
 
   // Distinct section / lab names for the filter control.
   const { classSections, labSections } = useMemo(() => collectSectionOptions(rows), [rows]);
@@ -227,8 +232,32 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
       </Box>
 
       <CardRoot variant="subtle">
-        <CardBody>
-          <RubricReport assignmentId={Number(assignment_id)} classSections={classSections} labSections={labSections} />
+        <CardBody py={2.5}>
+          <Collapsible.Root
+            open={rubricOpen}
+            onOpenChange={(e) => {
+              setRubricOpen(e.open);
+              if (e.open) setRubricEverOpened(true);
+            }}
+          >
+            <Collapsible.Trigger asChild>
+              <Button variant="ghost" size="sm" width="100%" justifyContent="space-between">
+                <Text fontWeight="medium">Rubric breakdown</Text>
+                <Text color="fg.muted">{rubricOpen ? "▾" : "▸"}</Text>
+              </Button>
+            </Collapsible.Trigger>
+            <Collapsible.Content>
+              <Box pt={3}>
+                {rubricEverOpened && (
+                  <RubricReport
+                    assignmentId={Number(assignment_id)}
+                    classSections={classSections}
+                    labSections={labSections}
+                  />
+                )}
+              </Box>
+            </Collapsible.Content>
+          </Collapsible.Root>
         </CardBody>
       </CardRoot>
 
