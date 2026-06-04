@@ -994,7 +994,9 @@ function InnerRubricPage() {
         setActiveRubric(minimal);
         setGuiEditorEpoch((e) => e + 1);
         setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
-        setValue("");
+        // Serialize the minimal rubric so the editor shows the template immediately,
+        // rather than briefly showing empty content until the reconciling effect runs.
+        setValue(YAML.stringify(HydratedRubricToYamlRubric(minimal)));
       } else {
         setActiveRubric(undefined);
         setGuiEditorEpoch((e) => e + 1);
@@ -1786,7 +1788,7 @@ function InnerRubricPage() {
               )}
 
               {/* Points summary for autograder vs grading rubric vs assignment total */}
-              {rubric?.review_round === "grading-review" && (
+              {activeReviewRound === "grading-review" && (
                 <Box
                   role="region"
                   border="1px solid"
