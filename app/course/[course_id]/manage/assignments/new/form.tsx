@@ -379,15 +379,14 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
               <Field
                 orientation="horizontal"
                 label="Group formation deadline"
-                helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
+                helperText="Optional: the deadline by which groups must be formed. If set, students will not be able to change groups after this deadline; leave empty for no deadline."
                 errorText={errors.group_formation_deadline?.message?.toString()}
                 invalid={errors.group_formation_deadline ? true : false}
-                required={withGroups}
               >
                 <Controller
                   name="group_formation_deadline"
                   control={control}
-                  rules={{ required: "This is required" }}
+                  rules={{ required: false }}
                   render={({ field }) => {
                     const hasATimezoneOffset =
                       field.value &&

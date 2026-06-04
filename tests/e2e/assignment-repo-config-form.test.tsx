@@ -306,6 +306,60 @@ test.describe("Assignment repo configuration form", () => {
     expect(data!.source_assignment_id).toBeNull();
   });
 
+  test("Group submissions: formation method has a default selection and saves without a formation deadline", async ({
+    page
+  }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments/new`);
+    await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+    const title = `Group No Deadline ${RUN_PREFIX}`;
+    const slug = `gnd-${RUN_PREFIX.slice(-6)}`;
+    await page.getByLabel("Title", { exact: false }).fill(title);
+    await fillBaselineAssignmentFields(page, slug);
+    // repo_mode='none' keeps this focused on the group fields (no GitHub on save).
+    await page.locator('select[name="repo_mode"]').selectOption("none");
+
+    // Reveal the group subform.
+    await page.locator('select[name="group_config"]').selectOption("groups");
+
+    // Bug 1: the "Group formation method" select must reflect a real default
+    // (instructor-formed = "false"), not an empty/unselected value.
+    const formationMethod = page.getByLabel("Group formation method", { exact: false });
+    await expect(formationMethod).toHaveValue("false");
+
+    await page.getByLabel("Minimum group size", { exact: false }).fill("2");
+    await page.getByLabel("Maximum group size", { exact: false }).fill("4");
+
+    // Bug 2: the group formation deadline is optional — saving without it succeeds.
+    await page.getByRole("button", { name: "Save" }).click();
+
+    type Row = {
+      group_config: string;
+      allow_student_formed_groups: boolean | null;
+      group_formation_deadline: string | null;
+      min_group_size: number | null;
+      max_group_size: number | null;
+    };
+    let data: Row | null = null;
+    await expect(async () => {
+      const r = await supabase
+        .from("assignments")
+        .select("group_config, allow_student_formed_groups, group_formation_deadline, min_group_size, max_group_size")
+        .eq("class_id", course.id)
+        .eq("title", title)
+        .maybeSingle();
+      expect(r.error).toBeNull();
+      expect(r.data).not.toBeNull();
+      data = r.data as unknown as Row;
+    }).toPass({ timeout: 30_000 });
+    expect(data!.group_config).toBe("groups");
+    expect(data!.allow_student_formed_groups).toBe(false);
+    expect(data!.group_formation_deadline).toBeNull();
+    expect(data!.min_group_size).toBe(2);
+    expect(data!.max_group_size).toBe(4);
+  });
+
   // ---------------------------------------------------------------------------
   // Scenario 5 — edit-form round-trip + self-exclusion in the source picker
   // ---------------------------------------------------------------------------

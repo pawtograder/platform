@@ -25,6 +25,11 @@ export default function NewAssignmentPage() {
       allow_not_graded_submissions: true,
       permit_empty_submissions: false,
       require_tokens_before_due_date: true,
+      // Default the group-formation method so the Groups subform's <select>
+      // reflects a real selection instead of an empty (apparently unselected)
+      // value. `false` = instructor-formed groups, matching how the rest of the
+      // app treats an unset value (`allow_student_formed_groups !== true`).
+      allow_student_formed_groups: false,
       repo_mode: "template_only_staff",
       protect_block_force_push: true,
       protect_require_pull_request: false,
