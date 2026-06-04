@@ -23,6 +23,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Papa from "papaparse";
 import RubricReportFilterBuilder, { type CheckOption } from "./RubricReportFilterBuilder";
 
 type GroupNode = { op: "and" | "or" | "not"; args: RubricFilter[] };
@@ -217,6 +218,62 @@ export default function RubricReport({
   const totalCheckCount = checkOptions.length;
   const includedCount = displayedChecks.length;
 
+  // Export the current view (cohort + selected checks + visualization) as CSV.
+  const exportCsv = () => {
+    let rows: Record<string, string | number>[];
+    if (viz === "section") {
+      rows = displayedChecks.flatMap((c) =>
+        classSections.map((s) => {
+          const report = bySection[s];
+          const total = report?.cohort_total ?? 0;
+          const applied = report?.checks.find((x) => x.rubric_check_id === c.id)?.applied_count ?? 0;
+          return {
+            Criterion: c.criterionName,
+            Check: c.name,
+            Section: s,
+            Applied: applied,
+            Cohort: total,
+            Percent: pct(applied, total)
+          };
+        })
+      );
+    } else {
+      rows = displayedChecks.flatMap((c) => {
+        const stat = statById.get(c.id);
+        const applied = stat?.applied_count ?? 0;
+        const checkRow = {
+          Criterion: c.criterionName,
+          Check: c.name,
+          Option: "",
+          Applied: applied,
+          Cohort: cohortTotal,
+          Percent: pct(applied, cohortTotal)
+        };
+        const optionRows = c.options.map((o) => {
+          const count = stat?.options.find((x) => x.option_index === o.index)?.count ?? 0;
+          return {
+            Criterion: c.criterionName,
+            Check: c.name,
+            Option: o.label,
+            Applied: count,
+            Cohort: cohortTotal,
+            Percent: pct(count, cohortTotal)
+          };
+        });
+        return [checkRow, ...optionRows];
+      });
+    }
+
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rubric-report-assignment-${assignmentId}-${viz}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Box>
       <HStack justify="space-between" align="center" mb={2} wrap="wrap" gap={3}>
@@ -232,6 +289,9 @@ export default function RubricReport({
               </Button>
             ))}
           </ButtonGroup>
+          <Button size="xs" variant="outline" onClick={exportCsv} disabled={cohortTotal === 0}>
+            Export CSV
+          </Button>
         </HStack>
       </HStack>
 
