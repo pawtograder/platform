@@ -1,0 +1,540 @@
+name: Deploy preview
+
+# Per-PR ephemeral previews of the full pawtograder stack on ripley.
+#
+# Trigger model:
+#   pull_request: opened/sync/reopened    → build + deploy preview, comment URL
+#   pull_request: closed                  → tear down preview
+#   workflow_dispatch (action=deploy)     → same as opened, with manual preview_id
+#   workflow_dispatch (action=destroy)    → manual teardown
+#
+# Cluster access: provided via KUBECONFIG_BASE64 repo secret (base64 of a
+# kubeconfig that can helm install + create namespaces in
+# pawtograder-preview-*). The deploy step uses helm directly against the
+# chart in this checkout — no OCI publish step required for previews.
+#
+# Image storage: ghcr.io/pawtograder/{web,edge-functions,migrations}:pr-${id}-${sha}.
+# Ephemeral; cleanup of old tags is out of scope here (use a periodic
+# package-cleanup workflow if image bloat becomes a problem).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  # pull_request is the canonical trigger: it auto-destroys the preview on
+  # close and comments back on the PR, so it owns the namespace lifecycle.
+  # For a one-off branch deploy without a PR, use workflow_dispatch with
+  # action=deploy (don't add a push trigger — it would race pull_request's
+  # synchronize event and deploy two near-identical previews from one SHA).
+  workflow_dispatch:
+    inputs:
+      preview_id:
+        description: "Preview id (URL suffix: pr-<id>.preview.pawtograder.net). Use the PR number, or any safe slug."
+        required: true
+      action:
+        description: deploy or destroy
+        required: true
+        type: choice
+        options: [deploy, destroy]
+        default: deploy
+
+permissions:
+  contents: read
+  pull-requests: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  REPO_OWNER: ${{ github.repository_owner }}
+  PREVIEW_DOMAIN: preview.pawtograder.net
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # meta — derive preview id, hostnames, image tag, namespace, etc.
+  # --------------------------------------------------------------------------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      preview_id: ${{ steps.v.outputs.preview_id }}
+      hostname: ${{ steps.v.outputs.hostname }}
+      api_hostname: ${{ steps.v.outputs.api_hostname }}
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+      namespace: ${{ steps.v.outputs.namespace }}
+      mode: ${{ steps.v.outputs.mode }}
+    steps:
+      - id: v
+        # Move attacker-influenceable inputs (workflow_dispatch input,
+        # branch name) into env: so they're shell variables rather than
+        # template-expanded literals. A preview_id containing $(...) or
+        # quotes would otherwise inject into downstream `run:` blocks
+        # that interpolate `${{ needs.meta.outputs.namespace }}`.
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_PR_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_PR_ACTION: ${{ github.event.action }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_PREVIEW_ID: ${{ inputs.preview_id }}
+          INPUT_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          if [[ "$GH_EVENT_NAME" == "pull_request" ]]; then
+            preview_id="$GH_PR_NUMBER"
+            sha="$GH_PR_SHA"
+            if [[ "$GH_PR_ACTION" == "closed" ]]; then
+              mode="destroy"
+            else
+              mode="deploy"
+            fi
+          elif [[ "$GH_EVENT_NAME" == "push" ]]; then
+            # Push trigger: use branch name as the preview id. URL becomes
+            # pr-<branch>.preview.pawtograder.net. No PR comment is posted.
+            preview_id="$GH_REF_NAME"
+            sha="${GITHUB_SHA}"
+            mode="deploy"
+          else
+            preview_id="$INPUT_PREVIEW_ID"
+            sha="${GITHUB_SHA}"
+            mode="$INPUT_ACTION"
+          fi
+          # preview_id flows into k8s namespace, DNS hostname, image tag,
+          # and several shell-interpolated commands downstream. Require a
+          # strict DNS-safe slug to close the injection surface for both
+          # workflow_dispatch input and branch-name push triggers.
+          if [[ ! "$preview_id" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$ ]]; then
+            echo "::error::invalid preview_id '$preview_id' (must match ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$)" >&2
+            exit 1
+          fi
+          short_sha="${sha:0:7}"
+          hostname="pr-${preview_id}.${PREVIEW_DOMAIN}"
+          api_hostname="api.pr-${preview_id}.${PREVIEW_DOMAIN}"
+          tag="pr-${preview_id}-${short_sha}"
+          release="pawtograder"
+          namespace="pawtograder-preview-pr-${preview_id}"
+          {
+            echo "preview_id=${preview_id}"
+            echo "hostname=${hostname}"
+            echo "api_hostname=${api_hostname}"
+            echo "tag=${tag}"
+            echo "release=${release}"
+            echo "namespace=${namespace}"
+            echo "mode=${mode}"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------------------
+  # secrets — ensure the preview namespace has all chart-required secrets
+  # before build / deploy. The cluster is the source of truth: subsequent
+  # jobs READ from the namespace rather than receive secret values via job
+  # outputs (GH Actions strips outputs that match registered secret masks).
+  #
+  # First install: generate fresh values via GenerateJwtKeys.ts and write
+  # pawtograder-{jwt,postgres,e2e,s3}.
+  # Subsequent installs: leave existing Secrets alone — same DB password +
+  # anon key persist across PR-sync pushes.
+  # --------------------------------------------------------------------------
+  secrets:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    # Cluster apiserver isn't reachable from gh-hosted runners (private LB);
+    # use the in-cluster runner pool. Same goes for the deploy job below.
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Write kubeconfig + ensure namespace
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error::KUBECONFIG_BASE64 is required"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+      - name: Ensure secrets in namespace
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+          MINIO_ACCESS: ${{ secrets.MINIO_PREVIEW_ACCESS_KEY }}
+          MINIO_SECRET: ${{ secrets.MINIO_PREVIEW_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          # Two-tier secret semantics:
+          #   atomic[]    — JWT keys, DB passwords, MinIO creds. Rotating
+          #                 any one mid-flight breaks every running pod, so
+          #                 these are all-or-nothing: partial state is a
+          #                 hard error.
+          #   topup[]     — edge-functions stub. Only the edge runtime reads
+          #                 it, restarting it is cheap, and the chart didn't
+          #                 require it pre-helm — so it's safe to back-fill
+          #                 against a pre-existing atomic set.
+          atomic=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3)
+          topup=(pawtograder-edge-functions)
+          present=()
+          missing=()
+          for s in "${atomic[@]}"; do
+            if kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              present+=("$s")
+            else
+              missing+=("$s")
+            fi
+          done
+          # Top-up: ensure each topup[] secret exists, generating just the
+          # missing ones. Idempotent — if it's already there, we leave it
+          # alone.
+          for s in "${topup[@]}"; do
+            if kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              echo "topup: $s exists, skipping"
+              continue
+            fi
+            case "$s" in
+              pawtograder-edge-functions)
+                echo "topup: creating $s with stub GitHub credentials"
+                stub_pem=$(openssl genrsa 2048 2>/dev/null)
+                kubectl -n "$NS" create secret generic pawtograder-edge-functions \
+                  --from-literal=GITHUB_PRIVATE_KEY_STRING="$stub_pem" \
+                  --from-literal=GITHUB_APP_ID="1" \
+                  --from-literal=GITHUB_OAUTH_CLIENT_ID="stub" \
+                  --from-literal=GITHUB_OAUTH_CLIENT_SECRET="stub" \
+                  --from-literal=GITHUB_WEBHOOK_SECRET="stub-webhook-secret"
+                ;;
+              *) echo "::error::no top-up generator for $s"; exit 1 ;;
+            esac
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "All atomic secrets present in $NS — reusing"
+            exit 0
+          fi
+          if [ "${#present[@]}" -ne 0 ]; then
+            echo "::error::Namespace $NS has a partial atomic secret set. Present: ${present[*]}. Missing: ${missing[*]}. Refusing to auto-fill — delete the remaining atomic secrets (or the whole namespace) and re-run to regenerate."
+            exit 1
+          fi
+          if [ -z "${MINIO_ACCESS:-}" ] || [ -z "${MINIO_SECRET:-}" ]; then
+            echo "::error::MINIO_PREVIEW_ACCESS_KEY / MINIO_PREVIEW_SECRET_KEY required for first install"
+            exit 1
+          fi
+          echo "First install for $NS — generating + creating secrets"
+          # Source generated KEY=VALUE pairs into the shell.
+          while IFS='=' read -r k v; do
+            [ -n "$k" ] && export "$k=$v"
+          done < <(npx -y tsx scripts/GenerateJwtKeys.ts --env)
+          kubectl -n "$NS" create secret generic pawtograder-jwt \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --from-literal=ANON_KEY="$ANON_KEY" \
+            --from-literal=SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
+            --from-literal=JWT_PRIVATE_JWKS="$JWT_PRIVATE_JWKS" \
+            --from-literal=JWT_PUBLIC_JWKS="$JWT_PUBLIC_JWKS" \
+            --from-literal=JWT_REALTIME_JWKS="$JWT_REALTIME_JWKS" \
+            --from-literal=REALTIME_ENC_KEY="$REALTIME_ENC_KEY" \
+            --from-literal=PG_META_CRYPTO_KEY="$PG_META_CRYPTO_KEY" \
+            --from-literal=PGSODIUM_ROOT_KEY="$PGSODIUM_ROOT_KEY"
+          kubectl -n "$NS" create secret generic pawtograder-postgres \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            --from-literal=PAWTOGRADER_PASSWORD="$PAWTOGRADER_PASSWORD"
+          kubectl -n "$NS" create secret generic pawtograder-e2e \
+            --from-literal=END_TO_END_SECRET="$END_TO_END_SECRET" \
+            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET"
+          kubectl -n "$NS" create secret generic pawtograder-s3 \
+            --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
+          # pawtograder-edge-functions is created by the top-up loop above
+          # (whether or not we hit this first-install path).
+
+  # --------------------------------------------------------------------------
+  # build-* — per-PR images. web is the only one whose build args change
+  # across previews (NEXT_PUBLIC_* is inlined). edge-functions & migrations
+  # are PR-content-dependent only, no per-preview args.
+  # --------------------------------------------------------------------------
+  build-web:
+    needs: [meta, secrets]
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Read anon key from cluster
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          ANON=$(kubectl -n "$NS" get secret pawtograder-jwt -o jsonpath='{.data.ANON_KEY}' | base64 -d)
+          [ -n "$ANON" ] || { echo "::error::ANON_KEY missing in $NS/pawtograder-jwt"; exit 1; }
+          echo "::add-mask::$ANON"
+          # Stash in env for the build step. Within a single job env is
+          # mask-aware but not subject to the cross-job output stripping.
+          echo "ANON_KEY=$ANON" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web:${{ needs.meta.outputs.tag }}
+          # NEXT_PUBLIC_SUPABASE_ANON_KEY is inlined into the client bundle
+          # by Next.js. We read the same value the cluster uses (created in
+          # the secrets job) so build/runtime match.
+          build-args: |
+            NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
+            NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            NEXT_PUBLIC_ENABLE_SIGNUPS=true
+            SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
+            SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
+          # Cache image lives in the in-cluster registry (auth seeded into
+          # the runner's ~/.docker/config.json by the gha-runner-scale-set
+          # init container — see k8s/apps/arc/values-pawtograder-ci.yaml).
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
+
+  build-edge-functions:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/edge-functions/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.tag }}
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
+
+  build-migrations:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/migrations/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.tag }}
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
+
+  # --------------------------------------------------------------------------
+  # build-seeder — Node + TS sources + node_modules + psql. Used only by
+  # the post-install seed Job, so it's a separate image from migrations.
+  # Stays out of the per-pod runtime path (~600 MiB vs migrations ~50 MiB).
+  # --------------------------------------------------------------------------
+  build-seeder:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/seeder/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/seeder:${{ needs.meta.outputs.tag }}
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
+
+  # --------------------------------------------------------------------------
+  # deploy — helm install/upgrade against ripley
+  # --------------------------------------------------------------------------
+  deploy:
+    needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error::KUBECONFIG_BASE64 secret is missing — set it under repo settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl version --client=true --output=yaml | head -20
+
+      - name: helm upgrade --install
+        env:
+          RELEASE: ${{ needs.meta.outputs.release }}
+          NAMESPACE: ${{ needs.meta.outputs.namespace }}
+          HOSTNAME: ${{ needs.meta.outputs.hostname }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # secrets.create=false: chart consumes the pawtograder-{jwt,
+          # postgres,e2e,s3} Secrets created by the `secrets` job.
+          # secrets.autogenerate=false: skip the in-cluster bootstrap Job
+          # (we already provisioned everything from CI).
+          helm upgrade --install "$RELEASE" \
+            ./charts/pawtograder \
+            --namespace "$NAMESPACE" \
+            -f charts/pawtograder/examples/values-preview.yaml \
+            --set global.hostname="$HOSTNAME" \
+            --set web.image.tag="$TAG" \
+            --set edgeFunctions.image.tag="$TAG" \
+            --set migrations.image.tag="$TAG" \
+            --set seed.image.tag="$TAG" \
+            --set secrets.autogenerate=false \
+            --set secrets.create=false \
+            --wait --wait-for-jobs --timeout 10m
+
+      - name: Status snapshot on failure
+        if: failure()
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          kubectl -n "$NS" get pods,jobs 2>&1 | head -50
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            echo "=== $j ==="
+            kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>&1 | tail -200 || true
+          done
+
+      - name: Status snapshot
+        if: always()
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
+
+      - name: Comment URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🚀 **Preview deployed** for `${{ needs.meta.outputs.tag }}`
+
+            - App:    https://${{ needs.meta.outputs.hostname }}
+            - API:    https://${{ needs.meta.outputs.api_hostname }}
+            - Studio: `kubectl -n ${{ needs.meta.outputs.namespace }} port-forward svc/pawtograder-studio 3010:3000`
+            - Logs:   `kubectl -n ${{ needs.meta.outputs.namespace }} logs -l app.kubernetes.io/instance=${{ needs.meta.outputs.release }}`
+
+            ### Sample login emails
+
+            | Role       | Email                              |
+            | ---------- | ---------------------------------- |
+            | Instructor | `instructor@pawtograder.net`       |
+            | Grader     | `grader@pawtograder.net`           |
+            | Student    | `student@pawtograder.net`          |
+
+            These accounts are real participants in the seeded demo class (with submissions, grading assignments, etc.) — not bolted on after the fact.
+
+            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). Or request a magic-link from the app sign-in page.
+
+            Cert may take ~1 min to issue. The preview tears down automatically when this PR closes.
+
+  # --------------------------------------------------------------------------
+  # destroy — helm uninstall + namespace delete on PR close (or manual)
+  # --------------------------------------------------------------------------
+  destroy:
+    needs: meta
+    if: needs.meta.outputs.mode == 'destroy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: helm uninstall + delete namespace
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+          RELEASE: ${{ needs.meta.outputs.release }}
+        run: |
+          set -euo pipefail
+          if kubectl get ns "$NS" >/dev/null 2>&1; then
+            helm uninstall "$RELEASE" --namespace "$NS" --ignore-not-found || true
+            # PVCs are not deleted by helm uninstall — clean them up so
+            # the namespace can actually go away.
+            kubectl -n "$NS" delete pvc --all --wait=false || true
+            kubectl delete namespace "$NS" --wait=false
+            echo "preview ${NS} torn down"
+          else
+            echo "preview ${NS} already absent — nothing to do"
+          fi
+
+      - name: Update PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🧹 **Preview torn down** — namespace `${{ needs.meta.outputs.namespace }}` deleted.

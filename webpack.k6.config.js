@@ -6,7 +6,8 @@ module.exports = {
   mode: "production",
   entry: {
     "submissions-api": "./tests/performance/submissions-api.ts",
-    "db-tps-http": "./tests/performance/db-tps-http.ts"
+    "db-tps-http": "./tests/performance/db-tps-http.ts",
+    "submissions-write-storm": "./tests/performance/submissions-write-storm.ts"
   },
   output: {
     path: path.resolve(__dirname, "dist/k6-tests"),
