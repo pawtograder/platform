@@ -123,11 +123,18 @@ spec:
             # In-cluster Redis URL (REDIS_URL) for the cross-replica Next.js
             # cache handler. provider=shared syncs it via
             # templates/redis-externalsecret.yaml; provider=internal writes it in
-            # templates/redis-secret.yaml. optional so a missing/late sync
-            # doesn't block web startup (handler degrades to per-pod memory).
+            # templates/redis-secret.yaml. REQUIRED, not optional: envFrom is
+            # evaluated once at container start, so a pod that booted before the
+            # secret existed would run on the per-pod in-memory fallback forever
+            # (never picking REDIS_URL up) — silent, permanent loss of the shared
+            # cache. Requiring it means a late sync only delays start
+            # (CreateContainerConfigError, self-healing once the secret lands),
+            # which is the correct loud behavior. Graceful degradation still
+            # exists at the connection level (cache-handler.cjs catches Redis
+            # outages), so this doesn't reduce runtime resilience.
             - secretRef:
                 name: pawtograder-redis
-                optional: true
+                optional: false
             {{- end }}
           readinessProbe:
             httpGet:

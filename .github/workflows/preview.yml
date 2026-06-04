@@ -20,16 +20,11 @@ name: Deploy preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-  # NB: the helm branch used to also fire on direct push (preview_id=helm)
-  # to allow iterating on the chart before the PR existed. Now that PR
-  # #741 is open, every push to the branch also triggers a pull_request
-  # synchronize event — so push + pull_request would deploy two
-  # near-identical previews (pawtograder-preview-pr-helm and
-  # pawtograder-preview-pr-741) from the same SHA. The pull_request
-  # trigger is the canonical one (auto-destroys on close, comments back
-  # on the PR), so we let it own the helm namespace lifecycle. If you
-  # ever need a one-off branch deploy without a PR, use
-  # workflow_dispatch with action=deploy.
+  # pull_request is the canonical trigger: it auto-destroys the preview on
+  # close and comments back on the PR, so it owns the namespace lifecycle.
+  # For a one-off branch deploy without a PR, use workflow_dispatch with
+  # action=deploy (don't add a push trigger — it would race pull_request's
+  # synchronize event and deploy two near-identical previews from one SHA).
   workflow_dispatch:
     inputs:
       preview_id:

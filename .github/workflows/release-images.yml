@@ -13,7 +13,7 @@ name: Release images
 #   - workflow_dispatch    → manual, with optional hostname/version overrides
 on:
   push:
-    branches: [main, helm]
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -72,7 +72,7 @@ jobs:
             is_tag=false
             tags="main-${short_sha},main-latest"
           else
-            # Any other branch (helm today, others tomorrow). Sanitize `/`
+            # Any other branch added to on.push.branches above. Sanitize `/`
             # to `-` so feature branches don't break docker tag syntax.
             branch="${GITHUB_REF#refs/heads/}"
             safe_branch="${branch//\//-}"
@@ -96,7 +96,7 @@ jobs:
     #                             defaults to staging)
     #   - push to refs/heads/main (staging — main-latest is contractually
     #                             a staging-baked image)
-    # For tag releases (v*) and other branches (helm, …), the caller must
+    # For tag releases (v*) and other branches, the caller must
     # invoke workflow_dispatch with explicit URLs; otherwise we'd silently
     # bake staging URLs into a release. edge-functions / migrations / chart
     # don't have this problem and continue to build/publish.

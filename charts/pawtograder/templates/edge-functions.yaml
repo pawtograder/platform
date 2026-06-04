@@ -145,11 +145,16 @@ spec:
             # provider=internal it's written by templates/redis-secret.yaml
             # alongside the chart's own Redis. The Redis.ts factory picks the
             # ioredis branch when REDIS_URL is present (preferred over any
-            # UPSTASH_* in pawtograder-edge-functions). optional:true so a
-            # missing/late sync doesn't block startup.
+            # UPSTASH_* in pawtograder-edge-functions). REQUIRED, not optional:
+            # envFrom is one-shot, so a pod booted before the secret synced would
+            # run WITHOUT REDIS_URL forever and silently fall back to per-isolate
+            # Bottleneck limiters — the exact cross-replica rate-limiter
+            # coordination loss this wiring exists to prevent. A late sync only
+            # delays start (self-healing), which is preferable to silent
+            # degradation across the whole edge gateway.
             - secretRef:
                 name: pawtograder-redis
-                optional: true
+                optional: false
             {{- end }}
           readinessProbe:
             tcpSocket:

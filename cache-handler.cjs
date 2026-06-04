@@ -20,6 +20,11 @@ const PREFIX = process.env.NEXT_CACHE_PREFIX || "nextcache";
 const entryKey = (k) => `${PREFIX}:entry:${k}`;
 const tagKey = (t) => `${PREFIX}:tag:${t}`;
 const MAX_TTL_SECONDS = 60 * 60 * 24; // GC cap; freshness is governed by tags + Next's own revalidate
+// Bound the REDIS_URL-unset fallback Map: without a cap a long-lived pod would
+// retain every ISR/Data Cache key it ever saw (no Redis EX to expire them),
+// turning a Redis misconfiguration into unbounded memory growth → OOM. Cap by
+// count (approximate LRU eviction) and honor MAX_TTL_SECONDS on read.
+const MAX_MEM_ENTRIES = Number(process.env.NEXT_CACHE_MEM_MAX_ENTRIES) || 1000;
 
 // JSON.stringify renders Buffers as { type: "Buffer", data: [...] }; revive them
 // so ROUTE / APP_PAGE cache bodies round-trip intact.
@@ -54,7 +59,15 @@ module.exports = class SharedCacheHandler {
   }
 
   async get(key) {
-    if (!this.redis) return this.mem.get(key) || null;
+    if (!this.redis) {
+      const e = this.mem.get(key);
+      if (!e) return null;
+      if (e.expiresAt <= Date.now()) {
+        this.mem.delete(key);
+        return null;
+      }
+      return { lastModified: e.lastModified, value: e.value };
+    }
     try {
       const raw = await this.redis.get(entryKey(key));
       if (!raw) return null;
@@ -79,7 +92,13 @@ module.exports = class SharedCacheHandler {
     const tags = (ctx && ctx.tags) || [];
     const lastModified = Date.now();
     if (!this.redis) {
-      this.mem.set(key, { lastModified, value, tags });
+      // Re-insert at the tail (Map preserves insertion order) so eviction is
+      // approximate-LRU, and stamp an expiry mirroring the Redis EX cap.
+      this.mem.delete(key);
+      this.mem.set(key, { lastModified, value, tags, expiresAt: lastModified + MAX_TTL_SECONDS * 1000 });
+      while (this.mem.size > MAX_MEM_ENTRIES) {
+        this.mem.delete(this.mem.keys().next().value); // evict oldest
+      }
       return;
     }
     try {
