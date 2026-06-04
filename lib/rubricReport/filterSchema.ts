@@ -19,9 +19,7 @@ export type RubricFilterLeaf =
   | { scoreAtLeast: number }
   | { scoreAtMost: number };
 
-export type RubricFilter =
-  | RubricFilterLeaf
-  | { op: "and" | "or" | "not"; args: RubricFilter[] };
+export type RubricFilter = RubricFilterLeaf | { op: "and" | "or" | "not"; args: RubricFilter[] };
 
 const leafSchema: z.ZodType<RubricFilterLeaf> = z.union([
   z.object({ checkApplied: z.number().int() }).strict(),
