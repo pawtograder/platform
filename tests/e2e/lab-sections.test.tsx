@@ -243,7 +243,9 @@ test.describe("Lab Sections Page", () => {
     const row = page.locator(`#lab-section-row-${created.id}`);
     try {
       await expect(row).toBeVisible({ timeout: 15_000 });
-    } catch {
+    } catch (err) {
+      const matcherResult = (err as { matcherResult?: { name?: string } } | null)?.matcherResult;
+      if (!matcherResult || matcherResult.name !== "toBeVisible") throw err;
       await page.reload();
       await expect(page.getByText("Loading lab sections...")).toBeHidden();
       await expect(row).toBeVisible({ timeout: 30_000 });
