@@ -201,6 +201,8 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   // Rubric breakdown is collapsed by default and only mounts (and hits its RPC) once opened.
   const [rubricOpen, setRubricOpen] = useState(false);
   const [rubricEverOpened, setRubricEverOpened] = useState(false);
+  // Cohort pushed from the rubric report to filter the submissions table (button or drill-in).
+  const [tableCohort, setTableCohort] = useState<{ ids: number[]; label: string } | null>(null);
 
   // Distinct section / lab names for the filter control.
   const { classSections, labSections } = useMemo(() => collectSectionOptions(rows), [rows]);
@@ -335,6 +337,7 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
                     assignmentId={Number(assignment_id)}
                     classSections={classSections}
                     labSections={labSections}
+                    onApplyCohort={(ids, label) => setTableCohort({ ids, label })}
                   />
                 )}
               </Box>
@@ -354,7 +357,18 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
           </Link>{" "}
           page.
         </Text>
-        <AssignmentsTable tableController={tableController} />
+        {tableCohort && (
+          <HStack mb={3} p={2} px={3} borderRadius="md" bg="bg.info" justify="space-between" wrap="wrap" gap={2}>
+            <Text fontSize="sm">
+              Showing <strong>{tableCohort.ids.length}</strong> student{tableCohort.ids.length === 1 ? "" : "s"} —{" "}
+              {tableCohort.label}.
+            </Text>
+            <Button size="xs" variant="outline" onClick={() => setTableCohort(null)}>
+              Clear filter
+            </Button>
+          </HStack>
+        )}
+        <AssignmentsTable tableController={tableController} restrictRowIds={tableCohort?.ids ?? null} />
       </Box>
     </VStack>
   );

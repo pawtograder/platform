@@ -294,9 +294,12 @@ function TotalScoreCell({
   );
 }
 export default function AssignmentsTable({
-  tableController: providedTableController
+  tableController: providedTableController,
+  restrictRowIds
 }: {
   tableController?: TableController<"submissions"> | null;
+  /** When set, restrict the table to these view row ids (used by the rubric-report cohort filter). */
+  restrictRowIds?: number[] | null;
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
@@ -354,6 +357,17 @@ export default function AssignmentsTable({
 
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
+      {
+        // Hidden, filter-only column used to restrict the table to a rubric-report cohort.
+        // Not in the header/body render allow-list, so it never displays.
+        id: "cohort_membership",
+        accessorFn: (row) => row.id,
+        enableColumnFilter: true,
+        filterFn: (row, _id, value) => {
+          if (value == null) return true;
+          return (value as number[]).includes(row.original.id);
+        }
+      },
       {
         id: "select",
         size: 44,
@@ -734,6 +748,7 @@ export default function AssignmentsTable({
     nextPage,
     previousPage,
     setPageSize,
+    setColumnFilters,
     isLoading,
     resetRowSelection
   } = useTableControllerTable({
@@ -766,6 +781,14 @@ export default function AssignmentsTable({
   useEffect(() => {
     setRowSelection({});
   }, [columnFiltersKey]);
+
+  // Apply / clear the rubric-report cohort restriction as a column filter.
+  useEffect(() => {
+    setColumnFilters((prev) => {
+      const others = prev.filter((f) => f.id !== "cohort_membership");
+      return restrictRowIds == null ? others : [...others, { id: "cohort_membership", value: restrictRowIds }];
+    });
+  }, [restrictRowIds, setColumnFilters]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({

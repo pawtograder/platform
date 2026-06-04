@@ -24,6 +24,32 @@ export type UseRubricReportResult = {
 };
 
 /**
+ * Fetch the cohort members (submissions_with_grades_for_assignment_nice row ids) matching a
+ * rubric report filter — used to filter the submissions table to the rubric breakdown cohort.
+ * Validates client-side (the RPC re-validates + interprets server-side).
+ */
+export async function getRubricReportCohortMembers(
+  assignmentId: number,
+  filter: RubricFilter | null,
+  reviewRound: string = "grading-review"
+): Promise<{ ok: true; ids: number[] } | { ok: false; error: string }> {
+  let validated: RubricFilter | null = null;
+  if (filter !== null) {
+    const result = validateRubricFilter(filter);
+    if (!result.ok) return { ok: false, error: result.error };
+    validated = result.value;
+  }
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc("get_rubric_report_cohort_members", {
+    p_assignment_id: assignmentId,
+    p_filter: validated === null ? undefined : (validated as unknown as Json),
+    p_review_round: reviewRound
+  });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, ids: (data as number[] | null) ?? [] };
+}
+
+/**
  * Fetch rubric-check application statistics for an assignment, optionally scoped by a
  * filter AST. The filter is validated client-side before sending (the RPC re-validates
  * server-side). Pass a stable `filter` reference (e.g. from state) to avoid refetch loops.

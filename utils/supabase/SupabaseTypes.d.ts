@@ -11641,6 +11641,10 @@ export type Database = {
         Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
         Returns: Json;
       };
+      get_rubric_report_cohort_members: {
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
+        Returns: number[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;

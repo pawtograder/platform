@@ -251,4 +251,32 @@ test.describe("get_rubric_check_application_stats RPC", () => {
     const { error } = await studentClient.rpc("get_rubric_check_application_stats", { p_assignment_id: assignmentId });
     expect(error).not.toBeNull();
   });
+
+  test("cohort-members RPC returns the row ids matching a filter", async () => {
+    const members = async (filter?: unknown) => {
+      const { data, error } = await instructorClient.rpc("get_rubric_report_cohort_members", {
+        p_assignment_id: assignmentId,
+        ...(filter === undefined ? {} : { p_filter: filter as never })
+      });
+      expect(error).toBeNull();
+      return (data as number[] | null) ?? [];
+    };
+
+    expect((await members()).length).toBe(2); // all
+    expect((await members({ section: secAName })).length).toBe(1); // studentA
+    expect((await members({ checkApplied: plainCheckId })).length).toBe(1); // studentA applied plain
+    expect((await members({ optionSelected: { checkId: choiceCheckId, optionIndex: 0 } })).length).toBe(1); // studentB
+    expect((await members({ op: "not", args: [{ section: secAName }] })).length).toBe(1); // studentB
+
+    // The two single-student cohorts are different students (no overlap).
+    const a = await members({ section: secAName });
+    const b = await members({ op: "not", args: [{ section: secAName }] });
+    expect(a[0]).not.toBe(b[0]);
+  });
+
+  test("cohort-members RPC denies non-instructors", async () => {
+    const studentClient = await createAuthenticatedClient(studentA);
+    const { error } = await studentClient.rpc("get_rubric_report_cohort_members", { p_assignment_id: assignmentId });
+    expect(error).not.toBeNull();
+  });
 });

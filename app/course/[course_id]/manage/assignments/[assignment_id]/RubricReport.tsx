@@ -3,7 +3,12 @@
 import { useRubric, useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricParts } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import RubricItemSelector, { type RubricTreePart } from "./RubricItemSelector";
-import { useRubricReport, useRubricReportBySection, type RubricReportData } from "@/lib/rubricReport/useRubricReport";
+import {
+  getRubricReportCohortMembers,
+  useRubricReport,
+  useRubricReportBySection,
+  type RubricReportData
+} from "@/lib/rubricReport/useRubricReport";
 import { useAssignmentDashboardView, type DashboardViewConfig } from "@/lib/rubricReport/useAssignmentDashboardView";
 import type { RubricFilter } from "@/lib/rubricReport/filterSchema";
 import { toaster } from "@/components/ui/toaster";
@@ -36,20 +41,31 @@ const EMPTY_FILTER: GroupNode = { op: "and", args: [] };
 
 const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
 
-/** A horizontal labeled application-rate bar. */
+/** A horizontal labeled application-rate bar. Clickable when `onClick` is provided (drill-in). */
 function RateBar({
   label,
   count,
   total,
-  colorPalette = "blue"
+  colorPalette = "blue",
+  onClick
 }: {
   label: string;
   count: number;
   total: number;
   colorPalette?: string;
+  onClick?: () => void;
 }) {
   return (
-    <Box>
+    <Box
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      title={onClick ? "Filter the submissions table to these students" : undefined}
+      cursor={onClick ? "pointer" : undefined}
+      borderRadius="md"
+      mx={onClick ? -1 : 0}
+      px={onClick ? 1 : 0}
+      _hover={onClick ? { bg: "bg.muted" } : undefined}
+    >
       <HStack justify="space-between" mb={0.5}>
         <Text fontSize="sm">{label}</Text>
         <Text fontSize="xs" color="fg.muted">
@@ -68,11 +84,14 @@ function RateBar({
 export default function RubricReport({
   assignmentId,
   classSections,
-  labSections
+  labSections,
+  onApplyCohort
 }: {
   assignmentId: number;
   classSections: string[];
   labSections: string[];
+  /** Called to filter the submissions table to the cohort matching `filter` (button or drill-in). */
+  onApplyCohort?: (ids: number[], label: string) => void;
 }) {
   const isInstructor = useIsInstructor();
   const gradingRubric = useRubric("grading-review");
@@ -218,6 +237,21 @@ export default function RubricReport({
   const totalCheckCount = checkOptions.length;
   const includedCount = displayedChecks.length;
 
+  // Fetch the cohort matching `cohortFilter` and push it to the submissions table.
+  const applyCohort = async (cohortFilter: RubricFilter | null, label: string) => {
+    if (!onApplyCohort) return;
+    const result = await getRubricReportCohortMembers(assignmentId, cohortFilter);
+    if (!result.ok) {
+      toaster.error({ title: "Couldn't filter submissions", description: result.error });
+      return;
+    }
+    onApplyCohort(result.ids, label);
+    toaster.success({
+      title: "Submissions filtered",
+      description: `Showing ${result.ids.length} student${result.ids.length === 1 ? "" : "s"} — ${label}.`
+    });
+  };
+
   // Export the current view (cohort + selected checks + visualization) as CSV.
   const exportCsv = () => {
     let rows: Record<string, string | number>[];
@@ -292,6 +326,17 @@ export default function RubricReport({
           <Button size="xs" variant="outline" onClick={exportCsv} disabled={cohortTotal === 0}>
             Export CSV
           </Button>
+          {onApplyCohort && (
+            <Button
+              size="xs"
+              variant="subtle"
+              colorPalette="teal"
+              onClick={() => applyCohort(filter, "matching the rubric filter")}
+              disabled={cohortTotal === 0}
+            >
+              Filter table to these {cohortTotal}
+            </Button>
+          )}
         </HStack>
       </HStack>
 
@@ -420,6 +465,7 @@ export default function RubricReport({
                     label={c.name}
                     count={statById.get(c.id)?.applied_count ?? 0}
                     total={cohortTotal}
+                    onClick={onApplyCohort ? () => applyCohort({ checkApplied: c.id }, c.name) : undefined}
                   />
                 ))}
               </VStack>
@@ -453,6 +499,15 @@ export default function RubricReport({
                         count={optCount(o.index)}
                         total={cohortTotal}
                         colorPalette="purple"
+                        onClick={
+                          onApplyCohort
+                            ? () =>
+                                applyCohort(
+                                  { optionSelected: { checkId: c.id, optionIndex: o.index } },
+                                  `${c.name}: ${o.label}`
+                                )
+                            : undefined
+                        }
                       />
                     ))}
                   </VStack>
@@ -476,7 +531,13 @@ export default function RubricReport({
             {displayedChecks.map((c) => {
               const applied = statById.get(c.id)?.applied_count ?? 0;
               return (
-                <Table.Row key={c.id}>
+                <Table.Row
+                  key={c.id}
+                  onClick={onApplyCohort ? () => applyCohort({ checkApplied: c.id }, c.name) : undefined}
+                  cursor={onApplyCohort ? "pointer" : undefined}
+                  _hover={onApplyCohort ? { bg: "bg.muted" } : undefined}
+                  title={onApplyCohort ? "Filter the submissions table to these students" : undefined}
+                >
                   <Table.Cell color="fg.muted">{c.criterionName}</Table.Cell>
                   <Table.Cell>{c.name}</Table.Cell>
                   <Table.Cell textAlign="right">
