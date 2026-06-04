@@ -1,7 +1,8 @@
 "use client";
 
-import { useRubric, useRubricChecksByRubric, useRubricCriteriaByRubric } from "@/hooks/useAssignment";
+import { useRubric, useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricParts } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
+import RubricItemSelector, { type RubricTreePart } from "./RubricItemSelector";
 import { useRubricReport, useRubricReportBySection, type RubricReportData } from "@/lib/rubricReport/useRubricReport";
 import { useAssignmentDashboardView, type DashboardViewConfig } from "@/lib/rubricReport/useAssignmentDashboardView";
 import type { RubricFilter } from "@/lib/rubricReport/filterSchema";
@@ -74,11 +75,14 @@ export default function RubricReport({
 }) {
   const isInstructor = useIsInstructor();
   const gradingRubric = useRubric("grading-review");
+  const parts = useRubricParts(gradingRubric?.id);
   const criteria = useRubricCriteriaByRubric(gradingRubric?.id);
   const checks = useRubricChecksByRubric(gradingRubric?.id);
 
   const [viz, setViz] = useState<Viz>("bars");
   const [filter, setFilter] = useState<GroupNode>(EMPTY_FILTER);
+  // Which rubric checks to include in the view. null = all (default).
+  const [includedCheckIds, setIncludedCheckIds] = useState<number[] | null>(null);
 
   // Shared, per-assignment saved default view.
   const { saved, save } = useAssignmentDashboardView(assignmentId);
@@ -92,17 +96,19 @@ export default function RubricReport({
       appliedSavedRef.current = true;
       setViz(saved.config.viz);
       setFilter(asGroup(saved.config.filter));
+      setIncludedCheckIds(saved.config.includedCheckIds ?? null);
     }
   }, [saved]);
 
   const applyConfig = (config: DashboardViewConfig) => {
     setViz(config.viz);
     setFilter(asGroup(config.filter));
+    setIncludedCheckIds(config.includedCheckIds ?? null);
   };
 
   const saveAsDefault = async () => {
     setIsSaving(true);
-    const result = await save({ viz, filter });
+    const result = await save({ viz, filter, includedCheckIds });
     setIsSaving(false);
     if (result.ok) {
       toaster.success({ title: "Shared default view saved", description: "All staff will see this view by default." });
@@ -127,6 +133,34 @@ export default function RubricReport({
         };
       });
   }, [checks, criteria]);
+
+  // Rubric hierarchy for the include-selector: part → criteria → checks.
+  const rubricTree: RubricTreePart[] = useMemo(() => {
+    return [...parts]
+      .sort((a, b) => Number(a.ordinal) - Number(b.ordinal))
+      .map((part) => ({
+        partId: Number(part.id),
+        partName: part.name,
+        criteria: [...criteria]
+          .filter((c) => c.rubric_part_id === part.id)
+          .sort((a, b) => Number(a.ordinal) - Number(b.ordinal))
+          .map((crit) => ({
+            critId: Number(crit.id),
+            critName: crit.name,
+            checks: [...checks]
+              .filter((ck) => ck.rubric_criteria_id === crit.id)
+              .sort((a, b) => Number(a.ordinal) - Number(b.ordinal))
+              .map((ck) => ({ id: Number(ck.id), name: ck.name }))
+          }))
+      }));
+  }, [parts, criteria, checks]);
+
+  // Effective set of included check ids (null state => all checks).
+  const includedSet = useMemo(
+    () => (includedCheckIds === null ? new Set(checkOptions.map((c) => c.id)) : new Set(includedCheckIds)),
+    [includedCheckIds, checkOptions]
+  );
+  const displayedChecks = useMemo(() => checkOptions.filter((c) => includedSet.has(c.id)), [checkOptions, includedSet]);
 
   const { data, isLoading, error } = useRubricReport(assignmentId, filter);
 
@@ -174,11 +208,14 @@ export default function RubricReport({
     );
   }
 
-  // Group checks by criterion for the bar view.
-  const byCriterion = checkOptions.reduce<Record<string, CheckOption[]>>((acc, c) => {
+  // Group the included checks by criterion for the bar view.
+  const byCriterion = displayedChecks.reduce<Record<string, CheckOption[]>>((acc, c) => {
     (acc[c.criterionName] ??= []).push(c);
     return acc;
   }, {});
+
+  const totalCheckCount = checkOptions.length;
+  const includedCount = displayedChecks.length;
 
   return (
     <Box>
@@ -250,24 +287,51 @@ export default function RubricReport({
         </HStack>
       </HStack>
 
-      <Collapsible.Root>
-        <Collapsible.Trigger asChild>
-          <Button size="xs" variant="ghost" mb={2}>
-            Advanced filter ▾
-          </Button>
-        </Collapsible.Trigger>
-        <Collapsible.Content>
-          <Box mb={3}>
-            <RubricReportFilterBuilder
-              value={filter}
-              onChange={setFilter}
-              checks={checkOptions}
-              sections={classSections}
-              labs={labSections}
-            />
-          </Box>
-        </Collapsible.Content>
-      </Collapsible.Root>
+      <HStack gap={4} wrap="wrap">
+        <Collapsible.Root>
+          <Collapsible.Trigger asChild>
+            <Button size="xs" variant="ghost" mb={2}>
+              Rubric items ({includedCount}/{totalCheckCount}) ▾
+            </Button>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <Box
+              mb={3}
+              maxH="320px"
+              overflowY="auto"
+              borderWidth="1px"
+              borderColor="border.muted"
+              borderRadius="md"
+              p={3}
+            >
+              <RubricItemSelector
+                tree={rubricTree}
+                included={includedSet}
+                onChange={(next) => setIncludedCheckIds(next.size === totalCheckCount ? null : Array.from(next))}
+              />
+            </Box>
+          </Collapsible.Content>
+        </Collapsible.Root>
+
+        <Collapsible.Root>
+          <Collapsible.Trigger asChild>
+            <Button size="xs" variant="ghost" mb={2}>
+              Advanced filter ▾
+            </Button>
+          </Collapsible.Trigger>
+          <Collapsible.Content>
+            <Box mb={3}>
+              <RubricReportFilterBuilder
+                value={filter}
+                onChange={setFilter}
+                checks={checkOptions}
+                sections={classSections}
+                labs={labSections}
+              />
+            </Box>
+          </Collapsible.Content>
+        </Collapsible.Root>
+      </HStack>
 
       {error && (
         <Text color="fg.error" fontSize="sm">
@@ -306,12 +370,12 @@ export default function RubricReport({
 
       {!isLoading && !error && cohortTotal > 0 && viz === "options" && (
         <VStack align="stretch" gap={4}>
-          {checkOptions.filter((c) => c.options.length > 0).length === 0 && (
+          {displayedChecks.filter((c) => c.options.length > 0).length === 0 && (
             <Text color="fg.muted" fontSize="sm">
-              No choice-style checks in this rubric.
+              No choice-style checks in the selected rubric items.
             </Text>
           )}
-          {checkOptions
+          {displayedChecks
             .filter((c) => c.options.length > 0)
             .map((c) => {
               const stat = statById.get(c.id);
@@ -349,7 +413,7 @@ export default function RubricReport({
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {checkOptions.map((c) => {
+            {displayedChecks.map((c) => {
               const applied = statById.get(c.id)?.applied_count ?? 0;
               return (
                 <Table.Row key={c.id}>
@@ -374,7 +438,7 @@ export default function RubricReport({
 
       {viz === "section" && !sectionError && (
         <SectionComparison
-          checks={checkOptions}
+          checks={displayedChecks}
           sections={classSections}
           bySection={bySection}
           isLoading={sectionLoading}

@@ -11,6 +11,8 @@ export type DashboardViz = "bars" | "options" | "table" | "section";
 export type DashboardViewConfig = {
   viz: DashboardViz;
   filter?: RubricFilter | null;
+  /** Rubric check ids to include in the report. null/omitted = all checks. */
+  includedCheckIds?: number[] | null;
 };
 
 export type SavedDashboardView = {
