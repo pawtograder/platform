@@ -1349,8 +1349,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
   const [isStaffDialogOpen, setIsStaffDialogOpen] = useState(false);
   const courseController = useCourseController();
   const isStaff = useIsGraderOrInstructor();
+  const { assignment } = useAssignmentController();
   const { course_id } = useParams();
   const courseId = Number(course_id);
+  // No-repo assignments have no git history; staff get the submission list
+  // (with a "make active" affordance) instead, same as students.
+  const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
 
   // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
@@ -1421,7 +1425,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             colorPalette={hasNewSubmission ? "yellow" : "default"}
           >
             <Icon as={FaHistory} />
-            Commit History
+            {noRepo ? "Submission History" : "Commit History"}
             {hasNewSubmission && <Icon as={FaBell} />}
           </Button>
         </Dialog.Trigger>
@@ -1431,10 +1435,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             <Dialog.Header p={0}>
               <Flex justify="space-between" align="center" gap={4}>
                 <Box>
-                  <Dialog.Title>Commit History</Dialog.Title>
-                  <Text fontSize="sm" color="fg.muted">
-                    {submission.repository}
-                  </Text>
+                  <Dialog.Title>{noRepo ? "Submission History" : "Commit History"}</Dialog.Title>
+                  {!noRepo && (
+                    <Text fontSize="sm" color="fg.muted">
+                      {submission.repository}
+                    </Text>
+                  )}
                 </Box>
                 <Dialog.CloseTrigger asChild>
                   <CloseButton bg="bg" size="sm" />
@@ -1442,7 +1448,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
               </Flex>
             </Dialog.Header>
             <Dialog.Body p={0} pt={3}>
-              {submission.repository_id !== null && submission.repository !== null ? (
+              {noRepo ? (
+                <SubmissionHistoryContents submission={submission} />
+              ) : submission.repository_id !== null && submission.repository !== null ? (
                 <StaffCommitHistory
                   courseId={courseId}
                   assignmentId={submission.assignment_id}

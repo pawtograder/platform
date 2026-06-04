@@ -98,6 +98,78 @@ import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icon
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
 const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
+// MIME types that aren't text/* but should still render as readable source.
+const INLINE_TEXT_MIME = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/x-yaml"
+]);
+
+/** Whether a file should render as text/markdown source rather than a binary download. */
+function isTextLikeFile(file: SubmissionFile): boolean {
+  if (!file.is_binary) return true;
+  if (isMarkdownFile(file.name)) return true;
+  const mime = file.mime_type ?? "";
+  return mime.startsWith("text/") || INLINE_TEXT_MIME.has(mime);
+}
+
+/**
+ * Render a submission file as markdown (source + preview) or source code.
+ * Uploaded text files can be stored as binary storage objects (contents null,
+ * storage_key set); fetch their text and render it the same way as inline
+ * git text files so markdown gets a real preview instead of a download link.
+ */
+function TextFileView({
+  file,
+  allFiles,
+  onNavigateToFile
+}: {
+  file: SubmissionFile;
+  allFiles: SubmissionFile[];
+  onNavigateToFile?: (fileId: number) => void;
+}) {
+  const needsFetch = file.is_binary && file.contents == null && !!file.storage_key;
+  const [hydrated, setHydrated] = useState<SubmissionFile | null>(needsFetch ? null : file);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!needsFetch) {
+      setHydrated(file);
+      return;
+    }
+    let mounted = true;
+    setHydrated(null);
+    setError(null);
+    (async () => {
+      const client = createClient();
+      const { data, error: dlError } = await client.storage
+        .from("submission-files")
+        .download(file.storage_key as string);
+      if (!mounted) return;
+      if (dlError || !data) {
+        setError(dlError?.message ?? "Could not load file contents");
+        return;
+      }
+      const text = await data.text();
+      if (!mounted) return;
+      setHydrated({ ...file, contents: text, is_binary: false });
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [file, needsFetch]);
+
+  // If the text can't be fetched, fall back to the binary download view.
+  if (error) return <BinaryFilePreview file={file} />;
+  if (!hydrated) return <Skeleton height="200px" />;
+  return isMarkdownFile(hydrated.name) ? (
+    <MarkdownFilePreview file={hydrated} allFiles={allFiles} onNavigateToFile={onNavigateToFile} />
+  ) : (
+    <CodeFile file={hydrated} />
+  );
+}
+
 function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
   const submission = useSubmission();
   const comments = useSubmissionFileComments({});
@@ -1441,17 +1513,15 @@ export default function FilesView() {
             </Box>
           ) : selectedFile ? (
             <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
-                <MarkdownFilePreview
+              {isTextLikeFile(selectedFile) ? (
+                <TextFileView
                   key={selectedFile.id}
                   file={selectedFile}
                   allFiles={submission.submission_files}
                   onNavigateToFile={handleSelectFile}
                 />
-              ) : selectedFile.is_binary ? (
-                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
               ) : (
-                <CodeFile key={selectedFile.id} file={selectedFile} />
+                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
               )}
             </Box>
           ) : (
