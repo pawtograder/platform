@@ -5,9 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
-import { createClient } from "@/utils/supabase/client";
 import { StudentDeadlineExtension } from "@/utils/supabase/DatabaseTypes";
 import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VStack } from "@chakra-ui/react";
 
@@ -20,7 +19,7 @@ import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionM
 export default function StudentExtensionsTable() {
   const extensions = useStudentDeadlineExtensions();
   const students = useAllStudentProfiles();
-  const supabase = createClient();
+  const { studentDeadlineExtensions } = useCourseController();
 
   const createOpen = useModalManager<AddExtensionDefaults>();
   const editOpen = useModalManager<StudentDeadlineExtension>();
@@ -29,11 +28,14 @@ export default function StudentExtensionsTable() {
 
   const handleUpdate = async (row: StudentDeadlineExtension, updates: { hours?: number; includes_lab?: boolean }) => {
     try {
-      const { error } = await supabase
-        .from("student_deadline_extensions")
-        .update({ hours: updates.hours ?? row.hours, includes_lab: updates.includes_lab ?? row.includes_lab })
-        .eq("id", row.id);
-      if (error) throw error;
+      // Update through the TableController so the change is applied to the
+      // local cache optimistically, for the same reason as handleDelete: a
+      // raw client update left the UI relying on the gated course-broadcast
+      // realtime event, which can race the staff-channel subscription lease.
+      await studentDeadlineExtensions.update(row.id, {
+        hours: updates.hours ?? row.hours,
+        includes_lab: updates.includes_lab ?? row.includes_lab
+      });
       toaster.create({
         title: "Extension updated",
         description: "Note: updates do not retroactively modify existing exceptions.",
@@ -47,8 +49,14 @@ export default function StudentExtensionsTable() {
 
   const handleDelete = async (row: StudentDeadlineExtension) => {
     try {
-      const { error } = await supabase.from("student_deadline_extensions").delete().eq("id", row.id);
-      if (error) throw error;
+      // Delete through the TableController so the row is removed from the
+      // local cache optimistically (matching how create() and the
+      // consolidated exceptions table's hardDelete work). The raw client
+      // delete used previously left the UI relying on the course-broadcast
+      // realtime event to drop the row — and that broadcast is gated by
+      // `channel_has_subscribers`, so a just-issued delete could race the
+      // staff-channel lease and never update the table.
+      await studentDeadlineExtensions.hardDelete(row.id);
       toaster.create({
         title: "Extension deleted",
         description: "Note: deletions do not retroactively modify existing exceptions.",
