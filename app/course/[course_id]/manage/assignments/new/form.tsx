@@ -30,7 +30,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -661,6 +661,7 @@ export default function AssignmentForm({
   const timezone = course.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Called by react-hook-form when Save is pressed but validation fails. Without
   // this the submit handler never runs and the only signal is inline error text
@@ -677,11 +678,12 @@ export default function AssignmentForm({
       title: "Couldn't save — please fix the highlighted fields",
       description: `Check: ${names.join(", ")}`
     });
-    // Defer so a just-expanded Advanced field is in the DOM before we scroll.
-    setTimeout(() => {
-      const firstInvalid = document.querySelector('[aria-invalid="true"]');
+    // Defer to the next frame so a just-expanded Advanced field is in the DOM, and
+    // scope the query to this form so we never grab an unrelated invalid input elsewhere.
+    requestAnimationFrame(() => {
+      const firstInvalid = formRef.current?.querySelector('[aria-invalid="true"]');
       firstInvalid?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 50);
+    });
   }, []);
 
   // Keep checkbox state synced with form value
@@ -737,7 +739,7 @@ export default function AssignmentForm({
   return (
     <div>
       <Toaster />
-      <form onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
+      <form ref={formRef} onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
         <Fieldset.Root>
           <VStack align="stretch" gap={6} w="100%">
             <CardRoot>

@@ -51,6 +51,12 @@ test.describe("assignment_dashboard_views (shared report view)", () => {
   });
 
   test("a grader can read the shared view but cannot write it", async () => {
+    // Self-contained: ensure a shared view exists regardless of test ordering.
+    const { error: seedErr } = await instructorClient
+      .from("assignment_dashboard_views")
+      .upsert({ assignment_id: assignmentId, config: { viz: "bars" } }, { onConflict: "assignment_id" });
+    expect(seedErr).toBeNull();
+
     const { data, error } = await graderClient
       .from("assignment_dashboard_views")
       .select("config")

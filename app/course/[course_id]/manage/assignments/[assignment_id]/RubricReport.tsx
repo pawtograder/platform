@@ -1,6 +1,7 @@
 "use client";
 
 import { useRubric, useRubricChecksByRubric, useRubricCriteriaByRubric } from "@/hooks/useAssignment";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { useRubricReport, useRubricReportBySection, type RubricReportData } from "@/lib/rubricReport/useRubricReport";
 import { useAssignmentDashboardView, type DashboardViewConfig } from "@/lib/rubricReport/useAssignmentDashboardView";
 import type { RubricFilter } from "@/lib/rubricReport/filterSchema";
@@ -71,6 +72,7 @@ export default function RubricReport({
   classSections: string[];
   labSections: string[];
 }) {
+  const isInstructor = useIsInstructor();
   const gradingRubric = useRubric("grading-review");
   const criteria = useRubricCriteriaByRubric(gradingRubric?.id);
   const checks = useRubricChecksByRubric(gradingRubric?.id);
@@ -133,7 +135,11 @@ export default function RubricReport({
     () => (viz === "section" ? classSections.map((s) => ({ key: s, filter: { section: s } as RubricFilter })) : []),
     [viz, classSections]
   );
-  const { byKey: bySection, isLoading: sectionLoading } = useRubricReportBySection(assignmentId, sectionParams);
+  const {
+    byKey: bySection,
+    isLoading: sectionLoading,
+    error: sectionError
+  } = useRubricReportBySection(assignmentId, sectionParams);
 
   const statById = useMemo(() => new Map((data?.checks ?? []).map((c) => [c.rubric_check_id, c])), [data]);
   const cohortTotal = data?.cohort_total ?? 0;
@@ -204,41 +210,43 @@ export default function RubricReport({
               Reset to default
             </Button>
           )}
-          <Popover.Root>
-            <Popover.Trigger asChild>
-              <Button size="xs" variant="subtle" colorPalette="blue" loading={isSaving}>
-                Save as default
-              </Button>
-            </Popover.Trigger>
-            <Popover.Positioner>
-              <Popover.Content>
-                <Popover.Arrow>
-                  <Popover.ArrowTip />
-                </Popover.Arrow>
-                <Popover.Header>Update the shared default view?</Popover.Header>
-                <Popover.Body>
-                  <VStack align="stretch" gap={3}>
-                    <Text fontSize="sm">
-                      This is a <strong>shared</strong> view. Saving changes the default that every instructor and
-                      grader sees for this assignment.
-                    </Text>
-                    <HStack justify="flex-end">
-                      <Popover.CloseTrigger asChild>
-                        <Button size="xs" variant="ghost">
-                          Cancel
-                        </Button>
-                      </Popover.CloseTrigger>
-                      <Popover.CloseTrigger asChild>
-                        <Button size="xs" colorPalette="blue" onClick={saveAsDefault}>
-                          Save as default
-                        </Button>
-                      </Popover.CloseTrigger>
-                    </HStack>
-                  </VStack>
-                </Popover.Body>
-              </Popover.Content>
-            </Popover.Positioner>
-          </Popover.Root>
+          {isInstructor && (
+            <Popover.Root>
+              <Popover.Trigger asChild>
+                <Button size="xs" variant="subtle" colorPalette="blue" loading={isSaving}>
+                  Save as default
+                </Button>
+              </Popover.Trigger>
+              <Popover.Positioner>
+                <Popover.Content>
+                  <Popover.Arrow>
+                    <Popover.ArrowTip />
+                  </Popover.Arrow>
+                  <Popover.Header>Update the shared default view?</Popover.Header>
+                  <Popover.Body>
+                    <VStack align="stretch" gap={3}>
+                      <Text fontSize="sm">
+                        This is a <strong>shared</strong> view. Saving changes the default that every instructor and
+                        grader sees for this assignment.
+                      </Text>
+                      <HStack justify="flex-end">
+                        <Popover.CloseTrigger asChild>
+                          <Button size="xs" variant="ghost">
+                            Cancel
+                          </Button>
+                        </Popover.CloseTrigger>
+                        <Popover.CloseTrigger asChild>
+                          <Button size="xs" colorPalette="blue" onClick={saveAsDefault}>
+                            Save as default
+                          </Button>
+                        </Popover.CloseTrigger>
+                      </HStack>
+                    </VStack>
+                  </Popover.Body>
+                </Popover.Content>
+              </Popover.Positioner>
+            </Popover.Root>
+          )}
         </HStack>
       </HStack>
 
@@ -358,7 +366,13 @@ export default function RubricReport({
         </Table.Root>
       )}
 
-      {viz === "section" && (
+      {viz === "section" && sectionError && (
+        <Text color="fg.error" fontSize="sm">
+          {sectionError}
+        </Text>
+      )}
+
+      {viz === "section" && !sectionError && (
         <SectionComparison
           checks={checkOptions}
           sections={classSections}

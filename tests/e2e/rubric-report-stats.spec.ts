@@ -127,8 +127,13 @@ test.describe("get_rubric_check_application_stats RPC", () => {
       assignment_id: assignmentId,
       class_id: classId
     });
-    // The cohort = students with an ACTIVE submission.
-    await supabase.from("submissions").update({ is_active: true }).in("id", [subA.submission_id, subB.submission_id]);
+    // The cohort = students with an ACTIVE submission. Fail fast if the update doesn't persist,
+    // otherwise the cohort would be empty and the assertions below would be meaningless.
+    const { error: activateErr } = await supabase
+      .from("submissions")
+      .update({ is_active: true })
+      .in("id", [subA.submission_id, subB.submission_id]);
+    if (activateErr) throw new Error(`Failed to activate submissions: ${activateErr.message}`);
 
     // Apply checks: studentA -> choice "OK" (option 1) + plain; studentB -> choice "Excellent" (option 0).
     const { error: commentsErr } = await supabase.from("submission_comments").insert([

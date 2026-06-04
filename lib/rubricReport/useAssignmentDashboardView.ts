@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RubricFilter } from "./filterSchema";
 
 export type DashboardViz = "bars" | "options" | "table" | "section";
@@ -39,8 +39,13 @@ export function useAssignmentDashboardView(assignmentId: number | undefined): Us
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Monotonic request id so a slow load for a previous assignment can't overwrite the current one.
+  const requestIdRef = useRef(0);
+
   const load = useCallback(async () => {
     if (!assignmentId) return;
+    const reqId = ++requestIdRef.current;
+    const isCurrent = () => reqId === requestIdRef.current;
     setIsLoading(true);
     setError(null);
     const supabase = createClient();
@@ -49,6 +54,7 @@ export function useAssignmentDashboardView(assignmentId: number | undefined): Us
       .select("config, updated_at, updated_by")
       .eq("assignment_id", assignmentId)
       .maybeSingle();
+    if (!isCurrent()) return;
     if (selErr) {
       setError(selErr.message);
       setIsLoading(false);
@@ -64,6 +70,7 @@ export function useAssignmentDashboardView(assignmentId: number | undefined): Us
       const { data: profile } = await supabase.from("profiles").select("name").eq("id", data.updated_by).maybeSingle();
       savedByName = profile?.name ?? null;
     }
+    if (!isCurrent()) return;
     setSaved({
       config: data.config as unknown as DashboardViewConfig,
       updatedAt: data.updated_at,

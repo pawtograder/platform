@@ -188,14 +188,16 @@ cohort_rows AS (
   WHERE v.assignment_id = p_assignment_id
     AND v.activesubmissionid IS NOT NULL
 ),
--- Grading-review ids for the cohort's active submissions (PK lookups on submissions).
--- Scoping the (BIG) comment tables to these reviews + this rubric's checks lets the planner
--- use the partial index (submission_review_id, rubric_check_id, deleted_at) instead of a full scan.
+-- Review ids for the REQUESTED rubric (i.e. the resolved review round) on the cohort's
+-- active submissions. Keyed off the rubric rather than submissions.grading_review_id so the
+-- function is correct for any review round, not just grading-review. Scoping the (BIG) comment
+-- tables to these reviews + this rubric's checks lets the planner use the partial index
+-- (submission_review_id, rubric_check_id, deleted_at) instead of a full scan.
 cohort_reviews AS (
-  SELECT s.grading_review_id AS review_id
-  FROM public.submissions s
-  WHERE s.id IN (SELECT DISTINCT submission_id FROM cohort_rows)
-    AND s.grading_review_id IS NOT NULL
+  SELECT sr.id AS review_id
+  FROM public.submission_reviews sr
+  WHERE sr.submission_id IN (SELECT DISTINCT submission_id FROM cohort_rows)
+    AND sr.rubric_id = p_rubric_id
 ),
 raw_comments AS (
   SELECT sc.submission_id, sc.rubric_check_id, sc.points

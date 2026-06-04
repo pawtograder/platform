@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { validateRubricFilter, type RubricFilter } from "./filterSchema";
 
 export type RubricCheckStat = {
@@ -36,6 +36,8 @@ export function useRubricReport(
   const [data, setData] = useState<RubricReportData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Monotonic request id so a slow earlier request can't overwrite a newer filter's result.
+  const requestIdRef = useRef(0);
 
   const fetchStats = useCallback(async () => {
     if (!assignmentId) return;
@@ -51,6 +53,7 @@ export function useRubricReport(
       validated = result.value;
     }
 
+    const reqId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
     const supabase = createClient();
@@ -59,6 +62,9 @@ export function useRubricReport(
       p_filter: validated === null ? undefined : (validated as unknown as Json),
       p_review_round: reviewRound
     });
+
+    // Ignore responses superseded by a newer request.
+    if (reqId !== requestIdRef.current) return;
 
     if (rpcError) {
       setError(rpcError.message);
