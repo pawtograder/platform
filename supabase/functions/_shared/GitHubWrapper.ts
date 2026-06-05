@@ -293,6 +293,28 @@ const installations: {
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
+// The GitHub App's URL slug, used to build the install URL we hand instructors
+// when an upstream/handout repo lives in an org where the app isn't installed.
+// Prefer the explicit env var; fall back to GET /app (app-JWT auth) once.
+let cachedAppSlug: string | undefined;
+export async function getAppSlug(scope?: Sentry.Scope): Promise<string | undefined> {
+  const fromEnv = Deno.env.get("GITHUB_APP_SLUG");
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (cachedAppSlug !== undefined) {
+    return cachedAppSlug;
+  }
+  try {
+    const { data } = await app.octokit.request("GET /app");
+    cachedAppSlug = data?.slug ?? "";
+    return cachedAppSlug || undefined;
+  } catch (e) {
+    Sentry.captureException(e, scope);
+    return undefined;
+  }
+}
+
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   const octokit = await getOctoKit(repoOrOrgName, scope);

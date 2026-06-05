@@ -460,6 +460,27 @@ export async function activateSubmission(params: { submission_id: number }, supa
     recoverable: false
   });
 }
+export type CheckAppInstallationResponse = {
+  installed: boolean;
+  repo_accessible: boolean;
+  org: string;
+  install_url: string;
+};
+
+/**
+ * Checks whether the Pawtograder GitHub App is installed in (and can see) `repo`
+ * ("owner/name"). Used by the assignment config form to gate PR-mode assignments
+ * whose upstream/handout repo may be in a different org than the class.
+ */
+export async function checkAppInstallation(
+  params: { repo: string; class_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<CheckAppInstallationResponse> {
+  return await invokeEdgeFunction<CheckAppInstallationResponse>(supabase, "github-check-app-installation", {
+    body: params
+  });
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,

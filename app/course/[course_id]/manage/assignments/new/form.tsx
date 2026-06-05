@@ -11,8 +11,10 @@ import {
   Field as CkField,
   Fieldset,
   Input,
+  Link,
   NativeSelectField,
   NativeSelectRoot,
+  Spinner,
   Table,
   Text,
   VStack
@@ -20,6 +22,8 @@ import {
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { checkAppInstallation } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
 import { appendTimezoneOffset } from "@/lib/utils";
@@ -799,6 +803,250 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   );
 }
 
+type InstallCheckStatus = "idle" | "checking" | "ok" | "missing" | "no_repo_access" | "error";
+
+/**
+ * How a submission is produced (push vs PR) and, for PR mode, the upstream repo
+ * PRs target. The upstream repo may live in a different GitHub org than the
+ * class; ptg can only ingest its PRs/checks and receive its webhooks if our
+ * GitHub App is installed there, so we check installation and block saving a
+ * PR-mode assignment until the upstream repo is reachable.
+ */
+function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const { course_id } = useParams();
+  const {
+    register,
+    control,
+    watch,
+    setError,
+    clearErrors,
+    formState: { errors }
+  } = form;
+
+  const submissionMode = watch("submission_mode") ?? "push";
+  const prIdentification = watch("pr_identification") ?? "base_branch";
+  const upstreamRepo = watch("upstream_repo");
+  const isPr = submissionMode === "pr";
+
+  const [check, setCheck] = useState<{ status: InstallCheckStatus; installUrl?: string; message?: string }>({
+    status: "idle"
+  });
+  // The field-level validate closure reads the latest check result via this ref
+  // so it gates Save without re-registering on every status change.
+  const checkRef = useRef(check);
+  useEffect(() => {
+    checkRef.current = check;
+  }, [check]);
+
+  const runCheck = useCallback(
+    async (repo: string | null | undefined) => {
+      if (!repo || !repo.includes("/")) {
+        setCheck({ status: "idle" });
+        return;
+      }
+      setCheck({ status: "checking" });
+      try {
+        const supabase = createClient();
+        const res = await checkAppInstallation({ repo, class_id: Number.parseInt(course_id as string, 10) }, supabase);
+        if (!res.installed) {
+          setCheck({ status: "missing", installUrl: res.install_url });
+        } else if (!res.repo_accessible) {
+          setCheck({ status: "no_repo_access", installUrl: res.install_url });
+        } else {
+          setCheck({ status: "ok" });
+          clearErrors("upstream_repo");
+        }
+      } catch (e) {
+        // Don't hard-block on a transient check failure — surface it but allow save.
+        setCheck({ status: "error", message: e instanceof Error ? e.message : "Installation check failed" });
+      }
+    },
+    [course_id, clearErrors]
+  );
+
+  // Check once when the section first shows an existing upstream repo (editing a
+  // PR-mode assignment), and clear any stale gate when leaving PR mode.
+  useEffect(() => {
+    if (isPr && upstreamRepo && check.status === "idle") {
+      runCheck(upstreamRepo);
+    }
+    if (!isPr) {
+      clearErrors("upstream_repo");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPr]);
+
+  // Surface the gate as an inline field error so onInvalid scrolls to it.
+  useEffect(() => {
+    if (!isPr) return;
+    if (check.status === "missing") {
+      setError("upstream_repo", {
+        type: "manual",
+        message: "The Pawtograder GitHub App is not installed on this repository's organization."
+      });
+    } else if (check.status === "no_repo_access") {
+      setError("upstream_repo", {
+        type: "manual",
+        message: "The app is installed but can't access this repository — grant it access, then re-check."
+      });
+    }
+  }, [check.status, isPr, setError]);
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Submission mode</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          Whether a submission is a push to the student repository or a pull request against an upstream repository.
+        </Text>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            orientation="horizontal"
+            label="Submission mode"
+            helperText="Push: a push to the student repo is the submission (today's default). Pull request: a PR against an upstream/class repo is the submission."
+          >
+            <NativeSelectRoot>
+              <NativeSelectField {...register("submission_mode")}>
+                <option value="push">Push to student repository</option>
+                <option value="pr">Pull request against an upstream repository</option>
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        {isPr && (
+          <>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="Upstream repository"
+                helperText='The repo PRs target, as "owner/name". May be in a different org than the class — the Pawtograder GitHub App must be installed there.'
+                errorText={errors.upstream_repo?.message?.toString()}
+                invalid={!!errors.upstream_repo}
+                required={true}
+              >
+                <Input
+                  placeholder="owner/name"
+                  {...register("upstream_repo", {
+                    validate: (value) => {
+                      if (submissionMode !== "pr") return true;
+                      if (!value) return "Upstream repository is required for PR submission mode";
+                      if (!`${value}`.includes("/")) return 'Use "owner/name" form';
+                      const st = checkRef.current.status;
+                      if (st === "checking") return "Still checking the GitHub App installation…";
+                      if (st === "idle") return "Verify the GitHub App installation before saving";
+                      if (st === "missing")
+                        return "Install the Pawtograder GitHub App on this repository's organization before saving";
+                      if (st === "no_repo_access") return "Grant the app access to this repository before saving";
+                      return true;
+                    },
+                    onBlur: (e) => runCheck((e.target as HTMLInputElement).value)
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field>
+                <Box display="flex" alignItems="center" gap={3}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => runCheck(upstreamRepo)}
+                    disabled={check.status === "checking" || !upstreamRepo}
+                  >
+                    {check.status === "checking" ? <Spinner size="xs" /> : null}
+                    Re-check installation
+                  </Button>
+                  {check.status === "ok" && (
+                    <Text fontSize="sm" color="fg.success">
+                      <LuCheck style={{ display: "inline" }} /> App installed and repository accessible
+                    </Text>
+                  )}
+                  {(check.status === "missing" || check.status === "no_repo_access") && check.installUrl && (
+                    <Text fontSize="sm" color="fg.error">
+                      {check.status === "missing"
+                        ? "App not installed on this organization. "
+                        : "App can't access this repository. "}
+                      <Link href={check.installUrl} target="_blank" rel="noopener noreferrer" color="fg.info">
+                        Install / configure the Pawtograder GitHub App
+                      </Link>
+                    </Text>
+                  )}
+                  {check.status === "error" && (
+                    <Text fontSize="sm" color="fg.warning">
+                      Couldn&apos;t verify installation: {check.message}
+                    </Text>
+                  )}
+                </Box>
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="Upstream base branch"
+                helperText="PRs must target this branch to count as a submission."
+                errorText={errors.upstream_base_branch?.message?.toString()}
+                invalid={!!errors.upstream_base_branch}
+              >
+                <Input placeholder="main" {...register("upstream_base_branch")} />
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="PR identification"
+                helperText="How the submission PR is identified among a student's PRs."
+              >
+                <NativeSelectRoot>
+                  <NativeSelectField {...register("pr_identification")}>
+                    <option value="base_branch">By base branch (confirm if more than one)</option>
+                    <option value="branch_convention">By head branch name convention</option>
+                    <option value="manual">Manually linked</option>
+                  </NativeSelectField>
+                </NativeSelectRoot>
+              </Field>
+            </Fieldset.Content>
+            {prIdentification === "branch_convention" && (
+              <Fieldset.Content>
+                <Field
+                  orientation="horizontal"
+                  label="Head branch convention"
+                  helperText="Regex the PR's head branch name must match (e.g. ^submission/.+$)."
+                  errorText={errors.pr_branch_convention?.message?.toString()}
+                  invalid={!!errors.pr_branch_convention}
+                >
+                  <Input placeholder="^submission/.+$" {...register("pr_branch_convention")} />
+                </Field>
+              </Fieldset.Content>
+            )}
+            <Fieldset.Content>
+              <Field helperText="When enabled, having an open (confirmed) PR is itself a graded condition.">
+                <Controller
+                  name="require_pr_open"
+                  control={control}
+                  render={({ field }) => (
+                    <Checkbox.Root
+                      checked={field.value === true}
+                      onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                    >
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control>
+                        <LuCheck />
+                      </Checkbox.Control>
+                      <Checkbox.Label>Require an open pull request</Checkbox.Label>
+                    </Checkbox.Root>
+                  )}
+                />
+              </Field>
+            </Fieldset.Content>
+          </>
+        )}
+      </CardBody>
+    </CardRoot>
+  );
+}
+
 export default function AssignmentForm({
   form,
   onSubmit
@@ -1169,6 +1417,7 @@ export default function AssignmentForm({
             </CardRoot>
             <GroupConfigurationSubform form={form} timezone={timezone} />
             <RepositoryConfigurationSubform form={form} />
+            <SubmissionModeSubform form={form} />
             <SelfEvaluationSubform form={form} timezone={timezone} />
             <CardRoot>
               <Accordion.Root

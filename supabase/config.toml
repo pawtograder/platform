@@ -315,6 +315,14 @@ entrypoint = "./functions/github-repo-configure-webhook/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/github-repo-configure-webhook/*.html" ]
 
+[functions.github-check-app-installation]
+enabled = true
+verify_jwt = false
+import_map = "./functions/github-check-app-installation/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/github-check-app-installation/index.ts"
+
 [functions.autograder-create-repos-for-student]
 enabled = true
 verify_jwt = false

@@ -107,6 +107,13 @@ export default function EditAssignment() {
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
         }
+        // Clear PR/upstream config when not in PR submission mode so toggling
+        // back to push doesn't leave stale upstream values behind.
+        if (values.submission_mode !== "pr") {
+          values.upstream_repo = null;
+          values.pr_branch_convention = null;
+          values.require_pr_open = false;
+        }
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

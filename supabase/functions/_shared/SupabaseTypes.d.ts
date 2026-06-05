@@ -1018,12 +1018,15 @@ export type Database = {
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
           permit_empty_submissions: boolean;
+          pr_branch_convention: string | null;
+          pr_identification: Database["public"]["Enums"]["pr_identification_mode"];
           protect_block_force_push: boolean;
           protect_require_pull_request: boolean;
           protect_required_reviewers: number;
           regrade_deadline: string | null;
           release_date: string | null;
           repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
+          require_pr_open: boolean;
           require_tokens_before_due_date: boolean;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
@@ -1031,11 +1034,14 @@ export type Database = {
           slug: string | null;
           source_assignment_id: number | null;
           student_repo_prefix: string | null;
+          submission_mode: Database["public"]["Enums"]["submission_mode"];
           suggested_due_date: string | null;
           template_repo: string | null;
           title: string;
           total_points: number | null;
           updated_at: string;
+          upstream_base_branch: string;
+          upstream_repo: string | null;
         };
         Insert: {
           allow_not_graded_submissions?: boolean;
@@ -1063,12 +1069,15 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          pr_branch_convention?: string | null;
+          pr_identification?: Database["public"]["Enums"]["pr_identification_mode"];
           protect_block_force_push?: boolean;
           protect_require_pull_request?: boolean;
           protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
           repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
+          require_pr_open?: boolean;
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
@@ -1076,11 +1085,14 @@ export type Database = {
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
+          submission_mode?: Database["public"]["Enums"]["submission_mode"];
           suggested_due_date?: string | null;
           template_repo?: string | null;
           title: string;
           total_points?: number | null;
           updated_at?: string;
+          upstream_base_branch?: string;
+          upstream_repo?: string | null;
         };
         Update: {
           allow_not_graded_submissions?: boolean;
@@ -1108,12 +1120,15 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          pr_branch_convention?: string | null;
+          pr_identification?: Database["public"]["Enums"]["pr_identification_mode"];
           protect_block_force_push?: boolean;
           protect_require_pull_request?: boolean;
           protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
           repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
+          require_pr_open?: boolean;
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
@@ -1121,11 +1136,14 @@ export type Database = {
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
+          submission_mode?: Database["public"]["Enums"]["submission_mode"];
           suggested_due_date?: string | null;
           template_repo?: string | null;
           title?: string;
           total_points?: number | null;
           updated_at?: string;
+          upstream_base_branch?: string;
+          upstream_repo?: string | null;
         };
         Relationships: [
           {
@@ -8148,6 +8166,71 @@ export type Database = {
           }
         ];
       };
+      submission_pr_links: {
+        Row: {
+          assignment_group_id: number | null;
+          assignment_id: number;
+          class_id: number;
+          confirmed: boolean;
+          created_at: string;
+          id: number;
+          pr_number: number;
+          pr_repo: string;
+          profile_id: string | null;
+        };
+        Insert: {
+          assignment_group_id?: number | null;
+          assignment_id: number;
+          class_id: number;
+          confirmed?: boolean;
+          created_at?: string;
+          id?: number;
+          pr_number: number;
+          pr_repo: string;
+          profile_id?: string | null;
+        };
+        Update: {
+          assignment_group_id?: number | null;
+          assignment_id?: number;
+          class_id?: number;
+          confirmed?: boolean;
+          created_at?: string;
+          id?: number;
+          pr_number?: number;
+          pr_repo?: string;
+          profile_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "submission_pr_links_assignment_group_id_fkey";
+            columns: ["assignment_group_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_groups";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_pr_links_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_pr_links_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_pr_links_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       submission_regrade_request_comments: {
         Row: {
           assignment_id: number;
@@ -8687,14 +8770,18 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           assignment_id: number;
+          base_sha: string | null;
           class_id: number;
           created_at: string;
           grading_review_id: number | null;
+          head_sha: string | null;
           id: number;
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
           ordinal: number;
+          pr_number: number | null;
+          pr_state: string | null;
           profile_id: string | null;
           released: string | null;
           repository: string | null;
@@ -8708,14 +8795,18 @@ export type Database = {
         Insert: {
           assignment_group_id?: number | null;
           assignment_id: number;
+          base_sha?: string | null;
           class_id: number;
           created_at?: string;
           grading_review_id?: number | null;
+          head_sha?: string | null;
           id?: number;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
+          pr_number?: number | null;
+          pr_state?: string | null;
           profile_id?: string | null;
           released?: string | null;
           repository?: string | null;
@@ -8729,14 +8820,18 @@ export type Database = {
         Update: {
           assignment_group_id?: number | null;
           assignment_id?: number;
+          base_sha?: string | null;
           class_id?: number;
           created_at?: string;
           grading_review_id?: number | null;
+          head_sha?: string | null;
           id?: number;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
+          pr_number?: number | null;
+          pr_state?: string | null;
           profile_id?: string | null;
           released?: string | null;
           repository?: string | null;
@@ -12521,6 +12616,7 @@ export type Database = {
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
+      pr_identification_mode: "base_branch" | "branch_convention" | "manual";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
       repo_analytics_fetch_status: "idle" | "fetching" | "completed" | "error";
       repo_analytics_item_type: "issue" | "pr" | "commit" | "issue_comment" | "pr_review_comment";
@@ -12540,6 +12636,7 @@ export type Database = {
         | "request_resolved"
         | "video_joined"
         | "video_left";
+      submission_mode: "push" | "pr";
       survey_status: "draft" | "published" | "closed";
       survey_type: "assign_all" | "specific" | "peer";
       template_scope: "global" | "course";
@@ -12729,6 +12826,7 @@ export const Constants = {
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
+      pr_identification_mode: ["base_branch", "branch_convention", "manual"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
       repo_analytics_fetch_status: ["idle", "fetching", "completed", "error"],
       repo_analytics_item_type: ["issue", "pr", "commit", "issue_comment", "pr_review_comment"],
@@ -12750,6 +12848,7 @@ export const Constants = {
         "video_joined",
         "video_left"
       ],
+      submission_mode: ["push", "pr"],
       survey_status: ["draft", "published", "closed"],
       survey_type: ["assign_all", "specific", "peer"],
       template_scope: ["global", "course"]
