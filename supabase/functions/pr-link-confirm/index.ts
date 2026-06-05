@@ -19,6 +19,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getPullRequest } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -101,6 +102,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
   });
   if (ingestError) {
     throw new UserVisibleError(`Could not ingest pull request submission: ${ingestError.message}`);
+  }
+
+  // Pull the confirmed PR head fork's files into submission_files so the
+  // submission is viewable/gradable (ingest_pr_submission only makes the row).
+  const headRepo = pr.head.repo?.full_name;
+  if (submissionId && headRepo) {
+    try {
+      await ingestPrSubmissionFiles({
+        adminSupabase,
+        submissionId: submissionId as number,
+        classId: link.class_id,
+        profileId: link.assignment_group_id ? null : link.profile_id,
+        groupId: link.assignment_group_id ?? null,
+        headRepo,
+        headSha: pr.head.sha,
+        scope
+      });
+    } catch (filesError) {
+      Sentry.captureException(filesError, scope);
+    }
   }
 
   return { submission_id: (submissionId as number | null) ?? null };

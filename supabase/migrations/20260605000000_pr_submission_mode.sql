@@ -143,24 +143,16 @@ USING (
   )
 );
 
--- Students can confirm (only) their own link. The webhook (service role)
--- creates rows; students flip `confirmed`.
-CREATE POLICY "Students confirm own pr links"
-ON public.submission_pr_links
-FOR UPDATE
-USING (
-  public.authorizeforprofile(profile_id)
-  OR (
-    assignment_group_id IS NOT NULL
-    AND EXISTS (
-      SELECT 1
-      FROM public.assignment_groups_members mem
-      JOIN public.user_roles r ON r.private_profile_id = mem.profile_id
-      WHERE mem.assignment_group_id = submission_pr_links.assignment_group_id
-        AND r.user_id = auth.uid()
-    )
-  )
-);
-
-GRANT ALL ON TABLE public.submission_pr_links TO authenticated;
+-- Students do NOT get a direct UPDATE/INSERT/DELETE policy here. Confirmation
+-- flows through the `pr-link-confirm` edge function, which runs as service_role
+-- and authorizes ownership server-side before flipping `confirmed`. Granting a
+-- direct client UPDATE would let a student repoint pr_repo/pr_number on a row
+-- they own at any PR the ptg app can read (an RLS WITH CHECK cannot pin those
+-- columns to their pre-update values), so the client gets SELECT only.
+-- REVOKE first: Supabase blanket-grants privileges to `authenticated` on public
+-- tables, so we must explicitly strip write access (not just omit it) and then
+-- re-grant SELECT. RLS (no INSERT/UPDATE/DELETE policy for non-staff) is the
+-- primary gate; this makes the privilege match the intent as defense in depth.
+REVOKE ALL ON TABLE public.submission_pr_links FROM authenticated;
+GRANT SELECT ON TABLE public.submission_pr_links TO authenticated;
 GRANT ALL ON TABLE public.submission_pr_links TO service_role;

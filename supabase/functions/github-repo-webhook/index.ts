@@ -23,6 +23,7 @@ import {
   PrimaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
+import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
@@ -329,6 +330,26 @@ async function handlePushToStudentRepo(
   scope.setTag("commits_count", payload.commits.length.toString());
 
   console.log(`Handling push to student repo ${payload.repository.full_name}, ref: ${payload.ref}`);
+
+  // pr-mode guard: when this repo's assignment takes submissions as pull requests
+  // (submission_mode='pr'), a push to the fork's main is NOT a submission and
+  // must not create a check run or dispatch grade.yml — the PR webhook handles
+  // submissions. Skip rather than spin up a grading workflow.
+  const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
+    .from("assignments")
+    .select("submission_mode")
+    .eq("id", studentRepo.assignment_id)
+    .maybeSingle();
+  if (pushAssignmentErr) {
+    Sentry.captureException(pushAssignmentErr, scope);
+    throw pushAssignmentErr;
+  }
+  if (pushAssignment?.submission_mode === "pr") {
+    scope.setTag("skipped_reason", "pr_mode_assignment");
+    console.log(`Skipping push handling for ${payload.repository.full_name}: assignment is pr-mode`);
+    return;
+  }
+
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
   if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
@@ -1647,7 +1668,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
       continue;
     }
 
-    const { error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
+    const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
       p_assignment_id: a.id,
       p_profile_id: groupId ? undefined : profileId,
       p_assignment_group_id: groupId ?? undefined,
@@ -1660,6 +1681,31 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     });
     if (ingestError) {
       Sentry.captureException(ingestError, scope);
+      continue;
+    }
+
+    // ingest_pr_submission only creates the submission row; fetch the PR head
+    // fork's files into submission_files so graders have something to view/diff.
+    // The code lives in the *head fork*, not the upstream repo. Null id => the
+    // link isn't confirmed yet (nothing to ingest).
+    const headRepo = pr.head.repo?.full_name;
+    if (submissionId && headRepo) {
+      try {
+        await ingestPrSubmissionFiles({
+          adminSupabase,
+          submissionId: submissionId as number,
+          classId: a.class_id,
+          profileId: groupId ? null : profileId,
+          groupId: groupId ?? null,
+          headRepo,
+          headSha,
+          scope
+        });
+      } catch (filesError) {
+        // Don't fail the webhook delivery over a file-ingest hiccup; the row
+        // exists and a re-delivery (or confirm) will retry idempotently.
+        Sentry.captureException(filesError, scope);
+      }
     }
   }
 }
