@@ -9,6 +9,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  setGradingEditorPreference,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -134,6 +135,11 @@ test.beforeAll(async () => {
       class_id: course.id
     })
     .select("id");
+
+  // This workflow exercises the classic plain/starry-night annotation UI ("Leave a comment",
+  // "Annotate line N…", react-select check picker) for both the self-reviewing student and the
+  // grading staff, so opt every annotating user out of the now-default Monaco editor.
+  await Promise.all([student, instructor, grader, student2].map((u) => setGradingEditorPreference(u!.user_id, false)));
 });
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, instructor, grader, student2]);

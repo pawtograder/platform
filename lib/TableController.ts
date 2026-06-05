@@ -1996,6 +1996,13 @@ export default class TableController<
           messagesWithData.push(message);
         } else if (message.row_id) {
           idsToRefetch.push(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
+          // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
+          // requires_refetch=false, so we must expand them ourselves or the update is dropped.
+          for (const rid of message.row_ids) {
+            idsToRefetch.push(rid as IDType);
+          }
         }
       }
     }
@@ -2055,6 +2062,14 @@ export default class TableController<
           messagesWithData.push(message);
         } else if (message.row_id) {
           idsToRefetch.push(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
+          // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
+          // requires_refetch=false, so we must expand them ourselves or the update is dropped —
+          // this is what left grading totals stale until a manual reload.
+          for (const rid of message.row_ids) {
+            idsToRefetch.push(rid as IDType);
+          }
         }
       }
     }
@@ -2105,6 +2120,12 @@ export default class TableController<
           idsToDelete.add(data.id as IDType);
         } else if (message.row_id) {
           idsToDelete.add(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array; small operations arrive here with
+          // requires_refetch=false and must be expanded or the delete is dropped.
+          for (const rid of message.row_ids) {
+            idsToDelete.add(rid as IDType);
+          }
         }
       }
     }

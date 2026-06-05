@@ -18,6 +18,19 @@ dotenv.config({ path: ".env.local", quiet: true });
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 
+/**
+ * Set a user's grading code-viewer preference (`users.preferences.grading.useMonacoEditor`). The
+ * submission-file viewer defaults to the Monaco editor; specs that exercise the classic
+ * plain/starry-night annotation UI call this with `useMonaco=false` before loading the page.
+ */
+export async function setGradingEditorPreference(userId: string, useMonaco: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("users")
+    .update({ preferences: { grading: { useMonacoEditor: useMonaco } } })
+    .eq("user_id", userId);
+  if (error) throw new Error(`Failed to set grading editor preference: ${error.message}`);
+}
+
 /** True when `dual_active_invariants_version` RPC exists (migration 20260424200000_prevent_dual_active_submissions.sql). */
 export async function isDualActiveSubmissionGuardsMigrated(): Promise<boolean> {
   const { data, error } = await supabase.rpc("dual_active_invariants_version");
@@ -1200,7 +1213,8 @@ export async function insertPreBakedSubmission({
   assignment_id,
   class_id,
   repositorySuffix,
-  rateLimitManager
+  rateLimitManager,
+  files
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -1208,6 +1222,8 @@ export async function insertPreBakedSubmission({
   class_id: number;
   repositorySuffix?: string;
   rateLimitManager?: RateLimitManager;
+  /** Override the default single sample.java with custom files (e.g. a multi-file class path). */
+  files?: { name: string; contents: string }[];
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -1288,14 +1304,10 @@ export async function insertPreBakedSubmission({
   }
   const submissionData = submissionDataList[0];
   const submission_id = submissionData?.id;
-  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
-    "submission_files",
-    () =>
-      supabase
-        .from("submission_files")
-        .insert({
-          name: "sample.java",
-          contents: `package com.pawtograder.example.java;
+  const defaultFiles = [
+    {
+      name: "sample.java",
+      contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
@@ -1304,7 +1316,7 @@ public class Entrypoint {
 
   /*
    * This method takes two integers and returns their sum.
-   * 
+   *
    * @param a the first integer
    * @param b the second integer
    * @return the sum of a and b
@@ -1318,15 +1330,28 @@ public class Entrypoint {
    * @return
    */
   public String getMessage() {
-      
+
       return "Hello, World!";
   }
-}`,
-          class_id: class_id,
-          submission_id: submission_id,
-          profile_id: student_profile_id,
-          assignment_group_id: assignment_group_id
-        })
+}`
+    }
+  ];
+  const filesToInsert = files ?? defaultFiles;
+  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "submission_files",
+    () =>
+      supabase
+        .from("submission_files")
+        .insert(
+          filesToInsert.map((f) => ({
+            name: f.name,
+            contents: f.contents,
+            class_id: class_id,
+            submission_id: submission_id,
+            profile_id: student_profile_id,
+            assignment_group_id: assignment_group_id
+          }))
+        )
         .select("id")
   );
   if (submissionFileError) {
