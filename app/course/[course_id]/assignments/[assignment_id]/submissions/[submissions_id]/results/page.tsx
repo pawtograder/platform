@@ -249,22 +249,6 @@ export default function GraderResults() {
   if (!query.data) {
     return <Box>No grader results found</Box>;
   }
-  // Manual / rubric-graded assignments have no autograder. Don't render the
-  // "autograder hasn't finished" / error panels (there will never be a result);
-  // point graders and students at the Grade tab instead. Gated on the
-  // assignment's has_autograder flag (joined via assignments(*) above).
-  if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
-    return (
-      <Container>
-        <Box p={4} margin={{ base: "2", lg: "4" }}>
-          <Alert title="Manual / rubric grading" status="info">
-            This assignment is graded manually — there is no autograder feedback for this submission. See the Grade tab
-            for rubric scores and comments.
-          </Alert>
-        </Box>
-      </Container>
-    );
-  }
   if (query.data.data.workflow_run_error && query.data.data.workflow_run_error.length > 0) {
     const errors = filterWorkflowRunErrorsForDisplay(query.data.data.workflow_run_error);
 
@@ -385,6 +369,25 @@ export default function GraderResults() {
     );
   }
   if (!query.data.data.grader_results) {
+    // No autograder result for this submission. For a manual / rubric-graded
+    // assignment (has_autograder = false) there will never be one, so show a
+    // "manual grading" notice instead of "autograder hasn't finished". NOTE:
+    // this is gated on the ABSENCE of a result, not on has_autograder alone —
+    // has_autograder defaults to false and isn't reliably set on every
+    // autograding assignment, so a submission that DOES have grader_results
+    // always renders them (below), regardless of the flag.
+    if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
+      return (
+        <Container>
+          <Box p={4} margin={{ base: "2", lg: "4" }}>
+            <Alert title="Manual / rubric grading" status="info">
+              This assignment is graded manually — there is no autograder feedback for this submission. See the Grade
+              tab for rubric scores and comments.
+            </Alert>
+          </Box>
+        </Container>
+      );
+    }
     return (
       <Container>
         <Box p={4} margin={{ base: "2", lg: "4" }}>
