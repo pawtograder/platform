@@ -1550,115 +1550,106 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 //      cannot satisfy the NOT NULL class_id. (Deployments on handout/solution or
 //      unrelated repos legitimately fall here.)
 // Idempotent on re-delivery via upsert_github_deployment's unique-key upsert.
-eventHandler.on(
-  "deployment_status",
-  async ({ payload }: { payload: DeploymentStatusEvent }) => {
-    const scope = new Sentry.Scope();
-    tagScopeWithGenericPayload(scope, "deployment_status", payload);
+eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentStatusEvent }) => {
+  const scope = new Sentry.Scope();
+  tagScopeWithGenericPayload(scope, "deployment_status", payload);
 
-    const adminSupabase = createClient<Database>(
-      Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-    );
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
 
-    try {
-      const repoFullName = payload.repository.full_name;
-      const deployment = payload.deployment;
-      const deploymentStatus = payload.deployment_status;
-      const sha = deployment?.sha ?? null;
-      // deployment_status.environment is the most specific; fall back to the
-      // deployment's environment.
-      const environment = deploymentStatus?.environment ?? deployment?.environment ?? null;
+  try {
+    const repoFullName = payload.repository.full_name;
+    const deployment = payload.deployment;
+    const deploymentStatus = payload.deployment_status;
+    const sha = deployment?.sha ?? null;
+    // deployment_status.environment is the most specific; fall back to the
+    // deployment's environment.
+    const environment = deploymentStatus?.environment ?? deployment?.environment ?? null;
 
-      scope.setTag("deployment_repo", repoFullName);
-      if (sha) {
-        scope.setTag("deployment_sha", sha);
-      }
-
-      // Step 1: tracked repo?
-      const { data: matchedRepo, error: repoError } = await adminSupabase
-        .from("repositories")
-        .select("id, class_id")
-        .eq("repository", repoFullName)
-        .maybeSingle();
-      if (repoError) {
-        Sentry.captureException(repoError, scope);
-      }
-
-      let repositoryId: number | null = null;
-      let classId: number | null = null;
-
-      if (matchedRepo) {
-        repositoryId = matchedRepo.id;
-        classId = matchedRepo.class_id;
-      } else if (sha) {
-        // Step 2: fork/shared-project -- resolve class via a matching submission.
-        const { data: matchedSubmission, error: submissionError } = await adminSupabase
-          .from("submissions")
-          .select("class_id")
-          .eq("repository", repoFullName)
-          .eq("head_sha", sha)
-          .limit(1)
-          .maybeSingle();
-        if (submissionError) {
-          Sentry.captureException(submissionError, scope);
-        }
-        if (matchedSubmission) {
-          classId = matchedSubmission.class_id;
-        }
-      }
-
-      // Step 3: can't attribute to a class -> nothing to record.
-      if (classId === null) {
-        scope.setTag("deployment_unresolved_class", "true");
-        return;
-      }
-
-      scope.setTag("class_id", classId.toString());
-      if (repositoryId !== null) {
-        scope.setTag("repository_id", repositoryId.toString());
-      }
-
-      maybeCrash("deployment_status.before_upsert");
-      // NOTE(orchestrator): `github_deployments` and `upsert_github_deployment`
-      // are added by migration 20260606000000 and are NOT yet in the generated
-      // `Database` type. Cast through `unknown` so this compiles before type
-      // regen; tighten by dropping the cast after `npm run client-local`.
-      const { error: upsertError } = await (
-        adminSupabase.rpc as unknown as (
-          fn: string,
-          args: Record<string, unknown>
-        ) => Promise<{ error: { message: string } | null }>
-      )("upsert_github_deployment", {
-        p_class_id: classId,
-        p_repository_name: repoFullName,
-        p_repository_id: repositoryId,
-        p_sha: sha,
-        p_environment: environment,
-        p_state: deploymentStatus?.state ?? null,
-        p_target_url: deploymentStatus?.target_url ?? deploymentStatus?.log_url ?? null,
-        p_github_deployment_id: deployment?.id ?? null,
-        p_github_deployment_status_id: deploymentStatus?.id ?? null,
-        p_creator_login: deployment?.creator?.login ?? null,
-        p_payload: payload as unknown as Json
-      });
-
-      if (upsertError) {
-        scope.setTag("error_source", "github_deployments_upsert_failed");
-        Sentry.captureException(upsertError, scope);
-        return;
-      }
-
-      scope.setTag("deployment_recorded", "true");
-      console.log(
-        `[DEPLOYMENT_STATUS] Recorded ${deploymentStatus?.state} for ${repoFullName}@${sha ?? "?"} (class=${classId})`
-      );
-    } catch (error) {
-      Sentry.captureException(error, scope);
-      // Don't throw -- a failed deployment record must not break webhook delivery.
+    scope.setTag("deployment_repo", repoFullName);
+    if (sha) {
+      scope.setTag("deployment_sha", sha);
     }
+
+    // Step 1: tracked repo?
+    const { data: matchedRepo, error: repoError } = await adminSupabase
+      .from("repositories")
+      .select("id, class_id")
+      .eq("repository", repoFullName)
+      .maybeSingle();
+    if (repoError) {
+      Sentry.captureException(repoError, scope);
+    }
+
+    let repositoryId: number | null = null;
+    let classId: number | null = null;
+
+    if (matchedRepo) {
+      repositoryId = matchedRepo.id;
+      classId = matchedRepo.class_id;
+    } else if (sha) {
+      // Step 2: fork/shared-project -- resolve class via a matching submission.
+      const { data: matchedSubmission, error: submissionError } = await adminSupabase
+        .from("submissions")
+        .select("class_id")
+        .eq("repository", repoFullName)
+        .eq("head_sha", sha)
+        .limit(1)
+        .maybeSingle();
+      if (submissionError) {
+        Sentry.captureException(submissionError, scope);
+      }
+      if (matchedSubmission) {
+        classId = matchedSubmission.class_id;
+      }
+    }
+
+    // Step 3: can't attribute to a class -> nothing to record.
+    if (classId === null) {
+      scope.setTag("deployment_unresolved_class", "true");
+      return;
+    }
+
+    scope.setTag("class_id", classId.toString());
+    if (repositoryId !== null) {
+      scope.setTag("repository_id", repositoryId.toString());
+    }
+
+    maybeCrash("deployment_status.before_upsert");
+    // Optional RPC params are generated as `?: T` (undefined, not null), and
+    // supabase-js omits undefined args so the SQL DEFAULT NULL applies — pass
+    // undefined, not null, to stay type-safe with the same runtime behavior.
+    const { error: upsertError } = await adminSupabase.rpc("upsert_github_deployment", {
+      p_class_id: classId,
+      p_repository_name: repoFullName,
+      p_repository_id: repositoryId ?? undefined,
+      p_sha: sha ?? undefined,
+      p_environment: environment ?? undefined,
+      p_state: deploymentStatus?.state ?? undefined,
+      p_target_url: deploymentStatus?.target_url ?? deploymentStatus?.log_url ?? undefined,
+      p_github_deployment_id: deployment?.id ?? undefined,
+      p_github_deployment_status_id: deploymentStatus?.id ?? undefined,
+      p_creator_login: deployment?.creator?.login ?? undefined,
+      p_payload: payload as unknown as Json
+    });
+
+    if (upsertError) {
+      scope.setTag("error_source", "github_deployments_upsert_failed");
+      Sentry.captureException(upsertError, scope);
+      return;
+    }
+
+    scope.setTag("deployment_recorded", "true");
+    console.log(
+      `[DEPLOYMENT_STATUS] Recorded ${deploymentStatus?.state} for ${repoFullName}@${sha ?? "?"} (class=${classId})`
+    );
+  } catch (error) {
+    Sentry.captureException(error, scope);
+    // Don't throw -- a failed deployment record must not break webhook delivery.
   }
-);
+});
 
 // Normalize a GitHub PR payload into the small state vocabulary we store on
 // submissions/links: open | draft | closed | merged. (reopened arrives as the

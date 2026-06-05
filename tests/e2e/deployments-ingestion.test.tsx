@@ -45,7 +45,10 @@ type DeploymentRow = {
 type UntypedClient = {
   from: (table: string) => {
     select: (cols: string) => {
-      eq: (col: string, val: unknown) => {
+      eq: (
+        col: string,
+        val: unknown
+      ) => {
         order: (col: string) => Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
       } & Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
     };
