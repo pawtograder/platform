@@ -484,11 +484,9 @@ jobs:
             | Grader     | `grader@pawtograder.net`           |
             | Student    | `student@pawtograder.net`          |
 
-            These accounts are real participants in the seeded demo class (with submissions, grading assignments, etc.) — not bolted on after the fact.
+            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). 
 
-            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). Or request a magic-link from the app sign-in page.
-
-            Cert may take ~1 min to issue. The preview tears down automatically when this PR closes.
+            The preview tears down automatically when this PR closes.
 
   # --------------------------------------------------------------------------
   # destroy — helm uninstall + namespace delete on PR close (or manual)
