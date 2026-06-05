@@ -167,7 +167,9 @@ DECLARE
     v_errors            jsonb[] := '{}';
 BEGIN
     -- Heavy batch operation: match the timeout other heavy RPCs use.
-    set statement_timeout to '3min';
+    -- Transaction-local so it resets when this RPC's transaction ends rather
+    -- than leaking onto the pooled connection for subsequent requests.
+    set local statement_timeout to '3min';
 
     -- Suppress the per-row repo-sync trigger for the duration of this batch.
     -- The RPC mutates membership row-at-a-time, so leaving the trigger active
