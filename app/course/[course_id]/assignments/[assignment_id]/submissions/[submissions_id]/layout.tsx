@@ -32,6 +32,7 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
@@ -170,9 +171,29 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
+  const courseController = useCourseController();
+  const allProfilesForSort = useTableControllerTableValues(courseController.profiles);
+  const profileNamesByIdForSort = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfilesForSort) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfilesForSort]);
+  // Sort by display name. Profile IDs are UUIDs that vary across test runs,
+  // so sorting by id put the per-student "Extra tweak" rows in a different
+  // order between visual screenshot runs (see flakiness diff in run1 vs
+  // run2). Matching the sibling "Scores by student" panel keeps both lists
+  // in the same deterministic order.
   const groupMemberIds = useMemo(
-    () => (assignmentGroupWithMembers?.assignment_groups_members ?? []).map((m) => m.profile_id).sort(),
-    [assignmentGroupWithMembers?.assignment_groups_members]
+    () =>
+      [...(assignmentGroupWithMembers?.assignment_groups_members ?? [])]
+        .map((m) => m.profile_id)
+        .sort((a, b) => {
+          const nameA = profileNamesByIdForSort.get(a) ?? a;
+          const nameB = profileNamesByIdForSort.get(b) ?? b;
+          const byName = nameA.localeCompare(nameB);
+          return byName !== 0 ? byName : a.localeCompare(b);
+        }),
+    [assignmentGroupWithMembers?.assignment_groups_members, profileNamesByIdForSort]
   );
 
   const [tweakValue, setTweakValue] = useState<number | undefined>(review?.tweak);
@@ -1093,7 +1114,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1249,15 +1270,26 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {historical_submission.submission_reviews?.completed_at &&
-                        (getDisplayedGradingTotalForStudent(
-                          historical_submission.submission_reviews,
-                          private_profile_id
-                        ) ??
-                          historical_submission.submission_reviews.total_score ??
-                          "—") +
-                          "/" +
-                          (assignment?.total_points ?? <Skeleton height="20px" />)}
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so
+                        // the embedded review is null and no total shows. An instructor
+                        // masquerading reads it via the staff RLS path, so mirror RLS here and
+                        // withhold the unreleased grade. Real staff still see it.
+                        const review =
+                          isReadOnly &&
+                          historical_submission.submission_reviews &&
+                          !historical_submission.submission_reviews.released
+                            ? null
+                            : historical_submission.submission_reviews;
+                        return (
+                          review?.completed_at &&
+                          (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
+                            review.total_score ??
+                            "—") +
+                            "/" +
+                            (assignment?.total_points ?? <Skeleton height="20px" />)
+                        );
+                      })()}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -1447,7 +1479,21 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 function TestResults() {
   const submission = useSubmission();
   const pathname = usePathname();
-  const testResults = submission.grader_results?.grader_result_tests;
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const rawTestResults = submission.grader_results?.grader_result_tests;
+  // Student view (including view-as) must hide tests that are flagged not-released or
+  // hide_score — these are present in the row because RLS doesn't strip them, but
+  // AutograderSection (the Grade tab) already applies the same filter. Use the same rule
+  // here so the submission sidebar's "Automated Check Results" matches.
+  const testResults = useMemo(() => {
+    if (!rawTestResults) return rawTestResults;
+    if (isGraderOrInstructor) return rawTestResults;
+    return rawTestResults.filter((t) => {
+      const extra = t.extra_data as GraderResultTestExtraData | null;
+      return extra?.hide_score !== "true" && t.is_released;
+    });
+  }, [rawTestResults, isGraderOrInstructor]);
+  const hiddenTestCount = (rawTestResults?.length ?? 0) - (testResults?.length ?? 0);
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
@@ -1555,6 +1601,11 @@ function TestResults() {
           </Box>
         );
       })}
+      {hiddenTestCount > 0 && (
+        <Text fontSize="xs" color="text.muted" mt={2}>
+          {hiddenTestCount} hidden test{hiddenTestCount === 1 ? "" : "s"} not yet released.
+        </Text>
+      )}
       {/* Show matches for submission-level (no specific test) */}
       {matches.has(null) && matches.get(null)!.length > 0 && (
         <Box mt={2}>
@@ -2110,6 +2161,7 @@ function RubricView() {
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
+        <SubmissionRegradeRequestsPanel submissionId={submission.id} />
         <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
         <Comments />
       </VStack>
@@ -2143,12 +2195,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
   const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
-  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
+  const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  // Default tab: students land on the released grade summary if available; otherwise (and always
+  // for graders/instructors, who grade from the rubric sidebar) autograder feedback if present,
+  // else files.
+  const defaultSubPage =
+    !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
+  const activeSubPage = explicitSubPage ?? defaultSubPage;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
-  const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
@@ -2199,11 +2257,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                       .sort((a, b) => a.id - b.id)
                       .map((member) => (
                         <HStack key={member.id} gap={1}>
-                          <PersonName uid={member.profile_id} showAvatar={false} />
-                          <StudentSummaryTrigger
-                            student_id={member.profile_id}
-                            course_id={parseInt(course_id as string, 10)}
-                          />
+                          {isGraderOrInstructor ? (
+                            <StudentSummaryTrigger
+                              student_id={member.profile_id}
+                              course_id={parseInt(course_id as string, 10)}
+                            >
+                              <PersonName uid={member.profile_id} showAvatar={false} />
+                            </StudentSummaryTrigger>
+                          ) : (
+                            <PersonName uid={member.profile_id} showAvatar={false} />
+                          )}
                         </HStack>
                       ))}
                     )
@@ -2216,13 +2279,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </HStack>
               ) : (
                 <>
-                  <Text>{submitter?.name}</Text>{" "}
-                  {isGraderOrInstructor && submission.profile_id && (
+                  {isGraderOrInstructor && submission.profile_id ? (
                     <StudentSummaryTrigger
                       student_id={submission.profile_id}
                       course_id={parseInt(course_id as string, 10)}
-                    />
-                  )}
+                    >
+                      <Text>{submitter?.name}</Text>
+                    </StudentSummaryTrigger>
+                  ) : (
+                    <Text>{submitter?.name}</Text>
+                  )}{" "}
                 </>
               )}
               - Submission #{submission.ordinal}
@@ -2298,10 +2364,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
+        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
+          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+            <Icon as={FaCheckCircle} />
+            Grade
+          </Button>
+        </NextLink>
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
-            <Icon as={FaCheckCircle} />
-            Grading Summary
+            <Icon as={FaRobot} />
+            Autograder Detail
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
@@ -2323,9 +2395,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
-          <RubricView />
-        </Box>
+        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
+            On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
+            so we must NOT collapse it to applied-only here. */}
+        {activeSubPage !== "grade" && (
+          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+            <RubricView />
+          </Box>
+        )}
       </Flex>
     </Flex>
   );

@@ -1,0 +1,48 @@
+{{- if and .Values.postgres.enabled .Values.auditPartitions.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "audit-partitions") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "audit-partitions") | nindent 4 }}
+spec:
+  schedule: {{ .Values.auditPartitions.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "audit-partitions") | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: psql
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.auditPartitions.image) }}
+              command:
+                - psql
+                - -v
+                - ON_ERROR_STOP=1
+                - -c
+                - "SELECT public.audit_maintain_partitions();"
+              env:
+                - name: PGHOST
+                  value: {{ include "pawtograder.postgres.host" . }}
+                - name: PGPORT
+                  value: {{ .Values.postgres.service.port | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database | quote }}
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.postgres }}
+                      key: POSTGRES_PASSWORD
+{{- end }}

@@ -2,6 +2,7 @@
 import {
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
+  RegradeStatus,
   ReviewAssignmentParts,
   ReviewAssignments,
   Rubric,
@@ -16,6 +17,7 @@ import {
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
 import TableController, {
+  type BroadcastMessage,
   useFindTableControllerValue,
   useListTableControllerValues,
   useTableControllerTableValues,
@@ -28,7 +30,7 @@ import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useClassProfiles } from "./useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "./useCourseController";
 
 export function useSubmission(submission_id: number | null | undefined) {
@@ -236,8 +238,18 @@ export function useActiveSubmissions() {
   }, [controller]);
   return submissions;
 }
+// A row is hidden from a real student until its release_date has passed (or is null).
+// RLS enforces this server-side for students, but in view-as the instructor's auth
+// returns the full row set — apply the same gate client-side here so peer-review tasks
+// don't preview before release.
+function isReviewAssignmentReleasedForStudent(row: { release_date: string | null }): boolean {
+  if (!row.release_date) return true;
+  return new Date(row.release_date).getTime() <= Date.now();
+}
+
 export function useReviewAssignment(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
+  const isReadOnly = useIsReadOnly();
 
   const [reviewAssignment, setReviewAssignment] = useState<ReviewAssignments | undefined>(undefined);
   useEffect(() => {
@@ -251,20 +263,24 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
     setReviewAssignment(data);
     return () => unsubscribe();
   }, [controller, review_assignment_id]);
+  if (isReadOnly && reviewAssignment && !isReviewAssignmentReleasedForStudent(reviewAssignment)) {
+    return undefined;
+  }
   return reviewAssignment;
 }
 
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const filter = useCallback(
     (reviewAssignment: ReviewAssignments) => {
-      return (
-        reviewAssignment.assignee_profile_id === private_profile_id &&
-        (submission_id ? reviewAssignment.submission_id === submission_id : true)
-      );
+      if (reviewAssignment.assignee_profile_id !== private_profile_id) return false;
+      if (submission_id && reviewAssignment.submission_id !== submission_id) return false;
+      if (isReadOnly && !isReviewAssignmentReleasedForStudent(reviewAssignment)) return false;
+      return true;
     },
-    [private_profile_id, submission_id]
+    [private_profile_id, submission_id, isReadOnly]
   );
   return useListTableControllerValues(controller.reviewAssignments, filter);
 }
@@ -356,6 +372,37 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
 }
 
 /**
+ * Returns the active regrade request for a rubric check that was never applied
+ * (no backing submission/file/artifact comment yet).
+ */
+export function useBareCheckRegradeRequest(
+  submission_review_id: number | null | undefined,
+  rubric_check_id: number | null | undefined
+) {
+  const controller = useAssignmentController();
+  const findPredicate = useCallback(
+    (regrade_request: RegradeRequest) =>
+      regrade_request.submission_review_id === submission_review_id &&
+      regrade_request.rubric_check_id === rubric_check_id &&
+      regrade_request.submission_comment_id == null &&
+      regrade_request.submission_file_comment_id == null &&
+      regrade_request.submission_artifact_comment_id == null,
+    [submission_review_id, rubric_check_id]
+  );
+  const matches = useListTableControllerValues(controller.regradeRequests, findPredicate);
+  // Only surface an ACTIVE bare-check request, and pick deterministically (most recently updated)
+  // so the UI never latches onto a stale/non-actionable row when several exist.
+  return useMemo(() => {
+    const ACTIVE_STATUSES: RegradeStatus[] = ["draft", "opened", "escalated"];
+    const active = matches.filter((r) => ACTIVE_STATUSES.includes(r.status as RegradeStatus));
+    if (active.length === 0) {
+      return undefined;
+    }
+    return [...active].sort((a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime())[0];
+  }, [matches]);
+}
+
+/**
  * Returns all leaderboard entries for the current assignment, sorted by autograder score descending.
  * Uses the TableController for real-time updates.
  */
@@ -400,6 +447,7 @@ export class AssignmentController {
     TableController<"review_assignment_rubric_parts">
   > = new Map();
   private _reviewAssignmentRubricPartsRefCount: Map<number, number> = new Map();
+  private _reviewAssignmentRubricHydrationUnsubscribe: (() => void) | null = null;
 
   constructor({
     client,
@@ -532,8 +580,54 @@ export class AssignmentController {
       table: "error_pin_rules",
       classRealTimeController
     });
+
+    // Self-review rubrics with hide_unless_assigned are invisible until a
+    // review_assignments row exists. Refetch rubric controllers when one
+    // arrives so useRubric("self-review") hydrates after RLS opens up.
+    this._reviewAssignmentRubricHydrationUnsubscribe = classRealTimeController.subscribeToTable(
+      "review_assignments",
+      (message: BroadcastMessage) => {
+        if (message.operation !== "INSERT" && message.operation !== "UPDATE") return;
+        const data = message.data as
+          | {
+              assignment_id?: number;
+              assignee_profile_id?: string;
+              rubric_id?: number | null;
+            }
+          | undefined;
+        if (!data || data.assignment_id !== assignment_id) return;
+        if (data.assignee_profile_id !== classRealTimeController.profileId) return;
+        if (!this._shouldRefetchRubricsForReviewAssignment(data)) return;
+        void this.refetchAllRubricData();
+      }
+    );
+  }
+
+  /**
+   * Refetch all rubric table controllers for this assignment. Needed when RLS
+   * starts allowing rubric reads after a review_assignment is created/released.
+   */
+  async refetchAllRubricData(): Promise<void> {
+    await Promise.all([
+      this.rubricsController.refetchAll(),
+      this.rubricPartsController.refetchAll(),
+      this.rubricCriteriaController.refetchAll(),
+      this.rubricChecksController.refetchAll(),
+      this.rubricCheckReferencesController.refetchAll()
+    ]);
+  }
+
+  private _shouldRefetchRubricsForReviewAssignment(data: { rubric_id?: number | null }): boolean {
+    if (!this._assignment) return true;
+    const selfReviewRubricId = this._assignment.self_review_rubric_id;
+    if (!selfReviewRubricId) return true;
+    return data.rubric_id === selfReviewRubricId;
   }
   close() {
+    if (this._reviewAssignmentRubricHydrationUnsubscribe) {
+      this._reviewAssignmentRubricHydrationUnsubscribe();
+      this._reviewAssignmentRubricHydrationUnsubscribe = null;
+    }
     this.reviewAssignments.close();
     this.regradeRequests.close();
     this.submissions.close();

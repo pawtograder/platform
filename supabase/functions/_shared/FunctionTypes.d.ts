@@ -350,6 +350,11 @@ export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_c
 export type AssignmentCreateHandoutRepoRequest = {
   assignment_id: number;
   class_id: number;
+  /** Optional override of the GitHub source template repository, in `owner/repo`
+   * form. When omitted, the edge function falls back to its built-in
+   * `pawtograder/template-assignment-handout`. Demo provisioning passes the
+   * canned per-assignment handout repo here. */
+  template_repo_override?: string;
 };
 
 export type AssignmentCreateHandoutRepoResponse = {
@@ -374,6 +379,11 @@ export type AutograderCreateReposForStudentRequest = {
   sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
   /** When true with assignment_id, allow an individual test repo even for groups-only assignments (instructor Test Assignment). */
   for_test_assignment?: boolean;
+  /** Optional override of the GitHub source template repository for the per-student repo, in
+   * `owner/repo` form. Only honored when the caller is the edge-function secret or the service
+   * role and `assignment_id` is set — demo provisioning uses this to seed each real-fleet
+   * student with a canned submission repo instead of the empty handout. */
+  template_repo_override?: string;
 };
 
 export type AssignmentDeleteRequest = {
@@ -490,7 +500,6 @@ export type CreateInvitationResponse = {
     name?: string;
     status: string;
     created_at: string;
-    expires_at: string;
     class_section_id?: number;
     lab_section_id?: number;
   }>;

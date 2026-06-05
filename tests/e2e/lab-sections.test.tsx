@@ -86,24 +86,22 @@ test.describe("Lab Sections Page", () => {
     // where an "Enrollments" menuitem subtree intercepted pointer events for
     // 60s).
     //
-    // The chakra menu's *positioner* is a popper container that stays in the
-    // DOM regardless of menu open/closed (no `data-state` on it). The actual
-    // closed signal is on `Menu.Content`: when the menu closes, zag-js sets
-    // `hidden` and `data-state="closed"` on the content (see
-    // node_modules/@zag-js/menu/dist/index.js getContentProps). Asserting the
-    // positioner toBeHidden() is therefore a brittle proxy that depends on
-    // browser-specific bbox semantics — webkit has been observed to keep the
-    // empty positioner reported as "visible" for >20s. Wait on the
-    // authoritative content `data-state="closed"` instead.
+    // Confirm the dropdown has finished closing before clicking through to the
+    // lab-sections page. Under webkit contention the menu positioner has been
+    // seen to linger after the new page has rendered, intercepting clicks on
+    // the "Manage lab sections" link below (see CI run #24943326970 retry #2,
+    // where an "Enrollments" menuitem subtree intercepted pointer events for
+    // 60s).
     //
-    // Scope to the Course Settings menu specifically: the page also mounts a
-    // UserMenu via `dynamicCourseNav`, and a bare `[data-part="content"]
-    // [data-scope="menu"]` selector matches both, tripping Playwright's
-    // strict-mode check on `toHaveAttribute`. Filtering by a menuitem only
-    // present in this menu uniquely identifies it.
-    await expect(
-      page.locator('[data-part="content"][data-scope="menu"]').filter({ hasText: "Lab Sections" })
-    ).toHaveAttribute("data-state", "closed");
+    // The cleanest closed signal that works across all renderer states is the
+    // menuitem itself. While the menu is open, "Lab Sections" is a real
+    // accessible menuitem; once it closes, Chakra/zag-js unmounts the
+    // menu.Content (no transition delay because tests/global-setup.ts disables
+    // animations in visual mode), removing the menuitem from the a11y tree.
+    // `toBeHidden` is satisfied by both "hidden attribute set" and "node
+    // missing", so it handles both the visible-but-closed (data-state=closed)
+    // and unmounted variants of the close.
+    await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeHidden({ timeout: 20_000 });
 
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
     // link render. Don't trust `Loading lab roster... toBeHidden()` as a readiness
@@ -188,5 +186,113 @@ test.describe("Lab Sections Page", () => {
     await expect(page.locator(`text=${labSectionName}`).first()).toBeVisible();
     await expect(page.locator(`text=${labSectionDescription}`).first()).toBeVisible();
     await expect(page.getByText("No lab sections created yet.")).not.toBeVisible();
+  });
+  test("Instructors can edit a lab section", async ({ page }) => {
+    // Edit a pre-seeded section. Use "<Lab Section 15>" — its name is not a
+    // substring of any other seeded section's name, so the row filter below is
+    // unambiguous (unlike e.g. "<Lab Section 1>", which is a substring of 10-19).
+    const originalName = "<Lab Section 15>";
+    const updatedDescription = "Edited via e2e test";
+    const row = page.getByRole("row").filter({ hasText: originalName });
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: "Edit lab section" }).click();
+
+    // The shared modal renders "Edit Lab Section" when initialData is present.
+    await expect(page.getByText("Edit Lab Section")).toBeVisible();
+    await page.getByPlaceholder("Optional description").fill(updatedDescription);
+    // The submit button reads "Update" in edit mode (vs "Create" when creating).
+    await page.getByRole("button", { name: "Update" }).click();
+
+    await expect(page.getByText("Edit Lab Section")).toBeHidden();
+    // The edited description is rendered back in the table for that section.
+    await expect(row.getByText(updatedDescription)).toBeVisible();
+  });
+  test("Instructors can delete a lab section", async ({ page }) => {
+    // Regression test for "instructors unable to delete a lab section":
+    // TableController.delete() soft-deletes via `UPDATE ... SET deleted_at`, but
+    // lab_sections has no deleted_at column, so the delete always errored and the
+    // section stayed. The page now uses hardDelete(); this test asserts the row is
+    // both removed from the table AND gone from the database.
+    const deletableName = "<Lab Section To Delete>";
+    const { data: created, error } = await supabase
+      .from("lab_sections")
+      .insert({
+        name: deletableName,
+        day_of_week: "monday",
+        class_id: course.id,
+        start_time: "09:00",
+        end_time: "10:00"
+      })
+      .select("*")
+      .single();
+    if (error) {
+      throw new Error(`Failed to create lab section to delete: ${error.message}`);
+    }
+    const { error: leaderError } = await supabase.from("lab_section_leaders").insert({
+      lab_section_id: created.id,
+      profile_id: instructor1!.private_profile_id,
+      class_id: course.id
+    });
+    if (leaderError) {
+      throw new Error(`Failed to create lab section leader: ${leaderError.message}`);
+    }
+
+    // The section is inserted while this page is already open and subscribed, so
+    // the realtime INSERT should deliver it live. Fall back to a single reload
+    // (by which time the async SSR cache invalidation has landed) if it doesn't.
+    const row = page.locator(`#lab-section-row-${created.id}`);
+    try {
+      await expect(row).toBeVisible({ timeout: 15_000 });
+    } catch (err) {
+      const matcherResult = (err as { matcherResult?: { name?: string } } | null)?.matcherResult;
+      if (!matcherResult || matcherResult.name !== "toBeVisible") throw err;
+      await page.reload();
+      await expect(page.getByText("Loading lab sections...")).toBeHidden();
+      await expect(row).toBeVisible({ timeout: 30_000 });
+    }
+    await expect(row.getByText(deletableName, { exact: true })).toBeVisible();
+
+    // Open the delete confirmation popover (trigger aria-label "Delete lab section")
+    // and confirm (confirm IconButton aria-label "Confirm action").
+    await row.getByRole("button", { name: "Delete lab section" }).click();
+    await page.getByRole("button", { name: "Confirm action" }).click();
+
+    // The user-visible success signal is the row leaving the table. (The success
+    // toast is intentionally not asserted — it auto-dismisses and is racy.)
+    await expect(page.locator(`#lab-section-row-${created.id}`)).toHaveCount(0);
+
+    // Hard delete: the row no longer exists in the database (not merely flagged).
+    // The table removes the row optimistically, so poll until the server-side
+    // DELETE has committed rather than racing it with a single query.
+    await expect
+      .poll(async () => {
+        const { data, error: fetchError } = await supabase.from("lab_sections").select("id").eq("id", created.id);
+        if (fetchError) {
+          throw new Error(`Failed to query lab section after delete: ${fetchError.message}`);
+        }
+        return data?.length ?? 0;
+      })
+      .toBe(0);
+  });
+  test("Instructors can cancel a lab section meeting", async ({ page }) => {
+    // Meetings are auto-generated between the class start/end dates (2035) by the
+    // sync_lab_section_meetings trigger, so a seeded section has scheduled meetings.
+    // "<Lab Section 16>" is not a substring of any other seeded section name.
+    const sectionName = "<Lab Section 16>";
+    const row = page.getByRole("row").filter({ hasText: sectionName });
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: "Manage meetings" }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(`Manage Meetings - ${sectionName}`)).toBeVisible();
+    // Each generated meeting starts "Scheduled" with a "Cancel" action.
+    const firstCancel = dialog.getByRole("button", { name: "Cancel", exact: true }).first();
+    await expect(firstCancel).toBeVisible();
+    await firstCancel.click();
+
+    // The durable signal is the row flipping to "Cancelled" with a "Restore" action
+    // (the "Meeting cancelled" toast auto-dismisses and is racy to assert).
+    await expect(dialog.getByText("Cancelled").first()).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Restore", exact: true }).first()).toBeVisible();
   });
 });

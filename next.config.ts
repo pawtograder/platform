@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 
 const bundlingProfile = process.env.NEXT_BUNDLING_PROFILE ?? "worker";
@@ -36,6 +37,19 @@ const nextConfig: NextConfig = {
   // builds — production builds keep maps off (faster build, smaller
   // artifact, no IP leak in browser DevTools).
   productionBrowserSourceMaps: coverageBuild,
+  // Shared cross-replica cache. The default Next cache is per-instance, so with
+  // >1 web replica `revalidateTag()` only invalidates the pod that handled the
+  // request and the others serve stale data. `cache-handler.cjs` backs the
+  // cache with the shared in-cluster Redis (REDIS_URL); it degrades to a
+  // per-process in-memory Map when REDIS_URL is unset, so local/dev builds are
+  // unaffected. `cacheMaxMemorySize: 0` disables Next's extra default in-memory
+  // layer in favour of the handler. Force-include the handler + ioredis in the
+  // standalone trace so `node server.js` can require them at runtime.
+  cacheHandler: path.join(process.cwd(), "cache-handler.cjs"),
+  cacheMaxMemorySize: 0,
+  outputFileTracingIncludes: {
+    "/**": ["./cache-handler.cjs"]
+  },
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),

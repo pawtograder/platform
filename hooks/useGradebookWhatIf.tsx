@@ -49,7 +49,8 @@ export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "s
   column_slug: string;
 };
 
-type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
+type AssignmentForStudentDashboard =
+  Database["public"]["Functions"]["get_assignments_for_student_dashboard"]["Returns"][number];
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
   public debugID: string = crypto.randomUUID();
@@ -72,16 +73,34 @@ class GradebookWhatIfController {
   }
 
   private initializeGradebookGrades() {
-    //Fetch all assignments for the student with their submissions
+    // Fetch all assignments for the student with their submissions via the SECURITY
+    // DEFINER RPC. The function authorizes at the top (caller is either the student
+    // themselves or an instructor/grader of the class), so this works for the
+    // instructor's read-only view-as path as well — using `this.courseController.userId`
+    // here would otherwise be the real signed-in user, not the effective student.
     const client = createClient();
     client
-      .from("assignments_for_student_dashboard")
-      .select("*")
-      .eq("class_id", this.gradebookController.class_id)
-      .eq("student_user_id", this.courseController.userId)
-      .eq("student_profile_id", this.private_profile_id)
-      .then(({ data }) => {
+      .rpc("get_assignments_for_student_dashboard", {
+        p_class_id: this.gradebookController.class_id,
+        p_student_profile_id: this.private_profile_id
+      })
+      .then(({ data, error }) => {
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load assignments for what-if dashboard:", error);
+          // Don't leave subscribers stuck silently on the initial [] fallback: rerun the
+          // dependency pass and notify so any assignments(...) formulas resolve against the
+          // (empty) known state rather than appearing to still be loading.
+          this._assignments = [];
+          this.recalculateDependentColumns();
+          this.notify();
+          return;
+        }
         this._assignments = data ?? [];
+        // Formulas using assignments(...) evaluated against [] before this resolved;
+        // rerun the dependency pass and notify subscribers so the UI catches up.
+        this.recalculateDependentColumns();
+        this.notify();
       });
     // Initialize with current grades from the gradebook
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];

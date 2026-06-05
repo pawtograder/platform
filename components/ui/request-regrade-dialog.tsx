@@ -9,7 +9,7 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { useAssignmentData, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController } from "@/hooks/useSubmission";
 import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
@@ -21,14 +21,18 @@ import { Alert } from "@/components/ui/alert";
 import { format, formatDistanceToNow } from "date-fns";
 
 export default function RequestRegradeDialog({
-  comment
+  comment,
+  compact = false
 }: {
   comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
+  /** Render a low-emphasis trigger (small ghost link) instead of the full-width button. */
+  compact?: boolean;
 }) {
   const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
   const submission = useSubmission();
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const assignment = useAssignmentData();
 
   const isGroupSubmission = submission.assignment_group_id !== null;
@@ -100,8 +104,20 @@ export default function RequestRegradeDialog({
 
   const pointsText = rubricCriteria?.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
 
+  // Read-only: an instructor viewing as a student cannot open regrade requests.
+  if (isReadOnly) {
+    return null;
+  }
+
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {
+    if (compact) {
+      return (
+        <Text fontSize="xs" color="fg.subtle" title="Regrade deadline has passed">
+          Regrade deadline passed
+        </Text>
+      );
+    }
     return (
       <Box pl={2} pb={2} w="100%">
         <Button size="sm" colorPalette="gray" variant="outline" w="100%" disabled title="Regrade deadline has passed">
@@ -115,12 +131,18 @@ export default function RequestRegradeDialog({
   }
 
   return (
-    <Box pl={2} pb={2} w="100%">
+    <Box pl={compact ? 0 : 2} pb={compact ? 0 : 2} w={compact ? "auto" : "100%"}>
       <DialogRoot open={isRegradeDialogOpen} onOpenChange={(e) => setIsRegradeDialogOpen(e.open)}>
         <DialogTrigger asChild>
-          <Button size="sm" colorPalette="orange" variant="outline" w="100%">
-            Request regrade for this check
-          </Button>
+          {compact ? (
+            <Button size="xs" variant="ghost" colorPalette="gray" color="fg.muted" px={1} h="auto" py={0.5}>
+              Request regrade
+            </Button>
+          ) : (
+            <Button size="sm" colorPalette="orange" variant="outline" w="100%">
+              Request regrade for this check
+            </Button>
+          )}
         </DialogTrigger>
         <DialogContent>
           <DialogHeader>

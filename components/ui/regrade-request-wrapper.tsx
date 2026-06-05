@@ -40,13 +40,24 @@ import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
+import BareCheckResolveLocationFields, {
+  toBareCheckResolveNamedItems,
+  useDefaultBareCheckResolveLocation
+} from "@/components/regrade-requests/BareCheckResolveLocationFields";
+import {
+  buildBareCheckRpcLocationArgs,
+  getBareCheckMaterializationKind,
+  isBareCheckRegradeRequest,
+  isBareCheckResolveLocationValid,
+  type BareCheckResolveLocation
+} from "@/lib/regrade/bareCheckMaterialization";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -213,8 +224,19 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
  */
 export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId: number }) {
   const comments = useSubmissionRegradeRequestComments({ submission_regrade_request_id: regradeRequestId });
+  const sortedComments = useMemo(
+    () =>
+      [...(comments ?? [])].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id
+      ),
+    [comments]
+  );
   return (
-    <VStack px={2}>{comments?.map((comment) => <RegradeRequestComment key={comment.id} comment={comment} />)}</VStack>
+    <VStack px={2}>
+      {sortedComments.map((comment) => (
+        <RegradeRequestComment key={comment.id} comment={comment} />
+      ))}
+    </VStack>
   );
 }
 
@@ -224,11 +246,14 @@ export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId:
 const ResolveRequestPopover = memo(function ResolveRequestPopover({
   initialPoints,
   regradeRequestId,
+  regradeRequest,
   privateProfileId,
-  rubricCriteria
+  rubricCriteria,
+  rubricCheck
 }: {
   initialPoints: number | null;
   regradeRequestId: number;
+  regradeRequest: SubmissionRegradeRequest;
   privateProfileId: string;
   rubricCriteria: RubricCriteria | null | undefined;
   rubricCheck?: RubricCheck | null | undefined;
@@ -236,13 +261,30 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   const [pointsAdjustment, setPointsAdjustment] = useState<string>("0");
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [resolveLocation, setResolveLocation] = useState<BareCheckResolveLocation>({});
   const { regradeRequests } = useAssignmentController();
+  const submission = useSubmission();
 
-  // Reset adjustment to 0 when popover opens
+  const isBareCheck = isBareCheckRegradeRequest(regradeRequest);
+  const materializationKind = getBareCheckMaterializationKind(rubricCheck);
+  const defaultResolveLocation = useDefaultBareCheckResolveLocation(
+    materializationKind,
+    rubricCheck ?? null,
+    toBareCheckResolveNamedItems(submission.submission_files),
+    toBareCheckResolveNamedItems(submission.submission_artifacts)
+  );
+  const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
+
+  // Reset the adjustment and resolve location ONLY when the popover opens. defaultResolveLocation is
+  // a fresh reference on every render (it derives from arrays rebuilt each render), so it must NOT
+  // be a dependency here: including it re-fires this effect on every render, which both wipes the
+  // user's just-typed adjustment back to "0" and spins a setState/render update loop.
   useEffect(() => {
     if (isOpen) {
       setPointsAdjustment("0");
+      setResolveLocation(defaultResolveLocation);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
@@ -280,7 +322,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         regrade_request_id: regradeRequestId,
         new_status: "resolved",
         profile_id: privateProfileId,
-        resolved_points: finalScore
+        resolved_points: finalScore,
+        ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
       });
 
       if (error) throw error;
@@ -305,7 +348,16 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
+  }, [
+    finalScore,
+    pointsAdjustmentNum,
+    regradeRequestId,
+    privateProfileId,
+    regradeRequests,
+    isBareCheck,
+    materializationKind,
+    resolveLocation
+  ]);
 
   return (
     <PopoverRoot
@@ -443,14 +495,31 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
               </Box>
             </VStack>
 
+            {isBareCheck && rubricCheck && (
+              <BareCheckResolveLocationFields
+                idPrefix={`resolve-${regradeRequestId}`}
+                rubricCheck={rubricCheck}
+                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
+                location={resolveLocation}
+                onChange={setResolveLocation}
+              />
+            )}
+
             <Button
               colorPalette="blue"
               size="sm"
               onClick={handleResolve}
               loading={isUpdating}
               w="100%"
-              disabled={wouldBeNegative}
-              aria-label={wouldBeNegative ? "Cannot resolve with negative score" : "Resolve regrade request"}
+              disabled={wouldBeNegative || !locationIsValid}
+              aria-label={
+                wouldBeNegative
+                  ? "Cannot resolve with negative score"
+                  : !locationIsValid
+                    ? "Select annotation location before resolving"
+                    : "Resolve regrade request"
+              }
             >
               {hasChange
                 ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Resolve`
@@ -526,12 +595,15 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   initialPoints,
   resolvedPoints,
   regradeRequestId,
+  regradeRequest,
   privateProfileId,
-  rubricCriteria
+  rubricCriteria,
+  rubricCheck
 }: {
   initialPoints: number | null;
   resolvedPoints: number | null;
   regradeRequestId: number;
+  regradeRequest: SubmissionRegradeRequest;
   privateProfileId: string;
   rubricCriteria: RubricCriteria | null | undefined;
   rubricCheck?: RubricCheck | null | undefined;
@@ -539,14 +611,31 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   const [pointsAdjustment, setPointsAdjustment] = useState<string>("0");
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [resolveLocation, setResolveLocation] = useState<BareCheckResolveLocation>({});
 
   const { regradeRequests } = useAssignmentController();
+  const submission = useSubmission();
 
-  // Reset adjustment to 0 when popover opens
+  const isBareCheck = isBareCheckRegradeRequest(regradeRequest);
+  const materializationKind = getBareCheckMaterializationKind(rubricCheck);
+  const defaultResolveLocation = useDefaultBareCheckResolveLocation(
+    materializationKind,
+    rubricCheck ?? null,
+    toBareCheckResolveNamedItems(submission.submission_files),
+    toBareCheckResolveNamedItems(submission.submission_artifacts)
+  );
+  const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
+
+  // Reset the adjustment and resolve location ONLY when the popover opens. defaultResolveLocation is
+  // a fresh reference on every render (it derives from arrays rebuilt each render), so it must NOT
+  // be a dependency here: including it re-fires this effect on every render, which both wipes the
+  // user's just-typed adjustment back to "0" and spins a setState/render update loop.
   useEffect(() => {
     if (isOpen) {
       setPointsAdjustment("0");
+      setResolveLocation(defaultResolveLocation);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
@@ -585,7 +674,8 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
         regrade_request_id: regradeRequestId,
         new_status: "closed",
         profile_id: privateProfileId,
-        closed_points: finalScore
+        closed_points: finalScore,
+        ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
       });
 
       if (error) throw error;
@@ -610,7 +700,16 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     } finally {
       setIsUpdating(false);
     }
-  }, [finalScore, pointsAdjustmentNum, regradeRequestId, privateProfileId, regradeRequests]);
+  }, [
+    finalScore,
+    pointsAdjustmentNum,
+    regradeRequestId,
+    privateProfileId,
+    regradeRequests,
+    isBareCheck,
+    materializationKind,
+    resolveLocation
+  ]);
 
   return (
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
@@ -763,6 +862,17 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
               </Box>
             </VStack>
 
+            {isBareCheck && rubricCheck && (
+              <BareCheckResolveLocationFields
+                idPrefix={`close-${regradeRequestId}`}
+                rubricCheck={rubricCheck}
+                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
+                location={resolveLocation}
+                onChange={setResolveLocation}
+              />
+            )}
+
             <VStack gap={2} w="100%">
               {!hasChange && (
                 <Box bg="bg.info" p={2} borderRadius="md" w="100%">
@@ -776,8 +886,14 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                 onClick={handleClose}
                 loading={isUpdating}
                 w="100%"
-                disabled={wouldBeNegative}
-                aria-label={wouldBeNegative ? "Cannot close with negative score" : "Close regrade request"}
+                disabled={wouldBeNegative || !locationIsValid}
+                aria-label={
+                  wouldBeNegative
+                    ? "Cannot close with negative score"
+                    : !locationIsValid
+                      ? "Select annotation location before closing"
+                      : "Close regrade request"
+                }
               >
                 {hasChange
                   ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Close`
@@ -934,7 +1050,8 @@ function useRegradeRequestRubricCheck(regradeRequest: SubmissionRegradeRequest |
   return useRubricCheck(
     submissionComment?.rubric_check_id ||
       submissionArtifactComment?.rubric_check_id ||
-      submissionFileComment?.rubric_check_id
+      submissionFileComment?.rubric_check_id ||
+      regradeRequest?.rubric_check_id
   );
 }
 
@@ -1255,6 +1372,7 @@ export default function RegradeRequestWrapper({
                 <ResolveRequestPopover
                   initialPoints={regradeRequest.initial_points}
                   regradeRequestId={regradeRequest.id}
+                  regradeRequest={regradeRequest}
                   privateProfileId={authorProfileId}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
@@ -1278,6 +1396,7 @@ export default function RegradeRequestWrapper({
                   initialPoints={regradeRequest.initial_points}
                   resolvedPoints={regradeRequest.resolved_points}
                   regradeRequestId={regradeRequest.id}
+                  regradeRequest={regradeRequest}
                   privateProfileId={private_profile_id}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}

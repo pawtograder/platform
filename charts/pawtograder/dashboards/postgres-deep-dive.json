@@ -1,0 +1,369 @@
+{
+  "uid": "pawtograder-postgres",
+  "title": "Pawtograder \u00b7 Postgres Deep Dive",
+  "tags": [
+    "pawtograder",
+    "postgres"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(kube_pod_info, namespace)",
+        "refresh": 1,
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": false,
+        "regex": "pawtograder.*",
+        "sort": 1
+      },
+      {
+        "name": "datname",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(pg_database_size_bytes, datname)",
+        "refresh": 1,
+        "current": {
+          "selected": false,
+          "text": "postgres",
+          "value": "postgres"
+        },
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Cache hit ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_blks_hit{datname=\"$datname\"}[5m])) / clamp_min(sum(rate(pg_stat_database_blks_hit{datname=\"$datname\"}[5m]) + rate(pg_stat_database_blks_read{datname=\"$datname\"}[5m])), 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.95
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Active connections",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pg_stat_activity_count{datname=\"$datname\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Replication lag (max slot)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_replication_slots_lag_bytes{namespace=~\"$namespace\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100000000
+              },
+              {
+                "color": "red",
+                "value": 1000000000
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "DB size",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pg_database_size_bytes{datname=\"$datname\", namespace=~\"$namespace\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Transactions / s (commit vs rollback)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "commit",
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"$datname\"}[1m])"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "rollback",
+          "expr": "rate(pg_stat_database_xact_rollback{datname=\"$datname\"}[1m])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Rows touched / s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "returned",
+          "expr": "rate(pg_stat_database_tup_returned{datname=\"$datname\"}[1m])"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "fetched",
+          "expr": "rate(pg_stat_database_tup_fetched{datname=\"$datname\"}[1m])"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "inserted",
+          "expr": "rate(pg_stat_database_tup_inserted{datname=\"$datname\"}[1m])"
+        },
+        {
+          "refId": "D",
+          "legendFormat": "updated",
+          "expr": "rate(pg_stat_database_tup_updated{datname=\"$datname\"}[1m])"
+        },
+        {
+          "refId": "E",
+          "legendFormat": "deleted",
+          "expr": "rate(pg_stat_database_tup_deleted{datname=\"$datname\"}[1m])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rps"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Top 20 statements by total exec time",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(20, pg_stat_statements_top_mean_exec_time{namespace=~\"$namespace\"})"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "table",
+      "title": "Top 30 tables by total size",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(30, pawtograder_table_sizes_total_bytes{namespace=~\"$namespace\"})"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Replication slot lag (bytes)",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{slot_name}}",
+          "expr": "pg_replication_slots_lag_bytes{namespace=~\"$namespace\"}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Locks held by mode",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{mode}}",
+          "expr": "sum by(mode)(pg_locks_count{datname=\"$datname\"})"
+        }
+      ]
+    }
+  ]
+}

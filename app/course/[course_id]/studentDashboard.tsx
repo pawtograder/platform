@@ -2,6 +2,7 @@ import { fetchStudentDashboardBundle } from "@/lib/ssr-course-dashboard";
 import { findGithubIdentity } from "@/lib/githubIdentity";
 import { Survey, SurveyResponse } from "@/types/survey";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Badge,
   Box,
@@ -29,6 +30,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { DueDateDisplay } from "@/components/ui/due-date-display";
 import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -87,17 +89,19 @@ function sortIncompleteSurveysForBanner(surveys: Survey[]): Survey[] {
 
 export default async function StudentDashboard({
   course_id,
-  private_profile_id
+  private_profile_id,
+  isViewingAsStudent = false
 }: {
   course_id: number;
   private_profile_id: string;
+  isViewingAsStudent?: boolean;
 }) {
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 
   const supabase = await createClient();
   const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
-    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id);
+    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id, isViewingAsStudent);
 
   const identitiesResult = await supabase.auth.getUserIdentities();
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
@@ -111,10 +115,14 @@ export default async function StudentDashboard({
 
   const surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
 
-  type StudentUpcomingAssignmentRow = {
-    id: number;
-    title: string | null;
-    due_date: string | null;
+  // Columns sourced from the assignments_with_effective_due_dates view (see
+  // fetchStudentDashboardBundle). Deriving them from the generated view type means a future
+  // column rename/removal surfaces as a compile error rather than silently dropping a value
+  // through the `as` cast below.
+  type StudentUpcomingAssignmentRow = Pick<
+    Database["public"]["Views"]["assignments_with_effective_due_dates"]["Row"],
+    "id" | "title" | "due_date" | "suggested_due_date"
+  > & {
     submissions?: Array<{
       created_at: string;
       ordinal: number | null;
@@ -328,7 +336,11 @@ export default async function StudentDashboard({
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
                         {assignment.due_date ? (
-                          <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                          <DueDateDisplay
+                            suggestedDueDate={assignment.suggested_due_date}
+                            dueDate={assignment.due_date}
+                            dateFormat="Pp"
+                          />
                         ) : (
                           "No due date"
                         )}
@@ -352,7 +364,7 @@ export default async function StudentDashboard({
 
       {/* Discussion Activity Summary */}
       <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
-        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+        <DiscussionSummary courseId={course_id} privateProfileId={private_profile_id} />
       </CourseFeatureGate>
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>

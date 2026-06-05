@@ -6,7 +6,7 @@ import {
   useConnectionStatus,
   useHelpQueueAssignments,
   useHelpQueues,
-  useHelpRequests,
+  useStudentVisibleHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -49,7 +49,7 @@ export default function OfficeHoursPage() {
   // Use individual hooks for office hours data
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const helpRequestStudents = useHelpRequestStudents();
   const officeHoursEvents = useOfficeHoursSchedule();
   const { connectionStatus, connectionError, isLoading } = useConnectionStatus();

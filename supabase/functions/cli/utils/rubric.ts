@@ -178,7 +178,11 @@ export async function copyRubricStructure(
         name: part.name,
         description: part.description,
         ordinal: part.ordinal,
-        data: part.data
+        data: part.data,
+        // Carry over the per-part grading mode (assign-to-student / individual);
+        // otherwise the copy silently downgrades those parts to regular grading.
+        is_individual_grading: part.is_individual_grading,
+        is_assign_to_student: part.is_assign_to_student
       })
       .select("id")
       .single();

@@ -121,17 +121,23 @@ test.describe("Course-wide manage regrade requests", () => {
     await expect(onlyRow.getByText(ASSIGN_B_TITLE)).toHaveCount(0);
 
     // The Status filter defaults to ["opened", "escalated"] (server-enforced),
-    // so draft and resolved rows are hidden. Clearing it reveals all 3.
+    // so draft and resolved rows are hidden. Clearing both pills reveals all 3.
     // react-select removes the rightmost selected pill on Backspace when the
-    // input is empty; two presses clear the two default-selected statuses.
+    // input is empty. Removing a pill flips `statusFilter`, which re-queries the
+    // table server-side and re-renders the control; under webkit a Backspace
+    // fired during that re-render is silently dropped, so two blind presses can
+    // leave one pill (and one row) behind. Re-press, re-focusing each time,
+    // until the filter is fully cleared and all 3 rows are loaded — this drives
+    // toward the observed end state instead of assuming both keystrokes land.
     const statusFilterCombobox = page
       .getByText("Filter by Status:", { exact: true })
       .locator("..")
       .getByRole("combobox");
-    await statusFilterCombobox.focus();
-    await statusFilterCombobox.press("Backspace");
-    await statusFilterCombobox.press("Backspace");
-    await expect(dataRows).toHaveCount(3);
+    await expect(async () => {
+      await statusFilterCombobox.focus();
+      await statusFilterCombobox.press("Backspace");
+      await expect(dataRows).toHaveCount(3, { timeout: 1500 });
+    }).toPass({ timeout: 20_000, intervals: [250, 500, 1000] });
 
     const openedRow = page.getByRole("row").filter({ hasText: ASSIGN_A_TITLE }).filter({ hasText: "Pending" });
     const openLink = openedRow.getByRole("link", { name: "Open" });

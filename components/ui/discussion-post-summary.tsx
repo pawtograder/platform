@@ -1,7 +1,7 @@
 "use client";
 import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -38,12 +38,17 @@ const SUMMARY_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
 
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const likeStatus = useDiscussionThreadLikes(thread.id);
   const { discussionThreadTeasers } = useCourseController();
   const [loading, setLoading] = useState(false);
   const { discussionThreadLikes } = useCourseController();
 
   const toggleLike = useCallback(async () => {
+    // View-as student is read-only. A create here would post a discussion_thread_likes row
+    // attributed to the student (creator = student.private_profile_id) while auth.uid() is
+    // the instructor — i.e. a spoofed like — even though RLS might allow it.
+    if (isReadOnly) return;
     setLoading(true);
     try {
       if (likeStatus) {
@@ -69,8 +74,12 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
     } finally {
       setLoading(false);
     }
-  }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers]);
+  }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers, isReadOnly]);
 
+  // The whole-thread Like button lives in the ThreadActions row of the post page, which
+  // doesn't otherwise hide write affordances under view-as. Hide it here so the affordance
+  // matches the read-only state.
+  if (isReadOnly) return null;
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
       {thread.likes_count} {likeStatus ? <Icon as={FaHeart} /> : <Icon as={FaRegHeart} />}
@@ -135,7 +144,13 @@ export function DiscussionPostSummary({
               <Skeleton width="100px" />
             )}
             <Flex wrap={{ base: "wrap", sm: "nowrap" }}>
-              <Text textStyle="sm" color="fg.muted" ms="3">
+              <Text
+                textStyle="sm"
+                color="fg.muted"
+                ms="3"
+                data-visual-test="transparent"
+                data-visual-placeholder="relative-time"
+              >
                 {formatRelative(thread.created_at, new Date())}
               </Text>
               <Spacer />

@@ -252,7 +252,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     //Wait for the textbox to disappear
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
@@ -331,9 +331,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)
@@ -359,6 +359,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
+    // This test does a magic-link login, full assignment navigation, and an
+    // axe accessibility scan plus rubric assertions. On webkit under CI
+    // load loginAsUser's retry loop alone can spend ~5×15s recovering from
+    // transient GoTrue contention, leaving little budget for the autograder
+    // results wait at line ~373. Triple the active timeout so a slow login
+    // doesn't surface as a "Lint Results: Passed" waitFor flake.
+    test.slow();
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
@@ -367,11 +374,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
+    // Released submissions now default students to the Grade tab; switch to the autograder
+    // detail (results) view that this test exercises.
+    await page.getByRole("button", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
-    // `/submissions/:id` auto-redirects to `/results` (when grader output
-    // exists) before this test clicks "Files". Scan the results route here so
-    // axe also covers the autograder output view, the Pyret REPL header
-    // (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
+    // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
+    // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
     await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
     await assertStudentPageAccessible(page, "grading results /results route");
     await page.getByRole("button", { name: "Files" }).click();
@@ -498,10 +506,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // the comment stream loads via realtime and races the screenshot, which
     // caused a 64px page-height delta between runs.
     {
+      // These are stabilization waits to ensure the realtime comment stream has
+      // rendered before the screenshot (see note above) — not uniqueness checks.
+      // The just-posted escalation comment briefly renders twice (optimistic insert
+      // + the realtime echo of the same row) before they dedupe, which tripped a
+      // strict-mode "resolved to 2 elements" on getByText. Scope to .first() so the
+      // wait means "at least one copy has rendered", independent of that transient.
       const appealRegion = page.getByLabel("Grading checks on line 4");
-      await expect(appealRegion.getByText(REGRADE_COMMENT)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_RESOLUTION)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_ESCALATION)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_COMMENT).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_RESOLUTION).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_ESCALATION).first()).toBeVisible();
     }
     await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
@@ -607,7 +621,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review Assignment" }).click();
+    await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
   });
 });

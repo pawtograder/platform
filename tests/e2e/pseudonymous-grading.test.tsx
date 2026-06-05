@@ -100,6 +100,17 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test.describe.configure({ mode: "serial" });
 
   test("Students can submit self-review", async ({ page }) => {
+    // This test does a lot inside the default 60s budget: magic-link login, finalize
+    // submission early, a DB-truth poll that can legitimately spend up to 30s waiting
+    // for the self-review review_assignments row to materialize (see toPass below),
+    // then ~6 right-click annotation/check interactions and an axe scan. Under webkit
+    // CI load the poll can eat most of the budget, leaving the annotation steps to tip
+    // the cumulative runtime past 60s mid-interaction (observed: click on the
+    // "Add a comment about this line" textbox timing out the whole test). This isn't a
+    // race to paper over — the work is genuinely long — so give it the same headroom
+    // the equally-heavy grading test below already uses. Because this is the first test
+    // in a serial describe, its timeout flaking forces a retry of the entire group.
+    test.slow();
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
@@ -155,7 +166,11 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
       el.scrollIntoView({ block: "start", behavior: "instant" });
     });
 
-    await page.getByText("public int doMath(int a, int").click({
+    const doMathLineSelfReview = page.getByText("public int doMath(int a, int");
+    // Same out-of-viewport hazard as the grading-review test below: ensure the line is
+    // scrolled into view before the right-click so the context menu opens deterministically.
+    await doMathLineSelfReview.scrollIntoViewIfNeeded();
+    await doMathLineSelfReview.click({
       button: "right"
     });
 
@@ -184,7 +199,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Add Check" }).click();
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await assertStudentPageAccessible(page, "pseudonymous self-review completed");
@@ -247,8 +262,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)
@@ -306,6 +321,13 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Files" }).click();
     const doMathLine = page.getByText("public int doMath(int a, int");
     await expect(doMathLine).toBeVisible();
+    // toBeVisible() only requires a non-empty bounding box, not that the element is in
+    // the viewport — in a long code file this line frequently renders below the fold.
+    // click({ force: true }) skips actionability checks but STILL needs the element in
+    // the viewport to resolve click coordinates, so it intermittently failed with
+    // "Element is outside of the viewport". Scroll it into view first so the (forced)
+    // click is deterministic regardless of where the file's scroll position settles.
+    await doMathLine.scrollIntoViewIfNeeded();
     await doMathLine.click({ force: true });
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);

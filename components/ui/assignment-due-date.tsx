@@ -10,7 +10,8 @@ import {
   useLateTokens
 } from "@/hooks/useCourseController";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
+import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
+import { DueDateDisplay } from "@/components/ui/due-date-display";
 import { TZDate } from "@date-fns/tz";
 import { addHours, isAfter } from "date-fns";
 import { useState } from "react";
@@ -211,20 +212,25 @@ export function AssignmentDueDate({
     return <Skeleton height="20px" width="80px" />;
   }
   return (
-    <Flex gap={1} wrap="wrap" maxWidth="100%">
-      <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
-        {showDue && <Text flexShrink={0}>Due: </Text>}
+    <DueDateDisplay
+      suggestedDueDate={assignment.suggested_due_date}
+      showDueLabel={showDue}
+      dueDateNode={
         <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
           <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" visualPlaceholder="date" />
         </Text>
-        {hoursExtended > 0 && (
-          <Text>
-            ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
-          </Text>
-        )}
-        {showLateTokenButton && <LateTokenButton assignment={assignment} />}
-      </Flex>
-    </Flex>
+      }
+      trailing={
+        <>
+          {hoursExtended > 0 && (
+            <Text>
+              ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
+            </Text>
+          )}
+          {showLateTokenButton && <LateTokenButton assignment={assignment} />}
+        </>
+      }
+    />
   );
 }
 

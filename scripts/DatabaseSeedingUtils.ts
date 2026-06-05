@@ -21,6 +21,14 @@ import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
+import type {
+  CannedAssignment,
+  DiscussionThreadFixture,
+  FixtureBundle,
+  HandoutStrategy,
+  HelpRequestFixture,
+  PrivatePostFixture
+} from "@/scripts/demo/fixtures.types";
 
 import {
   fetchDefaultGradeTargetStudentProfileIdsBatch,
@@ -35,8 +43,11 @@ import {
 } from "../tests/e2e/TestingUtils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { DEFAULT_RATE_LIMITS, RateLimitConfig, RateLimitManager } from "@/tests/generator/GenerationUtils";
-import { TEAM_COLLABORATION_SURVEY } from "@/tests/fixtures/teamCollaborationSurvey";
-import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
+import {
+  TEAM_COLLABORATION_ANALYTICS_CONFIG,
+  TEAM_COLLABORATION_SURVEY
+} from "@/tests/fixtures/teamCollaborationSurvey";
+import type { QuestionAnalyticsConfig, SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -119,6 +130,73 @@ export interface SeedingConfiguration {
   gradingScheme?: "current" | "specification";
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
+  /** Fixed e-mail addresses pinned to the first user of each role created
+   * during this seed run. Lets reviewers log in to a freshly-seeded preview
+   * with predictable accounts that have already produced realistic
+   * submissions / grading data (because they ARE the first instructor /
+   * grader / student in the simulation, not a post-hoc bolt-on).
+   *
+   * The seeder substitutes these emails for the random faker-generated
+   * ones at user-creation time; everything downstream — assignments,
+   * submissions, grading, discussions — references the same user objects,
+   * so the fixed accounts participate fully in the seeded class.
+   *
+   * Unset roles fall back to the existing faker-generated emails.
+   */
+  fixedUsers?: {
+    instructor?: string;
+    grader?: string;
+    student?: string;
+  };
+  // -------- Demo-mode opt-ins (all optional; null/undef preserves test behavior) --------
+  /** LLM-authored fixture bundle. When set, takes precedence over the
+   * hardcoded HELP_REQUEST_TEMPLATES / topicSubjects / questionBodies arrays. */
+  demoFixtures?: FixtureBundle;
+  /** Per-assignment canned repo configuration. When set, overrides
+   * numAssignments and TEST_HANDOUT_REPO. */
+  perAssignmentRepos?: CannedAssignment[];
+  /** Controls whether handout/solution/student repos are created on GitHub. */
+  handoutStrategy?: HandoutStrategy;
+  /** Prefix for the class slug. Defaults to `e2e-ignore-` so cleanup scripts find
+   * test classes. Demo provisioning passes `demo-` so the slug — which gets baked
+   * into every mirrored repo name and any trigger-created student repo at enroll
+   * time — doesn't carry the cleanup marker. Must be set before createClass runs. */
+  classSlugPrefix?: string;
+  /** Source class id whose hand-grading rubrics are copied onto each demo
+   * assignment that carries a `sourceAssignmentId` in perAssignmentRepos. When
+   * unset, the seeder falls back to its random rubric generator. */
+  sourceClassId?: number;
+  /** Optional async hook fired right after createClass succeeds, BEFORE createUsers
+   * and createAssignments. Receives the class slug + github_org so the demo
+   * orchestrator can stage any pre-enrollment work. */
+  onAfterClassCreated?: (info: { classId: number; classGithubOrg: string; classSlug: string }) => Promise<void>;
+  /** Optional async hook fired after createAssignments + autograder rows are in
+   * place but BEFORE createSubmissionsAndGradeSubmissions. Demo provisioning uses
+   * this to (a) invoke the platform's `assignment-create-handout-repo` /
+   * `assignment-create-solution-repo` so the platform's normal async workflow
+   * creates the GitHub repos, then (b) push canned source content into them.
+   * release_date is still in the future at this point so no student repos are
+   * auto-created yet. */
+  onAfterAssignmentsCreated?: (info: { classId: number; classGithubOrg: string; classSlug: string }) => Promise<void>;
+  /** Optional async hook fired after submissions + their submission_files have been
+   * inserted but BEFORE gradeSubmissions runs. When `skipSubmissions` is true the
+   * hook still fires, just with no submissions in flight. */
+  onAfterSubmissions?: (classId: number) => Promise<void>;
+  /** When true, push every assignment's release_date to `now + 30d` at creation
+   * time so the platform's `check_assignment_for_repo_creation` trigger doesn't
+   * auto-create per-student repos until the demo orchestrator flips it back. */
+  futureReleaseDate?: boolean;
+  /** When true, skip createSubmissionsAndGradeSubmissions entirely. Demo
+   * provisioning sets this for `real-everything`: per-student submissions land
+   * via the platform's webhook flow after Phase C pushes content, not via the
+   * seeder's fake-repo loop. */
+  skipSubmissions?: boolean;
+  /** Pre-existing fleet of users to enroll instead of creating new ones. */
+  sharedFleet?: {
+    instructors: TestingUser[];
+    graders: Array<TestingUser & { hasRealGitHub?: boolean; fleetName?: string }>;
+    students: Array<TestingUser & { hasRealGitHub?: boolean; fleetName?: string }>;
+  };
 }
 
 // Type for submission data items used in grading
@@ -608,96 +686,34 @@ const SURVEYJS_TEMPLATES = {
   teamCollaboration: TEAM_COLLABORATION_SURVEY
 };
 
-const TEAM_COLLABORATION_ANALYTICS_CONFIG: SurveyAnalyticsConfig = {
-  questions: {
-    q1: {
-      includeInAnalytics: true,
-      displayLabel: "This week I have..."
-    },
-    q2: {
-      includeInAnalytics: true,
-      displayLabel: "Interacted with team by..."
-    },
-    q3: {
-      includeInAnalytics: true,
-      alertThreshold: 5,
-      alertDirection: "above",
-      alertMessage: "Student unclear on weekly goals",
-      displayLabel: "Knew what to do"
-    },
-    q4: {
-      includeInAnalytics: true,
-      alertThreshold: 3.5,
-      alertDirection: "above",
-      alertMessage: "Individual reports lower than expected progress",
-      displayLabel: "Personal progress"
-    },
-    q5: {
-      includeInAnalytics: true,
-      alertThreshold: 3.5,
-      alertDirection: "above",
-      alertMessage: "Team reports lower than expected progress",
-      displayLabel: "Team progress"
-    },
-    q6: {
-      includeInAnalytics: true,
-      alertThreshold: 6,
-      alertDirection: "any_above",
-      alertMessage: "Possible unequal contribution reported",
-      displayLabel: "Equal contribution"
-    },
-    q7: {
-      includeInAnalytics: true,
-      alertThreshold: 4,
-      alertDirection: "above",
-      alertMessage: "Student planning to do less next week",
-      displayLabel: "Next week plans"
-    },
-    q16: {
-      includeInAnalytics: true,
-      alertThreshold: 2.5,
-      alertDirection: "below",
-      alertMessage: "Low team interdependence",
-      isReversedScale: true,
-      displayLabel: "Team reliance"
-    },
-    q21: {
-      includeInAnalytics: true,
-      alertThreshold: 3.5,
-      alertDirection: "above",
-      alertMessage: "Information hoarding detected",
-      isReversedScale: true,
-      displayLabel: "Info sharing"
-    },
-    q23: {
-      includeInAnalytics: true,
-      alertThreshold: 2.5,
-      alertDirection: "below",
-      alertMessage: "Low team satisfaction",
-      isReversedScale: true,
-      displayLabel: "Team satisfaction"
-    },
-    q24: {
-      includeInAnalytics: true,
-      alertThreshold: 2.5,
-      alertDirection: "below",
-      alertMessage: "Tasks not completed as agreed",
-      isReversedScale: true,
-      displayLabel: "Task agreement"
-    },
-    q9: {
-      includeInAnalytics: true,
-      flagValues: [4, 5, 6],
-      alertMessage: "Teammate/communication impediments reported",
-      displayLabel: "Impediments"
+/**
+ * Build a complete analytics_config for an arbitrary SurveyJS template by walking
+ * its pages/elements and including every named question. We seed this on EVERY
+ * survey (not just team-collaboration) so the stored `analytics_config` is never
+ * null and always has a `questions` object — the survey analytics view and the
+ * AnalyticsConfigEditor both index `analyticsConfig.questions[name]`, and a
+ * missing/empty `questions` is what produces the runtime crash
+ * "undefined is not an object (evaluating 'a.questions[e.name]')". Every question
+ * defaults to includeInAnalytics:true, matching the pre-config "show all numeric
+ * questions" behavior.
+ */
+function buildAnalyticsConfigFromTemplate(template: {
+  pages?: Array<{ elements?: Array<{ name?: string; type?: string }> }>;
+}): SurveyAnalyticsConfig {
+  const questions: Record<string, QuestionAnalyticsConfig> = {};
+  for (const page of template.pages ?? []) {
+    for (const el of page.elements ?? []) {
+      // Skip non-question display elements; include everything else that has a name.
+      if (el?.name && el.type !== "html" && el.type !== "expression" && el.type !== "image") {
+        questions[el.name] = { includeInAnalytics: true };
+      }
     }
-  },
-  globalSettings: {
-    varianceThreshold: 1.5,
-    nonResponseThreshold: 0.8,
-    trendDeclineCount: 3
   }
-};
+  return {
+    questions,
+    globalSettings: { varianceThreshold: 1.5, nonResponseThreshold: 0.8, trendDeclineCount: 3 }
+  };
+}
 
 // ============================
 // HELPER FUNCTIONS
@@ -925,7 +941,10 @@ export async function findExistingPawtograderUsers(): Promise<{
 export async function enrollExistingUserInClass(
   user: TestingUser,
   class_id: number,
-  rateLimitManager: RateLimitManager
+  rateLimitManager: RateLimitManager,
+  /** Demo-mode personas use non-prefixed emails (e.g. ripley@ripley.cloud);
+   * pass the role explicitly in that case. */
+  explicitRole?: "student" | "instructor" | "grader"
 ): Promise<TestingUser> {
   const { data: privateProfile, error: privateProfileError } = await rateLimitManager.trackAndLimit("profiles", () =>
     supabase
@@ -958,12 +977,10 @@ export async function enrollExistingUserInClass(
     throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
   }
 
-  // Determine role based on email pattern
-  const role = user.email.startsWith("instructor-")
-    ? "instructor"
-    : user.email.startsWith("grader-")
-      ? "grader"
-      : "student";
+  // Determine role: caller-provided wins, otherwise infer from email prefix.
+  const role: "student" | "instructor" | "grader" =
+    explicitRole ??
+    (user.email.startsWith("instructor-") ? "instructor" : user.email.startsWith("grader-") ? "grader" : "student");
 
   // Insert user role with new profiles
   const { error: userRoleError } = await rateLimitManager.trackAndLimit("user_roles", () =>
@@ -1082,6 +1099,18 @@ export class DatabaseSeeder {
     return this;
   }
 
+  /**
+   * Pin one or more roles to fixed e-mail addresses. The first user of each
+   * provided role is created with the given email instead of a random one,
+   * so reviewers can log in with predictable accounts that are fully woven
+   * into the seeded class (real submissions, real grading assignments,
+   * etc. — not post-hoc bolt-ons).
+   */
+  withFixedUsers(fixed: { instructor?: string; grader?: string; student?: string }): this {
+    this.config.fixedUsers = fixed;
+    return this;
+  }
+
   withUserRecycling(enabled: boolean = true): this {
     this.config.recycleUsers = enabled;
     return this;
@@ -1089,6 +1118,73 @@ export class DatabaseSeeder {
 
   withSurveys(config: SurveyConfig): this {
     this.config.surveyConfig = config;
+    return this;
+  }
+
+  // -------- Demo-mode builders --------
+  withDemoFixtures(bundle: FixtureBundle): this {
+    this.config.demoFixtures = bundle;
+    return this;
+  }
+
+  withPerAssignmentRepos(repos: CannedAssignment[]): this {
+    this.config.perAssignmentRepos = repos;
+    // numAssignments mirrors the manifest length so downstream code that
+    // reads config.numAssignments stays consistent.
+    this.config.numAssignments = repos.length;
+    return this;
+  }
+
+  withHandoutStrategy(strategy: HandoutStrategy): this {
+    this.config.handoutStrategy = strategy;
+    return this;
+  }
+
+  withSourceClassId(sourceClassId: number): this {
+    this.config.sourceClassId = sourceClassId;
+    return this;
+  }
+
+  withClassSlugPrefix(prefix: string): this {
+    this.config.classSlugPrefix = prefix;
+    return this;
+  }
+
+  withOnAfterClassCreated(
+    hook: (info: { classId: number; classGithubOrg: string; classSlug: string }) => Promise<void>
+  ): this {
+    this.config.onAfterClassCreated = hook;
+    return this;
+  }
+
+  withOnAfterAssignmentsCreated(
+    hook: (info: { classId: number; classGithubOrg: string; classSlug: string }) => Promise<void>
+  ): this {
+    this.config.onAfterAssignmentsCreated = hook;
+    return this;
+  }
+
+  withFutureReleaseDate(value: boolean): this {
+    this.config.futureReleaseDate = value;
+    return this;
+  }
+
+  withSkipSubmissions(value: boolean): this {
+    this.config.skipSubmissions = value;
+    return this;
+  }
+
+  withOnAfterSubmissions(hook: (classId: number) => Promise<void>): this {
+    this.config.onAfterSubmissions = hook;
+    return this;
+  }
+
+  withSharedFleet(fleet: NonNullable<SeedingConfiguration["sharedFleet"]>): this {
+    this.config.sharedFleet = fleet;
+    // Mirror counts so getCompleteConfiguration validation passes.
+    this.config.numInstructors = fleet.instructors.length;
+    this.config.numGraders = fleet.graders.length;
+    this.config.numStudents = fleet.students.length;
     return this;
   }
 
@@ -1148,12 +1244,24 @@ export class DatabaseSeeder {
       surveyConfig: this.config.surveyConfig,
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
-      recycleUsers: this.config.recycleUsers !== false // Default to true unless explicitly disabled
+      recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
+      fixedUsers: this.config.fixedUsers,
+      demoFixtures: this.config.demoFixtures,
+      perAssignmentRepos: this.config.perAssignmentRepos,
+      handoutStrategy: this.config.handoutStrategy,
+      sharedFleet: this.config.sharedFleet,
+      sourceClassId: this.config.sourceClassId,
+      classSlugPrefix: this.config.classSlugPrefix,
+      onAfterClassCreated: this.config.onAfterClassCreated,
+      onAfterAssignmentsCreated: this.config.onAfterAssignmentsCreated,
+      onAfterSubmissions: this.config.onAfterSubmissions,
+      futureReleaseDate: this.config.futureReleaseDate,
+      skipSubmissions: this.config.skipSubmissions
     };
   }
 
   // Main seeding method
-  async seed(): Promise<void> {
+  async seed(): Promise<{ id: number; name: string }> {
     const config = this.getCompleteConfiguration();
 
     console.log("🌱 Starting database seeding with DatabaseSeeder...\n");
@@ -1164,9 +1272,27 @@ export class DatabaseSeeder {
 
     try {
       // Create test class
-      const testClass = await createClass({ name: config.className });
+      const testClass = await createClass({ name: config.className, slugPrefix: config.classSlugPrefix });
       const class_id = testClass.id;
       console.log(`✓ Created test class: ${testClass.name} (ID: ${class_id})`);
+
+      // Pre-users hook: demo provisioning mirrors handout + solution repos here so
+      // (a) any user_roles trigger that auto-provisions per-student repos finds a
+      // template_repo it can actually read, and (b) createAssignments below writes
+      // the already-mirrored demo-org path into the row from the start.
+      if (config.onAfterClassCreated) {
+        if (!testClass.github_org || !testClass.slug) {
+          throw new Error(
+            `onAfterClassCreated requires class.github_org and class.slug, got org=${testClass.github_org} slug=${testClass.slug}`
+          );
+        }
+        console.log(`\n🔁 Running post-class-created hook before users + assignments…`);
+        await config.onAfterClassCreated({
+          classId: class_id,
+          classGithubOrg: testClass.github_org,
+          classSlug: testClass.slug
+        });
+      }
 
       // Create users
       const { instructors, graders, students } = await this.createUsers(config, class_id);
@@ -1193,31 +1319,80 @@ export class DatabaseSeeder {
       // Create grader conflicts
       await this.createGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
 
-      // Create discussion threads if configured
-      if (config.discussionConfig) {
+      // In demo mode the discussion fixtures need per-assignment topics to
+      // already exist, so we defer discussion creation until after assignments
+      // and additional topics are seeded.
+      const deferDiscussions = Boolean(config.demoFixtures);
+      if (config.discussionConfig && !deferDiscussions) {
         await this.createDiscussionThreads(config.discussionConfig, class_id, students, instructors, graders);
       }
 
       // // Create assignments and submissions
       const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students, graders);
 
+      // Post-assignments hook: demo provisioning uses this to invoke the platform's
+      // assignment-create-handout-repo / assignment-create-solution-repo edge
+      // functions and push canned source content into the new repos. At this point
+      // release_date is still in the future (withFutureReleaseDate), so the
+      // check_assignment_for_repo_creation trigger has NOT fanned out student repos.
+      if (config.onAfterAssignmentsCreated) {
+        if (!testClass.github_org || !testClass.slug) {
+          throw new Error(
+            `onAfterAssignmentsCreated requires class.github_org and class.slug, got org=${testClass.github_org} slug=${testClass.slug}`
+          );
+        }
+        console.log(`\n🔁 Running post-assignments hook before submissions…`);
+        await config.onAfterAssignmentsCreated({
+          classId: class_id,
+          classGithubOrg: testClass.github_org,
+          classSlug: testClass.slug
+        });
+      }
+
       // Create additional discussion topics if configured
       if (config.discussionConfig?.numAdditionalTopics) {
         await this.createAdditionalDiscussionTopics(config.discussionConfig.numAdditionalTopics, class_id, nextOrdinal);
       }
 
-      const submissionData = await this.createSubmissions(assignments, students, class_id);
+      if (deferDiscussions && config.demoFixtures) {
+        await this.createDiscussionsFromFixtures(
+          config.demoFixtures.discussions,
+          config.demoFixtures.privatePosts,
+          class_id,
+          students,
+          instructors,
+          graders
+        );
+      }
 
-      // Create workflow events and errors for ALL submissions
-      await this.createWorkflowEvents(submissionData, class_id);
-      await this.createWorkflowErrors(submissionData, class_id);
+      let submissionData: Awaited<ReturnType<typeof this.createSubmissions>> = [];
+      if (config.skipSubmissions) {
+        console.log(
+          `\n⏭  Skipping createSubmissions / createWorkflow* / gradeSubmissions (skipSubmissions=true). The orchestrator owns these via its own post-submissions hook.`
+        );
+        if (config.onAfterSubmissions) {
+          console.log(`\n🔁 Running post-submissions hook (no seeder-side submissions in flight)…`);
+          await config.onAfterSubmissions(class_id);
+        }
+      } else {
+        submissionData = await this.createSubmissions(assignments, students, class_id);
 
-      // Grade only the latest submission per assignment per student/group
-      const latestSubmissions = this.filterToLatestSubmissions(submissionData);
-      console.log(
-        `   Filtered from ${submissionData.length} to ${latestSubmissions.length} latest submissions for grading`
-      );
-      await this.gradeSubmissions(latestSubmissions, graders, students);
+        // Create workflow events and errors for ALL submissions
+        await this.createWorkflowEvents(submissionData, class_id);
+        await this.createWorkflowErrors(submissionData, class_id);
+
+        if (config.onAfterSubmissions) {
+          console.log(`\n🔁 Running post-submissions hook before grading…`);
+          await config.onAfterSubmissions(class_id);
+        }
+
+        // Grade only the latest submission per assignment per student/group
+        const latestSubmissions = this.filterToLatestSubmissions(submissionData);
+        console.log(
+          `   Filtered from ${submissionData.length} to ${latestSubmissions.length} latest submissions for grading`
+        );
+        await this.gradeSubmissions(latestSubmissions, graders, students);
+      }
 
       // const class_id = 208;
       // const { data: testClassData } = await supabase.from("classes").select("*").eq("id", class_id);
@@ -1361,6 +1536,8 @@ export class DatabaseSeeder {
         graders,
         students
       );
+
+      return { id: testClass.id, name: testClass.name || config.className || "Demo Class" };
     } catch (error) {
       console.error("❌ Error seeding database:", error);
       throw error;
@@ -1451,6 +1628,27 @@ export class DatabaseSeeder {
   private async createUsers(config: SeedingConfiguration, class_id: number) {
     console.log("\n👥 Creating users...");
 
+    // Demo-mode short circuit: when the caller already has a fleet of users
+    // (looked up via DemoFleetManager), just enroll them — no auth-user
+    // creation, no recycling lookup, no faker names.
+    if (config.sharedFleet) {
+      console.log(
+        `🎬 Demo mode: enrolling shared fleet of ${config.sharedFleet.students.length} students, ${config.sharedFleet.graders.length} graders, ${config.sharedFleet.instructors.length} instructors`
+      );
+      const instructors = await Promise.all(
+        config.sharedFleet.instructors.map((u) =>
+          enrollExistingUserInClass(u, class_id, this.rateLimitManager, "instructor")
+        )
+      );
+      const graders = await Promise.all(
+        config.sharedFleet.graders.map((u) => enrollExistingUserInClass(u, class_id, this.rateLimitManager, "grader"))
+      );
+      const students = await Promise.all(
+        config.sharedFleet.students.map((u) => enrollExistingUserInClass(u, class_id, this.rateLimitManager, "student"))
+      );
+      return { instructors, graders, students };
+    }
+
     let existingUsers = {
       instructors: [] as TestingUser[],
       graders: [] as TestingUser[],
@@ -1477,15 +1675,22 @@ export class DatabaseSeeder {
     );
 
     const newInstructorsNeeded = Math.max(0, config.numInstructors - existingInstructors.length);
+    // When fixedUsers.instructor is set, the first new instructor uses
+    // that email (a real-name placeholder kept stable across runs so
+    // reviewers can recognise the account in screenshots). All other
+    // instructors keep the recyclable faker emails so cleanup scripts
+    // can still find them.
+    const fixedInstructorEmail = existingInstructors.length === 0 ? config.fixedUsers?.instructor : undefined;
     const newInstructors = await Promise.all(
-      Array.from({ length: newInstructorsNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newInstructorsNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedInstructorEmail;
+        const name = useFixed ? "Pat Instructor" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "instructor",
           class_id,
           name,
-          email: `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedInstructorEmail : `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );
@@ -1505,15 +1710,17 @@ export class DatabaseSeeder {
     );
 
     const newGradersNeeded = Math.max(0, config.numGraders - existingGraders.length);
+    const fixedGraderEmail = existingGraders.length === 0 ? config.fixedUsers?.grader : undefined;
     const newGraders = await Promise.all(
-      Array.from({ length: newGradersNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newGradersNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedGraderEmail;
+        const name = useFixed ? "Sam Grader" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "grader",
           class_id,
           name,
-          email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedGraderEmail : `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );
@@ -1526,15 +1733,17 @@ export class DatabaseSeeder {
     );
 
     const newStudentsNeeded = Math.max(0, config.numStudents - existingStudents.length);
+    const fixedStudentEmail = existingStudents.length === 0 ? config.fixedUsers?.student : undefined;
     const newStudents = await Promise.all(
-      Array.from({ length: newStudentsNeeded }).map(async () => {
-        const name = faker.person.fullName();
+      Array.from({ length: newStudentsNeeded }).map(async (_, idx) => {
+        const useFixed = idx === 0 && fixedStudentEmail;
+        const name = useFixed ? "Alex Student" : faker.person.fullName();
         const uuid = crypto.randomUUID();
         return await createUserInClass({
           role: "student",
           class_id,
           name,
-          email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          email: useFixed ? fixedStudentEmail : `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
         });
       })
     );
@@ -2166,6 +2375,221 @@ export class DatabaseSeeder {
     console.log(`✓ Discussion threads seeding completed`);
   }
 
+  /**
+   * Demo-mode discussion seeding: drives from LLM-authored fixtures rather
+   * than the hardcoded topicSubjects / questionBodies arrays. Topics are
+   * matched by name (for general topics) or assignment slug (for
+   * per-assignment topics). Posts whose topic can't be matched fall back to
+   * the first general topic with a warning.
+   */
+  protected async createDiscussionsFromFixtures(
+    threads: DiscussionThreadFixture[],
+    privatePosts: PrivatePostFixture[],
+    class_id: number,
+    students: TestingUser[],
+    instructors: TestingUser[],
+    graders: TestingUser[]
+  ) {
+    console.log(
+      `\n💬 Demo: seeding ${threads.length} discussion threads + ${privatePosts.length} private posts from fixtures…`
+    );
+
+    const { data: discussionTopics, error: topicsError } = await supabase
+      .from("discussion_topics")
+      .select("id, topic, assignment_id, assignments(slug)")
+      .eq("class_id", class_id)
+      .order("ordinal");
+
+    if (topicsError) throw new Error(`Failed to load discussion topics: ${topicsError.message}`);
+    if (!discussionTopics || discussionTopics.length === 0) {
+      console.warn("⚠ No discussion topics exist for demo fixtures; skipping.");
+      return;
+    }
+
+    // Build name→topic_id lookup. Match by slug for per-assignment topics
+    // (so fixtures can use the canned assignment slug), and by topic name
+    // for general topics.
+    const topicByKey = new Map<string, number>();
+    for (const t of discussionTopics) {
+      topicByKey.set(t.topic.toLowerCase(), t.id);
+      // Per-assignment topics also indexed by their slug.
+      const linkedAssignment = (t as unknown as { assignments?: { slug?: string } | null }).assignments;
+      if (linkedAssignment?.slug) {
+        topicByKey.set(linkedAssignment.slug.toLowerCase(), t.id);
+      }
+    }
+
+    const fallbackTopicId = discussionTopics[0].id;
+    const resolveTopic = (key: string): number => topicByKey.get(key.toLowerCase()) ?? fallbackTopicId;
+
+    const studentInstructorPool = [...students, ...instructors, ...graders];
+    const staffPool = [...instructors, ...graders];
+
+    if (studentInstructorPool.length === 0) {
+      console.warn("⚠ No users to author discussion posts; skipping.");
+      return;
+    }
+
+    const pickAuthor = (pool: TestingUser[]) => pool[Math.floor(Math.random() * pool.length)];
+
+    type RootInsert = {
+      author: string;
+      subject: string;
+      body: string;
+      class_id: number;
+      topic_id: number;
+      is_question: boolean;
+      instructors_only: boolean;
+      draft: boolean;
+      root_class_id: number;
+    };
+    type ReplyInsert = Omit<RootInsert, "root_class_id"> & { parent: number; root: number };
+
+    const rootInserts: RootInsert[] = [];
+    type ThreadPlan = {
+      isPrivate: boolean;
+      replies: Array<{ body: string; authorId: string; isAnswer: boolean; instructorsOnly: boolean }>;
+    };
+    const plans: ThreadPlan[] = [];
+
+    // Public + private threads share a code path; private posts are flagged
+    // instructors_only=true at the root and on every reply. Both sides are
+    // normalized to DiscussionThreadFixture so the loop below can be typed.
+    const publicRoots: Array<{ isPrivate: false; thread: DiscussionThreadFixture }> = threads.map((t) => ({
+      isPrivate: false,
+      thread: t
+    }));
+    const privateRoots: Array<{ isPrivate: true; thread: DiscussionThreadFixture }> = privatePosts.map((p) => ({
+      isPrivate: true,
+      thread: {
+        topic: p.topic,
+        subject: p.subject,
+        body: p.body,
+        isQuestion: false,
+        anonymous: false,
+        replies: p.replies.map((r) => ({
+          body: r.body,
+          isInstructorReply: true,
+          anonymous: false
+        }))
+      }
+    }));
+    const allRoots: Array<{ isPrivate: boolean; thread: DiscussionThreadFixture }> = [...publicRoots, ...privateRoots];
+
+    for (const { isPrivate, thread } of allRoots) {
+      const topicId = resolveTopic(thread.topic);
+      const authorPool = isPrivate ? staffPool : studentInstructorPool;
+      if (authorPool.length === 0) continue;
+      const author = pickAuthor(authorPool);
+      const authorId = thread.anonymous ? author.public_profile_id : author.private_profile_id;
+
+      rootInserts.push({
+        author: authorId,
+        subject: thread.subject,
+        body: thread.body,
+        class_id,
+        topic_id: topicId,
+        is_question: thread.isQuestion,
+        instructors_only: isPrivate,
+        draft: false,
+        root_class_id: class_id
+      });
+
+      const replyPlan: ThreadPlan["replies"] = thread.replies.map((r) => {
+        const replyPool = r.isInstructorReply ? staffPool : studentInstructorPool;
+        const replyAuthor = pickAuthor(replyPool.length > 0 ? replyPool : studentInstructorPool);
+        const replyAuthorId = r.anonymous ? replyAuthor.public_profile_id : replyAuthor.private_profile_id;
+        return {
+          body: r.body,
+          authorId: replyAuthorId,
+          isAnswer: !!r.isAnswer && thread.isQuestion,
+          instructorsOnly: isPrivate
+        };
+      });
+
+      plans.push({ isPrivate, replies: replyPlan });
+    }
+
+    if (rootInserts.length === 0) {
+      console.log("   No fixture root threads to insert.");
+      return;
+    }
+
+    // Insert root threads in batches to respect the discussion_threads rate limit.
+    const batchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const rootIds: number[] = [];
+    for (let i = 0; i < rootInserts.length; i += batchSize) {
+      const slice = rootInserts.slice(i, i + batchSize);
+      const { data, error } = await this.rateLimitManager.trackAndLimit(
+        "discussion_threads",
+        () => supabase.from("discussion_threads").insert(slice).select("id"),
+        slice.length
+      );
+      if (error || !data) throw new Error(`Failed to insert demo discussion roots: ${error?.message}`);
+      rootIds.push(...data.map((d) => d.id));
+    }
+
+    console.log(`   ✓ Inserted ${rootIds.length} root threads from fixtures`);
+
+    // Build reply inserts now that we have root ids.
+    const replyInserts: Array<ReplyInsert & { _rootIndex: number; _isAnswer: boolean }> = [];
+    plans.forEach((plan, i) => {
+      const rootId = rootIds[i];
+      const topicId = rootInserts[i].topic_id;
+      for (const r of plan.replies) {
+        replyInserts.push({
+          _rootIndex: i,
+          _isAnswer: r.isAnswer,
+          author: r.authorId,
+          subject: "Re: " + rootInserts[i].subject,
+          body: r.body,
+          class_id,
+          topic_id: topicId,
+          parent: rootId,
+          root: rootId,
+          is_question: false,
+          instructors_only: r.instructorsOnly,
+          draft: false
+        });
+      }
+    });
+
+    if (replyInserts.length === 0) {
+      console.log("   No fixture replies to insert.");
+      return;
+    }
+
+    const insertedReplyIds: number[] = [];
+    const answerMap: Array<{ rootThreadId: number; replyId: number }> = [];
+    for (let i = 0; i < replyInserts.length; i += batchSize) {
+      const slice = replyInserts.slice(i, i + batchSize);
+      // strip the bookkeeping fields before inserting
+      const payload = slice.map(({ _rootIndex: _r, _isAnswer: _a, ...rest }) => rest);
+      const { data, error } = await this.rateLimitManager.trackAndLimit(
+        "discussion_threads",
+        () => supabase.from("discussion_threads").insert(payload).select("id"),
+        payload.length
+      );
+      if (error || !data) throw new Error(`Failed to insert demo discussion replies: ${error?.message}`);
+      data.forEach((row, idx) => {
+        const meta = slice[idx];
+        insertedReplyIds.push(row.id);
+        if (meta._isAnswer) {
+          answerMap.push({ rootThreadId: rootIds[meta._rootIndex], replyId: row.id });
+        }
+      });
+    }
+
+    console.log(
+      `   ✓ Inserted ${insertedReplyIds.length} replies from fixtures (${answerMap.length} accepted answers)`
+    );
+
+    // Mark accepted answers.
+    for (const { rootThreadId, replyId } of answerMap) {
+      await supabase.from("discussion_threads").update({ answer: replyId }).eq("id", rootThreadId);
+    }
+  }
+
   protected async createAdditionalDiscussionTopics(
     numTopics: number,
     class_id: number,
@@ -2300,46 +2724,86 @@ export class DatabaseSeeder {
     if (config.groupAssignmentConfig?.reuseGroupsAcrossAssignments) {
       sharedGroupMembership = this.formGroupMembership(students, groupSize);
       console.log(`   Formed ${sharedGroupMembership.length} shared groups (reused across assignments)`);
+    } else if (config.perAssignmentRepos && students.length > 0) {
+      // Demo mode: the fleet is small (typically ripley/orion/paws). For any
+      // canned group assignment, put every enrolled real-fleet student in the
+      // SAME group so the visiting instructor sees them collaborating.
+      sharedGroupMembership = [students.map((s) => s.private_profile_id)];
+      console.log(`   Demo mode: single shared group of ${students.length} students for any group assignment`);
     }
 
+    // Demo mode: anchor demo dates to "now - 8 weeks" so weeksFromStart=1 lands
+    // recently in the past (i.e. the demo class looks alive without due dates
+    // far in the future for the visiting instructor).
+    const demoStartDate = config.perAssignmentRepos
+      ? addDays(new Date(), -7 * Math.max(...config.perAssignmentRepos.map((a) => a.weeksFromStart), 1))
+      : null;
+
     for (let i = 0; i < config.numAssignments; i++) {
-      const assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
+      const canned = config.perAssignmentRepos?.[i];
+
+      let assignmentDate: Date;
+      if (canned && demoStartDate) {
+        assignmentDate = addDays(demoStartDate, 7 * canned.weeksFromStart);
+      } else {
+        assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
+      }
 
       // Determine assignment type
-      const shouldCreateLab = i % 2 === 0;
-      const canCreateLab = labsCreated < config.labAssignmentConfig!.numLabAssignments;
-      const canCreateRegularAssignment =
-        regularAssignmentsCreated < config.numAssignments - config.labAssignmentConfig!.numLabAssignments;
-
       let isLabAssignment: boolean;
-      if (shouldCreateLab && canCreateLab) {
-        isLabAssignment = true;
-        labsCreated++;
-      } else if (!shouldCreateLab && canCreateRegularAssignment) {
-        isLabAssignment = false;
-        regularAssignmentsCreated++;
-      } else if (canCreateLab) {
-        isLabAssignment = true;
-        labsCreated++;
+      if (canned) {
+        isLabAssignment = canned.isLab;
+        if (isLabAssignment) labsCreated++;
+        else regularAssignmentsCreated++;
       } else {
-        isLabAssignment = false;
-        regularAssignmentsCreated++;
+        const shouldCreateLab = i % 2 === 0;
+        const canCreateLab = labsCreated < config.labAssignmentConfig!.numLabAssignments;
+        const canCreateRegularAssignment =
+          regularAssignmentsCreated < config.numAssignments - config.labAssignmentConfig!.numLabAssignments;
+
+        if (shouldCreateLab && canCreateLab) {
+          isLabAssignment = true;
+          labsCreated++;
+        } else if (!shouldCreateLab && canCreateRegularAssignment) {
+          isLabAssignment = false;
+          regularAssignmentsCreated++;
+        } else if (canCreateLab) {
+          isLabAssignment = true;
+          labsCreated++;
+        } else {
+          isLabAssignment = false;
+          regularAssignmentsCreated++;
+        }
       }
 
-      const isGroupAssignment = i < config.groupAssignmentConfig!.numGroupAssignments;
-      const isLabGroupAssignment = isLabAssignment && i < config.groupAssignmentConfig!.numLabGroupAssignments;
+      // Canned assignments carry their own group_config (mirrored from the source
+      // class). Test-mode (non-canned) assignments fall back to the numeric
+      // group/lab-group quotas in groupAssignmentConfig.
+      //
+      // We treat "both" like "groups" here only for the purpose of *creating
+      // assignment groups* (a "both" assignment still needs groups to exist). The
+      // stored group_config below is preserved as "both" via `canned?.groupConfig`.
+      // NOTE: createSubmissions does not yet generate mixed individual+group
+      // submissions for "both"; this is unreachable today (no canned assignment
+      // uses "both", and the demo path skips submission generation entirely via
+      // withSkipSubmissions). Revisit createSubmissions if a "both" canned
+      // assignment is ever added.
+      const cannedIsGroup = canned?.groupConfig === "groups" || canned?.groupConfig === "both";
+      const isGroupAssignment = canned ? cannedIsGroup : i < config.groupAssignmentConfig!.numGroupAssignments;
+      const isLabGroupAssignment = canned
+        ? cannedIsGroup && isLabAssignment
+        : isLabAssignment && i < config.groupAssignmentConfig!.numLabGroupAssignments;
 
-      // Determine group configuration
-      let groupConfig: "individual" | "groups" | "both" = "individual";
-      if (isGroupAssignment || isLabGroupAssignment) {
-        groupConfig = "groups";
-      }
+      const groupConfig: "individual" | "groups" | "both" =
+        canned?.groupConfig ?? (isGroupAssignment || isLabGroupAssignment ? "groups" : "individual");
 
-      const name = isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
-      if (isLabAssignment) {
-        labAssignmentIdx++;
-      } else {
-        assignmentIdx++;
+      const name = canned ? canned.title : isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
+      if (!canned) {
+        if (isLabAssignment) {
+          labAssignmentIdx++;
+        } else {
+          assignmentIdx++;
+        }
       }
 
       // Create self review setting first
@@ -2358,8 +2822,16 @@ export class DatabaseSeeder {
         throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
       }
 
-      const title = name + (groupConfig !== "individual" ? " (Group)" : "");
+      const title = canned ? name : name + (groupConfig !== "individual" ? " (Group)" : "");
       const ourAssignmentIdx = isLabAssignment ? labAssignmentIdx - 1 : assignmentIdx - 1;
+      const slug = canned
+        ? canned.slug
+        : isLabAssignment
+          ? `lab-${ourAssignmentIdx}`
+          : `assignment-${ourAssignmentIdx}`;
+      const templateRepo = canned ? canned.handoutRepo : TEST_HANDOUT_REPO;
+      const totalPoints = canned ? canned.points : 100;
+      const autograderPoints = canned ? canned.autograderPoints : 20;
 
       // Create assignment
       const { data: insertedAssignmentData, error: assignmentError } = await this.rateLimitManager.trackAndLimit(
@@ -2369,21 +2841,44 @@ export class DatabaseSeeder {
             .from("assignments")
             .insert({
               title: title,
-              description: "This is an enhanced test assignment with diverse rubric structure",
-              due_date: assignmentDate.toISOString(),
+              description: canned
+                ? `Canned demo assignment: ${title}`
+                : "This is an enhanced test assignment with diverse rubric structure",
+              // When futureReleaseDate is set, push due_date well past release_date
+              // so end-to-end submissions made through the platform's webhook flow
+              // after Phase B don't get rejected as late. Default (test) path keeps
+              // the spread-out canned dates.
+              due_date: (config.futureReleaseDate ? addDays(new Date(), 60) : assignmentDate).toISOString(),
               minutes_due_after_lab: isLabAssignment ? config.labAssignmentConfig!.minutesDueAfterLab : undefined,
-              template_repo: TEST_HANDOUT_REPO,
-              autograder_points: 20,
-              total_points: 100,
+              template_repo: templateRepo,
+              autograder_points: autograderPoints,
+              total_points: totalPoints,
               max_late_tokens: 10,
-              release_date: addDays(new Date(), -1).toISOString(),
+              // When the orchestrator wants to gate per-student repo creation behind
+              // the check_assignment_for_repo_creation trigger, write release_date in
+              // the future. The orchestrator flips it back to the past once handout +
+              // solution repos exist.
+              release_date: (config.futureReleaseDate
+                ? addDays(new Date(), 30)
+                : addDays(new Date(), -1)
+              ).toISOString(),
               class_id: class_id,
-              slug: isLabAssignment ? `lab-${ourAssignmentIdx}` : `assignment-${ourAssignmentIdx}`,
+              slug,
               group_config: groupConfig,
               allow_not_graded_submissions: false,
               self_review_setting_id: selfReviewSettingData.id,
               max_group_size: 6,
-              group_formation_deadline: addDays(new Date(), -1).toISOString()
+              // Demo path only: reject empty / no-op submissions so the platform's
+              // autograder-create-submission gate filters out pushes that match the
+              // handout exactly. Keeps the Phase D count poll accurate (one row per
+              // real student push, not one per platform-emitted scaffolding push).
+              ...(config.futureReleaseDate ? { permit_empty_submissions: false } : {}),
+              // When futureReleaseDate, the group-formation deadline also has to land
+              // before due_date (still future) so groups stay editable in the demo UI.
+              group_formation_deadline: (config.futureReleaseDate
+                ? addDays(new Date(), 45)
+                : addDays(new Date(), -1)
+              ).toISOString()
             })
             .select("id")
       );
@@ -2410,14 +2905,30 @@ export class DatabaseSeeder {
       await supabase
         .from("autograder")
         .update({
-          grader_repo: "pawtograder-playground/test-e2e-java-solution",
-          grader_commit_sha: "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177",
+          grader_repo: canned ? canned.solutionRepo : "pawtograder-playground/test-e2e-java-solution",
+          grader_commit_sha: canned
+            ? canned.graderCommitSha
+            : "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177",
           config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
         })
         .eq("id", assignmentData.id);
 
-      // Create rubric structure
-      await this.createRubricForAssignment(assignmentData, config.rubricConfig!);
+      // Create rubric structure. When this assignment is canned and points at a
+      // sourceAssignmentId, copy the real hand-grading rubric tree from there
+      // instead of generating a random one. The seeder later grades against the
+      // copied rubric, so this must happen before gradeSubmissions.
+      if (this.config.sourceClassId && canned?.sourceAssignmentId) {
+        const { copyAllRubricsForAssignment } = await import("@/scripts/demo/copyRubrics");
+        await copyAllRubricsForAssignment(supabase, this.config.sourceClassId, canned.sourceAssignmentId, {
+          id: assignmentData.id,
+          class_id: assignmentData.class_id,
+          grading_rubric_id: assignmentData.grading_rubric_id,
+          self_review_rubric_id: assignmentData.self_review_rubric_id,
+          meta_grading_rubric_id: assignmentData.meta_grading_rubric_id
+        });
+      } else {
+        await this.createRubricForAssignment(assignmentData, config.rubricConfig!);
+      }
 
       // Create assignment groups for group assignments
       let groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
@@ -3057,6 +3568,181 @@ export class DatabaseSeeder {
     return latestSubmissions;
   }
 
+  /**
+   * Public entry point for hand-grading the real (platform-webhook-created)
+   * submissions in a demo class. The seeder normally calls `gradeSubmissions`
+   * against its own batchCreateSubmissions output; with `withSkipSubmissions(true)`
+   * we skip that path and rely on the platform's own autograder pipeline to
+   * produce `submissions` rows. This method:
+   *   1. Pulls every non-empty submission for `class_id`
+   *   2. Maps them back to the enrolled fleet via `submissions.profile_id`
+   *   3. Runs the same protected `gradeSubmissions` + `createExtensionsAndRegradeRequests`
+   *      the test path runs, just over real submissions instead of fake ones.
+   * Safe to call inside an onAfterSubmissions hook — `this.config.sharedFleet`
+   * has its `private_profile_id`s filled in by then.
+   */
+  public async gradeRealSubmissionsForDemo(class_id: number): Promise<void> {
+    const config = this.getCompleteConfiguration();
+    const fleet = config.sharedFleet;
+    if (!fleet) {
+      console.warn("⏭  gradeRealSubmissionsForDemo: no sharedFleet configured; skipping");
+      return;
+    }
+
+    const { data: rawSubs, error: sErr } = await supabase
+      .from("submissions")
+      .select("id, profile_id, assignment_group_id, assignment_id, created_at, is_empty_submission")
+      .eq("class_id", class_id);
+    if (sErr) throw new Error(`gradeRealSubmissionsForDemo fetch submissions: ${sErr.message}`);
+    const subs = (rawSubs ?? []).filter((s) => !s.is_empty_submission);
+    if (subs.length === 0) {
+      console.warn("⏭  gradeRealSubmissionsForDemo: no non-empty submissions to grade");
+      return;
+    }
+
+    const { data: assignments, error: aErr } = await supabase
+      .from("assignments")
+      .select("id, title, due_date")
+      .eq("class_id", class_id);
+    if (aErr || !assignments) throw new Error(`gradeRealSubmissionsForDemo fetch assignments: ${aErr?.message}`);
+    const assignmentById = new Map(assignments.map((a) => [a.id, a]));
+
+    // enrollExistingUserInClass returns a NEW TestingUser with private_profile_id
+    // filled in — it does NOT mutate config.sharedFleet.students. So
+    // fleet.students[i].private_profile_id is the original "" placeholder, not
+    // the real id. Look up the real ids from user_roles by user_id (which the
+    // fleet objects DO carry correctly).
+    const fleetUserIds = fleet.students.map((s) => s.user_id).filter((id): id is string => !!id);
+    const { data: roleRows, error: roleErr } = await supabase
+      .from("user_roles")
+      .select("user_id, private_profile_id")
+      .eq("class_id", class_id)
+      .in("user_id", fleetUserIds);
+    if (roleErr) throw new Error(`gradeRealSubmissionsForDemo fetch user_roles: ${roleErr.message}`);
+
+    const profileIdByUserId = new Map((roleRows ?? []).map((r) => [r.user_id, r.private_profile_id] as const));
+    const studentsWithProfiles: TestingUser[] = fleet.students
+      .map((s) => {
+        const pid = profileIdByUserId.get(s.user_id);
+        return pid ? { ...s, private_profile_id: pid, class_id } : null;
+      })
+      .filter((s): s is TestingUser => s !== null);
+    const studentByProfileId = new Map<string, TestingUser>(
+      studentsWithProfiles.map((s) => [s.private_profile_id, s] as const)
+    );
+
+    // Do the same for graders so gradeSubmissions can attribute reviews properly.
+    const graderUserIds = fleet.graders.map((g) => g.user_id).filter((id): id is string => !!id);
+    const { data: graderRoleRows, error: graderRoleErr } = await supabase
+      .from("user_roles")
+      .select("user_id, private_profile_id")
+      .eq("class_id", class_id)
+      .in("user_id", graderUserIds);
+    if (graderRoleErr) throw new Error(`gradeRealSubmissionsForDemo fetch grader user_roles: ${graderRoleErr.message}`);
+    const graderProfileByUserId = new Map(
+      (graderRoleRows ?? []).map((r) => [r.user_id, r.private_profile_id] as const)
+    );
+    const gradersWithProfiles: TestingUser[] = fleet.graders
+      .map((g) => {
+        const pid = graderProfileByUserId.get(g.user_id);
+        return pid ? { ...g, private_profile_id: pid, class_id } : null;
+      })
+      .filter((g): g is TestingUser => g !== null);
+
+    // Group assignments produce submissions with assignment_group_id set and
+    // profile_id null. Without this lookup they'd all fall into the
+    // "unmapped profile" bucket and never get hand-graded. Map each group to its
+    // name + member profile_ids so we can emit a group-backed SubmissionDataItem.
+    const groupIds = [
+      ...new Set((subs ?? []).map((s) => s.assignment_group_id).filter((id): id is number => id != null))
+    ];
+    const groupInfoById = new Map<number, { id: number; name: string; members: string[] }>();
+    if (groupIds.length > 0) {
+      const { data: groupRows, error: groupErr } = await supabase
+        .from("assignment_groups")
+        .select("id, name")
+        .in("id", groupIds);
+      if (groupErr) throw new Error(`gradeRealSubmissionsForDemo fetch assignment_groups: ${groupErr.message}`);
+      const { data: memberRows, error: memberErr } = await supabase
+        .from("assignment_groups_members")
+        .select("assignment_group_id, profile_id")
+        .in("assignment_group_id", groupIds);
+      if (memberErr)
+        throw new Error(`gradeRealSubmissionsForDemo fetch assignment_groups_members: ${memberErr.message}`);
+      const membersByGroup = new Map<number, string[]>();
+      for (const m of memberRows ?? []) {
+        if (!membersByGroup.has(m.assignment_group_id)) membersByGroup.set(m.assignment_group_id, []);
+        membersByGroup.get(m.assignment_group_id)!.push(m.profile_id);
+      }
+      for (const g of groupRows ?? []) {
+        groupInfoById.set(g.id, { id: g.id, name: g.name, members: membersByGroup.get(g.id) ?? [] });
+      }
+    }
+
+    const submissionData: SubmissionDataItem[] = [];
+    let unmappedProfiles = 0;
+    let unmappedAssignments = 0;
+    let unmappedGroups = 0;
+    for (const s of subs) {
+      if (!s.assignment_id) continue;
+      const assignment = assignmentById.get(s.assignment_id);
+      if (!assignment) {
+        unmappedAssignments++;
+        continue;
+      }
+      if (s.assignment_group_id != null) {
+        // Group-backed submission.
+        const group = groupInfoById.get(s.assignment_group_id);
+        if (!group || group.members.length === 0) {
+          unmappedGroups++;
+          continue;
+        }
+        submissionData.push({
+          submission_id: s.id,
+          assignment: { id: assignment.id, due_date: assignment.due_date },
+          group: { id: group.id, name: group.name, memberCount: group.members.length, members: group.members }
+        });
+        continue;
+      }
+      if (!s.profile_id) continue;
+      const student = studentByProfileId.get(s.profile_id);
+      if (!student) {
+        unmappedProfiles++;
+        continue;
+      }
+      submissionData.push({
+        submission_id: s.id,
+        assignment: { id: assignment.id, due_date: assignment.due_date },
+        student
+      });
+    }
+    if (unmappedAssignments > 0)
+      console.warn(`   ⚠ ${unmappedAssignments} submissions had no matching assignment row`);
+    if (unmappedProfiles > 0)
+      console.warn(`   ⚠ ${unmappedProfiles} submissions belonged to a profile_id not in the demo fleet`);
+    if (unmappedGroups > 0)
+      console.warn(`   ⚠ ${unmappedGroups} group submissions had no resolvable group membership`);
+
+    if (submissionData.length === 0) {
+      console.warn("⏭  gradeRealSubmissionsForDemo: nothing to grade after mapping");
+      return;
+    }
+
+    const latestSubmissions = this.filterToLatestSubmissions(submissionData);
+    console.log(
+      `📊 Hand-grading ${latestSubmissions.length} real submissions (filtered from ${submissionData.length})`
+    );
+    await this.gradeSubmissions(latestSubmissions, gradersWithProfiles, studentsWithProfiles);
+
+    console.log(`⏰ Setting up extensions + regrade requests on real submissions`);
+    await this.createExtensionsAndRegradeRequests(
+      submissionData,
+      assignments.map((a) => ({ id: a.id, title: a.title })),
+      gradersWithProfiles,
+      class_id
+    );
+  }
+
   protected async gradeSubmissions(
     submissionData: Array<SubmissionDataItem>,
     graders: TestingUser[],
@@ -3089,36 +3775,47 @@ export class DatabaseSeeder {
       reviewsByRubric.get(review.rubric_id)!.push(review);
     });
 
-    // Get all rubric checks for all rubrics in parallel
+    // Get all rubric checks for all rubrics in parallel — pull the parent
+    // criterion's constraints so per-review selection respects them.
     const rubricCheckQueries = Array.from(reviewsByRubric.keys()).map((rubricId) =>
       supabase
         .from("rubric_checks")
         .select(
           `
           id, name, is_annotation, points, is_required, file,
-          rubric_criteria!inner(id, rubric_id)
+          rubric_criteria!inner(
+            id, rubric_id, total_points, is_additive, is_deduction_only,
+            min_checks_per_submission, max_checks_per_submission
+          )
         `
         )
         .eq("rubric_criteria.rubric_id", rubricId)
     );
 
     const rubricCheckResults = await Promise.all(rubricCheckQueries);
-    const rubricChecksMap = new Map<
-      number,
-      Array<{
+    type CheckWithCriterion = {
+      id: number;
+      name: string;
+      is_annotation: boolean;
+      points: number;
+      is_required: boolean;
+      file?: string | null;
+      rubric_criteria: {
         id: number;
-        name: string;
-        is_annotation: boolean;
-        points: number;
-        is_required: boolean;
-        file?: string | null;
-      }>
-    >();
+        rubric_id: number;
+        total_points: number;
+        is_additive: boolean;
+        is_deduction_only: boolean;
+        min_checks_per_submission: number | null;
+        max_checks_per_submission: number | null;
+      };
+    };
+    const rubricChecksMap = new Map<number, CheckWithCriterion[]>();
 
     rubricCheckResults.forEach((result, index) => {
       const rubricId = Array.from(reviewsByRubric.keys())[index];
       if (result.data) {
-        rubricChecksMap.set(rubricId, result.data);
+        rubricChecksMap.set(rubricId, result.data as unknown as CheckWithCriterion[]);
       }
     });
 
@@ -3143,6 +3840,65 @@ export class DatabaseSeeder {
       supabase,
       submissionIdsForDefaultTarget
     );
+
+    // Fetch all group members per submission so individual-grading targets round-
+    // robin across the group, and so is_assign_to_student parts can be assigned.
+    // (For individual / non-group submissions the array contains the sole profile.)
+    const groupMembersBySubmission = new Map<number, string[]>();
+    {
+      const { data: subRows } = await supabase
+        .from("submissions")
+        .select("id, profile_id, assignment_group_id, assignment_id")
+        .in("id", submissionIds);
+      const groupIds = [
+        ...new Set((subRows ?? []).map((s) => s.assignment_group_id).filter((id): id is number => id != null))
+      ];
+      type MemberRow = { assignment_group_id: number; assignment_id: number; profile_id: string };
+      const membersByGroup = new Map<string, string[]>();
+      if (groupIds.length > 0) {
+        const { data: members } = await supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, assignment_id, profile_id")
+          .in("assignment_group_id", groupIds);
+        for (const m of (members ?? []) as MemberRow[]) {
+          const key = `${m.assignment_group_id}:${m.assignment_id}`;
+          const bucket = membersByGroup.get(key) ?? [];
+          bucket.push(m.profile_id);
+          membersByGroup.set(key, bucket);
+        }
+        // Sort so round-robin is deterministic per submission.
+        for (const arr of membersByGroup.values()) arr.sort((a, b) => a.localeCompare(b));
+      }
+      for (const s of subRows ?? []) {
+        if (s.assignment_group_id == null) {
+          groupMembersBySubmission.set(s.id, s.profile_id ? [s.profile_id] : []);
+        } else {
+          const key = `${s.assignment_group_id}:${s.assignment_id}`;
+          groupMembersBySubmission.set(s.id, membersByGroup.get(key) ?? []);
+        }
+      }
+    }
+
+    // Per-rubric list of parts marked is_assign_to_student. For each review whose
+    // rubric has any such parts, we'll seed `submission_reviews.rubric_part_student_assignments`
+    // mapping partId → a chosen group member so the submissionreviewrecompute trigger
+    // can produce `individual_scores`.
+    const assignToStudentPartsByRubric = new Map<number, number[]>();
+    {
+      const rubricIds = [...rubricChecksMap.keys()];
+      if (rubricIds.length > 0) {
+        const { data: parts } = await supabase
+          .from("rubric_parts")
+          .select("id, rubric_id, is_assign_to_student")
+          .in("rubric_id", rubricIds);
+        for (const p of parts ?? []) {
+          if (!p.is_assign_to_student) continue;
+          const arr = assignToStudentPartsByRubric.get(p.rubric_id) ?? [];
+          arr.push(p.id);
+          assignToStudentPartsByRubric.set(p.rubric_id, arr);
+        }
+      }
+    }
 
     const submissionFilesMap = new Map<number, Array<{ id: number; name: string; submission_id: number }>>();
     submissionFiles?.forEach((file) => {
@@ -3182,6 +3938,7 @@ export class DatabaseSeeder {
         released: boolean;
         completed_by: string | null;
         completed_at: string | null;
+        rubric_part_student_assignments?: Record<number, string>;
       }
     >();
 
@@ -3192,57 +3949,94 @@ export class DatabaseSeeder {
       const files = submissionFilesMap.get(review.submission_id) || [];
 
       if (isCompleted) {
-        // Calculate maximum possible points for this rubric
-        const targetTotalPoints = 90; //Math.floor(maxPossiblePoints * targetPercentage);
+        // Pick which checks to apply, respecting per-criterion constraints:
+        //   • required checks are always applied
+        //   • count per criterion stays within [min_checks_per_submission,
+        //     max_checks_per_submission] (clamped by required.length and the
+        //     available pool)
+        //   • for additive criteria, drop optional checks whose points would
+        //     push the running total past the criterion's total_points cap
+        //   • points awarded per check is the check's own `points` field, NOT a
+        //     redistributed arbitrary value — so rubric arithmetic in the UI
+        //     adds up to what the rubric defines.
+        const checksByCriterion = new Map<number, CheckWithCriterion[]>();
+        for (const c of rubricChecks) {
+          const cid = c.rubric_criteria.id;
+          if (!checksByCriterion.has(cid)) checksByCriterion.set(cid, []);
+          checksByCriterion.get(cid)!.push(c);
+        }
 
-        // Filter checks that will be applied
-        const applicableChecks = rubricChecks.filter((check) => {
-          const applyChance = 0.8;
-          return check.is_required || Math.random() < applyChance;
-        });
-
-        // Distribute target points among applicable checks (ignore individual check.points limits)
+        const applicableChecks: CheckWithCriterion[] = [];
         const checkPointAllocations = new Map<number, number>();
 
-        // Distribute points roughly equally among checks with some randomness
-        let remainingPoints = targetTotalPoints;
+        for (const [, checks] of checksByCriterion) {
+          const criterion = checks[0].rubric_criteria;
+          const required = checks.filter((c) => c.is_required);
+          const optional = checks.filter((c) => !c.is_required);
 
-        for (let i = 0; i < applicableChecks.length; i++) {
-          const check = applicableChecks[i];
+          const minN = criterion.min_checks_per_submission ?? 0;
+          const maxN = criterion.max_checks_per_submission ?? checks.length;
 
-          if (i === applicableChecks.length - 1) {
-            // Last check gets all remaining points
-            checkPointAllocations.set(check.id, remainingPoints);
-            remainingPoints = 0;
-          } else {
-            // Allocate roughly equal portion with some randomness
-            const baseAllocation = Math.floor(targetTotalPoints / applicableChecks.length);
-            const randomBonus = Math.floor(Math.random() * 10) - 5; // ±5 points variance
-            const allocation = Math.max(1, baseAllocation + randomBonus); // At least 1 point
+          // Required checks must always be present; the floor cannot be lower
+          // than required.length, and the ceiling cannot be lower than the floor.
+          const lowerBound = Math.max(minN, required.length);
+          const upperBound = Math.max(lowerBound, Math.min(maxN, checks.length));
+          const targetN = lowerBound + Math.floor(Math.random() * (upperBound - lowerBound + 1));
 
-            // Don't allocate more than what's remaining
-            const finalAllocation = Math.min(allocation, remainingPoints - (applicableChecks.length - i - 1));
+          // Shuffle optional and pull enough to hit targetN.
+          const shuffledOptional = [...optional].sort(() => Math.random() - 0.5);
+          const optionalSlots = Math.max(0, targetN - required.length);
+          const candidateOptional = shuffledOptional.slice(0, optionalSlots);
 
-            checkPointAllocations.set(check.id, finalAllocation);
-            remainingPoints -= finalAllocation;
+          // Sum required first; they're mandatory regardless of total_points cap.
+          let runningCriterionTotal = 0;
+          const selected: CheckWithCriterion[] = [];
+          for (const c of required) {
+            selected.push(c);
+            runningCriterionTotal += c.points;
+          }
+          // For additive criteria, only admit optional checks while we stay at
+          // or under the cap. For deduction-only / others, take them all.
+          for (const c of candidateOptional) {
+            if (criterion.is_additive) {
+              if (runningCriterionTotal + c.points > criterion.total_points) continue;
+              runningCriterionTotal += c.points;
+            } else {
+              runningCriterionTotal += c.points;
+            }
+            selected.push(c);
+          }
+
+          for (const c of selected) {
+            applicableChecks.push(c);
+            checkPointAllocations.set(c.id, c.points);
           }
         }
+        // Round-robin individual-grading targets across the group's members. A
+        // group with [ripley, orion, paws] means check 0 → ripley, check 1 → orion,
+        // check 2 → paws, check 3 → ripley, etc. For individual submissions
+        // groupMembers is a single-element array, so this collapses to "all checks
+        // go to the lone submitter".
+        const groupMembers = groupMembersBySubmission.get(review.submission_id) ?? [];
+        let individualTargetCursor = 0;
+        const pickIndividualTarget = (): string | null => {
+          if (groupMembers.length === 0) return defaultTargetBySubmission.get(review.submission_id) ?? null;
+          const t = groupMembers[individualTargetCursor % groupMembers.length];
+          individualTargetCursor++;
+          return t;
+        };
 
-        const totalPointsAwarded = Array.from(checkPointAllocations.values()).reduce((sum, points) => sum + points, 0);
-        if (totalPointsAwarded !== targetTotalPoints) {
-          console.log(`Total points awarded: ${totalPointsAwarded} !== target total points: ${targetTotalPoints}`);
-        }
         // Create comments for applicable checks with allocated points
         for (const check of applicableChecks) {
           const pointsAwarded = checkPointAllocations.get(check.id) || 0;
           const individualSet = individualChecksByRubric.get(review.rubric_id);
           const needsIndividualTarget = individualSet?.has(check.id) === true;
-          const targetProfile = needsIndividualTarget ? defaultTargetBySubmission.get(review.submission_id) : undefined;
+          const targetProfile = needsIndividualTarget ? pickIndividualTarget() : undefined;
           let targetField: { target_student_profile_id: string } | Record<string, never> = {};
           if (needsIndividualTarget) {
             if (targetProfile == null) {
               throw new Error(
-                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no default target for submission ${review.submission_id} (review ${review.id})`
+                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no group member available for submission ${review.submission_id} (review ${review.id})`
               );
             }
             targetField = { target_student_profile_id: targetProfile };
@@ -3283,11 +4077,28 @@ export class DatabaseSeeder {
         }
       }
 
+      // For each is_assign_to_student part on this rubric, pick a group member to
+      // own that part. The trigger submissionreviewrecompute reads
+      // submission_reviews.rubric_part_student_assignments and turns it into
+      // submission_reviews.individual_scores, which is what the UI shows.
+      const assignToParts = assignToStudentPartsByRubric.get(review.rubric_id) ?? [];
+      let rubric_part_student_assignments: Record<number, string> | undefined;
+      if (assignToParts.length > 0) {
+        const members = groupMembersBySubmission.get(review.submission_id) ?? [];
+        if (members.length > 0) {
+          rubric_part_student_assignments = {};
+          for (let i = 0; i < assignToParts.length; i++) {
+            rubric_part_student_assignments[assignToParts[i]] = members[i % members.length];
+          }
+        }
+      }
+
       reviewUpdates.set(review.id, {
         grader: grader.private_profile_id,
         released: isCompleted,
         completed_by: isCompleted ? grader.private_profile_id : null,
-        completed_at: isCompleted ? new Date().toISOString() : null
+        completed_at: isCompleted ? new Date().toISOString() : null,
+        ...(rubric_part_student_assignments ? { rubric_part_student_assignments } : {})
       });
     }
 
@@ -4085,6 +4896,11 @@ final;`,
     instructors: TestingUser[],
     graders: TestingUser[]
   ) {
+    const fixtures = this.config.demoFixtures?.helpRequests;
+    if (fixtures && fixtures.length > 0) {
+      await this.createHelpRequestsFromFixtures(fixtures, class_id, students, instructors, graders);
+      return;
+    }
     console.log(`\n🆘 Creating ${config.numHelpRequests} help requests...`);
 
     // First, create a help queue if it doesn't exist
@@ -4327,6 +5143,131 @@ final;`,
     );
   }
 
+  /**
+   * Demo-mode help-request seeding. Drives request bodies, replies,
+   * resolution status, and work-session duration directly from the LLM
+   * fixture entries. Always writes to a single demo office-hours queue.
+   */
+  protected async createHelpRequestsFromFixtures(
+    fixtures: HelpRequestFixture[],
+    class_id: number,
+    students: TestingUser[],
+    instructors: TestingUser[],
+    graders: TestingUser[]
+  ) {
+    console.log(`\n🆘 Demo: seeding ${fixtures.length} help requests from fixtures…`);
+    if (students.length === 0) {
+      console.warn("⚠ No students to author help requests; skipping.");
+      return;
+    }
+
+    // Reuse or create the OH queue (mirrors the non-fixture path).
+    const { data: existingQueue } = await supabase.from("help_queues").select("id").eq("class_id", class_id).single();
+    let queueId: number;
+    if (existingQueue) {
+      queueId = existingQueue.id;
+    } else {
+      const { data: queueData, error: queueError } = await supabase
+        .from("help_queues")
+        .insert({
+          class_id: class_id,
+          name: "Office Hours",
+          description: "Demo office hours queue",
+          depth: 1,
+          queue_type: "video"
+        })
+        .select("id")
+        .single();
+      if (queueError) throw new Error(`Failed to create help queue: ${queueError.message}`);
+      queueId = queueData.id;
+    }
+
+    const pickRandom = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
+    let resolvedCount = 0;
+    for (const fixture of fixtures) {
+      const creator = pickRandom(students);
+      const resolver = fixture.resolved && graders.length > 0 ? pickRandom(graders) : null;
+      const resolvedAt = fixture.resolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
+
+      const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(
+        "help_requests",
+        () =>
+          supabase
+            .from("help_requests")
+            .insert({
+              class_id,
+              help_queue: queueId,
+              request: fixture.request,
+              is_private: fixture.isPrivate,
+              status: fixture.resolved ? "resolved" : "open",
+              created_by: creator.private_profile_id,
+              assignee: resolver?.private_profile_id ?? null,
+              resolved_by: resolver?.private_profile_id ?? null,
+              resolved_at: resolvedAt?.toISOString() ?? null
+            })
+            .select("id")
+      );
+      if (helpRequestError || !helpRequestData?.[0]) {
+        throw new Error(`Failed to create demo help request: ${helpRequestError?.message}`);
+      }
+      const helpRequestId = helpRequestData[0].id;
+
+      // Creator is always a member.
+      await this.rateLimitManager.trackAndLimit("help_request_students", () =>
+        supabase
+          .from("help_request_students")
+          .insert({ help_request_id: helpRequestId, profile_id: creator.private_profile_id, class_id })
+          .select("id")
+      );
+
+      // Replies — alternate between staff (instructor/grader) and the creator.
+      if (fixture.replies.length > 0) {
+        const messageInserts = fixture.replies.map((r) => {
+          const staffPool = [...instructors, ...graders];
+          const senderPool = r.isFromInstructor && staffPool.length > 0 ? staffPool : [creator];
+          const sender = pickRandom(senderPool);
+          return {
+            help_request_id: helpRequestId,
+            author: sender.private_profile_id,
+            message: r.message,
+            class_id,
+            instructors_only: r.instructorsOnly ?? false,
+            created_at: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
+          };
+        });
+        await this.rateLimitManager.trackAndLimit(
+          "help_request_messages",
+          () => supabase.from("help_request_messages").insert(messageInserts).select("id"),
+          messageInserts.length
+        );
+      }
+
+      // Work session — for resolved requests, attribute the time to the
+      // resolver grader using the fixture-specified duration.
+      if (fixture.resolved && resolver && resolvedAt) {
+        const durationMs = Math.max(1, fixture.durationMinutes) * 60 * 1000;
+        const endedAt = resolvedAt;
+        const startedAt = new Date(endedAt.getTime() - durationMs);
+        await this.rateLimitManager.trackAndLimit("help_request_work_sessions", () =>
+          supabase
+            .from("help_request_work_sessions")
+            .insert({
+              help_request_id: helpRequestId,
+              class_id,
+              ta_profile_id: resolver.private_profile_id,
+              started_at: startedAt.toISOString(),
+              ended_at: endedAt.toISOString()
+            })
+            .select("id")
+        );
+        resolvedCount++;
+      }
+    }
+
+    console.log(`✓ Demo: created ${fixtures.length} help requests (${resolvedCount} resolved)`);
+  }
+
   // Helper method to create rubric structure for an assignment
   private async createRubricForAssignment(assignment: Assignment, rubricConfig: RubricConfig) {
     const rubricStructure = generateRubricStructure(rubricConfig);
@@ -4503,9 +5444,12 @@ final;`,
               .insert({
                 assignment_id,
                 class_id,
-                // Numeric suffix avoids unique(lower(name), assignment_id) collisions from
-                // String.fromCharCode(65 + i) repeating letters for large group counts (e.g. Group A vs Group a).
-                name: `Group ${i + 1}`,
+                // No space in the name: the platform derives the GitHub repo name as
+                // `${slug}-group-${name}` WITHOUT sanitizing, and GitHub repo names
+                // can't contain spaces — "Group 1" → "...-group-Group 1" fails repo
+                // creation. Numeric suffix also avoids unique(lower(name), assignment_id)
+                // collisions from repeating letters at large group counts.
+                name: `Group-${i + 1}`,
                 mentor_profile_id: mentorProfileId
               })
               .select("id, name")
@@ -4577,7 +5521,9 @@ final;`,
               .insert({
                 assignment_id: assignment_id,
                 class_id: class_id,
-                name: `Group ${i + 1}`,
+                // Space-free: repo name is `${slug}-group-${name}` unsanitized, and
+                // GitHub repo names can't contain spaces.
+                name: `Group-${i + 1}`,
                 mentor_profile_id: mentorProfileId
               })
               .select("id, name")
@@ -4648,87 +5594,18 @@ final;`,
       return [];
     }
 
-    const batch_size = this.rateLimits["submissions"].batchSize || 100;
-    const submissionChunks = chunkArray(submissionsToCreate, batch_size);
     const test_run_prefix = getTestRunPrefix();
+    const startingRepoCounter = this.repoCounter;
 
-    console.log(`   Processing ${submissionChunks.length} batches in parallel...`);
+    // Mirror production: each submission is its own transaction chain, matching the
+    // shape of `repo push → check_run → submission insert → file → grader_result
+    // → grader_result_tests` that a real autograder workflow produces. Concurrency
+    // is bounded by the per-table Bottleneck rate limiters, so we can fan all
+    // submissions out in parallel without recreating the large-batch deadlocks the
+    // previous chunked path produced under contention.
+    console.log(`   Processing ${submissionsToCreate.length} submissions per-row in parallel...`);
 
-    // Process all chunks in parallel
-    const chunkResults = await Promise.all(
-      submissionChunks.map(async (chunk, chunkIndex) => {
-        // Calculate unique repo counter base for this chunk to avoid conflicts
-        const chunkRepoCounterBase = this.repoCounter + chunkIndex * batch_size;
-
-        // Prepare repository data for this chunk
-        const repositoryInserts = chunk.map((item, index) => ({
-          assignment_id: item.assignment.id,
-          repository: `not-actually/repository-${test_run_prefix}-${chunkRepoCounterBase + index}`,
-          class_id: class_id,
-          profile_id: item.student?.private_profile_id,
-          assignment_group_id: item.group?.id,
-          synced_handout_sha: "none"
-        }));
-
-        // Batch insert repositories for this chunk
-        const { data: repositoryData, error: repositoryError } = await this.rateLimitManager.trackAndLimit(
-          "repositories",
-          () => supabase.from("repositories").insert(repositoryInserts).select("id"),
-          repositoryInserts.length
-        );
-
-        if (repositoryError) {
-          throw new Error(`Failed to batch create repositories (chunk ${chunkIndex + 1}): ${repositoryError.message}`);
-        }
-
-        // Prepare repository check runs for this chunk
-        const checkRunInserts = repositoryData.map((repo) => ({
-          class_id: class_id,
-          repository_id: repo.id,
-          check_run_id: 1,
-          status: "{}",
-          sha: "none",
-          commit_message: "none"
-        }));
-
-        // Batch insert repository check runs for this chunk
-        const { data: checkRunData, error: checkRunError } = await this.rateLimitManager.trackAndLimit(
-          "repository_check_runs",
-          () => supabase.from("repository_check_runs").insert(checkRunInserts).select("id"),
-          checkRunInserts.length
-        );
-
-        if (checkRunError) {
-          throw new Error(`Failed to batch create check runs (chunk ${chunkIndex + 1}): ${checkRunError.message}`);
-        }
-
-        // Prepare submissions for this chunk
-        const submissionInserts = chunk.map((item, index) => ({
-          assignment_id: item.assignment.id,
-          profile_id: item.student?.private_profile_id,
-          assignment_group_id: item.group?.id,
-          sha: "none",
-          repository: repositoryInserts[index].repository,
-          run_attempt: 1,
-          run_number: 1,
-          class_id: class_id,
-          repository_check_run_id: checkRunData[index].id,
-          repository_id: repositoryData[index].id
-        }));
-
-        // Batch insert submissions for this chunk
-        const { data: submissionData, error: submissionError } = await this.rateLimitManager.trackAndLimit(
-          "submissions",
-          () => supabase.from("submissions").insert(submissionInserts).select("id"),
-          submissionInserts.length
-        );
-
-        if (submissionError) {
-          throw new Error(`Failed to batch create submissions (chunk ${chunkIndex + 1}): ${submissionError.message}`);
-        }
-
-        // Prepare submission files for this chunk
-        const sampleJavaCode = `package com.pawtograder.example.java;
+    const sampleJavaCode = `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
@@ -4756,211 +5633,249 @@ public class Entrypoint {
   }
 }`;
 
-        const submissionFileInserts = submissionData.map((submission: any, index) => ({
-          name: "sample.java",
-          contents: sampleJavaCode,
-          class_id: class_id,
-          submission_id: submission.id,
-          profile_id: chunk[index].student?.private_profile_id,
-          assignment_group_id: chunk[index].group?.id
-        }));
+    const llmPrompt =
+      "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.";
 
-        // Batch insert submission files for this chunk
-        const { error: submissionFileError } = await this.rateLimitManager.trackAndLimit(
-          "submission_files",
-          () => supabase.from("submission_files").insert(submissionFileInserts).select("id"),
-          submissionFileInserts.length
-        );
-
-        if (submissionFileError) {
-          throw new Error(
-            `Failed to batch create submission files (chunk ${chunkIndex + 1}): ${submissionFileError.message}`
-          );
-        }
-
-        // Prepare grader results for this chunk
-        const graderResultInserts = submissionData.map((submission: any, index) => ({
-          submission_id: submission.id,
-          score: 5,
-          class_id: class_id,
-          profile_id: chunk[index].student?.private_profile_id,
-          assignment_group_id: chunk[index].group?.id,
-          lint_passed: true,
-          lint_output: "no lint output",
-          lint_output_format: "markdown",
-          max_score: 10
-        }));
-
-        // Batch insert grader results for this chunk
-        const { data: graderResultData, error: graderResultError } = await this.rateLimitManager.trackAndLimit(
-          "grader_results",
-          () => supabase.from("grader_results").insert(graderResultInserts).select("id"),
-          graderResultInserts.length
-        );
-
-        if (graderResultError) {
-          throw new Error(
-            `Failed to batch create grader results (chunk ${chunkIndex + 1}): ${graderResultError.message}`
-          );
-        }
-
-        // Prepare grader result tests (6 per submission: 2 regular + 4 with LLM hints) for this chunk
-        const graderResultTestInserts = graderResultData.flatMap((graderResult: any, index) => [
-          {
-            score: 5,
-            max_score: 5,
-            name: "test 1",
-            name_format: "text",
-            output: "here is a bunch of output\n**wow**",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true
-          },
-          {
-            score: 5,
-            max_score: 5,
-            name: "test 2",
-            name_format: "text",
-            output: "here is a bunch of output\n**wow**",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true
-          },
-          {
-            score: 3,
-            max_score: 5,
-            name: "OpenAI test",
-            name_format: "text",
-            output: "This test uses OpenAI for hints",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true,
-            extra_data: {
-              llm: {
-                type: "v1",
-                prompt:
-                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
-                model: "gpt-4o-mini",
-                account: "e2e_test",
-                provider: "openai",
-                temperature: 1,
-                max_tokens: 100
-              }
-            }
-          },
-          {
-            score: 3,
-            max_score: 5,
-            name: "Azure test",
-            name_format: "text",
-            output: "This test uses Azure for hints",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true,
-            extra_data: {
-              llm: {
-                prompt:
-                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
-                model: "gpt-4o-mini",
-                account: "e2e_test",
-                provider: "azure",
-                temperature: 1,
-                max_tokens: 100
-              }
-            }
-          },
-          {
-            score: 3,
-            max_score: 5,
-            name: "Anthropic test",
-            name_format: "text",
-            output: "This test uses Anthropic for hints",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true,
-            extra_data: {
-              llm: {
-                prompt:
-                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
-                model: "claude-3-haiku-20240307",
-                account: "e2e_test",
-                provider: "anthropic",
-                temperature: 1,
-                max_tokens: 100
-              }
-            }
-          },
-          {
-            score: 3,
-            max_score: 5,
-            name: "OpenRouter test",
-            name_format: "text",
-            output: "This test uses OpenRouter for hints",
-            output_format: "markdown",
-            class_id: class_id,
-            student_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
-            grader_result_id: graderResult.id,
-            is_released: true,
-            extra_data: {
-              llm: {
-                type: "v1",
-                prompt:
-                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
-                model: "openai/gpt-4o-mini",
-                account: "e2e_test",
-                provider: "openrouter",
-                temperature: 1,
-                max_tokens: 100
-              }
+    const buildGraderResultTests = (
+      graderResultId: number,
+      studentProfileId: string | undefined,
+      groupId: number | undefined
+    ) => {
+      const base = {
+        class_id,
+        student_id: studentProfileId,
+        assignment_group_id: groupId,
+        grader_result_id: graderResultId,
+        is_released: true,
+        name_format: "text",
+        output_format: "markdown"
+      } as const;
+      return [
+        { ...base, score: 5, max_score: 5, name: "test 1", output: "here is a bunch of output\n**wow**" },
+        { ...base, score: 5, max_score: 5, name: "test 2", output: "here is a bunch of output\n**wow**" },
+        {
+          ...base,
+          score: 3,
+          max_score: 5,
+          name: "OpenAI test",
+          output: "This test uses OpenAI for hints",
+          extra_data: {
+            llm: {
+              type: "v1",
+              prompt: llmPrompt,
+              model: "gpt-4o-mini",
+              account: "e2e_test",
+              provider: "openai",
+              temperature: 1,
+              max_tokens: 100
             }
           }
-        ]);
+        },
+        {
+          ...base,
+          score: 3,
+          max_score: 5,
+          name: "Azure test",
+          output: "This test uses Azure for hints",
+          extra_data: {
+            llm: {
+              prompt: llmPrompt,
+              model: "gpt-4o-mini",
+              account: "e2e_test",
+              provider: "azure",
+              temperature: 1,
+              max_tokens: 100
+            }
+          }
+        },
+        {
+          ...base,
+          score: 3,
+          max_score: 5,
+          name: "Anthropic test",
+          output: "This test uses Anthropic for hints",
+          extra_data: {
+            llm: {
+              prompt: llmPrompt,
+              model: "claude-3-haiku-20240307",
+              account: "e2e_test",
+              provider: "anthropic",
+              temperature: 1,
+              max_tokens: 100
+            }
+          }
+        },
+        {
+          ...base,
+          score: 3,
+          max_score: 5,
+          name: "OpenRouter test",
+          output: "This test uses OpenRouter for hints",
+          extra_data: {
+            llm: {
+              type: "v1",
+              prompt: llmPrompt,
+              model: "openai/gpt-4o-mini",
+              account: "e2e_test",
+              provider: "openrouter",
+              temperature: 1,
+              max_tokens: 100
+            }
+          }
+        }
+      ];
+    };
 
-        // Batch insert grader result tests for this chunk
-        const { error: graderResultTestError } = await this.rateLimitManager.trackAndLimit(
-          "grader_result_tests",
-          () => supabase.from("grader_result_tests").insert(graderResultTestInserts).select("id"),
-          graderResultTestInserts.length
+    const submissionResults = await Promise.all(
+      submissionsToCreate.map(async (item, index) => {
+        const studentProfileId = item.student?.private_profile_id;
+        const groupId = item.group?.id;
+        const repoName = `not-actually/repository-${test_run_prefix}-${startingRepoCounter + index}`;
+
+        // 1. repository
+        const { data: repoData, error: repoErr } = await this.rateLimitManager.trackAndLimit(
+          "repositories",
+          () =>
+            supabase
+              .from("repositories")
+              .insert({
+                assignment_id: item.assignment.id,
+                repository: repoName,
+                class_id,
+                profile_id: studentProfileId,
+                assignment_group_id: groupId,
+                synced_handout_sha: "none"
+              })
+              .select("id"),
+          1
         );
+        const repoId = repoData?.[0]?.id;
+        if (repoErr || repoId === undefined) {
+          throw new Error(`Failed to create repository for submission ${index + 1}: ${repoErr?.message ?? "no row"}`);
+        }
 
-        if (graderResultTestError) {
+        // 2. repository_check_run
+        const { data: checkRunData, error: checkRunErr } = await this.rateLimitManager.trackAndLimit(
+          "repository_check_runs",
+          () =>
+            supabase
+              .from("repository_check_runs")
+              .insert({
+                class_id,
+                repository_id: repoId,
+                check_run_id: 1,
+                status: "{}",
+                sha: "none",
+                commit_message: "none"
+              })
+              .select("id"),
+          1
+        );
+        const checkRunId = checkRunData?.[0]?.id;
+        if (checkRunErr || checkRunId === undefined) {
           throw new Error(
-            `Failed to batch create grader result tests (chunk ${chunkIndex + 1}): ${graderResultTestError.message}`
+            `Failed to create repository_check_run for submission ${index + 1}: ${checkRunErr?.message ?? "no row"}`
           );
         }
 
-        // Return the results for this chunk
-        return chunk.map((item, index) => ({
-          submission_id: (submissionData[index] as any).id,
+        // 3. submission
+        const { data: submissionData, error: submissionErr } = await this.rateLimitManager.trackAndLimit(
+          "submissions",
+          () =>
+            supabase
+              .from("submissions")
+              .insert({
+                assignment_id: item.assignment.id,
+                profile_id: studentProfileId,
+                assignment_group_id: groupId,
+                sha: "none",
+                repository: repoName,
+                run_attempt: 1,
+                run_number: 1,
+                class_id,
+                repository_check_run_id: checkRunId,
+                repository_id: repoId
+              })
+              .select("id"),
+          1
+        );
+        const submissionId = submissionData?.[0]?.id;
+        if (submissionErr || submissionId === undefined) {
+          throw new Error(`Failed to create submission ${index + 1}: ${submissionErr?.message ?? "no row"}`);
+        }
+
+        // 4. submission_file
+        const { error: fileErr } = await this.rateLimitManager.trackAndLimit(
+          "submission_files",
+          () =>
+            supabase
+              .from("submission_files")
+              .insert({
+                name: "sample.java",
+                contents: sampleJavaCode,
+                class_id,
+                submission_id: submissionId,
+                profile_id: studentProfileId,
+                assignment_group_id: groupId
+              })
+              .select("id"),
+          1
+        );
+        if (fileErr) {
+          throw new Error(`Failed to create submission_file for submission ${index + 1}: ${fileErr.message}`);
+        }
+
+        // 5. grader_result
+        const { data: graderResultData, error: graderResultErr } = await this.rateLimitManager.trackAndLimit(
+          "grader_results",
+          () =>
+            supabase
+              .from("grader_results")
+              .insert({
+                submission_id: submissionId,
+                score: 5,
+                class_id,
+                profile_id: studentProfileId,
+                assignment_group_id: groupId,
+                lint_passed: true,
+                lint_output: "no lint output",
+                lint_output_format: "markdown",
+                max_score: 10
+              })
+              .select("id"),
+          1
+        );
+        const graderResultId = graderResultData?.[0]?.id;
+        if (graderResultErr || graderResultId === undefined) {
+          throw new Error(
+            `Failed to create grader_result for submission ${index + 1}: ${graderResultErr?.message ?? "no row"}`
+          );
+        }
+
+        // 6. grader_result_tests (6 rows scoped to this submission only — mirrors a
+        //    single autograder run inserting its own test rows in one transaction).
+        const tests = buildGraderResultTests(graderResultId, studentProfileId, groupId);
+        const { error: testsErr } = await this.rateLimitManager.trackAndLimit(
+          "grader_result_tests",
+          () => supabase.from("grader_result_tests").insert(tests).select("id"),
+          tests.length
+        );
+        if (testsErr) {
+          throw new Error(`Failed to create grader_result_tests for submission ${index + 1}: ${testsErr.message}`);
+        }
+
+        return {
+          submission_id: submissionId,
           assignment: { id: item.assignment.id, due_date: item.assignment.due_date },
           student: item.student,
           group: item.group,
-          repository_id: repositoryData[index].id
-        }));
+          repository_id: repoId
+        };
       })
     );
 
-    // Update repo counter for next batch
     this.repoCounter += submissionsToCreate.length;
-
-    // Flatten results from all chunks
-    return chunkResults.flat();
+    return submissionResults;
   }
 
   protected async createSurveys(
@@ -5079,11 +5994,18 @@ public class Entrypoint {
       }
     }
 
-    // Create regular (non-linked) surveys
+    // Create regular (non-linked) surveys. When team collaboration is enabled,
+    // put it FIRST so it's guaranteed to be created even at small numSurveys —
+    // teamCollaboration is otherwise the last key in SURVEYJS_TEMPLATES and the
+    // i % length rotation would never reach it for e.g. numSurveys=5 (8 templates),
+    // leaving the demo with no TCRS at all. When the linked path already created
+    // team-collaboration surveys (linkToGroupAssignments), don't duplicate it here.
+    const alreadyHasTeamCollab = surveys.length > 0;
+    const otherTypes = Object.keys(SURVEYJS_TEMPLATES).filter((k) => k !== "teamCollaboration");
     const surveyTypes =
-      config.includeTeamCollaboration !== false
-        ? Object.keys(SURVEYJS_TEMPLATES)
-        : Object.keys(SURVEYJS_TEMPLATES).filter((k) => k !== "teamCollaboration");
+      config.includeTeamCollaboration !== false && !alreadyHasTeamCollab
+        ? ["teamCollaboration", ...otherTypes]
+        : otherTypes;
     const remaining = Math.max(0, config.numSurveys - surveys.length);
 
     for (let i = 0; i < remaining; i++) {
@@ -5095,7 +6017,15 @@ public class Entrypoint {
       const statusRoll = Math.random();
       const status = statusRoll < 0.7 ? "published" : statusRoll < 0.9 ? "draft" : "closed";
 
-      // Create survey with SurveyJS JSON format
+      // Always seed a well-formed analytics_config (never null, always with a
+      // `questions` object) so the analytics view + AnalyticsConfigEditor can't
+      // hit "undefined is not an object (evaluating 'a.questions[e.name]')".
+      // Team collaboration uses the curated config (alert thresholds etc.);
+      // every other survey gets one derived from its own template questions.
+      const analyticsConfig =
+        surveyType === "teamCollaboration"
+          ? TEAM_COLLABORATION_ANALYTICS_CONFIG
+          : buildAnalyticsConfigFromTemplate(template);
       const surveyData = {
         class_id: class_id,
         created_by: instructor.private_profile_id,
@@ -5106,7 +6036,8 @@ public class Entrypoint {
         status: status as "draft" | "published" | "closed",
         allow_response_editing: Math.random() < 0.7, // 70% allow editing
         due_date: status === "published" ? addDays(new Date(), Math.floor(Math.random() * 30) + 7).toISOString() : null,
-        version: 1
+        version: 1,
+        analytics_config: analyticsConfig
       };
 
       const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
@@ -5283,6 +6214,10 @@ public class Entrypoint {
   }
 
   private generateSurveyJSResponse(element: any): any {
+    const freeform = this.config.demoFixtures?.surveyFreeform;
+    const pickFreeform = () =>
+      freeform && freeform.length > 0 ? freeform[Math.floor(Math.random() * freeform.length)] : null;
+
     switch (element.type) {
       case "rating": {
         const min = element.rateMin || 1;
@@ -5317,11 +6252,11 @@ public class Entrypoint {
         return Math.random() < 0.5;
 
       case "text":
-        return faker.lorem.sentence();
+        return pickFreeform() ?? faker.lorem.sentence();
 
       case "comment": {
         const rows = element.rows || 3;
-        return faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
+        return pickFreeform() ?? faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
       }
 
       default:
