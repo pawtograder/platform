@@ -32,13 +32,42 @@ create index if not exists idx_submission_file_symbol_index_class
 alter table "public"."submission_file_symbol_index" enable row level security;
 
 -- Mirrors the submission_files SELECT predicate: graders/instructors of the class, the owning
--- student, or members of the owning assignment group.
+-- student, or members of the owning assignment group. Inlined onto user_privileges (rather than
+-- the authorizefor* helpers) to avoid per-row SECURITY DEFINER function calls, matching the
+-- submissions RLS pattern.
 create policy "view symbol index for accessible submission files"
     on "public"."submission_file_symbol_index"
     for select
     to public
     using (
-        public.authorizeforclassgrader(class_id)
-        or public.authorizeforprofile(profile_id)
-        or public.authorizeforassignmentgroup(assignment_group_id)
+        -- owning student (via profile ownership)
+        (
+            profile_id IN (
+                SELECT up.private_profile_id
+                FROM public.user_privileges up
+                WHERE up.user_id = auth.uid()
+                    AND up.private_profile_id IS NOT NULL
+            )
+        )
+        OR
+        -- instructors/graders of the class
+        (
+            class_id IN (
+                SELECT up.class_id
+                FROM public.user_privileges up
+                WHERE up.user_id = auth.uid()
+                    AND up.role IN ('instructor','grader')
+            )
+        )
+        OR
+        -- members of the owning assignment group
+        (
+            assignment_group_id IS NOT NULL
+            AND assignment_group_id IN (
+                SELECT agm.assignment_group_id
+                FROM public.assignment_groups_members agm
+                JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
+                WHERE up.user_id = auth.uid()
+            )
+        )
     );
