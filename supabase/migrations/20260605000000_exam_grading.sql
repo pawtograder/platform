@@ -158,6 +158,14 @@ create index if not exists exam_scan_pages_batch_idx on public.exam_scan_pages (
 create index if not exists exam_scanned_submissions_batch_idx on public.exam_scanned_submissions (batch_id);
 create index if not exists exam_scanned_submissions_submission_idx
   on public.exam_scanned_submissions (submission_id) where submission_id is not null;
+-- At most one exam_v1 artifact per submission. This is the finalize completion marker;
+-- the partial unique index makes finalize's artifact insert race-safe (a concurrent
+-- second finalize for the same submission hits a unique violation and is retried into a
+-- no-op) and keeps maybeCompleteBatch's artifact count equal to the finalized-submission
+-- count. Scoped to exam_v1 so it never constrains other submission_artifacts rows.
+create unique index if not exists submission_artifacts_one_exam_v1_per_submission
+  on public.submission_artifacts (submission_id)
+  where (data->>'format') = 'exam_v1';
 
 -- ---------------------------------------------------------------------------
 -- 4) RLS — inline user_privileges checks (no helper functions)

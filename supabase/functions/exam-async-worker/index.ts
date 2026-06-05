@@ -216,14 +216,18 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
     const groupPages = pages.slice(g * perExam, g * perExam + perExam);
     // upsert the scanned submission for this group
     let scannedId: number;
+    let humanDecided = false;
     const { data: existing } = await admin
       .from("exam_scanned_submissions")
-      .select("id")
+      .select("id, match_status")
       .eq("batch_id", batch.id)
       .eq("exam_index", g)
       .maybeSingle();
     if (existing?.id) {
       scannedId = existing.id;
+      // A re-run of the match phase (re-process, or a redelivered 'match' message) must
+      // never clobber a decision a human already made.
+      humanDecided = existing.match_status === "confirmed" || existing.match_status === "skipped";
     } else {
       const { data: created, error: cErr } = await admin
         .from("exam_scanned_submissions")
@@ -240,6 +244,10 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
         "id",
         groupPages.map((p) => p.id)
       );
+
+    // Preserve a human's confirmed/skipped decision across re-runs: leave the existing
+    // match untouched rather than re-detecting and overwriting it.
+    if (humanDecided) continue;
 
     // Read identity. With both an SIS-id and a name region, take the SIS id from the
     // former and the name from the latter; with one region, use just that; with none,
@@ -318,6 +326,16 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     .eq("id", args.scanned_submission_id)
     .single();
   if (error || !scanned) throw new Error(`scanned submission ${args.scanned_submission_id} not found`);
+
+  // Already finalized -> idempotent no-op, regardless of the current match_status (a
+  // confirmation may have been changed after this message was enqueued). Mirrors the old
+  // submission_id short-circuit but keys off the artifact (the true completion marker),
+  // and still re-checks batch completion so a crash in that last step can't strand it.
+  if (scanned.submission_id && (await hasExamArtifact(admin, scanned.submission_id))) {
+    await maybeCompleteBatch(admin, scanned.batch_id);
+    return;
+  }
+
   if (scanned.match_status !== "confirmed" || !scanned.matched_profile_id) {
     throw new Error(`scanned submission ${scanned.id} is not a confirmed match`);
   }
@@ -349,31 +367,41 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
       .order("page_index", { ascending: true });
     const groupPages = pages ?? [];
 
-    // Idempotent rebuild: clear any page files left behind by a partial prior attempt,
-    // then re-copy. Exam submissions only ever hold these exam-page files.
-    await admin.from("submission_files").delete().eq("submission_id", submissionId);
+    // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
+    // submission's files would fail once a grader has commented on a page (the
+    // submission_file_comments / submission_artifacts FKs are NO ACTION) and could wipe
+    // unrelated rows. Instead refresh the page bytes in storage (upsert) and insert only
+    // the file rows that don't already exist (keyed by the deterministic page name).
+    const { data: existingFiles } = await admin
+      .from("submission_files")
+      .select("name")
+      .eq("submission_id", submissionId);
+    const existingNames = new Set((existingFiles ?? []).map((f) => f.name));
 
     const pageRefs: { page_number: number; storage_key: string; width: number; height: number }[] = [];
     for (let i = 0; i < groupPages.length; i++) {
       const p = groupPages[i];
+      const name = `exam-page-${i + 1}.png`;
       const bytes = await downloadImage(admin, "exam-scans", p.image_path);
-      const storageKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/files/exam-page-${i + 1}.png`;
+      const storageKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/files/${name}`;
       const up = await admin.storage.from("submission-files").upload(storageKey, bytes, {
         contentType: "image/png",
         upsert: true
       });
       if (up.error) throw new Error(`upload ${storageKey} failed: ${up.error.message}`);
-      await admin.from("submission_files").insert({
-        submission_id: submissionId,
-        name: `exam-page-${i + 1}.png`,
-        class_id: classId,
-        profile_id: profileId,
-        is_binary: true,
-        mime_type: "image/png",
-        file_size: bytes.length,
-        storage_key: storageKey,
-        contents: null
-      });
+      if (!existingNames.has(name)) {
+        await admin.from("submission_files").insert({
+          submission_id: submissionId,
+          name,
+          class_id: classId,
+          profile_id: profileId,
+          is_binary: true,
+          mime_type: "image/png",
+          file_size: bytes.length,
+          storage_key: storageKey,
+          contents: null
+        });
+      }
       pageRefs.push({ page_number: i + 1, storage_key: storageKey, width: p.width ?? 0, height: p.height ?? 0 });
     }
 
@@ -414,20 +442,21 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
       });
     }
 
-    // The artifact is written LAST and is the completion marker. Clear any stray prior
-    // copy first so a resumed finalize ends with exactly one exam_v1 artifact.
-    await admin
-      .from("submission_artifacts")
-      .delete()
-      .eq("submission_id", submissionId)
-      .eq("data->>format", EXAM_ARTIFACT_FORMAT);
-    await admin.from("submission_artifacts").insert({
+    // The artifact is written LAST and is the completion marker. We reach here only when
+    // no exam_v1 artifact exists yet (hasExamArtifact guard above), so a plain insert is
+    // correct; the partial unique index (submission_artifacts_one_exam_v1_per_submission)
+    // guarantees at most one. A concurrent finalize that already inserted it trips that
+    // unique violation — treat it as "already done" rather than failing the message.
+    const { error: artErr } = await admin.from("submission_artifacts").insert({
       submission_id: submissionId,
       class_id: classId,
       profile_id: profileId,
       name: "Exam",
       data: { format: EXAM_ARTIFACT_FORMAT, pages: pageRefs, questions } as unknown as Json
     });
+    if (artErr && !/duplicate key|unique/i.test(artErr.message)) {
+      throw new Error(`artifact insert failed: ${artErr.message}`);
+    }
   }
 
   await maybeCompleteBatch(admin, scanned.batch_id);

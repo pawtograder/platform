@@ -178,13 +178,33 @@ test.describe("Exam grading OCR pipeline", () => {
     const unmatched = (scanned ?? []).find((s) => s.detected_sis_id === String(unknownSis));
     expect(unmatched?.match_status).toBe("unmatched");
 
-    // --- 6) confirm the two real matches, finalize ---
+    // --- 6) confirm the two real matches ---
     await supabase
       .from("exam_scanned_submissions")
       .update({ match_status: "confirmed" })
       .eq("batch_id", batchId)
       .not("matched_profile_id", "is", null);
 
+    // re-processing the batch must NOT clobber a human's confirmed decision
+    await supabase.rpc("enqueue_exam_process_batch", { p_batch_id: batchId });
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          const { data } = await supabase.from("exam_scan_batches").select("status").eq("id", batchId).single();
+          return data?.status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("review");
+    const { count: stillConfirmed } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("batch_id", batchId)
+      .eq("match_status", "confirmed");
+    expect(stillConfirmed).toBe(2);
+
+    // --- finalize ---
     const { error: finErr } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
 

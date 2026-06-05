@@ -1,9 +1,14 @@
+/**
+ * @jest-environment node
+ *
+ * Server-only API route test. Runs under the node environment (not jsdom): importing
+ * `next/server` evaluates the WHATWG `Request` global at module load, which jsdom does
+ * not define. The handler uses no DOM APIs.
+ */
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/llm-hint/route";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
-import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
-import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import * as Sentry from "@sentry/nextjs";
 import { LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
@@ -11,16 +16,58 @@ import { LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
 // Mock all external dependencies
 jest.mock("@/utils/supabase/server");
 jest.mock("@supabase/supabase-js");
-jest.mock("@langchain/openai");
-jest.mock("@langchain/anthropic");
+// Use factory mocks (not auto-mocks) for the langchain chat models so that the
+// real subclass relationship (AzureChatOpenAI extends ChatOpenAI) is preserved.
+// route.ts branches on `chatModel instanceof ChatOpenAI || chatModel instanceof ChatAnthropic`,
+// and an auto-mock would lose the prototype chain, making AzureChatOpenAI instances
+// fail the `instanceof ChatOpenAI` check (→ 500). These mock classes are still usable
+// as jest.MockedClass for the existing `toHaveBeenCalledWith(...)` constructor-args assertions.
+jest.mock("@langchain/openai", () => {
+  class ChatOpenAI {
+    constructor(...args: unknown[]) {
+      mockChatOpenAICtor(...args);
+    }
+  }
+  class AzureChatOpenAI extends ChatOpenAI {
+    constructor(...args: unknown[]) {
+      super();
+      mockAzureChatOpenAICtor(...args);
+    }
+  }
+  return { ChatOpenAI, AzureChatOpenAI };
+});
+jest.mock("@langchain/anthropic", () => {
+  class ChatAnthropic {
+    constructor(...args: unknown[]) {
+      mockChatAnthropicCtor(...args);
+    }
+  }
+  return { ChatAnthropic };
+});
 jest.mock("@langchain/core/prompts");
 jest.mock("@sentry/nextjs");
 
+// Spy fns invoked from the mock constructors above. Declared with `var` so they are
+// hoisted alongside the jest.mock factories (which jest hoists to the top of the file).
+// eslint-disable-next-line no-var
+var mockChatOpenAICtor: jest.Mock;
+// eslint-disable-next-line no-var
+var mockAzureChatOpenAICtor: jest.Mock;
+// eslint-disable-next-line no-var
+var mockChatAnthropicCtor: jest.Mock;
+mockChatOpenAICtor = jest.fn();
+mockAzureChatOpenAICtor = jest.fn();
+mockChatAnthropicCtor = jest.fn();
+
 const mockCreateClient = createClient as jest.MockedFunction<typeof createClient>;
 const mockCreateServiceClient = createServiceClient as jest.MockedFunction<typeof createServiceClient>;
-const mockAzureChatOpenAI = AzureChatOpenAI as jest.MockedClass<typeof AzureChatOpenAI>;
-const mockChatOpenAI = ChatOpenAI as jest.MockedClass<typeof ChatOpenAI>;
-const mockChatAnthropic = ChatAnthropic as jest.MockedClass<typeof ChatAnthropic>;
+// These alias the constructor spies invoked inside the factory-mock classes, so the
+// existing `toHaveBeenCalledWith(...)` constructor-args assertions keep working while
+// the real prototype chain (AzureChatOpenAI extends ChatOpenAI) is preserved for the
+// route's `instanceof` checks.
+const mockAzureChatOpenAI = mockAzureChatOpenAICtor;
+const mockChatOpenAI = mockChatOpenAICtor;
+const mockChatAnthropic = mockChatAnthropicCtor;
 const mockChatPromptTemplate = ChatPromptTemplate as jest.MockedClass<typeof ChatPromptTemplate>;
 const mockSentry = Sentry as jest.Mocked<typeof Sentry>;
 
@@ -41,6 +88,13 @@ describe("LLM Hint API Route", () => {
     in: jest.MockedFunction<
       (column?: string, values?: unknown[]) => Promise<{ count?: number; error: unknown | null; data?: unknown }>
     >;
+    // Settable resolution for `await <builder>` (used by the assignment_total query, which
+    // ends on `.neq(...)` and awaits the builder directly).
+    awaitResult?: { count?: number; data?: unknown; error: unknown | null };
+    then?: (
+      onFulfilled?: (value: { count?: number; data?: unknown; error: unknown }) => unknown,
+      onRejected?: (reason: unknown) => unknown
+    ) => Promise<unknown>;
   }
 
   let mockSupabase: {
@@ -152,7 +206,15 @@ describe("LLM Hint API Route", () => {
       from: jest.fn().mockReturnValue(mockQueryBuilder)
     };
 
-    // Mock service Supabase client (with from() returning a shared chainable builder)
+    // Mock service Supabase client (with from() returning a shared chainable builder).
+    //
+    // The route's assignment_total rate-limit query ends on `.neq(...)` and then awaits
+    // the builder directly: `const { count } = await serviceSupabase.from(...).select(...)
+    // .eq(...).neq(...)`. So the builder itself must be thenable. We make it a PromiseLike
+    // whose resolution value defaults to `{ count: 0, error: null }` and can be overridden
+    // per-test via `serviceQueryBuilder.awaitResult` (used by the assignment_total tests).
+    // The cooldown query still terminates on `.single()` and the class_total query still
+    // terminates on `.eq(...)`, so those keep using their own `mockResolvedValue(Once)`.
     serviceQueryBuilder = {
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
@@ -164,8 +226,17 @@ describe("LLM Hint API Route", () => {
       update: jest.fn().mockReturnValue({
         eq: jest.fn().mockResolvedValue({ error: null })
       }),
-      in: jest.fn().mockReturnThis()
-    };
+      in: jest.fn().mockReturnThis(),
+      // Default awaited result for the assignment_total query (overridable per-test).
+      awaitResult: { count: 0, error: null },
+      then: function (
+        this: MockQueryBuilder,
+        onFulfilled?: (value: { count?: number; data?: unknown; error: unknown }) => unknown,
+        onRejected?: (reason: unknown) => unknown
+      ) {
+        return Promise.resolve(this.awaitResult ?? { count: 0, error: null }).then(onFulfilled, onRejected);
+      }
+    } as unknown as MockQueryBuilder;
     mockServiceSupabase = {
       from: jest.fn().mockReturnValue(serviceQueryBuilder)
     } as unknown as typeof mockServiceSupabase;
@@ -400,18 +471,9 @@ describe("LLM Hint API Route", () => {
         const rateLimitConfig: LLMRateLimitConfig = { assignment_total: 10 };
         mockTestResult.extra_data.llm!.rate_limit = rateLimitConfig;
 
-        // Mock assignment submissions
-        const assignmentSubmissions = Array.from({ length: 5 }, (_, i) => ({ id: i + 1 }));
-        (serviceQueryBuilder.eq as unknown as jest.Mock).mockResolvedValueOnce({
-          data: assignmentSubmissions,
-          error: null
-        });
-
-        // Mock usage count at limit
-        (serviceQueryBuilder.in as unknown as jest.Mock).mockResolvedValueOnce({
-          count: 10,
-          error: null
-        });
+        // The route's assignment_total query ends on `.neq(...)` then awaits the builder.
+        // Resolve that await to a usage count at the limit.
+        serviceQueryBuilder.awaitResult = { count: 10, error: null };
 
         const request = new NextRequest("http://localhost:3000/api/llm-hint", {
           method: "POST",
@@ -431,18 +493,9 @@ describe("LLM Hint API Route", () => {
         const rateLimitConfig: LLMRateLimitConfig = { assignment_total: 10 };
         mockTestResult.extra_data.llm!.rate_limit = rateLimitConfig;
 
-        // Mock assignment submissions
-        const assignmentSubmissions = Array.from({ length: 5 }, (_, i) => ({ id: i + 1 }));
-        (serviceQueryBuilder.eq as unknown as jest.Mock).mockResolvedValueOnce({
-          data: assignmentSubmissions,
-          error: null
-        });
-
-        // Mock usage count below limit
-        (serviceQueryBuilder.in as unknown as jest.Mock).mockResolvedValueOnce({
-          count: 5,
-          error: null
-        });
+        // The route's assignment_total query ends on `.neq(...)` then awaits the builder.
+        // Resolve that await to a usage count below the limit.
+        serviceQueryBuilder.awaitResult = { count: 5, error: null };
 
         const request = new NextRequest("http://localhost:3000/api/llm-hint", {
           method: "POST",
@@ -514,32 +567,17 @@ describe("LLM Hint API Route", () => {
         };
         mockTestResult.extra_data.llm!.rate_limit = rateLimitConfig;
 
-        // Mock cooldown: eq().neq().order().limit().single() -> single returns no recent usage
+        // Cooldown query terminates on `.single()` -> no recent usage.
         serviceQueryBuilder.single.mockResolvedValue({
           data: null, // No recent usage
           error: null
         });
 
-        // First eq call is part of cooldown chain, keep it chainable
-        (serviceQueryBuilder.eq as unknown as jest.Mock).mockReturnValueOnce(serviceQueryBuilder);
-
-        const assignmentSubmissions = Array.from({ length: 5 }, (_, i) => ({ id: i + 1 }));
-        // Next eq (submissions query) should resolve to submissions list
-        (serviceQueryBuilder.eq as unknown as jest.Mock).mockResolvedValueOnce({
-          data: assignmentSubmissions,
-          error: null
-        });
-
-        (serviceQueryBuilder.in as unknown as jest.Mock).mockResolvedValueOnce({
-          count: 5, // Below assignment limit
-          error: null
-        });
-
-        // Class usage under limit
-        (serviceQueryBuilder.eq as unknown as jest.Mock).mockResolvedValueOnce({
-          count: 25, // Below class limit
-          error: null
-        });
+        // Both the assignment_total query (ends on `.neq(...)`, awaits builder) and the
+        // class_total query (ends on `.eq("class_id", ...)`, awaits builder) resolve via
+        // the builder's thenable. A single below-limit count (5 < assignment 10 and 5 < class 50)
+        // lets both checks pass.
+        serviceQueryBuilder.awaitResult = { count: 5, error: null };
 
         const request = new NextRequest("http://localhost:3000/api/llm-hint", {
           method: "POST",
@@ -642,7 +680,7 @@ describe("LLM Hint API Route", () => {
           azureOpenAIApiKey: "test-azure-key",
           azureOpenAIApiInstanceName: "test.openai.azure.com",
           azureOpenAIApiDeploymentName: "gpt-4o-mini",
-          azureOpenAIApiVersion: "2024-05-01-preview"
+          azureOpenAIApiVersion: "2025-03-01-preview"
         });
       });
 
@@ -870,7 +908,11 @@ describe("LLM Hint API Route", () => {
         model: "gpt-4o-mini",
         provider: "openai",
         input_tokens: 100,
-        output_tokens: 50
+        output_tokens: 50,
+        tags: {
+          type: "grader_result_test_hint",
+          hint_type: "v1"
+        }
       });
     });
 

@@ -32,12 +32,12 @@ jobs:
       - name: Run linting check
         run: npm run lint
 
-  # Jest unit tests (no DB, no Next server) — the fast, pure-logic suite under tests/unit/.
-  # Covers exam OCR region math / page splitting, rubric parsing, gradebook expressions,
-  # export selectors, etc. Excludes tests/unit/llm-hint.test.ts (pre-existing failures from
-  # jest.mock vs the route's `instanceof` model checks — unrelated, tracked separately) and
-  # the tests/unit/issue-* Supabase integration tests (they self-skip without a live DB and
-  # run in the deploy workflow instead). See the `test:unit` script.
+  # Jest unit tests (no DB, no Next server) — the full tests/unit/ suite. Covers exam OCR
+  # region math / page splitting, rubric parsing, gradebook expressions, export selectors,
+  # the llm-hint route, etc. The tests/unit/issue-* Supabase integration tests self-skip
+  # here (RUN_SUPABASE_INTEGRATION_TESTS is not set) and run for real against a live DB in
+  # the deploy workflow; the placeholder Supabase env below only lets their module-load
+  # admin-client construction succeed so they reach the self-skip instead of throwing.
   unit-tests:
     runs-on: pawtograder-ci
     strategy:
@@ -59,6 +59,15 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Run Jest unit tests
+        env:
+          # Placeholder values so module-load createClient/createAdminClient asserts pass;
+          # no real connection is made (integration tests self-skip without
+          # RUN_SUPABASE_INTEGRATION_TESTS).
+          SUPABASE_URL: http://localhost:54321
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+          SUPABASE_ANON_KEY: test-anon-key
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
         run: npm run test:unit
 
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
