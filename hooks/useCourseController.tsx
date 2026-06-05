@@ -14,6 +14,7 @@ import TableController, {
   useTableControllerValueById
 } from "@/lib/TableController";
 import type { CourseControllerInitialData } from "@/lib/ssrUtils";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -2672,7 +2673,11 @@ export function usePublishedSurveys() {
  * Type for survey response with profile data
  */
 export type SurveyResponseWithProfile = Database["public"]["Tables"]["survey_responses"]["Row"] & {
-  profiles: { id: string; name: string | null } | null;
+  profiles: { id: string; name: string | null; sortable_name?: string | null } | null;
+};
+
+type SurveyResponseRowWithProfiles = Database["public"]["Tables"]["survey_responses"]["Row"] & {
+  profiles: { id: string; name: string | null; sortable_name?: string | null } | null;
 };
 
 /**
@@ -2697,7 +2702,16 @@ export function useSurveyResponses(surveyId: string | undefined) {
       table: "survey_responses",
       query: controller.client
         .from("survey_responses")
-        .select("*")
+        .select(
+          `
+          *,
+          profiles:profiles!survey_responses_profile_id_fkey (
+            id,
+            name,
+            sortable_name
+          )
+        `
+        )
         .eq("survey_id", surveyId)
         .eq("is_submitted", true)
         .is("deleted_at", null),
@@ -2705,22 +2719,22 @@ export function useSurveyResponses(surveyId: string | undefined) {
       realtimeFilter: { survey_id: surveyId }
     });
 
-    // Get profiles for joining response data
+    // Fallback profile names from the course profiles controller when the join is empty
     const profilesController = controller.profiles;
 
-    const updateResponsesWithProfiles = (rawResponses: Database["public"]["Tables"]["survey_responses"]["Row"][]) => {
-      // Join with profiles data from the profiles controller
+    const updateResponsesWithProfiles = (rawResponses: SurveyResponseRowWithProfiles[]) => {
       const { data: profiles } = profilesController.list(() => {});
       const profileMap = new Map(profiles.map((p) => [p.id, p]));
 
       const responsesWithProfiles: SurveyResponseWithProfile[] = rawResponses.map((r) => ({
         ...r,
-        profiles: profileMap.get(r.profile_id)
-          ? { id: r.profile_id, name: profileMap.get(r.profile_id)?.name ?? null }
-          : null
+        profiles: {
+          id: r.profile_id,
+          name: r.profiles?.name ?? profileMap.get(r.profile_id)?.name ?? null
+        }
       }));
 
-      setResponses(responsesWithProfiles);
+      setResponses(sortSurveyResponsesByProfile(responsesWithProfiles));
     };
 
     const { data, unsubscribe } = ctrl.list((updated) => {

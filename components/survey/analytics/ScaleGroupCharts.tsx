@@ -8,7 +8,9 @@ import { Box, Text, VStack } from "@chakra-ui/react";
 import { ChoiceDistributionChart } from "./ChoiceDistributionChart";
 import { DivergingStackedChart } from "./DivergingStackedChart";
 import { DivergingStackedChartMultiSeries } from "./DivergingStackedChartMultiSeries";
+import { SurveyChartCapturePlaceholder } from "./SurveyChartCapturePlaceholder";
 import { getValueLabelsFromSurveyJson } from "./utils";
+import { shouldReduceSurveyChartMountCost, WEBKIT_VISUAL_CAPTURE_MAX_SCALE_GROUPS } from "./visualCaptureUtils";
 
 export type ScaleGroup = {
   questions: SurveyQuestionInfo[];
@@ -40,6 +42,10 @@ type ScaleGroupChartsMultiProps = {
   obfuscateStats?: boolean;
 };
 
+function estimateScaleGroupChartHeight(questionCount: number, isCheckbox: boolean): number {
+  return isCheckbox ? Math.max(150, questionCount * 60) + 56 : Math.max(200, questionCount * 52) + 96;
+}
+
 function SingleModeCharts({
   questionsByScaleGroup,
   statsForCharts,
@@ -47,14 +53,28 @@ function SingleModeCharts({
   courseMeanByQuestion,
   obfuscateStats = false
 }: ScaleGroupChartsSingleProps) {
+  const reduceChartMounts = shouldReduceSurveyChartMountCost();
+
   return (
     <>
-      {questionsByScaleGroup.map((group) => {
+      {questionsByScaleGroup.map((group, index) => {
         const isCheckbox = group.questions[0]?.type === "checkbox";
+        const sectionLabel = isCheckbox ? (group.questions[0]?.title ?? group.groupLabel) : group.groupLabel;
+
+        if (reduceChartMounts && index >= WEBKIT_VISUAL_CAPTURE_MAX_SCALE_GROUPS) {
+          return (
+            <SurveyChartCapturePlaceholder
+              key={group.groupLabel}
+              label={sectionLabel}
+              height={estimateScaleGroupChartHeight(group.questions.length, isCheckbox)}
+            />
+          );
+        }
+
         return (
           <Box key={group.groupLabel} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
             <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
-              {isCheckbox ? (group.questions[0]?.title ?? group.groupLabel) : group.groupLabel}
+              {sectionLabel}
             </Text>
             {isCheckbox ? (
               <ChoiceDistributionChart
@@ -95,6 +115,9 @@ function MultiModeCharts({
   courseMeanByQuestion,
   obfuscateStats = false
 }: ScaleGroupChartsMultiProps) {
+  const reduceChartMounts = shouldReduceSurveyChartMountCost();
+  let renderedScaleGroups = 0;
+
   return (
     <VStack align="stretch" gap={6}>
       {questionsByScaleGroup.map((group) => {
@@ -102,10 +125,24 @@ function MultiModeCharts({
         const seriesData = seriesDataByGroup.get(group.groupLabel) ?? [];
         if (seriesData.length === 0) return null;
 
+        const sectionLabel = isCheckbox ? (group.questions[0]?.title ?? group.groupLabel) : group.groupLabel;
+
+        if (reduceChartMounts && renderedScaleGroups >= WEBKIT_VISUAL_CAPTURE_MAX_SCALE_GROUPS) {
+          return (
+            <SurveyChartCapturePlaceholder
+              key={group.groupLabel}
+              label={sectionLabel}
+              height={estimateScaleGroupChartHeight(group.questions.length, isCheckbox)}
+            />
+          );
+        }
+
+        renderedScaleGroups += 1;
+
         return (
           <Box key={group.groupLabel}>
             <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={2}>
-              {isCheckbox ? (group.questions[0]?.title ?? group.groupLabel) : group.groupLabel}
+              {sectionLabel}
             </Text>
             {isCheckbox ? (
               <VStack align="stretch" gap={4}>
@@ -136,6 +173,7 @@ function MultiModeCharts({
               <DivergingStackedChartMultiSeries
                 questions={group.questions.map((q) => ({ name: q.name, title: q.title ?? q.name }))}
                 series={seriesData}
+                limitSeriesForVisualCapture={reduceChartMounts}
                 courseMeanByQuestion={
                   !obfuscateStats && courseMeanByQuestion
                     ? Object.fromEntries(

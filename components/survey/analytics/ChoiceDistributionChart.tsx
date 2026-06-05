@@ -2,9 +2,10 @@
 
 import { Box, Text } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 import { useMemo } from "react";
 import { WrappedYAxisTick } from "./ChartAxisTick";
+import { StableChartContainer } from "./StableChartContainer";
 import type { QuestionStats } from "@/types/survey-analytics";
 
 type ChoiceDistributionChartProps = {
@@ -49,6 +50,7 @@ export function ChoiceDistributionChart({
   }, [questions, questionStats, valueLabelsByQuestion]);
 
   const labelWidth = 280;
+  const chartHeight = Math.max(150, chartData.length * 60);
 
   if (chartData.length === 0) {
     return (
@@ -61,9 +63,11 @@ export function ChoiceDistributionChart({
   }
 
   return (
-    <Box w="100%" h={Math.max(150, chartData.length * 60)}>
-      <ResponsiveContainer width="100%" height="100%">
+    <StableChartContainer height={chartHeight}>
+      {({ width, height }) => (
         <BarChart
+          width={width}
+          height={height}
           data={chartData}
           layout="vertical"
           margin={{ left: labelWidth, right: 20, top: 4, bottom: 24 }}
@@ -112,7 +116,7 @@ export function ChoiceDistributionChart({
           />
           <Bar isAnimationActive={false} dataKey="count" fill={barColor} radius={[0, 4, 4, 0]} />
         </BarChart>
-      </ResponsiveContainer>
-    </Box>
+      )}
+    </StableChartContainer>
   );
 }

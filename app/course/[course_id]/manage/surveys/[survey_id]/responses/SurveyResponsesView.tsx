@@ -6,6 +6,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
@@ -158,6 +159,10 @@ export default function SurveyResponsesView({
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
+    if (typeof document !== "undefined" && document.documentElement.hasAttribute("data-visual-tests")) {
+      return;
+    }
+
     const interval = setInterval(() => {
       setCurrentTime(new Date());
     }, 60000); // Update every minute
@@ -200,16 +205,8 @@ export default function SurveyResponsesView({
       }
     }
 
-    // Deterministic ordering: realtime arrival order is non-deterministic across
-    // runs. Sort by student name (then id) so the responses table renders the
-    // same way every time — required for visual regression stability.
-    return [...filtered].sort((a, b) => {
-      const nameA = a.profiles?.name ?? "";
-      const nameB = b.profiles?.name ?? "";
-      const byName = nameA.localeCompare(nameB);
-      if (byName !== 0) return byName;
-      return String(a.id).localeCompare(String(b.id));
-    });
+    // Deterministic ordering: DB/realtime arrival order is non-deterministic across runs.
+    return sortSurveyResponsesByProfile(filtered);
   }, [responses, dateRangeStart, dateRangeEnd]);
 
   // Count active filters
@@ -540,7 +537,14 @@ export default function SurveyResponsesView({
       />
 
       {/* Responses Table */}
-      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
+      <Box
+        border="1px solid"
+        borderColor="border"
+        borderRadius="lg"
+        overflow="hidden"
+        overflowX="auto"
+        data-survey-responses-table=""
+      >
         <Table.Root variant="outline" size="md">
           <Table.Header>
             <Table.Row bg="bg.subtle">

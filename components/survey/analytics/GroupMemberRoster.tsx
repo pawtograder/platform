@@ -1,6 +1,7 @@
 "use client";
 
 import type { GroupAnalytics, SurveyResponseWithContext } from "@/types/survey-analytics";
+import { compareSurveyResponsesByProfile } from "@/types/survey";
 import { Box, HStack, Link, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 import { LuCheck, LuX } from "react-icons/lu";
@@ -34,9 +35,7 @@ export function GroupMemberRoster({ group, memberRows, obfuscateStats = false }:
       if (!group.mentorId) return true;
       return r.profile_id !== group.mentorId;
     });
-    return [...filtered].sort((a, b) =>
-      (a.profile_name ?? "").localeCompare(b.profile_name ?? "", undefined, { sensitivity: "base" })
-    );
+    return [...filtered].sort(compareSurveyResponsesByProfile);
   }, [memberRows, group.mentorId]);
 
   const showEmails = !obfuscateStats;

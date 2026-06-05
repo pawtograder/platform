@@ -2,6 +2,7 @@
 
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import type { GroupAnalytics, QuestionStats, SurveyResponseWithContext } from "@/types/survey-analytics";
+import { sortSurveyResponsesByProfile } from "@/types/survey";
 import type { SurveyQuestionInfo } from "./utils";
 import { Box, Card, HStack, Text, VStack } from "@chakra-ui/react";
 import { ChoiceDistributionChart } from "./ChoiceDistributionChart";
@@ -14,6 +15,8 @@ import {
 } from "./utils";
 import { getScaleGroupKey, getScaleGroupLabel } from "./utils";
 import { GroupMemberRoster } from "./GroupMemberRoster";
+import { SurveyChartCapturePlaceholder } from "./SurveyChartCapturePlaceholder";
+import { shouldReduceSurveyChartMountCost, WEBKIT_VISUAL_CAPTURE_MAX_GROUP_DETAIL_CHARTS } from "./visualCaptureUtils";
 
 type GroupDetailPanelProps = {
   group: GroupAnalytics | null;
@@ -45,7 +48,7 @@ export function GroupDetailPanel({
     );
   }
 
-  const allGroupMemberRows = responses.filter((r) => r.group_id === group.groupId);
+  const allGroupMemberRows = sortSurveyResponsesByProfile(responses.filter((r) => r.group_id === group.groupId));
   const groupResponses = allGroupMemberRows.filter((r) => r.is_submitted);
   const valueLabelsByQuestion = Object.fromEntries(
     allQuestions.map((q) => [q.name, getValueLabelsFromSurveyJson(surveyJson, q.name)])
@@ -91,6 +94,8 @@ export function GroupDetailPanel({
     }));
   })();
 
+  const reduceChartMounts = shouldReduceSurveyChartMountCost();
+
   return (
     <Card.Root>
       <Card.Header>
@@ -104,12 +109,21 @@ export function GroupDetailPanel({
       <Card.Body>
         <VStack align="stretch" gap={6}>
           <GroupMemberRoster group={group} memberRows={allGroupMemberRows} obfuscateStats={obfuscateNames} />
-          {numericQuestionsByScale.map(({ groupLabel, questions }) => {
+          {numericQuestionsByScale.map(({ groupLabel, questions }, scaleIndex) => {
             const isCheckbox = questions[0]?.type === "checkbox";
+            const sectionLabel = isCheckbox ? (questions[0]?.title ?? groupLabel) : groupLabel;
+            const chartHeight = isCheckbox
+              ? Math.max(150, questions.length * 60) + 56
+              : Math.max(200, questions.length * 52) + 96;
+
+            if (reduceChartMounts && scaleIndex >= WEBKIT_VISUAL_CAPTURE_MAX_GROUP_DETAIL_CHARTS) {
+              return <SurveyChartCapturePlaceholder key={groupLabel} label={sectionLabel} height={chartHeight} />;
+            }
+
             return (
               <Box key={groupLabel} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
                 <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
-                  {isCheckbox ? (questions[0]?.title ?? groupLabel) : groupLabel}
+                  {sectionLabel}
                 </Text>
                 {isCheckbox ? (
                   <ChoiceDistributionChart
