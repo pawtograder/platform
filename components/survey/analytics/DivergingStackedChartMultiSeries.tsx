@@ -2,10 +2,11 @@
 
 import { Box, HStack, Text, VStack } from "@chakra-ui/react";
 import { useColorModeValue } from "@/components/ui/color-mode";
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, ReferenceDot, ReferenceLine } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceDot, ReferenceLine } from "recharts";
 import { useMemo } from "react";
 import type { QuestionStats } from "@/types/survey-analytics";
 import { WrappedYAxisTick } from "./ChartAxisTick";
+import { StableChartContainer } from "./StableChartContainer";
 import { getDivergingColor, getComparisonArrowType, partitionForDiverging, LIKERT_COLORS } from "./likert-chart-utils";
 import type { ComparisonArrowType } from "./likert-chart-utils";
 
@@ -74,6 +75,8 @@ type DivergingStackedChartMultiSeriesProps = {
   series: SeriesItem[];
   /** Course mean per question (for section/group view reference marker) */
   courseMeanByQuestion?: Record<string, number>;
+  /** WebKit visual capture: render one series block instead of one Recharts chart per survey. */
+  limitSeriesForVisualCapture?: boolean;
 };
 
 function buildDivergingRow(
@@ -137,7 +140,8 @@ function buildDivergingRow(
 export function DivergingStackedChartMultiSeries({
   questions,
   series,
-  courseMeanByQuestion
+  courseMeanByQuestion,
+  limitSeriesForVisualCapture = false
 }: DivergingStackedChartMultiSeriesProps) {
   const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
   const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");
@@ -233,6 +237,9 @@ export function DivergingStackedChartMultiSeries({
 
   const labelWidth = 280;
 
+  const visibleSeriesGroups = limitSeriesForVisualCapture ? chartDataBySeries.slice(0, 1) : chartDataBySeries;
+  const visibleSeries = limitSeriesForVisualCapture ? series.slice(0, 1) : series;
+
   if (chartData.length === 0) {
     return (
       <Box p={4} bg="bg.subtle" borderRadius="md">
@@ -246,14 +253,14 @@ export function DivergingStackedChartMultiSeries({
   return (
     <VStack align="stretch" gap={4} w="100%">
       <HStack gap={3} flexWrap="wrap" mb={2}>
-        {series.map((s) => (
+        {visibleSeries.map((s) => (
           <HStack key={s.surveyId} gap={1} fontSize="xs">
             <Box w="3" h="3" borderRadius="sm" bg={s.surveyColor} borderWidth="1px" borderColor="border" />
             <Text color="fg.muted">{s.surveyLabel}</Text>
           </HStack>
         ))}
       </HStack>
-      {chartDataBySeries.map((groupData, groupIdx) => (
+      {visibleSeriesGroups.map((groupData, groupIdx) => (
         <Box
           key={groupIdx}
           borderWidth="1px"
@@ -261,14 +268,16 @@ export function DivergingStackedChartMultiSeries({
           borderRadius="md"
           p={3}
           borderLeftWidth="4px"
-          borderLeftColor={series[groupIdx]?.surveyColor ?? "gray"}
+          borderLeftColor={visibleSeries[groupIdx]?.surveyColor ?? "gray"}
         >
           <Text fontSize="xs" color="fg.muted" mb={2}>
-            {series[groupIdx]?.surveyLabel}
+            {visibleSeries[groupIdx]?.surveyLabel}
           </Text>
-          <Box w="100%" h={Math.max(200, groupData.length * 52)}>
-            <ResponsiveContainer width="100%" height="100%">
+          <StableChartContainer height={Math.max(200, groupData.length * 52)}>
+            {({ width, height }) => (
               <BarChart
+                width={width}
+                height={height}
                 data={groupData}
                 layout="vertical"
                 margin={{ left: labelWidth, right: 20, top: 8, bottom: 40 }}
@@ -311,7 +320,7 @@ export function DivergingStackedChartMultiSeries({
                       byValue.set(v, (byValue.get(v) ?? 0) + absVal);
                     });
                     const total = Array.from(byValue.values()).reduce((a, b) => a + b, 0);
-                    const seriesStats = series[groupIdx]?.questionStats;
+                    const seriesStats = visibleSeries[groupIdx]?.questionStats;
                     const groupMean = qName ? seriesStats?.[qName]?.mean : undefined;
                     const courseMean = qName ? courseMeanByQuestion?.[qName] : undefined;
                     const arrowType =
@@ -402,7 +411,7 @@ export function DivergingStackedChartMultiSeries({
                     const qName = (row as { qName?: string }).qName;
                     const courseMean = qName && courseMeanByQuestion[qName];
                     if (courseMean == null || typeof courseMean !== "number") return null;
-                    const seriesStats = series[groupIdx]?.questionStats;
+                    const seriesStats = visibleSeries[groupIdx]?.questionStats;
                     const groupMean = qName && seriesStats?.[qName]?.mean;
                     if (groupMean == null || typeof groupMean !== "number") return null;
                     const arrowType = getComparisonArrowType(groupMean, courseMean);
@@ -427,8 +436,8 @@ export function DivergingStackedChartMultiSeries({
                     );
                   })}
               </BarChart>
-            </ResponsiveContainer>
-          </Box>
+            )}
+          </StableChartContainer>
           <Box pl={labelWidth} pr={20} w="100%">
             <HStack gap={4} flexWrap="wrap" justify="center" pt={2} fontSize={10}>
               {legendPayload.map((item) => (

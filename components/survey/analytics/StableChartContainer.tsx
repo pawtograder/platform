@@ -2,6 +2,7 @@
 
 import { Box } from "@chakra-ui/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isVisualTestMode } from "./visualCaptureUtils";
 
 export type ChartDimensions = {
   width: number;
@@ -9,10 +10,6 @@ export type ChartDimensions = {
 };
 
 const DIMENSION_EPSILON = 1;
-
-function isVisualTestMode(): boolean {
-  return typeof document !== "undefined" && document.documentElement.hasAttribute("data-visual-tests");
-}
 
 function dimensionsMatch(a: ChartDimensions, b: ChartDimensions): boolean {
   return Math.abs(a.width - b.width) < DIMENSION_EPSILON && Math.abs(a.height - b.height) < DIMENSION_EPSILON;

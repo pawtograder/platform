@@ -61,6 +61,9 @@ async function waitForStableSurveyCharts(page: Page) {
         const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-survey-chart-host]"));
         if (hosts.length === 0) return true;
         return hosts.every((host) => {
+          if (host.hasAttribute("data-survey-chart-placeholder")) {
+            return host.hasAttribute("data-survey-chart-ready");
+          }
           if (
             document.documentElement.hasAttribute("data-visual-tests") &&
             host.hasAttribute("data-survey-chart-ready")

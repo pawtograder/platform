@@ -216,7 +216,12 @@ export default function SurveyAnalytics({
           obfuscateStats={obfuscateStats}
         />
 
-        <Tabs.Root value={viewMode} onValueChange={(d) => setViewMode(d.value as typeof viewMode)}>
+        <Tabs.Root
+          value={viewMode}
+          onValueChange={(d) => setViewMode(d.value as typeof viewMode)}
+          lazyMount
+          unmountOnExit
+        >
           <Tabs.List>
             <Tabs.Trigger value="course">Overview</Tabs.Trigger>
             <Tabs.Trigger value="group">By Group</Tabs.Trigger>
