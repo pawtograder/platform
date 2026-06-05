@@ -181,7 +181,7 @@ test.describe("PR submission surfaces (checks + deployments data/RLS)", () => {
     // CI run (workflow_event) on the fork, matching the submission head_sha.
     const { error: weErr } = await supabase.from("workflow_events").insert({
       class_id: classAId,
-      event_type: "workflow_run",
+      event_type: "completed",
       repository_name: FORK_REPO,
       head_sha: HEAD_SHA,
       head_branch: `pr-${SAFE_ID}`,
@@ -197,11 +197,13 @@ test.describe("PR submission surfaces (checks + deployments data/RLS)", () => {
     // A workflow_event for a DIFFERENT sha — must NOT come back for this submission.
     const { error: weOtherErr } = await supabase.from("workflow_events").insert({
       class_id: classAId,
-      event_type: "workflow_run",
+      event_type: "completed",
       repository_name: FORK_REPO,
       head_sha: `other${SAFE_ID}`,
       workflow_name: "CI-other",
       workflow_run_id: deploymentGhId + 1,
+      run_number: 1,
+      run_attempt: 1,
       status: "completed",
       conclusion: "failure"
     });
