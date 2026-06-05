@@ -1091,7 +1091,9 @@ function generateRubricStructure(config: RubricConfig): SeedRubricPart[] {
   const parts: SeedRubricPart[] = [correctness, codeQuality, design, conventions];
 
   // Optionally append plain additive parts if a template asks for more breadth.
-  const extraParts = Math.max(0, (config.maxPartsPerAssignment ?? 0) - parts.length);
+  // When maxPartsPerAssignment is below the curated base count, trim down instead.
+  const maxParts = config.maxPartsPerAssignment ?? parts.length;
+  const extraParts = Math.max(0, maxParts - parts.length);
   const extraNames = ["Testing", "Performance", "Documentation Quality", "Robustness"];
   for (let e = 0; e < extraParts && e < extraNames.length; e++) {
     parts.push({
@@ -1114,7 +1116,7 @@ function generateRubricStructure(config: RubricConfig): SeedRubricPart[] {
     });
   }
 
-  return parts;
+  return parts.slice(0, maxParts);
 }
 
 // Meta-grading rubric: "grade the grading". Single part, single-pick + checkbox criteria.
@@ -1240,9 +1242,10 @@ interface GradingCriterion {
 function pickCheckPoints(check: GradingCheck): { points: number; label?: string } {
   const opts = check.data?.options;
   if (opts && opts.length > 0) {
-    const r = Math.random();
-    const idx = r < 0.6 ? 0 : r < 0.85 ? 1 : opts.length - 1; // weight toward the better options
-    const opt = opts[Math.min(idx, opts.length - 1)];
+    // Bias toward the better (earlier) options while keeping every option — including
+    // any middle ones like "Adequate" — reachable so the demo exercises all UI states.
+    const idx = Math.min(Math.floor(Math.pow(Math.random(), 1.5) * opts.length), opts.length - 1);
+    const opt = opts[idx];
     return { points: opt.points, label: opt.label };
   }
   return { points: check.points };
@@ -4261,12 +4264,48 @@ export class DatabaseSeeder {
   ) {
     const metaGraders = [...instructors, ...graders.slice(0, Math.max(1, Math.floor(graders.length / 4)))];
     if (metaGraders.length === 0) return;
+
+    // Meta-grading ("grade the grading") only makes sense once the primary grading
+    // review is finished. Resolve each submission's completed primary grader so we
+    // can (a) skip submissions whose primary review isn't done and (b) never assign
+    // a grader to meta-grade their own review.
+    const submissionIds = latestSubmissions.map((s) => s.submission_id);
+    const submissionRows = await this.batchQuerySubmissions(submissionIds);
+    const submissionByGradingReviewId = new Map<number, number>();
+    for (const row of submissionRows) {
+      if (row.grading_review_id) submissionByGradingReviewId.set(row.grading_review_id, row.id);
+    }
+
+    const primaryGraderBySubmission = new Map<number, string>();
+    for (const chunk of chunkArray([...submissionByGradingReviewId.keys()], 200)) {
+      const { data, error } = await supabase.from("submission_reviews").select("id, completed_by").in("id", chunk);
+      if (error) throw new Error(`Failed to fetch primary reviews for meta-grading: ${error.message}`);
+      for (const r of data ?? []) {
+        const submissionId = submissionByGradingReviewId.get(r.id);
+        // completed_by is only set once the primary grading review is complete.
+        if (submissionId != null && r.completed_by) {
+          primaryGraderBySubmission.set(submissionId, r.completed_by);
+        }
+      }
+    }
+
+    const eligibleSubmissions = latestSubmissions.filter((s) => primaryGraderBySubmission.has(s.submission_id));
+    if (eligibleSubmissions.length === 0) {
+      console.log("   No completed primary reviews to meta-grade");
+      return;
+    }
+
     await this.applyAuxiliaryReviews({
       label: "meta-grading reviews",
       reviewRound: "meta-grading-review",
-      latestSubmissions,
+      latestSubmissions: eligibleSubmissions,
       class_id,
-      authorFor: () => metaGraders[Math.floor(Math.random() * metaGraders.length)].private_profile_id,
+      authorFor: (submissionId) => {
+        const primaryGrader = primaryGraderBySubmission.get(submissionId);
+        const eligible = metaGraders.filter((g) => g.private_profile_id !== primaryGrader);
+        const pool = eligible.length > 0 ? eligible : metaGraders;
+        return pool[Math.floor(Math.random() * pool.length)].private_profile_id;
+      },
       completionRate: 0.2
     });
   }
@@ -5061,15 +5100,35 @@ final;`,
     // the student's code + assignment — "the queue knows about the student's code".
     const { data: submissionPool } = await supabase
       .from("submissions")
-      .select("id, assignment_id, submission_files(id)")
+      .select("id, assignment_id, profile_id, assignment_group_id, submission_files(id)")
       .eq("class_id", class_id)
       .not("assignment_id", "is", null)
       .limit(400);
     const linkableSubmissions = (submissionPool ?? []).filter((s) => s.assignment_id != null);
-    const pickSubmission = () =>
-      linkableSubmissions.length > 0
-        ? linkableSubmissions[Math.floor(Math.random() * linkableSubmissions.length)]
-        : null;
+    type LinkableSubmission = (typeof linkableSubmissions)[number];
+
+    // Map each student to the groups they belong to so a help request can only ever
+    // reference the requester's own code (their individual or group submissions),
+    // never an unrelated student's work.
+    const { data: groupMemberships } = await supabase
+      .from("assignment_groups_members")
+      .select("profile_id, assignment_group_id")
+      .eq("class_id", class_id);
+    const groupIdsByProfile = new Map<string, Set<number>>();
+    for (const m of groupMemberships ?? []) {
+      if (m.profile_id == null || m.assignment_group_id == null) continue;
+      if (!groupIdsByProfile.has(m.profile_id)) groupIdsByProfile.set(m.profile_id, new Set());
+      groupIdsByProfile.get(m.profile_id)!.add(m.assignment_group_id);
+    }
+
+    const pickSubmission = (creatorProfileId: string): LinkableSubmission | null => {
+      const groupIds = groupIdsByProfile.get(creatorProfileId);
+      const candidates = linkableSubmissions.filter(
+        (s) =>
+          s.profile_id === creatorProfileId || (s.assignment_group_id != null && groupIds?.has(s.assignment_group_id))
+      );
+      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+    };
 
     // Create help requests in batches
     const BATCH_SIZE = 50;
@@ -5114,8 +5173,8 @@ final;`,
         // Calculate resolved_at timestamp (reused for work sessions)
         const resolvedAt = isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
 
-        // ~60% of requests reference the student's actual submission + code.
-        const linkedSubmission = Math.random() < 0.6 ? pickSubmission() : null;
+        // ~60% of requests reference the requester's own submission + code.
+        const linkedSubmission = Math.random() < 0.6 ? pickSubmission(creator.private_profile_id) : null;
 
         // Create the help request
         const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(

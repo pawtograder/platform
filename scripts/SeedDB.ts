@@ -553,7 +553,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "tcrs", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "marketing", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:
