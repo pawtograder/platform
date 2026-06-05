@@ -79,7 +79,8 @@ export function useUserPreferences(): UseUserPreferencesResult {
       }
 
       const raw = row?.preferences as unknown;
-      const rawObj = raw && typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+      const rawObj =
+        raw && typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
 
       const current = parseUserPreferencesFromDb(raw as Json | null | undefined);
       const merged = mergeUserPreferences(current, patch);
