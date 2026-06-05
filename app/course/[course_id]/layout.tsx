@@ -7,11 +7,12 @@ import { GlobalSearchProvider } from "@/components/ui/global-search";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
-import { fetchCourseControllerData, getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { fetchCourseControllerData, getCourse, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
+import { ViewAsBanner } from "@/components/course/view-as-banner";
 import { HelpDrawerProvider } from "@/hooks/useHelpDrawer";
 import { KeyboardShortcutsProvider } from "@/hooks/useKeyboardShortcuts";
 
@@ -40,14 +41,16 @@ const ProtectedLayout = async ({
   if (!user_id) {
     redirect("/");
   }
-  const user_role = await getUserRolesForCourse(Number.parseInt(course_id), user_id);
+  const user_role = await getEffectiveCourseIdentity(Number.parseInt(course_id), user_id);
   if (!user_role) {
     redirect("/");
   }
 
   // Staff pages should stream quickly even for very large classes; avoid blocking layout render
-  // on a full table prefetch bundle.
-  const shouldPrefetchCourseData = user_role.role === "student";
+  // on a full table prefetch bundle. When an instructor is viewing as a student, skip the
+  // role-keyed prefetch (it is not scoped to the target profile) and let controllers load
+  // the student's data client-side.
+  const shouldPrefetchCourseData = user_role.role === "student" && !user_role.isViewingAs;
   const initialData = shouldPrefetchCourseData
     ? await fetchCourseControllerData(Number.parseInt(course_id), user_role.role)
     : undefined;
@@ -74,6 +77,7 @@ const ProtectedLayout = async ({
               <HelpDrawerProvider>
                 <GlobalSearchProvider>
                   <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
+                    <ViewAsBanner />
                     <DynamicCourseNav />
                     <Box
                       as="main"

@@ -2,7 +2,7 @@ import { Box, Skeleton, SkeletonText, Stack } from "@chakra-ui/react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import { getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import InstructorDashboard from "./instructorDashboard";
 import StudentDashboard from "./studentDashboard";
 
@@ -27,7 +27,7 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
     redirect("/");
   }
 
-  const role = await getUserRolesForCourse(course_id, user_id);
+  const role = await getEffectiveCourseIdentity(course_id, user_id);
   if (role?.role === "instructor" || role?.role === "grader") {
     return (
       <Box>
@@ -44,7 +44,11 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   return (
     <Box>
       <Suspense fallback={<CourseHomeDashboardFallback />}>
-        <StudentDashboard course_id={course_id} private_profile_id={private_profile_id} />
+        <StudentDashboard
+          course_id={course_id}
+          private_profile_id={private_profile_id}
+          isViewingAsStudent={role.isViewingAs}
+        />
       </Suspense>
     </Box>
   );

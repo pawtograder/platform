@@ -40,7 +40,7 @@ import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
@@ -224,8 +224,19 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
  */
 export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId: number }) {
   const comments = useSubmissionRegradeRequestComments({ submission_regrade_request_id: regradeRequestId });
+  const sortedComments = useMemo(
+    () =>
+      [...(comments ?? [])].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id
+      ),
+    [comments]
+  );
   return (
-    <VStack px={2}>{comments?.map((comment) => <RegradeRequestComment key={comment.id} comment={comment} />)}</VStack>
+    <VStack px={2}>
+      {sortedComments.map((comment) => (
+        <RegradeRequestComment key={comment.id} comment={comment} />
+      ))}
+    </VStack>
   );
 }
 

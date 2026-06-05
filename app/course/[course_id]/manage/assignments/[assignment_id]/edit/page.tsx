@@ -39,13 +39,15 @@ export default function EditAssignment() {
       form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
       form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
       form.setValue("allow_early", selfReviewSetting?.data.allow_early);
+      form.setValue("self_review_release_at", selfReviewSetting?.data.release_at ?? null);
     }
   }, [
     queryData,
     form,
     selfReviewSetting?.data.allow_early,
     selfReviewSetting?.data.deadline_offset,
-    selfReviewSetting?.data.enabled
+    selfReviewSetting?.data.enabled,
+    selfReviewSetting?.data.release_at
   ]);
 
   const onFinish = useCallback(
@@ -62,6 +64,7 @@ export default function EditAssignment() {
                 enabled: isEnabled,
                 deadline_offset: isEnabled ? values.deadline_offset : null,
                 allow_early: isEnabled ? values.allow_early : null,
+                release_at: isEnabled ? values.self_review_release_at || null : null,
                 class_id: course_id
               }
             },
@@ -88,6 +91,7 @@ export default function EditAssignment() {
         values.eval_config = undefined;
         values.allow_early = undefined;
         values.deadline_offset = undefined;
+        values.self_review_release_at = undefined;
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

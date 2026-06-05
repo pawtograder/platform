@@ -1,0 +1,227 @@
+{
+  "uid": "pawtograder-rate-limiting",
+  "title": "Pawtograder · Rate Limiting & Queues",
+  "tags": ["pawtograder", "rate-limit", "redis"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "GitHub API rate limiting (Bottleneck via Redis + circuit breakers)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Open circuit breakers",
+      "description": "Number of GitHub-org circuit breakers currently open. >0 means GitHub API access for that org is paused due to rate limiting or repeated errors. Deduped across edge pods (metrics are global).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(max by (scope, key) (pawtograder_circuit_breaker_open))",
+          "legendFormat": "open"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bottleneck queued jobs by limiter (rate-limit backpressure)",
+      "description": "Jobs waiting in each Bottleneck limiter's Redis queue. The primary GitHub-API-rate-limit pressure signal: sustained growth means callers are being throttled and work is backing up. limiter_id identifies the limited resource (e.g. per-installation GitHub API).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "showPoints": "never", "lineWidth": 2, "stacking": { "mode": "none" } }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (limiter_id) (pawtograder_bottleneck_queued)",
+          "legendFormat": "{{limiter_id}}"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Circuit breaker state",
+      "description": "Current state of every GitHub circuit breaker (scope/key). open=1 pauses GitHub calls for that scope.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "filterable": true },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [
+            { "id": "displayName", "value": "open" },
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+          ] }
+        ]
+      },
+      "options": { "showHeader": true },
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true } } }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (scope, key, state) (pawtograder_circuit_breaker_open)",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bottleneck running weight by limiter",
+      "description": "Total running job weight per Bottleneck limiter (Redis 'running'). How much GitHub-API work is in flight across all edge isolates sharing the limiter.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (limiter_id) (pawtograder_bottleneck_running)",
+          "legendFormat": "{{limiter_id}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bottleneck concurrent clients by limiter",
+      "description": "Number of distinct Bottleneck clients (edge isolates) with active work per limiter — the cross-replica concurrency the Redis-backed limiter is coordinating.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (limiter_id) (pawtograder_bottleneck_concurrent_clients)",
+          "legendFormat": "{{limiter_id}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Async worker queue depths",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depths",
+      "description": "Backlog in the pgmq-backed async worker queues. Sustained growth indicates downstream processing can't keep up with inbound webhook/grading volume.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 18, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_queue_size)", "legendFormat": "github async" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_low_priority_queue_size)", "legendFormat": "github async (low priority)" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_discord_queue_size)", "legendFormat": "discord async" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_gradebook_row_recalculate_queue_size)", "legendFormat": "gradebook recalculate" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Dead-letter queues",
+      "description": "Messages parked in dead-letter queues (github async + discord). Any non-zero value is a failed-processing signal worth investigating.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name",
+        "orientation": "vertical"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_dlq_size)", "legendFormat": "github DLQ" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_discord_dlq_size)", "legendFormat": "discord DLQ" }
+      ]
+    }
+  ]
+}
