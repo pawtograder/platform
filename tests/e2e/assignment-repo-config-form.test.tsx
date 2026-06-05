@@ -543,4 +543,180 @@ test.describe("Assignment repo configuration form", () => {
     expect(bad.error).not.toBeNull();
     expect(bad.error?.message).toMatch(/assignments_no_protection_when_no_repo/);
   });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 8 — Submission mode = PR + the live install-check gate
+  // (form.tsx SubmissionModeSubform, lines ~815-1048).
+  //
+  // The PR subform runs a LIVE checkAppInstallation() against the upstream repo
+  // (the form's `runCheck`, on input blur / "Re-check installation"). Save is
+  // gated on the result via the upstream_repo `validate` closure: it returns an
+  // error string until the check status is "ok". The real edge function calls
+  // GitHub, which isn't deterministic on the local stack (dummy creds), so we
+  // stub the `github-check-app-installation` HTTP call with page.route — the same
+  // edge-fn stubbing seam instructor-commit-history.test.tsx uses — to drive the
+  // two outcomes that matter: an org WITHOUT the app installed blocks Save, and a
+  // reachable repo allows it and round-trips the PR columns.
+  //
+  // We pair PR mode with repo_mode='none' so Save never creates a handout/solution
+  // repo (no other GitHub call), isolating the install gate + the PR-field
+  // persistence — same no-GitHub-on-save tactic as Scenario 4.
+  // ---------------------------------------------------------------------------
+
+  // Stub the install-check edge function to return a fixed result. The Supabase
+  // JS client POSTs to {SUPABASE_URL}/functions/v1/github-check-app-installation;
+  // invokeEdgeFunction() returns the 200 JSON body verbatim, so the shape here
+  // matches CheckAppInstallationResponse. CORS headers + the OPTIONS preflight are
+  // included because the call is cross-origin (app:3001 -> supabase:54321).
+  async function stubInstallCheck(
+    page: Page,
+    result: { installed: boolean; repo_accessible: boolean; org?: string; install_url?: string }
+  ) {
+    await page.route("**/functions/v1/github-check-app-installation", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
+          }
+        });
+        return;
+      }
+      const body = route.request().postDataJSON() as { repo?: string; class_id?: number };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({
+          installed: result.installed,
+          repo_accessible: result.repo_accessible,
+          org: result.org ?? (body.repo ?? "owner/name").split("/")[0],
+          install_url: result.install_url ?? "https://github.com/apps/pawtograder/installations/new"
+        })
+      });
+    });
+  }
+
+  test("PR submission mode reveals the upstream fields", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments/new`);
+    await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+    const modeSelect = page.locator('select[name="submission_mode"]');
+    await expect(modeSelect).toBeVisible();
+    // Default is push (page.tsx leaves submission_mode unset -> form defaults "push").
+    await expect(modeSelect).toHaveValue("push");
+
+    const upstreamInput = page.getByLabel("Upstream repository", { exact: false });
+    const baseBranchInput = page.getByLabel("Upstream base branch", { exact: false });
+    // Push mode: the PR-only fields are hidden.
+    await expect(upstreamInput).toHaveCount(0);
+    await expect(baseBranchInput).toHaveCount(0);
+
+    // Switch to PR mode: upstream repo, base branch, PR-identification, and the
+    // "Require an open pull request" toggle appear.
+    await modeSelect.selectOption("pr");
+    await expect(upstreamInput).toBeVisible();
+    await expect(baseBranchInput).toBeVisible();
+    await expect(page.locator('select[name="pr_identification"]')).toBeVisible();
+    await expect(page.getByText("Require an open pull request")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Re-check installation/i })).toBeVisible();
+  });
+
+  test("PR mode: an upstream repo whose org lacks the app blocks Save with the inline error", async ({ page }) => {
+    // App not installed on the org -> runCheck sets status 'missing'.
+    await stubInstallCheck(page, { installed: false, repo_accessible: false });
+
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments/new`);
+    await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+    const title = `PR Gate Blocked ${RUN_PREFIX}`;
+    await page.getByLabel("Title", { exact: false }).fill(title);
+    await fillBaselineAssignmentFields(page, `prg-${RUN_PREFIX.slice(-6)}`);
+    // No-repo so Save makes no GitHub repo; the gate is purely the install check.
+    await page.locator('select[name="repo_mode"]').selectOption("none");
+
+    await page.locator('select[name="submission_mode"]').selectOption("pr");
+    const upstreamInput = page.getByLabel("Upstream repository", { exact: false });
+    await upstreamInput.fill("no-app-org/some-repo");
+    // Blur triggers runCheck; the helper area surfaces the install link + copy.
+    await upstreamInput.blur();
+    await expect(page.getByText("App not installed on this organization.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("link", { name: /Install \/ configure the Pawtograder GitHub App/i })).toBeVisible();
+
+    // Save is gated: the validate closure rejects and the inline field error
+    // shows. Accept either gate message — the manual setError copy ("...is not
+    // installed on this repository's organization.") that the missing-status
+    // effect sets, or the validate-closure copy ("Install the Pawtograder GitHub
+    // App ... before saving") that wins when Save re-validates. Both prove the
+    // install gate blocked the save.
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText(/Pawtograder GitHub App.*(installed|before saving)/i).first()).toBeVisible();
+
+    // And no assignment row was inserted.
+    const { data } = await supabase.from("assignments").select("id").eq("class_id", course.id).eq("title", title);
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  test("PR mode: a reachable upstream repo allows Save and round-trips the PR columns", async ({ page }) => {
+    // App installed AND repo accessible -> runCheck sets status 'ok'.
+    await stubInstallCheck(page, { installed: true, repo_accessible: true });
+
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments/new`);
+    await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+    const title = `PR Gate Allowed ${RUN_PREFIX}`;
+    const slug = `pra-${RUN_PREFIX.slice(-6)}`;
+    await page.getByLabel("Title", { exact: false }).fill(title);
+    await fillBaselineAssignmentFields(page, slug);
+    await page.locator('select[name="repo_mode"]').selectOption("none");
+
+    await page.locator('select[name="submission_mode"]').selectOption("pr");
+    const upstreamInput = page.getByLabel("Upstream repository", { exact: false });
+    await upstreamInput.fill("reachable-org/upstream-repo");
+    await upstreamInput.blur();
+    // The success affordance confirms the gate cleared.
+    await expect(page.getByText("App installed and repository accessible")).toBeVisible({ timeout: 15_000 });
+
+    // Configure the remaining PR fields so we can assert they round-trip.
+    await page.getByLabel("Upstream base branch", { exact: false }).fill("develop");
+    await page.locator('select[name="pr_identification"]').selectOption("branch_convention");
+    // The head-branch convention field appears for branch_convention.
+    await page.getByLabel("Head branch convention", { exact: false }).fill("^submission/.+$");
+    await toggleCheckboxByLabel(page, "Require an open pull request");
+
+    await page.getByRole("button", { name: "Save" }).click();
+
+    type Row = {
+      submission_mode: string;
+      upstream_repo: string | null;
+      upstream_base_branch: string | null;
+      pr_identification: string;
+      pr_branch_convention: string | null;
+      require_pr_open: boolean;
+    };
+    let data: Row | null = null;
+    await expect(async () => {
+      const r = await supabase
+        .from("assignments")
+        .select(
+          "submission_mode, upstream_repo, upstream_base_branch, pr_identification, pr_branch_convention, require_pr_open"
+        )
+        .eq("class_id", course.id)
+        .eq("title", title)
+        .maybeSingle();
+      expect(r.error).toBeNull();
+      expect(r.data).not.toBeNull();
+      data = r.data as unknown as Row;
+    }).toPass({ timeout: 30_000 });
+    expect(data!.submission_mode).toBe("pr");
+    expect(data!.upstream_repo).toBe("reachable-org/upstream-repo");
+    expect(data!.upstream_base_branch).toBe("develop");
+    expect(data!.pr_identification).toBe("branch_convention");
+    expect(data!.pr_branch_convention).toBe("^submission/.+$");
+    expect(data!.require_pr_open).toBe(true);
+  });
 });
