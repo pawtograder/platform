@@ -183,7 +183,7 @@ export type Database = {
         };
         Insert: {
           assignment_id: number;
-          class_id: number;
+          class_id?: number;
           config: Json;
           updated_at?: string;
           updated_by?: string | null;
@@ -195,57 +195,7 @@ export type Database = {
           updated_at?: string;
           updated_by?: string | null;
         };
-        Relationships: [
-          {
-            foreignKeyName: "assignment_dashboard_views_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignment_overview";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignments";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignments_with_effective_due_dates";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_updated_by_fkey";
-            columns: ["updated_by"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_dashboard_views_updated_by_fkey";
-            columns: ["updated_by"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
-          }
-        ];
+        Relationships: [];
       };
       assignment_due_date_exceptions: {
         Row: {
@@ -3327,69 +3277,6 @@ export type Database = {
           updated_at?: string;
         };
         Relationships: [];
-      };
-      github_deployments: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          creator_login: string | null;
-          environment: string | null;
-          github_deployment_id: number | null;
-          github_deployment_status_id: number | null;
-          id: number;
-          payload: Json | null;
-          repository_id: number | null;
-          repository_name: string;
-          sha: string | null;
-          state: string | null;
-          target_url: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          creator_login?: string | null;
-          environment?: string | null;
-          github_deployment_id?: number | null;
-          github_deployment_status_id?: number | null;
-          id?: number;
-          payload?: Json | null;
-          repository_id?: number | null;
-          repository_name: string;
-          sha?: string | null;
-          state?: string | null;
-          target_url?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          creator_login?: string | null;
-          environment?: string | null;
-          github_deployment_id?: number | null;
-          github_deployment_status_id?: number | null;
-          id?: number;
-          payload?: Json | null;
-          repository_id?: number | null;
-          repository_name?: string;
-          sha?: string | null;
-          state?: string | null;
-          target_url?: string | null;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "github_deployments_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "github_deployments_repository_id_fkey";
-            columns: ["repository_id"];
-            isOneToOne: false;
-            referencedRelation: "repositories";
-            referencedColumns: ["id"];
-          }
-        ];
       };
       gradebook_column_students: {
         Row: {
@@ -8325,29 +8212,8 @@ export type Database = {
             foreignKeyName: "submission_pr_links_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "assignment_overview";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_pr_links_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "assignments";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_pr_links_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_with_effective_due_dates";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_pr_links_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "submission_pr_links_class_id_fkey";
@@ -8362,13 +8228,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "profiles";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_pr_links_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_nice";
-            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -10850,17 +10709,6 @@ export type Database = {
         Args: { p_file_name: string; p_submission_id: number };
         Returns: number;
       };
-      _eval_rubric_report_filter: {
-        Args: {
-          p_check_ids: number[];
-          p_class_section: string;
-          p_lab_section: string;
-          p_node: Json;
-          p_option_keys: string[];
-          p_total_score: number;
-        };
-        Returns: boolean;
-      };
       _grade_targets_for_submission: {
         Args: { p_submission_id: number };
         Returns: string[];
@@ -10885,24 +10733,12 @@ export type Database = {
         };
         Returns: Record<string, unknown>;
       };
-      _rubric_check_application_stats: {
-        Args: { p_assignment_id: number; p_filter: Json; p_rubric_id: number };
-        Returns: Json;
-      };
-      _rubric_report_cohort_member_ids: {
-        Args: { p_assignment_id: number; p_filter: Json; p_rubric_id: number };
-        Returns: number[];
-      };
       _submission_review_is_completable: {
         Args: { p_submission_review_id: number };
         Returns: boolean;
       };
       _submission_review_recompute_scores: {
         Args: { p_submission_review_id: number };
-        Returns: undefined;
-      };
-      _validate_rubric_report_filter: {
-        Args: { p_depth: number; p_node: Json };
         Returns: undefined;
       };
       acquire_assignment_due_date_exception_lock: {
@@ -11383,6 +11219,29 @@ export type Database = {
       };
       create_all_manual_submissions_for_assignment: {
         Args: { p_assignment_id: number; p_class_id: number };
+        Returns: undefined;
+      };
+      ingest_pr_submission: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id: number;
+          p_auto_confirm?: boolean;
+          p_base_sha?: string;
+          p_head_sha?: string;
+          p_pr_number: number;
+          p_pr_repo: string;
+          p_pr_state?: string;
+          p_profile_id?: string;
+        };
+        Returns: number;
+      };
+      set_pr_state: {
+        Args: {
+          p_assignment_id: number;
+          p_pr_number: number;
+          p_pr_repo: string;
+          p_pr_state: string;
+        };
         Returns: undefined;
       };
       create_all_repos_for_assignment:
@@ -11999,59 +11858,16 @@ export type Database = {
       };
       get_llm_tags_breakdown: { Args: never; Returns: Json };
       get_rubric_check_application_stats: {
-        Args: {
-          p_assignment_id: number;
-          p_filter?: Json;
-          p_review_round?: string;
-        };
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
         Returns: Json;
       };
       get_rubric_report_cohort_members: {
-        Args: {
-          p_assignment_id: number;
-          p_filter?: Json;
-          p_review_round?: string;
-        };
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
         Returns: number[];
       };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
-      };
-      get_submission_checks: {
-        Args: { p_submission_id: number };
-        Returns: {
-          actor_login: string | null;
-          class_id: number | null;
-          conclusion: string | null;
-          created_at: string | null;
-          event_type: string;
-          github_repository_id: number | null;
-          head_branch: string | null;
-          head_sha: string | null;
-          id: number;
-          payload: Json | null;
-          pull_requests: Json | null;
-          repository_id: number | null;
-          repository_name: string;
-          run_attempt: number | null;
-          run_number: number | null;
-          run_started_at: string | null;
-          run_updated_at: string | null;
-          started_at: string | null;
-          status: string | null;
-          triggering_actor_login: string | null;
-          updated_at: string | null;
-          workflow_name: string | null;
-          workflow_path: string | null;
-          workflow_run_id: number;
-        }[];
-        SetofOptions: {
-          from: "*";
-          to: "workflow_events";
-          isOneToOne: false;
-          isSetofReturn: true;
-        };
       };
       get_submissions_limits: {
         Args: { p_assignment_id: number };
@@ -12302,20 +12118,6 @@ export type Database = {
       import_gradebook_scores: {
         Args: { p_class_id: number; p_updates: Json };
         Returns: boolean;
-      };
-      ingest_pr_submission: {
-        Args: {
-          p_assignment_group_id?: number;
-          p_assignment_id: number;
-          p_auto_confirm?: boolean;
-          p_base_sha?: string;
-          p_head_sha?: string;
-          p_pr_number: number;
-          p_pr_repo: string;
-          p_pr_state?: string;
-          p_profile_id?: string;
-        };
-        Returns: number;
       };
       insert_discord_message: {
         Args: {
@@ -12605,15 +12407,6 @@ export type Database = {
         Args: { p_instructors_only: boolean; p_thread_id: number };
         Returns: undefined;
       };
-      set_pr_state: {
-        Args: {
-          p_assignment_id: number;
-          p_pr_number: number;
-          p_pr_repo: string;
-          p_pr_state: string;
-        };
-        Returns: undefined;
-      };
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
         Returns: Json;
@@ -12769,22 +12562,6 @@ export type Database = {
           p_lab_section_id?: number;
           p_sync_message?: string;
           p_sync_status?: string;
-        };
-        Returns: number;
-      };
-      upsert_github_deployment: {
-        Args: {
-          p_class_id: number;
-          p_creator_login?: string;
-          p_environment?: string;
-          p_github_deployment_id?: number;
-          p_github_deployment_status_id?: number;
-          p_payload?: Json;
-          p_repository_id?: number;
-          p_repository_name: string;
-          p_sha?: string;
-          p_state?: string;
-          p_target_url?: string;
         };
         Returns: number;
       };

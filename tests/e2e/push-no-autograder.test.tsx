@@ -1,12 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addDays } from "date-fns";
-import {
-  createClass,
-  createUserInClass,
-  getTestRunPrefix,
-  insertAssignment,
-  supabase
-} from "@/tests/e2e/TestingUtils";
+import { createClass, createUserInClass, getTestRunPrefix, insertAssignment, supabase } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // E2E for the push-mode zero-runner submission path (P0 of the PR-submission
@@ -214,16 +208,10 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
 
     // Zero-runner: NO repository_check_run and NO workflow_events / grade.yml
     // dispatch were created for this repo.
-    const { data: checkRuns } = await supabase
-      .from("repository_check_runs")
-      .select("id")
-      .eq("repository_id", repoId);
+    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
     expect(checkRuns ?? []).toHaveLength(0);
 
-    const { data: wfEvents } = await supabase
-      .from("workflow_events")
-      .select("id")
-      .eq("repository_name", repoName);
+    const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
     expect(wfEvents ?? []).toHaveLength(0);
   });
 
@@ -240,11 +228,7 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     const r2 = await deliverPush(detail, `e2e-push-${SAFE_ID}-2b`);
     expect(r2.status).toBe(200);
 
-    const { data: subs } = await supabase
-      .from("submissions")
-      .select("id")
-      .eq("repository", repoName)
-      .eq("sha", sha);
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
     expect(subs).toHaveLength(1);
   });
 
@@ -255,11 +239,7 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     const res = await deliverPush(makePushDetail(repoName, sha, "WIP, not submitting yet"), `e2e-push-${SAFE_ID}-3`);
     expect(res.status).toBe(200);
 
-    const { data: subs } = await supabase
-      .from("submissions")
-      .select("id")
-      .eq("repository", repoName)
-      .eq("sha", sha);
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
     expect(subs ?? []).toHaveLength(0);
   });
 });
