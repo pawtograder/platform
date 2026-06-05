@@ -613,7 +613,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               }, 2000);
             }
           }
+          return true;
         }
+        // Editor not mounted yet (or invalid line) — report failure so callers can retry.
+        return false;
       }
     }));
 

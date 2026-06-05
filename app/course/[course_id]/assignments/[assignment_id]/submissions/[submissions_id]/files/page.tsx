@@ -1099,6 +1099,14 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
+    // `#L<n>` line anchors live inside the code editor, which renders lines virtually — there is no
+    // element to getElementById. Use the editor's imperative handle for those; the editor is already
+    // mounted here (this path only fires for an already-open file), so a single call suffices.
+    const lineMatch = /^L(\d+)$/.exec(id);
+    if (lineMatch) {
+      codeFileRef.current?.scrollToLine(Number(lineMatch[1]));
+      return;
+    }
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
       if (el) preciseScrollTo(el);
@@ -1504,20 +1512,38 @@ export default function FilesView() {
     const key = `${effectiveFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
+    // `#L<n>` line anchors don't map to a DOM id — the code editor (Monaco by default) renders lines
+    // virtually, so getElementById would never find them. Drive the scroll through the editor's
+    // imperative handle instead, retrying until the editor has mounted (scrollToLine returns false
+    // until then). Non-line anchors still resolve to a real element.
+    const lineMatch = /^L(\d+)$/.exec(targetId);
+    const targetLine = lineMatch ? Number(lineMatch[1]) : null;
+
     let attempts = 0;
     const maxAttempts = 60; // up to ~3s at 50ms
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const tryScroll = () => {
-      const el = document.getElementById(targetId);
-      if (el) {
-        preciseScrollTo(el);
-        scrolledTargetsRef.current.add(key);
-        return;
+      if (targetLine !== null) {
+        if (codeFileRef.current?.scrollToLine(targetLine)) {
+          scrolledTargetsRef.current.add(key);
+          return;
+        }
+      } else {
+        const el = document.getElementById(targetId);
+        if (el) {
+          preciseScrollTo(el);
+          scrolledTargetsRef.current.add(key);
+          return;
+        }
       }
       if (attempts++ < maxAttempts) {
-        setTimeout(tryScroll, 50);
+        timeoutId = setTimeout(tryScroll, 50);
       }
     };
     tryScroll();
+    return () => {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
   }, [isSwitching, effectiveFileId, preciseScrollTo]);
 
   // Briefly show a loading skeleton when switching files/artifacts

@@ -240,13 +240,13 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
 
     useImperativeHandle(ref, () => ({
       scrollToLine: (lineNumber: number) => {
-        if (lineNumber <= 0) return;
+        if (lineNumber <= 0) return false;
         const el = document.getElementById(`plain-line-${lineNumber}`);
-        if (el) {
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
+        if (!el) return false; // Line not rendered yet — let the caller retry.
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
         setHighlightLine(lineNumber);
         window.setTimeout(() => setHighlightLine(null), 2000);
+        return true;
       }
     }));
 

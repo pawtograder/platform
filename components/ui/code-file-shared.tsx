@@ -66,7 +66,10 @@ export function isRubricCheckDataWithOptions(data: Json | null | undefined): dat
 }
 
 export type CodeFileHandle = {
-  scrollToLine: (lineNumber: number) => void;
+  // Returns true if the editor was ready and the line was actually scrolled to. Callers that scroll
+  // on initial load (e.g. a deep link with a `#L<n>` anchor) use this to retry until the underlying
+  // editor has mounted, since the Monaco editor renders lines virtually and has no addressable DOM.
+  scrollToLine: (lineNumber: number) => boolean;
 };
 
 export type CodeFileProps = {
