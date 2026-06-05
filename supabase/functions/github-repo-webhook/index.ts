@@ -26,7 +26,11 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
-import { ingestSubmissionFilesFromRepo } from "../_shared/SubmissionIngestion.ts";
+import {
+  ingestSubmissionFilesFromRepo,
+  SubmissionFileTooLargeError,
+  SubmissionTooLargeError
+} from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
@@ -400,9 +404,11 @@ async function createPushDirectSubmission(
     Sentry.captureException(dueDateError, scope);
     throw dueDateError;
   }
-  // head_commit.timestamp and the RPC result are both absolute instants, so a
-  // plain Date comparison is correct (course time zone only affects display).
-  const pushTime = headCommit.timestamp ? new Date(headCommit.timestamp) : new Date();
+  // Gate on the webhook *receive* time, NOT head_commit.timestamp: the commit
+  // timestamp is student-controllable (`git commit --date=...`), so a backdated
+  // commit pushed after the deadline must not slip through. This matches the
+  // autograder path, which gates on the check-run created_at (server time).
+  const pushTime = new Date();
   const finalDueDate = new Date(finalDueDateResult);
   if (pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions)) {
     scope.setTag("push_direct_submission_skipped", "after_due_date");
@@ -437,6 +443,15 @@ async function createPushDirectSubmission(
       scope.setTag("push_direct_submission_insert_race", "true");
       return;
     }
+    // 23514 = check_violation: the submissions insert trigger rejects an
+    // individual submission when the student has since joined a group for this
+    // assignment. Skip gracefully (the group repo's push handles submissions)
+    // rather than throw + force endless webhook retries.
+    if (insertError.code === "23514") {
+      scope.setTag("push_direct_submission_skipped", "group_transition");
+      console.log(`Push-direct submission for ${repoName}@${sha} rejected by group-transition check; skipping`);
+      return;
+    }
     Sentry.captureException(insertError, scope);
     throw insertError;
   }
@@ -469,16 +484,58 @@ async function createPushDirectSubmission(
   }
 
   // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
-  await ingestSubmissionFilesFromRepo({
-    adminSupabase,
-    submissionId,
-    classId: studentRepo.class_id,
-    profileId: studentRepo.profile_id,
-    groupId: studentRepo.assignment_group_id,
-    repo: repoName,
-    sha,
-    scope
-  });
+  // The insert above and this ingest are NOT in one transaction, so if ingest
+  // fails we must clean up the just-created row — otherwise the idempotency
+  // pre-check would return early on re-delivery and leave a permanent fileless
+  // submission. Mirrors the autograder's reject-and-cleanup behavior.
+  try {
+    await ingestSubmissionFilesFromRepo({
+      adminSupabase,
+      submissionId,
+      classId: studentRepo.class_id,
+      profileId: studentRepo.profile_id,
+      groupId: studentRepo.assignment_group_id,
+      repo: repoName,
+      sha,
+      scope
+    });
+  } catch (ingestErr) {
+    await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
+      // Permanent (repo/file too big): record and stop — don't make GitHub retry
+      // a delivery that can never succeed.
+      scope.setTag("push_direct_submission_rejected", "too_large");
+      Sentry.captureException(ingestErr, scope);
+      return;
+    }
+    // Transient (clone/storage/db): rethrow so GitHub redelivers. Cleanup above
+    // means the retry starts fresh rather than short-circuiting on a stub row.
+    throw ingestErr;
+  }
+}
+
+// Best-effort cleanup of a push-direct submission whose file ingest failed:
+// remove any uploaded binary objects, then the file rows, then the submission.
+async function cleanupPushDirectSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  submissionId: number,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const { data: bins } = await adminSupabase
+      .from("submission_files")
+      .select("storage_key")
+      .eq("submission_id", submissionId)
+      .eq("is_binary", true);
+    const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
+    if (keys.length > 0) {
+      await adminSupabase.storage.from("submission-files").remove(keys);
+    }
+    await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+    await adminSupabase.from("submissions").delete().eq("id", submissionId);
+  } catch (cleanupErr) {
+    Sentry.captureException(cleanupErr, scope);
+  }
 }
 
 type GitHubCommit = PushEvent["commits"][number];
