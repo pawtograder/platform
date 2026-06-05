@@ -102,6 +102,13 @@ import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panel
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
 const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
+// Parse a URL hash fragment id like `L56` into its line number, or null if it isn't a line anchor.
+// Line anchors are emitted by deep links (help-request-chat) and comment-jump links (rubric-sidebar).
+const parseLineAnchor = (id: string): number | null => {
+  const match = /^L(\d+)$/.exec(id);
+  return match ? Number(match[1]) : null;
+};
+
 function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1099,12 +1106,13 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
-    // `#L<n>` line anchors live inside the code editor, which renders lines virtually — there is no
-    // element to getElementById. Use the editor's imperative handle for those; the editor is already
-    // mounted here (this path only fires for an already-open file), so a single call suffices.
-    const lineMatch = /^L(\d+)$/.exec(id);
-    if (lineMatch) {
-      codeFileRef.current?.scrollToLine(Number(lineMatch[1]));
+    // For `#L<n>` line anchors, prefer the editor's imperative handle: the Monaco editor (default
+    // view) renders lines virtually, so there is no element to getElementById. This path only fires
+    // for an already-open file, so the editor is mounted and a single call suffices. If the handle
+    // isn't wired (the classic StarryNight view exposes no ref but does render `<pre id="L56">`), fall
+    // through to the DOM-id lookup below so those views still scroll.
+    const targetLine = parseLineAnchor(id);
+    if (targetLine !== null && codeFileRef.current?.scrollToLine(targetLine)) {
       return;
     }
     requestAnimationFrame(() => {
@@ -1512,29 +1520,31 @@ export default function FilesView() {
     const key = `${effectiveFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
-    // `#L<n>` line anchors don't map to a DOM id — the code editor (Monaco by default) renders lines
-    // virtually, so getElementById would never find them. Drive the scroll through the editor's
-    // imperative handle instead, retrying until the editor has mounted (scrollToLine returns false
-    // until then). Non-line anchors still resolve to a real element.
-    const lineMatch = /^L(\d+)$/.exec(targetId);
-    const targetLine = lineMatch ? Number(lineMatch[1]) : null;
+    const targetLine = parseLineAnchor(targetId);
+    // A line anchor on a markdown/binary preview can never resolve (no virtual editor, no `<pre id>`),
+    // so skip the retry loop entirely rather than polling for ~3s to no effect.
+    if (targetLine !== null && selectedFile && (isMarkdownFile(selectedFile.name) || selectedFile.is_binary)) {
+      return;
+    }
 
     let attempts = 0;
     const maxAttempts = 60; // up to ~3s at 50ms
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const tryScroll = () => {
-      if (targetLine !== null) {
-        if (codeFileRef.current?.scrollToLine(targetLine)) {
-          scrolledTargetsRef.current.add(key);
-          return;
-        }
-      } else {
-        const el = document.getElementById(targetId);
-        if (el) {
-          preciseScrollTo(el);
-          scrolledTargetsRef.current.add(key);
-          return;
-        }
+      // For `#L<n>` anchors, prefer the editor's imperative handle: the Monaco editor (default view)
+      // renders lines virtually, so getElementById can't find them. scrollToLine returns false until
+      // the lazily-imported editor has mounted, so we retry. If the handle isn't wired (the classic
+      // StarryNight view exposes no ref), this falls through to the DOM-id lookup, which finds its
+      // `<pre id="L56">`. Non-line anchors always resolve via getElementById.
+      if (targetLine !== null && codeFileRef.current?.scrollToLine(targetLine)) {
+        scrolledTargetsRef.current.add(key);
+        return;
+      }
+      const el = document.getElementById(targetId);
+      if (el) {
+        preciseScrollTo(el);
+        scrolledTargetsRef.current.add(key);
+        return;
       }
       if (attempts++ < maxAttempts) {
         timeoutId = setTimeout(tryScroll, 50);
@@ -1544,7 +1554,7 @@ export default function FilesView() {
     return () => {
       if (timeoutId !== null) clearTimeout(timeoutId);
     };
-  }, [isSwitching, effectiveFileId, preciseScrollTo]);
+  }, [isSwitching, effectiveFileId, selectedFile, preciseScrollTo]);
 
   // Briefly show a loading skeleton when switching files/artifacts
   useEffect(() => {
