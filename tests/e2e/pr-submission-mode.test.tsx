@@ -291,3 +291,213 @@ test.describe("PR submission mode (ingest + RLS)", () => {
     expect(data ?? []).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A1 — group PR submissions
+// ---------------------------------------------------------------------------
+// Exercises the per-group branch of ingest_pr_submission (the `p_assignment_group_id`
+// path) plus the cross-scope deactivation guard at lines 196-210 of
+// 20260605010000_pr_submission_ingest.sql: a group submission must deactivate any
+// active *individual* submission held by a member (and vice-versa) so a student
+// never ends up with two active submissions on one assignment. Group links key on
+// (assignment_group_id, profile_id IS NULL) and auto-confirm as the sole candidate.
+test.describe("PR submission mode (group ingest + cross-scope deactivation)", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  const RUN_PREFIX = getTestRunPrefix();
+  const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const UPSTREAM = `pawtograder-playground/pr-group-upstream-${SAFE_ID}`;
+  const PR_NUMBER = 11;
+
+  let classId: number;
+  let instructor: TestingUser;
+  let memberA: TestingUser;
+  let memberB: TestingUser;
+  let assignmentId: number;
+  let groupId: number;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E PR Group ${RUN_PREFIX}` });
+    classId = cls.id;
+
+    // An instructor is required for assignment_groups_members.added_by.
+    instructor = await createUserInClass({
+      role: "instructor",
+      class_id: classId,
+      name: `PR Group Instructor ${RUN_PREFIX}`,
+      email: `e2e-pr-grp-inst-${SAFE_ID}@pawtograder.net`
+    });
+    memberA = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `PR Group Member A ${RUN_PREFIX}`,
+      email: `e2e-pr-grp-a-${SAFE_ID}@pawtograder.net`
+    });
+    memberB = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `PR Group Member B ${RUN_PREFIX}`,
+      email: `e2e-pr-grp-b-${SAFE_ID}@pawtograder.net`
+    });
+
+    // base_branch identification (auto-confirms a sole candidate), groups enabled.
+    const a = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `PR Group base_branch ${RUN_PREFIX}`,
+      assignment_slug: `e2e-pr-grp-${SAFE_ID}`
+    });
+    assignmentId = a.id;
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({
+        submission_mode: "pr",
+        upstream_repo: UPSTREAM,
+        upstream_base_branch: "main",
+        pr_identification: "base_branch",
+        group_config: "groups"
+      })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+  });
+
+  test("a member's pre-existing individual submission becomes inactive when the group submits", async () => {
+    // memberA submits individually FIRST (sole candidate auto-confirms), so there
+    // is a live per-profile active submission before the group is formed.
+    const { data: indivId, error: indivErr } = await ingest({
+      p_assignment_id: assignmentId,
+      p_profile_id: memberA.private_profile_id,
+      p_pr_repo: UPSTREAM,
+      p_pr_number: 99,
+      p_base_sha: "ibase",
+      p_head_sha: "ihead",
+      p_pr_state: "open",
+      p_auto_confirm: true
+    });
+    expect(indivErr).toBeNull();
+    expect(typeof indivId).toBe("number");
+
+    const { data: indivBefore } = await supabase
+      .from("submissions")
+      .select("is_active")
+      .eq("id", indivId!)
+      .single();
+    expect(indivBefore?.is_active).toBe(true);
+
+    // Form the group AFTER the individual submission exists.
+    const { data: groupData, error: groupErr } = await supabase
+      .from("assignment_groups")
+      .insert({ name: `PR Group ${RUN_PREFIX}`, class_id: classId, assignment_id: assignmentId })
+      .select("id")
+      .single();
+    expect(groupErr).toBeNull();
+    groupId = groupData!.id;
+
+    for (const member of [memberA, memberB]) {
+      const { error } = await supabase.from("assignment_groups_members").insert({
+        assignment_group_id: groupId,
+        profile_id: member.private_profile_id,
+        assignment_id: assignmentId,
+        class_id: classId,
+        added_by: instructor.private_profile_id
+      });
+      expect(error).toBeNull();
+    }
+
+    // Group ingest: profile_id undefined, assignment_group_id set.
+    const { data: groupSubId, error } = await ingest({
+      p_assignment_id: assignmentId,
+      p_profile_id: undefined,
+      p_assignment_group_id: groupId,
+      p_pr_repo: UPSTREAM,
+      p_pr_number: PR_NUMBER,
+      p_base_sha: "gbase0",
+      p_head_sha: "ghead0",
+      p_pr_state: "open",
+      p_auto_confirm: true
+    });
+    expect(error).toBeNull();
+    expect(typeof groupSubId).toBe("number");
+
+    // The group submission row is keyed on the group, not a profile.
+    const { data: groupSub } = await supabase
+      .from("submissions")
+      .select("assignment_group_id, profile_id, is_active, submitted_via, pr_number, head_sha")
+      .eq("id", groupSubId!)
+      .single();
+    expect(groupSub).toMatchObject({
+      assignment_group_id: groupId,
+      profile_id: null,
+      is_active: true,
+      submitted_via: "pr",
+      pr_number: PR_NUMBER,
+      head_sha: "ghead0"
+    });
+
+    // Cross-scope deactivation: the member's prior individual submission is now inactive.
+    const { data: indivAfter } = await supabase
+      .from("submissions")
+      .select("is_active")
+      .eq("id", indivId!)
+      .single();
+    expect(indivAfter?.is_active).toBe(false);
+
+    // Exactly one active submission across the whole group scope (the members'
+    // individual rows + the group row): only the group row.
+    const { data: activeRows } = await supabase
+      .from("submissions")
+      .select("id, assignment_group_id, profile_id")
+      .eq("assignment_id", assignmentId)
+      .eq("is_active", true);
+    expect(activeRows ?? []).toHaveLength(1);
+    expect(activeRows![0]).toMatchObject({ id: groupSubId, assignment_group_id: groupId, profile_id: null });
+  });
+
+  test("the group's pr link keys on assignment_group_id (profile_id null) and auto-confirmed", async () => {
+    const { data: link } = await supabase
+      .from("submission_pr_links")
+      .select("profile_id, assignment_group_id, confirmed")
+      .eq("assignment_id", assignmentId)
+      .eq("assignment_group_id", groupId)
+      .eq("pr_number", PR_NUMBER)
+      .single();
+    expect(link).toMatchObject({ profile_id: null, assignment_group_id: groupId, confirmed: true });
+  });
+
+  test("a new head sha for the group creates a new active version; prior group version deactivated", async () => {
+    const { data: newId, error } = await ingest({
+      p_assignment_id: assignmentId,
+      p_profile_id: undefined,
+      p_assignment_group_id: groupId,
+      p_pr_repo: UPSTREAM,
+      p_pr_number: PR_NUMBER,
+      p_base_sha: "gbase0",
+      p_head_sha: "ghead1",
+      p_pr_state: "open",
+      p_auto_confirm: true
+    });
+    expect(error).toBeNull();
+    expect(typeof newId).toBe("number");
+
+    // Exactly one active row for the group, at the new head; the prior group
+    // version (ghead0) is deactivated.
+    const { data: active } = await supabase
+      .from("submissions")
+      .select("id, head_sha, is_active")
+      .eq("assignment_id", assignmentId)
+      .eq("assignment_group_id", groupId)
+      .eq("is_active", true);
+    expect(active).toHaveLength(1);
+    expect(active![0]).toMatchObject({ id: newId, head_sha: "ghead1" });
+
+    // And still exactly one active row across the entire group scope.
+    const { data: allActive } = await supabase
+      .from("submissions")
+      .select("id")
+      .eq("assignment_id", assignmentId)
+      .eq("is_active", true);
+    expect(allActive ?? []).toHaveLength(1);
+    expect(allActive![0].id).toBe(newId);
+  });
+});
