@@ -13,7 +13,6 @@ import {
   type WordBox
 } from "../_shared/examVision.ts";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 const QUEUE = "exam_processing";
@@ -112,6 +111,39 @@ async function loadRoster(admin: Admin, classId: number): Promise<RosterEntry[]>
     }));
 }
 
+async function sisIdToProfile(
+  admin: Admin,
+  classId: number,
+  detectedSisId: string | undefined
+): Promise<string | null> {
+  if (!detectedSisId || !/^\d+$/.test(detectedSisId)) return null;
+  const { data: user } = await admin
+    .from("users")
+    .select("user_id")
+    .eq("sis_user_id", parseInt(detectedSisId, 10))
+    .maybeSingle();
+  if (!user?.user_id) return null;
+  const { data: ur } = await admin
+    .from("user_roles")
+    .select("private_profile_id")
+    .eq("class_id", classId)
+    .eq("role", "student")
+    .eq("user_id", user.user_id)
+    .maybeSingle();
+  return ur?.private_profile_id ?? null;
+}
+
+function nameToProfile(detectedName: string | undefined, roster: RosterEntry[]): string | null {
+  if (!detectedName) return null;
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const want = norm(detectedName);
+  const hit = roster.find((r) => r.name && norm(r.name) === want);
+  return hit?.profile_id ?? null;
+}
+
+// Resolve the two identity signals independently and combine them. When both an SIS id
+// and a name resolve, agreement is the strongest signal (confidence 1); disagreement is
+// treated as ambiguous — we trust the SIS id but flag low confidence so a grader reviews.
 async function matchProfile(
   admin: Admin,
   classId: number,
@@ -119,31 +151,16 @@ async function matchProfile(
   detectedName: string | undefined,
   roster: RosterEntry[]
 ): Promise<{ profile_id: string | null; confidence: number }> {
-  // 1) exact SIS id (users.sis_user_id integer) -> private_profile_id
-  if (detectedSisId && /^\d+$/.test(detectedSisId)) {
-    const { data: user } = await admin
-      .from("users")
-      .select("user_id")
-      .eq("sis_user_id", parseInt(detectedSisId, 10))
-      .maybeSingle();
-    if (user?.user_id) {
-      const { data: ur } = await admin
-        .from("user_roles")
-        .select("private_profile_id")
-        .eq("class_id", classId)
-        .eq("role", "student")
-        .eq("user_id", user.user_id)
-        .maybeSingle();
-      if (ur?.private_profile_id) return { profile_id: ur.private_profile_id, confidence: 1 };
-    }
+  const sisProfile = await sisIdToProfile(admin, classId, detectedSisId);
+  const nameProfile = nameToProfile(detectedName, roster);
+
+  if (sisProfile && nameProfile) {
+    return sisProfile === nameProfile
+      ? { profile_id: sisProfile, confidence: 1 } // both agree
+      : { profile_id: sisProfile, confidence: 0.5 }; // conflict — trust SIS id, flag for review
   }
-  // 2) case-insensitive exact name
-  if (detectedName) {
-    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-    const want = norm(detectedName);
-    const hit = roster.find((r) => r.name && norm(r.name) === want);
-    if (hit) return { profile_id: hit.profile_id, confidence: 0.6 };
-  }
+  if (sisProfile) return { profile_id: sisProfile, confidence: 0.9 };
+  if (nameProfile) return { profile_id: nameProfile, confidence: 0.6 };
   return { profile_id: null, confidence: 0 };
 }
 
@@ -168,13 +185,29 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
     return;
   }
 
-  // identity region (kind name/student_id) defined on the template
+  // identity regions (kind name/student_id) defined on the template. A template may
+  // define one of each; when both exist we read each independently (they can sit on
+  // different pages) and combine the two signals to disambiguate the student.
   const { data: idRegions } = await admin
     .from("exam_question_regions")
     .select("kind, page_number, x, y, width, height")
     .eq("exam_id", batch.exam_id)
     .in("kind", ["student_id", "name"]);
-  const idRegion = (idRegions ?? [])[0] as (NormRect & { kind: string; page_number: number }) | undefined;
+  type IdRegion = NormRect & { kind: string; page_number: number };
+  const sisRegion = (idRegions ?? []).find((r) => r.kind === "student_id") as IdRegion | undefined;
+  const nameRegion = (idRegions ?? []).find((r) => r.kind === "name") as IdRegion | undefined;
+
+  // Read the identity within one region (or the whole first page when region is null).
+  const readRegionIdentity = async (region: IdRegion | undefined, groupPages: typeof pages) => {
+    const pageNumber = region?.page_number ?? 1;
+    const page = groupPages[Math.min(pageNumber - 1, groupPages.length - 1)] ?? groupPages[0];
+    const bytes = await downloadImage(admin, "exam-scans", page.image_path);
+    const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
+    const rect: NormRect | null = region
+      ? { x: region.x, y: region.y, width: region.width, height: region.height }
+      : null;
+    return provider.readIdentity(img, rect);
+  };
 
   const roster = await loadRoster(admin, classId);
   const groupCount = Math.ceil(pages.length / perExam);
@@ -208,22 +241,30 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
         groupPages.map((p) => p.id)
       );
 
-    // read identity from the page that holds the identity region (default: first page)
-    const idPageNumber = idRegion?.page_number ?? 1;
-    const idPage = groupPages[Math.min(idPageNumber - 1, groupPages.length - 1)] ?? groupPages[0];
-    const bytes = await downloadImage(admin, "exam-scans", idPage.image_path);
-    const img: PageImage = { name: idPage.image_path, bytes, width: idPage.width ?? 0, height: idPage.height ?? 0 };
-    const region: NormRect | null = idRegion
-      ? { x: idRegion.x, y: idRegion.y, width: idRegion.width, height: idRegion.height }
-      : null;
-    const identity = await provider.readIdentity(img, region);
-    const match = await matchProfile(admin, classId, identity.sisId, identity.name, roster);
+    // Read identity. With both an SIS-id and a name region, take the SIS id from the
+    // former and the name from the latter; with one region, use just that; with none,
+    // read the whole first page.
+    let detectedSisId: string | undefined;
+    let detectedName: string | undefined;
+    if (sisRegion && nameRegion) {
+      const [sisRes, nameRes] = await Promise.all([
+        readRegionIdentity(sisRegion, groupPages),
+        readRegionIdentity(nameRegion, groupPages)
+      ]);
+      detectedSisId = sisRes.sisId;
+      detectedName = nameRes.name;
+    } else {
+      const res = await readRegionIdentity(sisRegion ?? nameRegion, groupPages);
+      detectedSisId = res.sisId;
+      detectedName = res.name;
+    }
+    const match = await matchProfile(admin, classId, detectedSisId, detectedName, roster);
 
     await admin
       .from("exam_scanned_submissions")
       .update({
-        detected_name: identity.name ?? null,
-        detected_sis_id: identity.sisId ?? null,
+        detected_name: detectedName ?? null,
+        detected_sis_id: detectedSisId ?? null,
         matched_profile_id: match.profile_id,
         match_confidence: match.confidence,
         match_status: match.profile_id ? "suggested" : "unmatched"
@@ -237,6 +278,38 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
 // ---------------------------------------------------------------------------
 // finalize: create the submission, copy raw pages, assemble the exam_v1 artifact
 // ---------------------------------------------------------------------------
+// The exam artifact is the single source of truth for "this scanned submission is
+// fully finalized": it is written last, after the submission row and all page files.
+const EXAM_ARTIFACT_FORMAT = "exam_v1";
+
+async function hasExamArtifact(admin: Admin, submissionId: number): Promise<boolean> {
+  const { data } = await admin.from("submission_artifacts").select("data").eq("submission_id", submissionId);
+  return (data ?? []).some((a) => (a.data as { format?: string } | null)?.format === EXAM_ARTIFACT_FORMAT);
+}
+
+// Mark the batch completed once every confirmed scanned submission has its exam
+// artifact. Re-evaluated on every finalize (including retries of already-done work)
+// so a crash in the final step can't leave the batch stuck in "finalizing".
+async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> {
+  const { data: confirmed } = await admin
+    .from("exam_scanned_submissions")
+    .select("submission_id")
+    .eq("batch_id", batchId)
+    .eq("match_status", "confirmed");
+  const rows = confirmed ?? [];
+  const subIds = rows.map((r) => r.submission_id).filter((id): id is number => id != null);
+  // not done if any confirmed submission lacks a submission row yet
+  if (rows.length === 0 || subIds.length !== rows.length) return;
+  const { count } = await admin
+    .from("submission_artifacts")
+    .select("id", { count: "exact", head: true })
+    .in("submission_id", subIds)
+    .eq("data->>format", EXAM_ARTIFACT_FORMAT);
+  if ((count ?? 0) >= subIds.length) {
+    await admin.from("exam_scan_batches").update({ status: "completed" }).eq("id", batchId);
+  }
+}
+
 async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: scanned, error } = await admin
@@ -245,113 +318,119 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     .eq("id", args.scanned_submission_id)
     .single();
   if (error || !scanned) throw new Error(`scanned submission ${args.scanned_submission_id} not found`);
-  if (scanned.submission_id) return; // already finalized
   if (scanned.match_status !== "confirmed" || !scanned.matched_profile_id) {
     throw new Error(`scanned submission ${scanned.id} is not a confirmed match`);
   }
   const profileId = scanned.matched_profile_id as string;
 
-  // create the submission (fires submissions_after_insert_hook -> grading review)
+  // Create the submission (fires submissions_after_insert_hook -> grading review).
+  // exam_create_submission is idempotent: it returns the existing submission_id if the
+  // row already exists, so a retried finalize reuses the same submission.
   const { data: subId, error: rpcErr } = await admin.rpc("exam_create_submission", {
     p_scanned_submission_id: scanned.id
   });
   if (rpcErr || !subId) throw new Error(`exam_create_submission failed: ${rpcErr?.message}`);
   const submissionId = subId as number;
 
-  const { data: batch } = await admin
-    .from("exam_scan_batches")
-    .select("pages_per_exam")
-    .eq("id", scanned.batch_id)
-    .single();
-  const perExam = Math.max(1, batch?.pages_per_exam ?? 1);
+  // Resume point: if the artifact is already present this submission was finalized on a
+  // previous attempt — skip the (re)build but still re-check batch completion below.
+  if (!(await hasExamArtifact(admin, submissionId))) {
+    const { data: batch } = await admin
+      .from("exam_scan_batches")
+      .select("pages_per_exam")
+      .eq("id", scanned.batch_id)
+      .single();
+    const perExam = Math.max(1, batch?.pages_per_exam ?? 1);
 
-  const { data: pages } = await admin
-    .from("exam_scan_pages")
-    .select("id, page_index, image_path, width, height, ocr_data")
-    .eq("scanned_submission_id", scanned.id)
-    .order("page_index", { ascending: true });
-  const groupPages = pages ?? [];
+    const { data: pages } = await admin
+      .from("exam_scan_pages")
+      .select("id, page_index, image_path, width, height, ocr_data")
+      .eq("scanned_submission_id", scanned.id)
+      .order("page_index", { ascending: true });
+    const groupPages = pages ?? [];
 
-  // copy each raw page into submission-files and record a submission_files row
-  const pageRefs: { page_number: number; storage_key: string; width: number; height: number }[] = [];
-  for (let i = 0; i < groupPages.length; i++) {
-    const p = groupPages[i];
-    const bytes = await downloadImage(admin, "exam-scans", p.image_path);
-    const storageKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/files/exam-page-${i + 1}.png`;
-    const up = await admin.storage.from("submission-files").upload(storageKey, bytes, {
-      contentType: "image/png",
-      upsert: true
-    });
-    if (up.error) throw new Error(`upload ${storageKey} failed: ${up.error.message}`);
-    await admin.from("submission_files").insert({
+    // Idempotent rebuild: clear any page files left behind by a partial prior attempt,
+    // then re-copy. Exam submissions only ever hold these exam-page files.
+    await admin.from("submission_files").delete().eq("submission_id", submissionId);
+
+    const pageRefs: { page_number: number; storage_key: string; width: number; height: number }[] = [];
+    for (let i = 0; i < groupPages.length; i++) {
+      const p = groupPages[i];
+      const bytes = await downloadImage(admin, "exam-scans", p.image_path);
+      const storageKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/files/exam-page-${i + 1}.png`;
+      const up = await admin.storage.from("submission-files").upload(storageKey, bytes, {
+        contentType: "image/png",
+        upsert: true
+      });
+      if (up.error) throw new Error(`upload ${storageKey} failed: ${up.error.message}`);
+      await admin.from("submission_files").insert({
+        submission_id: submissionId,
+        name: `exam-page-${i + 1}.png`,
+        class_id: classId,
+        profile_id: profileId,
+        is_binary: true,
+        mime_type: "image/png",
+        file_size: bytes.length,
+        storage_key: storageKey,
+        contents: null
+      });
+      pageRefs.push({ page_number: i + 1, storage_key: storageKey, width: p.width ?? 0, height: p.height ?? 0 });
+    }
+
+    // answer questions: for each answer region, OCR text from the right page's words ∩ region
+    const { data: regions } = await admin
+      .from("exam_question_regions")
+      .select("exam_question_id, page_number, x, y, width, height, exam_questions(answer_type)")
+      .eq("exam_id", scanned.exam_id)
+      .eq("kind", "answer")
+      .not("exam_question_id", "is", null);
+
+    const questions: unknown[] = [];
+    for (const r of regions ?? []) {
+      const examPageNo = Math.min(Math.max(1, r.page_number), perExam);
+      const page = groupPages[examPageNo - 1];
+      if (!page) continue;
+      const words = ((page.ocr_data as { words?: WordBox[] } | null)?.words ?? []) as WordBox[];
+      const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
+      const ocrText = wordsInRegion(words, rect);
+      let structuredValue: unknown = ocrText;
+      const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
+      if (answerType && answerType !== "free_text" && ocrText) {
+        try {
+          const bytes = await downloadImage(admin, "exam-scans", page.image_path);
+          const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
+          const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
+          structuredValue = structured.value;
+        } catch {
+          // fall back to raw OCR text on structuring failure
+        }
+      }
+      questions.push({
+        exam_question_id: r.exam_question_id,
+        page_number: examPageNo,
+        region: rect,
+        ocr_text: ocrText,
+        structured_value: structuredValue
+      });
+    }
+
+    // The artifact is written LAST and is the completion marker. Clear any stray prior
+    // copy first so a resumed finalize ends with exactly one exam_v1 artifact.
+    await admin
+      .from("submission_artifacts")
+      .delete()
+      .eq("submission_id", submissionId)
+      .eq("data->>format", EXAM_ARTIFACT_FORMAT);
+    await admin.from("submission_artifacts").insert({
       submission_id: submissionId,
-      name: `exam-page-${i + 1}.png`,
       class_id: classId,
       profile_id: profileId,
-      is_binary: true,
-      mime_type: "image/png",
-      file_size: bytes.length,
-      storage_key: storageKey,
-      contents: null
-    });
-    pageRefs.push({ page_number: i + 1, storage_key: storageKey, width: p.width ?? 0, height: p.height ?? 0 });
-  }
-
-  // answer questions: for each answer region, OCR text from the right page's words ∩ region
-  const { data: regions } = await admin
-    .from("exam_question_regions")
-    .select("exam_question_id, page_number, x, y, width, height, exam_questions(answer_type)")
-    .eq("exam_id", scanned.exam_id)
-    .eq("kind", "answer")
-    .not("exam_question_id", "is", null);
-
-  const questions: unknown[] = [];
-  for (const r of regions ?? []) {
-    const examPageNo = Math.min(Math.max(1, r.page_number), perExam);
-    const page = groupPages[examPageNo - 1];
-    if (!page) continue;
-    const words = ((page.ocr_data as { words?: WordBox[] } | null)?.words ?? []) as WordBox[];
-    const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
-    const ocrText = wordsInRegion(words, rect);
-    let structuredValue: unknown = ocrText;
-    const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
-    if (answerType && answerType !== "free_text" && ocrText) {
-      try {
-        const bytes = await downloadImage(admin, "exam-scans", page.image_path);
-        const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
-        const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
-        structuredValue = structured.value;
-      } catch (_e) {
-        // fall back to raw OCR text on structuring failure
-      }
-    }
-    questions.push({
-      exam_question_id: r.exam_question_id,
-      page_number: examPageNo,
-      region: rect,
-      ocr_text: ocrText,
-      structured_value: structuredValue
+      name: "Exam",
+      data: { format: EXAM_ARTIFACT_FORMAT, pages: pageRefs, questions } as unknown as Json
     });
   }
 
-  await admin.from("submission_artifacts").insert({
-    submission_id: submissionId,
-    class_id: classId,
-    profile_id: profileId,
-    name: "Exam",
-    data: { format: "exam_v1", pages: pageRefs, questions } as unknown as Json
-  });
-
-  // mark the batch completed once no confirmed submissions remain unfinalized
-  const { count } = await admin
-    .from("exam_scanned_submissions")
-    .select("id", { count: "exact", head: true })
-    .eq("batch_id", scanned.batch_id)
-    .eq("match_status", "confirmed")
-    .is("submission_id", null);
-  if ((count ?? 0) === 0) {
-    await admin.from("exam_scan_batches").update({ status: "completed" }).eq("id", scanned.batch_id);
-  }
+  await maybeCompleteBatch(admin, scanned.batch_id);
 }
 
 // ---------------------------------------------------------------------------

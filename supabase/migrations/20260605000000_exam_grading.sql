@@ -443,13 +443,15 @@ set search_path = ''
 as $$
 declare
   v_class_id bigint;
+  v_assignment_id bigint;
   r1 record;  -- level 1 (part)
   r2 record;  -- level 2 (criteria)
   r3 record;  -- level 3 (check)
   v_part_id bigint;
   v_crit_id bigint;
 begin
-  select class_id into v_class_id from public.exams where id = p_exam_id;
+  select class_id, assignment_id into v_class_id, v_assignment_id
+    from public.exams where id = p_exam_id;
   if v_class_id is null then
     raise exception 'Exam % not found', p_exam_id;
   end if;
@@ -465,8 +467,8 @@ begin
     select id into v_part_id from public.rubric_parts
       where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r1.id limit 1;
     if v_part_id is null then
-      insert into public.rubric_parts (class_id, rubric_id, name, description, ordinal, data)
-      values (v_class_id, p_rubric_id, coalesce(r1.label, 'Part'), r1.prompt, r1.ordinal,
+      insert into public.rubric_parts (class_id, assignment_id, rubric_id, name, description, ordinal, data)
+      values (v_class_id, v_assignment_id, p_rubric_id, coalesce(r1.label, 'Part'), r1.prompt, r1.ordinal,
               jsonb_build_object('exam_question_id', r1.id))
       returning id into v_part_id;
     else
@@ -481,8 +483,8 @@ begin
         where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r2.id limit 1;
       if v_crit_id is null then
         insert into public.rubric_criteria
-          (class_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, data)
-        values (v_class_id, p_rubric_id, v_part_id, coalesce(r2.label,'Criteria'), r2.prompt,
+          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, data)
+        values (v_class_id, v_assignment_id, p_rubric_id, v_part_id, coalesce(r2.label,'Criteria'), r2.prompt,
                 coalesce(r2.points, 0), true, r2.ordinal, jsonb_build_object('exam_question_id', r2.id))
         returning id into v_crit_id;
       else
@@ -499,8 +501,8 @@ begin
           where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r3.id
         ) then
           insert into public.rubric_checks
-            (class_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
-          values (v_class_id, v_crit_id, coalesce(r3.label,'Check'), r3.prompt, r3.ordinal,
+            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+          values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r3.label,'Check'), r3.prompt, r3.ordinal,
                   coalesce(r3.points, 0), false, false, jsonb_build_object('exam_question_id', r3.id));
         end if;
       end loop;
@@ -518,7 +520,11 @@ create or replace function public.exam_create_submission(p_scanned_submission_id
 returns bigint
 language plpgsql
 security definer
-set search_path = ''
+-- Inserting into public.submissions fires the submission trigger chain (channels,
+-- metrics, after-insert hook). Some of those triggers reference tables unqualified and
+-- have no search_path of their own, so they inherit this function's. An empty search_path
+-- makes them fail with "relation submissions does not exist" — keep public on the path.
+set search_path = public, pg_temp
 as $$
 declare
   v_class_id bigint;
@@ -638,24 +644,38 @@ begin
     raise exception 'Access denied: staff only';
   end if;
 
-  update public.exam_scan_batches set status = 'finalizing', error = null where id = p_batch_id;
-
-  for rec in select id from public.exam_scanned_submissions
-             where batch_id = p_batch_id and match_status = 'confirmed' and submission_id is null loop
+  -- Re-enqueue every confirmed submission that does NOT yet have its finished exam
+  -- artifact. This is the crash-safety signal: a submission whose row exists but whose
+  -- finalize crashed before writing the artifact (submission_id set, no exam_v1 artifact)
+  -- is picked back up here, as is one that never started (submission_id null).
+  for rec in select ss.id from public.exam_scanned_submissions ss
+             where ss.batch_id = p_batch_id and ss.match_status = 'confirmed'
+               and not exists (
+                 select 1 from public.submission_artifacts sa
+                 where sa.submission_id = ss.submission_id
+                   and sa.data->>'format' = 'exam_v1'
+               ) loop
     perform pgmq_public.send('exam_processing', jsonb_build_object(
       'method', 'finalize', 'class_id', v_class_id, 'batch_id', p_batch_id,
       'args', jsonb_build_object('scanned_submission_id', rec.id)));
     v_count := v_count + 1;
   end loop;
 
-  -- best-effort immediate kick; the cron invoker drains the queue regardless
-  begin
-    perform public.call_edge_function_internal(
-      '/functions/v1/exam-async-worker', 'POST',
-      '{"Content-type":"application/json","x-supabase-webhook-source":"exam-async-worker"}'::jsonb,
-      '{}'::jsonb, 3000, null, null, null, null, null);
-  exception when others then null;
-  end;
+  -- Only flip into 'finalizing' when there is actually work; otherwise leave the batch's
+  -- status untouched (e.g. an already-'completed' batch stays completed) so a redundant
+  -- finalize click can't strand it.
+  if v_count > 0 then
+    update public.exam_scan_batches set status = 'finalizing', error = null where id = p_batch_id;
+
+    -- best-effort immediate kick; the cron invoker drains the queue regardless
+    begin
+      perform public.call_edge_function_internal(
+        '/functions/v1/exam-async-worker', 'POST',
+        '{"Content-type":"application/json","x-supabase-webhook-source":"exam-async-worker"}'::jsonb,
+        '{}'::jsonb, 3000, null, null, null, null, null);
+    exception when others then null;
+    end;
+  end if;
 
   return v_count;
 end;

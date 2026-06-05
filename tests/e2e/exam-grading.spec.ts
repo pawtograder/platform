@@ -32,8 +32,14 @@ test.describe("Exam grading OCR pipeline", () => {
     await createUserInClass({ role: "instructor", class_id: course.id });
     const alice = await createUserInClass({ role: "student", class_id: course.id, name: "Alice Smith" });
     const bob = await createUserInClass({ role: "student", class_id: course.id, name: "Bob Jones" });
-    await setUserSisId(alice.user_id, 111);
-    await setUserSisId(bob.user_id, 222);
+    // Unique SIS ids per run: users.sis_user_id is globally unique, so fixed ids would
+    // collide across parallel browser projects and across re-runs against a persistent DB.
+    const sisBase = 100000 + Math.floor(Math.random() * 800000);
+    const aliceSis = sisBase + 1;
+    const bobSis = sisBase + 2;
+    const unknownSis = sisBase + 9; // intentionally never assigned -> stays unmatched
+    await setUserSisId(alice.user_id, aliceSis);
+    await setUserSisId(bob.user_id, bobSis);
 
     const assignment = await insertAssignment({
       class_id: course.id,
@@ -77,7 +83,9 @@ test.describe("Exam grading OCR pipeline", () => {
       ],
       p_regions: [
         { question_client_id: "c1", kind: "answer", page_number: 1, x: 0.1, y: 0.3, width: 0.8, height: 0.2 },
-        { question_client_id: null, kind: "student_id", page_number: 1, x: 0.1, y: 0.05, width: 0.5, height: 0.06 }
+        { question_client_id: null, kind: "student_id", page_number: 1, x: 0.1, y: 0.05, width: 0.5, height: 0.06 },
+        // both identity kinds defined -> the worker reads each and combines them
+        { question_client_id: null, kind: "name", page_number: 1, x: 0.1, y: 0.12, width: 0.5, height: 0.06 }
       ]
     });
     expect(structErr).toBeNull();
@@ -110,9 +118,16 @@ test.describe("Exam grading OCR pipeline", () => {
       .single();
     const batchId = batch!.id;
 
-    const sisIds = ["111", "222", "999"];
-    for (let i = 0; i < sisIds.length; i++) {
-      const path = `classes/${course.id}/exams/${examId}/batches/${batchId}/sis-${sisIds[i]}__page-${i}.png`;
+    // The fake vision provider reads identity from the object path: sis-<id> drives the
+    // student_id region, name-<Name> drives the name region. Alice/Bob carry a matching
+    // name too (both signals agree); the unknown scan matches neither.
+    const scans = [
+      { sis: String(aliceSis), name: "Alice_Smith" },
+      { sis: String(bobSis), name: "Bob_Jones" },
+      { sis: String(unknownSis), name: "Nobody_Here" }
+    ];
+    for (let i = 0; i < scans.length; i++) {
+      const path = `classes/${course.id}/exams/${examId}/batches/${batchId}/sis-${scans[i].sis}__name-${scans[i].name}__page-${i}.png`;
       const up = await supabase.storage.from("exam-scans").upload(path, PNG_1x1, {
         contentType: "image/png",
         upsert: true
@@ -146,15 +161,21 @@ test.describe("Exam grading OCR pipeline", () => {
 
     const { data: scanned } = await supabase
       .from("exam_scanned_submissions")
-      .select("id, detected_sis_id, matched_profile_id, match_status")
+      .select("id, detected_sis_id, detected_name, matched_profile_id, match_status, match_confidence")
       .eq("batch_id", batchId)
       .order("exam_index");
     expect(scanned).toHaveLength(3);
 
     const byProfile = new Map((scanned ?? []).map((s) => [s.matched_profile_id, s]));
-    expect(byProfile.get(alice.private_profile_id)?.match_status).toBe("suggested");
-    expect(byProfile.get(bob.private_profile_id)?.match_status).toBe("suggested");
-    const unmatched = (scanned ?? []).find((s) => s.detected_sis_id === "999");
+    const aliceScan = byProfile.get(alice.private_profile_id);
+    const bobScan = byProfile.get(bob.private_profile_id);
+    expect(aliceScan?.match_status).toBe("suggested");
+    expect(bobScan?.match_status).toBe("suggested");
+    // SIS id and name both resolve to the same student -> max confidence
+    expect(aliceScan?.detected_name).toBe("Alice Smith");
+    expect(aliceScan?.match_confidence).toBe(1);
+    expect(bobScan?.match_confidence).toBe(1);
+    const unmatched = (scanned ?? []).find((s) => s.detected_sis_id === String(unknownSis));
     expect(unmatched?.match_status).toBe("unmatched");
 
     // --- 6) confirm the two real matches, finalize ---
@@ -212,5 +233,41 @@ test.describe("Exam grading OCR pipeline", () => {
       .eq("id", unmatched!.id)
       .single();
     expect(stillUnmatched?.submission_id).toBeNull();
+
+    // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
+    const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(reCountDone).toBe(0); // every confirmed submission already has its artifact
+
+    // --- 9) crash-safety: a finalize that died before writing the artifact resumes ---
+    // Simulate the crash by dropping one submission's exam artifact, then re-finalize.
+    const victim = (submissions ?? [])[0]!;
+    const { data: filesBefore } = await supabase.from("submission_files").select("id").eq("submission_id", victim.id);
+    await supabase.from("submission_artifacts").delete().eq("submission_id", victim.id).eq("data->>format", "exam_v1");
+
+    // only the one submission missing its artifact gets re-enqueued
+    const { data: reCount } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(reCount).toBe(1);
+
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          const { data } = await supabase.from("exam_scan_batches").select("status").eq("id", batchId).single();
+          return data?.status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("completed");
+
+    // artifact restored exactly once, and page files rebuilt — not duplicated
+    const { data: artAfter } = await supabase
+      .from("submission_artifacts")
+      .select("id, data")
+      .eq("submission_id", victim.id);
+    expect((artAfter ?? []).filter((a) => (a.data as { format?: string } | null)?.format === "exam_v1")).toHaveLength(
+      1
+    );
+    const { data: filesAfter } = await supabase.from("submission_files").select("id").eq("submission_id", victim.id);
+    expect(filesAfter ?? []).toHaveLength((filesBefore ?? []).length);
   });
 });

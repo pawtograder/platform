@@ -14,6 +14,7 @@
     "start": "next start",
     "start:https": "node scripts/next-start-https.cjs",
     "test": "jest",
+    "test:unit": "jest --ci --testPathIgnorePatterns '/node_modules/' 'tests/unit/llm-hint'",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "npx playwright test",

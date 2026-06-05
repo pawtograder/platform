@@ -32,6 +32,35 @@ jobs:
       - name: Run linting check
         run: npm run lint
 
+  # Jest unit tests (no DB, no Next server) — the fast, pure-logic suite under tests/unit/.
+  # Covers exam OCR region math / page splitting, rubric parsing, gradebook expressions,
+  # export selectors, etc. Excludes tests/unit/llm-hint.test.ts (pre-existing failures from
+  # jest.mock vs the route's `instanceof` model checks — unrelated, tracked separately) and
+  # the tests/unit/issue-* Supabase integration tests (they self-skip without a live DB and
+  # run in the deploy workflow instead). See the `test:unit` script.
+  unit-tests:
+    runs-on: pawtograder-ci
+    strategy:
+      matrix:
+        node-version: [22.x]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        run: npm install
+      - name: Run Jest unit tests
+        run: npm run test:unit
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
