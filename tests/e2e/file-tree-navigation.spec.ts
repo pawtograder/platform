@@ -8,6 +8,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  setGradingEditorPreference,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -160,6 +161,9 @@ test.describe("File-tree navigation (#288 / #103a)", () => {
   });
 
   test("GUARD: keystrokes are ignored while typing in a comment box", async ({ page }) => {
+    // The free-text comment popup ("Leave a comment") lives in the classic plain/starry-night viewer,
+    // so opt this grader out of the now-default Monaco editor before loading the page.
+    await setGradingEditorPreference(instructor!.user_id, false);
     await loginAsUser(page, instructor!, course);
     await openFiles(page);
 

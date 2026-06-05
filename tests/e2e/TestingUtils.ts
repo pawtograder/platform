@@ -18,6 +18,19 @@ dotenv.config({ path: ".env.local", quiet: true });
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 
+/**
+ * Set a user's grading code-viewer preference (`users.preferences.grading.useMonacoEditor`). The
+ * submission-file viewer defaults to the Monaco editor; specs that exercise the classic
+ * plain/starry-night annotation UI call this with `useMonaco=false` before loading the page.
+ */
+export async function setGradingEditorPreference(userId: string, useMonaco: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("users")
+    .update({ preferences: { grading: { useMonacoEditor: useMonaco } } })
+    .eq("user_id", userId);
+  if (error) throw new Error(`Failed to set grading editor preference: ${error.message}`);
+}
+
 /** True when `dual_active_invariants_version` RPC exists (migration 20260424200000_prevent_dual_active_submissions.sql). */
 export async function isDualActiveSubmissionGuardsMigrated(): Promise<boolean> {
   const { data, error } = await supabase.rpc("dual_active_invariants_version");

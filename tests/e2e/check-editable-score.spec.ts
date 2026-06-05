@@ -8,6 +8,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  setGradingEditorPreference,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -84,6 +85,10 @@ test.beforeAll(async () => {
     .single();
   if (error) throw new Error(`Failed to insert option check: ${error.message}`);
   optionCheckId = optionCheck!.id;
+
+  // This spec exercises the classic plain/starry-night annotation UI (react-select check picker,
+  // "Annotate line N…" popover), so opt the grader out of the now-default Monaco editor.
+  await setGradingEditorPreference(instructor!.user_id, false);
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
