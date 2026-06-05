@@ -58,15 +58,23 @@ RUN apt-get update \
 # privileges below.
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 
-# Source files SeedDB.ts walks transitively. Copy enough of the tree to
-# resolve all imports — scripts/, tests/, utils/, supabase/ (the Database
-# type), components/, libs/, etc. The image is for seeding so we don't
-# care about excluding test fixtures.
+# Source files SeedDB.ts → DatabaseSeedingUtils.ts walks transitively. Copy
+# every top-level dir its import closure resolves through, or tsx fails at
+# resolution with MODULE_NOT_FOUND before seeding anything:
+#   scripts/  - the seeder + demo fixtures/copyRubrics
+#   utils/    - utils/supabase/{Database,Supabase}Types
+#   supabase/ - migrations / generated types
+#   tests/    - tests/fixtures + tests/generator used by the seed
+#   lib/      - e.g. lib/rubricCommentTargetStudentProfileId
+#   types/    - e.g. types/survey-analytics
+# The image is for seeding so we don't care about excluding test fixtures.
 COPY --chown=node:node tsconfig.json package.json package-lock.json ./
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node utils ./utils
 COPY --chown=node:node supabase ./supabase
 COPY --chown=node:node tests ./tests
+COPY --chown=node:node lib ./lib
+COPY --chown=node:node types ./types
 
 # Entrypoint wrapper. Stays root-owned (mode 0755) so node can execute
 # it but not modify it.
