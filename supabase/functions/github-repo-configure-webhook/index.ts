@@ -10,6 +10,33 @@ import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+
+/**
+ * Webhook events the Pawtograder GitHub App must subscribe to.
+ *
+ * NOTE: the App-level webhook subscription is configured in the GitHub App
+ * settings (GitHub UI / app manifest), not by this function — this function
+ * only fetches/validates per-repo autograder config. We keep the authoritative
+ * list here (the file the docs point at for "subscribed events") so the set is
+ * discoverable in code and reviewed alongside the handlers in
+ * `github-repo-webhook/index.ts`. When you add a handler there, add the event
+ * here and update the GitHub App subscription to match.
+ *
+ * `deployment` / `deployment_status` (added for PR-submission-mode Phase 4) feed
+ * the `github_deployments` ingestion in the webhook handler. `deployment_status`
+ * is the one we actually persist; `deployment` is subscribed for completeness so
+ * the App receives the full deployment lifecycle.
+ */
+export const GITHUB_APP_WEBHOOK_EVENTS = [
+  "push",
+  "pull_request",
+  "check_run",
+  "workflow_run",
+  "membership",
+  "organization",
+  "deployment",
+  "deployment_status"
+] as const;
 type RequestBody = {
   new_repo: string;
   assignment_id: number;
