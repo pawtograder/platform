@@ -234,7 +234,15 @@ test.describe("Assignment due dates", () => {
       await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments/${assignment.id}$`));
     };
 
-    const consumeTokenAndWaitForExtension = async () => {
+    const assignmentDueDateHeadingSection = (assignmentTitle: string) =>
+      page.getByRole("heading", { name: assignmentTitle }).locator("..");
+    const assignmentDueDateDisplay = (assignmentTitle: string) =>
+      assignmentDueDateHeadingSection(assignmentTitle).locator('span[data-visual-placeholder="date"]');
+    const expectAssignmentDueDate = async (assignmentTitle: string, date: Date | TZDate) => {
+      await expect(assignmentDueDateDisplay(assignmentTitle)).toHaveText(formatDateForTest(date));
+    };
+
+    const consumeTokenAndWaitForExtension = async (assignmentTitle: string) => {
       const exceptionCreate = page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&
@@ -243,8 +251,13 @@ test.describe("Assignment due dates", () => {
       );
       await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
       await exceptionCreate;
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(page.getByText("(24-hour extension applied, 1 late tokens consumed)")).toBeVisible();
+      // Extension confirmation and recomputed due date render together under the assignment
+      // heading once TableController applies the new exception — not when the dialog unmounts.
+      await expect(
+        assignmentDueDateHeadingSection(assignmentTitle).getByText(
+          "(24-hour extension applied, 1 late tokens consumed)"
+        )
+      ).toBeVisible();
     };
 
     //Test with the lab section assignment
@@ -252,44 +265,46 @@ test.describe("Assignment due dates", () => {
     await openAssignment(testLabAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
+    await expectAssignmentDueDate(
+      testLabAssignment!.title,
+      new TZDate(expectedLabAssignmentDueDate, "America/New_York")
+    );
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
-    await expect(
-      page.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
-    ).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await consumeTokenAndWaitForExtension();
-    await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testLabAssignment!.title);
+    await expectAssignmentDueDate(
+      testLabAssignment!.title,
+      addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)
+    );
 
     //Test with the non-lab section assignment
     await openAssignment(testAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
+    await expectAssignmentDueDate(testAssignment!.title, new TZDate(assignmentDueDate, "America/New_York"));
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
-    await expect(page.getByText(formatDateForTest(new TZDate(assignmentDueDate, "America/New_York")))).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await consumeTokenAndWaitForExtension();
-    await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testAssignment!.title);
+    await expectAssignmentDueDate(
+      testAssignment!.title,
+      addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)
+    );
 
     //Test with the group assignment
     await openAssignment(testGroupAssignment!);
 
     await expect(page.getByText("This is a test group assignment for E2E testing")).toBeVisible();
+    await expectAssignmentDueDate(testGroupAssignment!.title, new TZDate(groupAssignmentDueDate, "America/New_York"));
     await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
-    await expect(
-      page.getByText(formatDateForTest(new TZDate(groupAssignmentDueDate, "America/New_York")))
-    ).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await consumeTokenAndWaitForExtension();
-    await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testGroupAssignment!.title);
+    await expectAssignmentDueDate(
+      testGroupAssignment!.title,
+      addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)
+    );
     await assertStudentPageAccessible(page, "due dates after token extensions");
   });
 });
