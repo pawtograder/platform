@@ -460,6 +460,43 @@ export async function activateSubmission(params: { submission_id: number }, supa
     recoverable: false
   });
 }
+export type CheckAppInstallationResponse = {
+  installed: boolean;
+  repo_accessible: boolean;
+  org: string;
+  install_url: string;
+};
+
+/**
+ * Checks whether the Pawtograder GitHub App is installed in (and can see) `repo`
+ * ("owner/name"). Used by the assignment config form to gate PR-mode assignments
+ * whose upstream/handout repo may be in a different org than the class.
+ */
+export async function checkAppInstallation(
+  params: { repo: string; class_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<CheckAppInstallationResponse> {
+  return await invokeEdgeFunction<CheckAppInstallationResponse>(supabase, "github-check-app-installation", {
+    body: params
+  });
+}
+
+export type PrLinkConfirmResponse = { submission_id: number | null };
+
+/**
+ * Confirms which candidate pull request is the submission PR for a pr-mode
+ * assignment and ingests its current state as a submission. Used by the student
+ * "which PR is your submission?" picker and by staff linking a PR manually.
+ */
+export async function confirmPrLink(
+  params: { link_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<PrLinkConfirmResponse> {
+  return await invokeEdgeFunction<PrLinkConfirmResponse>(supabase, "pr-link-confirm", {
+    body: params
+  });
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,

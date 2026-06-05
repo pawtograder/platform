@@ -239,6 +239,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GetCommitResponse = Endpoints["GET /repos/{owner}/{repo}/commits/{ref}"]["response"];
+export type GetPullRequestResponse = Endpoints["GET /repos/{owner}/{repo}/pulls/{pull_number}"]["response"];
 export type GitHubOIDCToken = {
   jti: string;
   sub: string;
@@ -292,6 +293,28 @@ const installations: {
   octokit: Octokit;
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
+
+// The GitHub App's URL slug, used to build the install URL we hand instructors
+// when an upstream/handout repo lives in an org where the app isn't installed.
+// Prefer the explicit env var; fall back to GET /app (app-JWT auth) once.
+let cachedAppSlug: string | undefined;
+export async function getAppSlug(scope?: Sentry.Scope): Promise<string | undefined> {
+  const fromEnv = Deno.env.get("GITHUB_APP_SLUG");
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (cachedAppSlug !== undefined) {
+    return cachedAppSlug;
+  }
+  try {
+    const { data } = await app.octokit.request("GET /app");
+    cachedAppSlug = data?.slug ?? "";
+    return cachedAppSlug || undefined;
+  } catch (e) {
+    Sentry.captureException(e, scope);
+    return undefined;
+  }
+}
 
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
@@ -2318,6 +2341,41 @@ export async function getCommit(
     ref
   });
   return commit.data;
+}
+
+/**
+ * Fetch a single pull request from an upstream/class repo. Used by pr-mode
+ * ingestion (e.g. when a student confirms which PR is their submission) to read
+ * the PR's current head/base shas and state straight from GitHub rather than
+ * relying on a possibly-stale webhook payload.
+ */
+export async function getPullRequest(
+  repo_full_name: string,
+  pull_number: number,
+  scope?: Sentry.Scope
+): Promise<GetPullRequestResponse["data"]> {
+  scope?.setTag("github_operation", "get_pull_request");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("pull_number", pull_number.toString());
+
+  const parts = repo_full_name
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length !== 2) {
+    throw new Error(`Invalid repo_full_name format: ${repo_full_name}`);
+  }
+  const [org, repo] = parts;
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const pr = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+    owner: org,
+    repo,
+    pull_number
+  });
+  return pr.data;
 }
 
 /**

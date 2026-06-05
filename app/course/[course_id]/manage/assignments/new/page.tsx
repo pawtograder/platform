@@ -46,6 +46,7 @@ export default function NewAssignmentPage() {
     async function create() {
       const repoMode = getValues("repo_mode") || "template_only_staff";
       const isNoRepo = repoMode === "none" || repoMode === "no_submission";
+      const isPr = getValues("submission_mode") === "pr";
       const willCreateRepos = !isNoRepo;
 
       // Show loading toast before starting the process
@@ -149,7 +150,16 @@ export default function NewAssignmentPage() {
             // surfacing a constraint error from the disabled-but-still-set checkboxes.
             protect_block_force_push: isNoRepo ? false : getValues("protect_block_force_push") !== false,
             protect_require_pull_request: isNoRepo ? false : getValues("protect_require_pull_request") === true,
-            protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0)
+            protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0),
+            // Submission-mode axis. Only persist the upstream/PR config when the
+            // instructor actually selected PR mode; otherwise leave the columns at
+            // their push-mode defaults.
+            submission_mode: isPr ? "pr" : "push",
+            upstream_repo: isPr ? getValues("upstream_repo") || null : null,
+            upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
+            pr_identification: isPr ? getValues("pr_identification") || "base_branch" : "base_branch",
+            pr_branch_convention: isPr ? getValues("pr_branch_convention") || null : null,
+            require_pr_open: isPr ? getValues("require_pr_open") === true : false
           })
           .select("id")
           .single();

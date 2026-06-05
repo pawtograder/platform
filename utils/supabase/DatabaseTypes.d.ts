@@ -43,6 +43,7 @@ export type GraderResultTestExtraData = {
 
 export type GraderResultTestsHintFeedback = Database["public"]["Tables"]["grader_result_tests_hint_feedback"]["Row"];
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
+export type SubmissionPrLink = Database["public"]["Tables"]["submission_pr_links"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"],

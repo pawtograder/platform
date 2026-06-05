@@ -31,6 +31,7 @@ import { useEffect, useMemo, useRef } from "react";
 import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import PrSubmissionPanel from "./prSubmissionPanel";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -112,9 +113,11 @@ export default function AssignmentPage() {
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
   }
-  // No-repo / no-submission assignments have no autograder by convention, so an
-  // autograder score is not meaningful — show "N/A" instead of progress/score.
-  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission";
+  // No-repo / no-submission / PR-mode assignments have no autograder by
+  // convention, so an autograder score is not meaningful — show "N/A" instead
+  // of progress/score.
+  const isPrMode = assignment.submission_mode === "pr";
+  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission" || isPrMode;
   return (
     <Box p={4}>
       <LinkAccount />
@@ -142,7 +145,18 @@ export default function AssignmentPage() {
 
           <Markdown>{assignment.description}</Markdown>
 
-          {assignment.repo_mode === "none" ? (
+          {isPrMode && (
+            <PrSubmissionPanel
+              assignment={assignment}
+              assignmentGroupId={assignmentGroup?.id}
+              profileId={enrollment?.private_profile_id}
+              onConfirmed={() => refetchSubmissions()}
+            />
+          )}
+
+          {isPrMode ? (
+            <></>
+          ) : assignment.repo_mode === "none" ? (
             <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
           ) : assignment.repo_mode === "no_submission" ? (
             <Alert.Root status="info" flexDirection="column" m={4} maxW="4xl">
@@ -169,7 +183,9 @@ export default function AssignmentPage() {
             <ManageGroupWidget
               assignment={assignment}
               repositories={repositories ?? []}
-              showRepositories={assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"}
+              showRepositories={
+                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+              }
             />
           </Box>
           <SelfReviewNotice
@@ -251,7 +267,12 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    {submission.sha && submission.repository ? (
+                    {submission.submitted_via === "pr" && submission.repository && submission.pr_number ? (
+                      <Link href={`https://github.com/${submission.repository}/pull/${submission.pr_number}`}>
+                        #{submission.pr_number}
+                        {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
+                      </Link>
+                    ) : submission.sha && submission.repository ? (
                       <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
                         {submission.sha.slice(0, 7)}
                       </Link>
