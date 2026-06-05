@@ -10,6 +10,8 @@ import {
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 // Data-layer tests for the Phase-4 read-only PR-submission surfaces (the
 // Checks and Deployments subpages). These exercise the exact queries the UI
@@ -27,59 +29,12 @@ import type { TestingUser } from "@/tests/e2e/TestingUtils";
 // The UI-render layer is thin (a Chakra table + empty state) over these queries,
 // so we assert at the data/RLS layer here — the same approach as
 // deployments-ingestion.test.tsx and pr-submission-mode.test.tsx.
-//
-// NOTE(orchestrator): `github_deployments` (table) and `upsert_github_deployment`
-// / `get_submission_checks` (RPCs) are added by migration 20260606000000 and are
-// NOT yet in the generated Database type. Every access below goes through a small
-// typed alias cast; drop these casts after `npm run client-local` regenerates the
-// types (mirrors the `asUntyped` helper in deployments-ingestion.test.tsx).
-
-type WorkflowEventRow = {
-  id: number;
-  head_sha: string | null;
-  workflow_name: string | null;
-  status: string | null;
-  conclusion: string | null;
-  repository_name: string;
-};
-
-type DeploymentRow = {
-  id: number;
-  repository_name: string;
-  sha: string | null;
-  environment: string | null;
-  state: string | null;
-  target_url: string | null;
-};
-
-type UntypedClient = {
-  rpc: (
-    fn: string,
-    args: Record<string, unknown>
-  ) => Promise<{ data: WorkflowEventRow[] | number | null; error: { message: string } | null }>;
-  from: (table: string) => {
-    select: (cols: string) => {
-      eq: (
-        col: string,
-        val: unknown
-      ) => {
-        eq: (col: string, val: unknown) => Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
-      };
-    };
-  };
-};
-
-const asUntyped = (client: unknown) => client as unknown as UntypedClient;
-
-async function getSubmissionChecks(client: unknown, submissionId: number) {
-  return asUntyped(client).rpc("get_submission_checks", { p_submission_id: submissionId }) as Promise<{
-    data: WorkflowEventRow[] | null;
-    error: { message: string } | null;
-  }>;
+async function getSubmissionChecks(client: SupabaseClient<Database>, submissionId: number) {
+  return client.rpc("get_submission_checks", { p_submission_id: submissionId });
 }
 
-async function getDeploymentsForSubmission(client: unknown, repositoryName: string, sha: string) {
-  return asUntyped(client)
+async function getDeploymentsForSubmission(client: SupabaseClient<Database>, repositoryName: string, sha: string) {
+  return client
     .from("github_deployments")
     .select("id, repository_name, sha, environment, state, target_url")
     .eq("repository_name", repositoryName)
@@ -211,11 +166,10 @@ test.describe("PR submission surfaces (checks + deployments data/RLS)", () => {
 
     // Deployment for the fork repo + head sha (Path 3: NULL repository_id,
     // resolved to the class via the submission match).
-    // types: upsert_github_deployment not yet in generated Database (deferred regen)
-    const { error: depErr } = await asUntyped(supabase).rpc("upsert_github_deployment", {
+    const { error: depErr } = await supabase.rpc("upsert_github_deployment", {
       p_class_id: classAId,
       p_repository_name: FORK_REPO,
-      p_repository_id: null,
+      p_repository_id: undefined,
       p_sha: HEAD_SHA,
       p_environment: "preview",
       p_state: "success",

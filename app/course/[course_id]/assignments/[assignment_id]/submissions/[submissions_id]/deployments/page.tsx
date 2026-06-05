@@ -3,46 +3,16 @@
 import Link from "@/components/ui/link";
 import { useSubmission } from "@/hooks/useSubmission";
 import { createClient } from "@/utils/supabase/client";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { formatDistanceToNow } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 import { FaExternalLinkAlt } from "react-icons/fa";
 
-// types: github_deployments not yet in generated Database (deferred regen).
-// The whole table (and the columns below) are reached through a localized cast,
-// mirroring the `asUntyped` helper in tests/e2e/deployments-ingestion.test.tsx;
-// drop the cast after the deferred, repo-wide type regen.
-type DeploymentRow = {
-  id: number;
-  created_at: string | null;
-  repository_name: string;
-  sha: string | null;
-  environment: string | null;
-  state: string | null;
-  target_url: string | null;
-  creator_login: string | null;
-};
-
-type UntypedDeploymentsQuery = {
-  from: (table: string) => {
-    select: (cols: string) => {
-      eq: (
-        col: string,
-        val: unknown
-      ) => {
-        eq: (
-          col: string,
-          val: unknown
-        ) => {
-          order: (
-            col: string,
-            opts: { ascending: boolean }
-          ) => Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
-        };
-      };
-    };
-  };
-};
+type DeploymentRow = Pick<
+  Database["public"]["Tables"]["github_deployments"]["Row"],
+  "id" | "created_at" | "repository_name" | "sha" | "environment" | "state" | "target_url" | "creator_login"
+>;
 
 /** Map a deployment state to a Chakra colorPalette. */
 function stateColor(state: string | null): string {
@@ -87,7 +57,7 @@ export default function SubmissionDeploymentsPage() {
       return;
     }
     (async () => {
-      const { data, error: queryError } = await (supabase as unknown as UntypedDeploymentsQuery)
+      const { data, error: queryError } = await supabase
         .from("github_deployments")
         .select("id, created_at, repository_name, sha, environment, state, target_url, creator_login")
         .eq("repository_name", submissionRepository)

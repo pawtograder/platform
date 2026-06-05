@@ -1864,18 +1864,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
     }
 
     maybeCrash("deployment_status.before_upsert");
-    // `upsert_github_deployment` (migration 20260606000000) is intentionally NOT
-    // in the committed generated types: regenerating under the pinned CLI
-    // (2.105.0) drifts unrelated entries and breaks #806 rubric code, so we keep
-    // the generated file as-is and cast this one call until a controlled,
-    // repo-wide type regen lands. Optional params are omitted (not null) so the
-    // SQL DEFAULT NULL applies.
-    const { error: upsertError } = await (
-      adminSupabase.rpc as unknown as (
-        fn: string,
-        args: Record<string, unknown>
-      ) => Promise<{ error: { message: string } | null }>
-    )("upsert_github_deployment", {
+    // Optional params are omitted (not null) so the SQL DEFAULT NULL applies.
+    const { error: upsertError } = await adminSupabase.rpc("upsert_github_deployment", {
       p_class_id: classId,
       p_repository_name: repoFullName,
       p_repository_id: repositoryId ?? undefined,

@@ -73,13 +73,9 @@ export default function SubmissionChecksPage() {
     setLoading(true);
     setError(null);
     (async () => {
-      // types: get_submission_checks not yet in generated Database (deferred regen)
-      const { data, error: rpcError } = await (
-        supabase.rpc as unknown as (
-          fn: string,
-          args: Record<string, unknown>
-        ) => Promise<{ data: WorkflowEvent[] | null; error: { message: string } | null }>
-      )("get_submission_checks", { p_submission_id: submission.id });
+      const { data, error: rpcError } = await supabase.rpc("get_submission_checks", {
+        p_submission_id: submission.id
+      });
       if (!mounted) {
         return;
       }

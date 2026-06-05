@@ -10,6 +10,8 @@ import {
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 // Tests for the github_deployments read-only data layer (PR-submission-mode
 // Phase 4, P1-backend), exercised directly against the DB:
@@ -21,64 +23,12 @@ import type { TestingUser } from "@/tests/e2e/TestingUtils";
 //     (github_deployment_id, github_deployment_status_id) updates the existing
 //     row's mutable fields instead of inserting a duplicate.
 //
-// NOTE(orchestrator): `github_deployments` and `upsert_github_deployment` are
-// added by migration 20260606000000 and are NOT yet in the generated Database
-// type. Every `.from("github_deployments")` / `.rpc("upsert_github_deployment")`
-// below is reached through a small typed alias cast (UntypedClient); drop these
-// casts after `npm run client-local` regenerates the types.
-
-// Minimal structural type for the not-yet-generated table/RPC. Lets us assert on
-// the columns we read without `any` leaking through the test body.
-type DeploymentRow = {
-  id: number;
-  class_id: number;
-  repository_id: number | null;
-  repository_name: string;
-  sha: string | null;
-  state: string | null;
-  target_url: string | null;
-  environment: string | null;
-  github_deployment_id: number | null;
-  github_deployment_status_id: number | null;
-};
-
-type UntypedClient = {
-  from: (table: string) => {
-    select: (cols: string) => {
-      eq: (
-        col: string,
-        val: unknown
-      ) => {
-        order: (col: string) => Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
-      } & Promise<{ data: DeploymentRow[] | null; error: { message: string } | null }>;
-    };
-  };
-  rpc: (
-    fn: string,
-    args: Record<string, unknown>
-  ) => Promise<{ data: number | null; error: { message: string } | null }>;
-};
-
-const asUntyped = (client: unknown) => client as unknown as UntypedClient;
-
-async function upsertDeployment(args: {
-  p_class_id: number;
-  p_repository_name: string;
-  p_repository_id?: number | null;
-  p_sha?: string | null;
-  p_environment?: string | null;
-  p_state?: string | null;
-  p_target_url?: string | null;
-  p_github_deployment_id?: number | null;
-  p_github_deployment_status_id?: number | null;
-  p_creator_login?: string | null;
-  p_payload?: unknown;
-}) {
-  return asUntyped(supabase).rpc("upsert_github_deployment", args);
+async function upsertDeployment(args: Database["public"]["Functions"]["upsert_github_deployment"]["Args"]) {
+  return supabase.rpc("upsert_github_deployment", args);
 }
 
-async function readDeploymentsForClass(client: unknown, classId: number) {
-  return asUntyped(client).from("github_deployments").select("*").eq("class_id", classId).order("id");
+async function readDeploymentsForClass(client: SupabaseClient<Database>, classId: number) {
+  return client.from("github_deployments").select("*").eq("class_id", classId).order("id");
 }
 
 test.describe.configure({ mode: "serial" });
@@ -198,7 +148,7 @@ test.describe("github_deployments ingestion + RLS", () => {
     const { data: id, error } = await upsertDeployment({
       p_class_id: classAId,
       p_repository_name: FORK_REPO,
-      p_repository_id: null, // not in `repositories`
+      p_repository_id: undefined, // not in `repositories`
       p_sha: FORK_SHA,
       p_environment: "preview",
       p_state: "success",
@@ -224,7 +174,7 @@ test.describe("github_deployments ingestion + RLS", () => {
     const { error } = await upsertDeployment({
       p_class_id: classAId,
       p_repository_name: `unrelated/repo-${SAFE_ID}`,
-      p_repository_id: null,
+      p_repository_id: undefined,
       p_sha: "unrelated-sha",
       p_environment: "production",
       p_state: "success",
