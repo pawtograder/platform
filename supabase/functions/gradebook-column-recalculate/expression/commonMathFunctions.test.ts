@@ -66,10 +66,8 @@ Deno.test("countif: counts values satisfying the predicate", () => {
 
 Deno.test("countif: empty input is undefined", () => {
   // deno-lint-ignore no-explicit-any
-  assertEquals(
-    fns()["countif"](ctx, [], (_v: any) => true),
-    undefined
-  );
+  const count = fns()["countif"](ctx, [], (_v: any) => true);
+  assertEquals(count, undefined);
 });
 
 Deno.test("sum: adds gradebook scores", () => {
