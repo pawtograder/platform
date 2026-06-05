@@ -56,7 +56,7 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
   const RUN_PREFIX = getTestRunPrefix();
   const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const UPSTREAM = `pawtograder-playground/pr-upstream-${SAFE_ID}`;
-  const FORK = `${END_TO_END_REPO_PREFIX}-fork-${SAFE_ID}`;
+  const FORK = `${END_TO_END_REPO_PREFIX}--fork-${SAFE_ID}`;
   const GH_LOGIN = `e2e-pr-author-${SAFE_ID}`;
   const PR_NUMBER = 42;
 

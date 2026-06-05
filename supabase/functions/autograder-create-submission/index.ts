@@ -15,6 +15,7 @@ import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   cloneRepository,
   getRepoTarballURL,
+  getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   PrimaryRateLimitError,
@@ -522,17 +523,6 @@ async function handleGitHubApiCall<T>(
     // Re-throw the original error
     throw error;
   }
-}
-
-function getRepoToCloneConsideringE2E(repository: string) {
-  if (repository.startsWith(END_TO_END_REPO_PREFIX)) {
-    const separatorPosition = repository.indexOf("--");
-    if (separatorPosition === -1) {
-      throw new SecurityError("E2E repo provided, but no separator found");
-    }
-    return repository.slice(0, separatorPosition);
-  }
-  return repository;
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

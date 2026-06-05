@@ -763,6 +763,24 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
 
 // E2E testing constants and helper
 export const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+
+/**
+ * Resolve the real repo to clone for an E2E run. E2E student repos are named
+ * `<real-repo>--<unique-suffix>` so each test is isolated while still pointing at
+ * one real fixture repo; strip the `--<suffix>` to get the repo actually cloned.
+ * Non-E2E repos are returned unchanged. Shared by autograder-create-submission
+ * and the webhook-direct ingestion helpers so all E2E clones resolve identically.
+ */
+export function getRepoToCloneConsideringE2E(repository: string): string {
+  if (repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    const separatorPosition = repository.indexOf("--");
+    if (separatorPosition === -1) {
+      throw new SecurityError("E2E repo provided, but no separator found");
+    }
+    return repository.slice(0, separatorPosition);
+  }
+  return repository;
+}
 // Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
 const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");
 // Explicit opt-in flag for E2E testing

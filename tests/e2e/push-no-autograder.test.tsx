@@ -139,7 +139,7 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
 
     // A student repo whose name uses the E2E prefix so the webhook's
     // E2E_MOCK_GITHUB path writes a canned file instead of cloning GitHub.
-    repoName = `${END_TO_END_REPO_PREFIX}-${SAFE_ID}`;
+    repoName = `${END_TO_END_REPO_PREFIX}--${SAFE_ID}`;
     const { data: repo, error: repoErr } = await supabase
       .from("repositories")
       .insert({
