@@ -153,13 +153,16 @@ create table if not exists public.exam_async_worker_dlq_messages (
 -- ---------------------------------------------------------------------------
 -- 3) Indexes (deliberate, minimal — real access paths only)
 -- ---------------------------------------------------------------------------
-create index if not exists exam_template_pages_exam_idx on public.exam_template_pages (exam_id, page_number);
+-- One template page per (exam, page_number): unique so re-rasterizing/re-importing can't
+-- silently create duplicate pages.
+create unique index if not exists exam_template_pages_exam_idx on public.exam_template_pages (exam_id, page_number);
 create index if not exists exam_questions_exam_idx on public.exam_questions (exam_id);
 create index if not exists exam_questions_parent_idx on public.exam_questions (parent_id);
 create index if not exists exam_question_regions_exam_idx on public.exam_question_regions (exam_id);
 create index if not exists exam_question_regions_question_idx
   on public.exam_question_regions (exam_question_id) where exam_question_id is not null;
-create index if not exists exam_scan_pages_batch_idx on public.exam_scan_pages (batch_id, page_index);
+-- One scan page per (batch, page_index): unique so a re-upload can't duplicate pages.
+create unique index if not exists exam_scan_pages_batch_idx on public.exam_scan_pages (batch_id, page_index);
 create index if not exists exam_scanned_submissions_batch_idx on public.exam_scanned_submissions (batch_id);
 create index if not exists exam_scanned_submissions_submission_idx
   on public.exam_scanned_submissions (submission_id) where submission_id is not null;

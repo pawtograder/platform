@@ -24,21 +24,30 @@ export default function ExamScansPage() {
 
   const loadBatches = useCallback(async (exam: number) => {
     const supabase = createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("exam_scan_batches")
       .select("id, status, total_pages, pages_per_exam, error")
       .eq("exam_id", exam)
       .order("id", { ascending: false });
+    if (error) {
+      toaster.error({ title: "Failed to load batches", description: error.message });
+      return;
+    }
     setBatches((data ?? []) as Batch[]);
   }, []);
 
   const load = useCallback(async () => {
     const supabase = createClient();
-    const { data: exam } = await supabase
+    const { data: exam, error } = await supabase
       .from("exams")
       .select("id, num_pages")
       .eq("assignment_id", assignmentId)
       .maybeSingle();
+    if (error) {
+      toaster.error({ title: "Failed to load exam", description: error.message });
+      setLoading(false);
+      return;
+    }
     if (exam) {
       setExamId(exam.id);
       setNumPages(exam.num_pages || 1);

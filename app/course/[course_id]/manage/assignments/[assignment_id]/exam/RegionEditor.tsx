@@ -46,28 +46,29 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   useEffect(() => {
     const supabase = createClient();
     async function load() {
-      const { data: pageRows } = await supabase
+      const { data: pageRows, error: pageErr } = await supabase
         .from("exam_template_pages")
         .select("page_number, image_path, width, height")
         .eq("exam_id", examId)
         .order("page_number");
+      if (pageErr) throw pageErr;
       const ps = (pageRows ?? []) as TemplatePage[];
-      setPages(ps);
       const next: Record<number, string> = {};
       for (const p of ps) {
-        const { data: signed } = await supabase.storage
+        const { data: signed, error: signErr } = await supabase.storage
           .from("exam-templates")
           .createSignedUrl(p.image_path, 60 * 60 * 12);
+        if (signErr) throw signErr;
         if (signed?.signedUrl) next[p.page_number] = signed.signedUrl;
       }
-      setUrls(next);
 
-      const { data: qRows } = await supabase
+      const { data: qRows, error: qErr } = await supabase
         .from("exam_questions")
         .select("id, parent_id, level, ordinal, label, answer_type, points")
         .eq("exam_id", examId)
         .order("level")
         .order("ordinal");
+      if (qErr) throw qErr;
       const idToClient = new Map<number, string>();
       const qs: EditorQuestion[] = (qRows ?? []).map((q) => {
         const cid = uid();
@@ -86,26 +87,35 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       (qRows ?? []).forEach((q, i) => {
         if (q.parent_id != null) qs[i].parent_client_id = idToClient.get(q.parent_id) ?? null;
       });
-      setQuestions(qs);
 
-      const { data: rRows } = await supabase
+      const { data: rRows, error: rErr } = await supabase
         .from("exam_question_regions")
         .select("exam_question_id, kind, page_number, x, y, width, height")
         .eq("exam_id", examId);
-      setRegions(
-        (rRows ?? []).map((r) => ({
-          client_id: uid(),
-          question_client_id: r.exam_question_id != null ? (idToClient.get(r.exam_question_id) ?? null) : null,
-          kind: (r.kind as EditorRegion["kind"]) ?? "answer",
-          page_number: r.page_number,
-          x: Number(r.x),
-          y: Number(r.y),
-          width: Number(r.width),
-          height: Number(r.height)
-        }))
-      );
+      if (rErr) throw rErr;
+      const rs: EditorRegion[] = (rRows ?? []).map((r) => ({
+        client_id: uid(),
+        question_client_id: r.exam_question_id != null ? (idToClient.get(r.exam_question_id) ?? null) : null,
+        kind: (r.kind as EditorRegion["kind"]) ?? "answer",
+        page_number: r.page_number,
+        x: Number(r.x),
+        y: Number(r.y),
+        width: Number(r.width),
+        height: Number(r.height)
+      }));
+
+      // only hydrate state once every query succeeded
+      setPages(ps);
+      setUrls(next);
+      setQuestions(qs);
+      setRegions(rs);
     }
-    load();
+    load().catch((e) => {
+      toaster.error({
+        title: "Failed to load exam structure",
+        description: e instanceof Error ? e.message : String(e)
+      });
+    });
   }, [examId]);
 
   const addQuestion = useCallback((level: 1 | 2 | 3, parent: string | null) => {
@@ -128,8 +138,22 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   }, []);
 
   const removeQuestion = useCallback((cid: string) => {
-    setQuestions((qs) => qs.filter((q) => q.client_id !== cid && q.parent_client_id !== cid));
-    setRegions((rs) => rs.filter((r) => r.question_client_id !== cid));
+    setQuestions((qs) => {
+      // collect the question and all of its transitive descendants
+      const toRemove = new Set<string>([cid]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const q of qs) {
+          if (q.parent_client_id && toRemove.has(q.parent_client_id) && !toRemove.has(q.client_id)) {
+            toRemove.add(q.client_id);
+            grew = true;
+          }
+        }
+      }
+      setRegions((rs) => rs.filter((r) => !(r.question_client_id && toRemove.has(r.question_client_id))));
+      return qs.filter((q) => !toRemove.has(q.client_id));
+    });
   }, []);
 
   const normFromEvent = (e: React.PointerEvent, el: HTMLElement) => {
@@ -177,7 +201,10 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
 
   const removeRegion = (cid: string) => setRegions((rs) => rs.filter((r) => r.client_id !== cid));
 
-  const leafQuestions = useMemo(() => questions.filter((q) => q.level === 3 || q.answer_type), [questions]);
+  const leafQuestions = useMemo(() => {
+    const hasChildren = new Set(questions.map((q) => q.parent_client_id).filter((p): p is string => p != null));
+    return questions.filter((q) => !hasChildren.has(q.client_id));
+  }, [questions]);
 
   const save = useCallback(async () => {
     setSaving(true);

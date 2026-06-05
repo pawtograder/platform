@@ -20,16 +20,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // authorize the caller as staff for this class
   await assertUserIsInstructorOrGrader(exam.class_id, req.headers.get("Authorization")!);
 
-  const { data: pages } = await admin
+  const { data: pages, error: pagesErr } = await admin
     .from("exam_template_pages")
     .select("page_number, image_path, width, height")
     .eq("exam_id", exam_id)
     .order("page_number", { ascending: true });
+  if (pagesErr) throw new Error(`Failed to load template pages for exam ${exam_id}: ${pagesErr.message}`);
+  if (!pages || pages.length === 0) throw new Error(`Exam ${exam_id} has no template pages to extract`);
 
   const images: PageImage[] = [];
-  for (const p of pages ?? []) {
+  for (const p of pages) {
     const { data, error: dlErr } = await admin.storage.from("exam-templates").download(p.image_path);
-    if (dlErr || !data) continue;
+    // Fail loudly: silently skipping a page would feed the extractor a partial template and
+    // drop the questions/regions for the missing page(s).
+    if (dlErr || !data) {
+      throw new Error(`Failed to download template page ${p.image_path}: ${dlErr?.message ?? "no data"}`);
+    }
     images.push({
       name: p.image_path,
       bytes: new Uint8Array(await data.arrayBuffer()),

@@ -28,7 +28,8 @@ export async function uploadExamTemplate(
   if (examErr || !examId) throw new Error(`exam_create failed: ${examErr?.message}`);
 
   // remove any previous template pages for a clean re-upload
-  await supabase.from("exam_template_pages").delete().eq("exam_id", examId);
+  const { error: delErr } = await supabase.from("exam_template_pages").delete().eq("exam_id", examId);
+  if (delErr) throw new Error(`clear previous template pages failed: ${delErr.message}`);
 
   const pages: UploadedTemplate["pages"] = [];
   for (const r of rasters) {

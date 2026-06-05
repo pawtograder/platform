@@ -56,13 +56,17 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
   const setMatch = useCallback(
     async (id: number, profileId: string | null) => {
       const supabase = createClient();
-      await supabase
+      const { error } = await supabase
         .from("exam_scanned_submissions")
         .update({
           matched_profile_id: profileId,
-          match_status: profileId ? "confirmed" : "unmatched"
+          match_status: profileId ? "suggested" : "unmatched"
         })
         .eq("id", id);
+      if (error) {
+        toaster.error({ title: "Update failed", description: error.message });
+        return;
+      }
       await load();
     },
     [load]
@@ -76,7 +80,14 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
         return;
       }
       const supabase = createClient();
-      await supabase.from("exam_scanned_submissions").update({ match_status: "confirmed" }).eq("id", id);
+      const { error } = await supabase
+        .from("exam_scanned_submissions")
+        .update({ match_status: "confirmed" })
+        .eq("id", id);
+      if (error) {
+        toaster.error({ title: "Confirm failed", description: error.message });
+        return;
+      }
       await load();
     },
     [rows, load]
@@ -85,7 +96,14 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
   const skip = useCallback(
     async (id: number) => {
       const supabase = createClient();
-      await supabase.from("exam_scanned_submissions").update({ match_status: "skipped" }).eq("id", id);
+      const { error } = await supabase
+        .from("exam_scanned_submissions")
+        .update({ match_status: "skipped" })
+        .eq("id", id);
+      if (error) {
+        toaster.error({ title: "Skip failed", description: error.message });
+        return;
+      }
       await load();
     },
     [load]

@@ -311,6 +311,14 @@ export function getExamVisionProvider(): ExamVisionProvider {
   if (which === "fake") return new FakeExamVisionProvider();
   const ocrKey = Deno.env.get("EXAM_OCR_API_KEY") ?? Deno.env.get("GOOGLE_API_KEY") ?? "";
   const geminiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";
+  // Fail fast with an actionable message instead of constructing providers with empty keys
+  // (which would otherwise surface as opaque 400/401s from Google deep in OCR/extraction).
+  if (!ocrKey || !geminiKey) {
+    throw new Error(
+      `EXAM_VISION_PROVIDER='${which}' requires GOOGLE_API_KEY` +
+        " (and optionally EXAM_OCR_API_KEY for a separate OCR key) to be set."
+    );
+  }
   const model = Deno.env.get("EXAM_GEMINI_MODEL") ?? "gemini-2.0-flash";
   const ocrRpm = parseInt(Deno.env.get("EXAM_OCR_RPM") ?? "60", 10);
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);

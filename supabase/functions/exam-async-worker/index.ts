@@ -104,10 +104,12 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
     height: page.height ?? 0
   };
   const result = await provider.ocrImage(img);
-  await admin
+  const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
     .eq("id", args.scan_page_id);
+  // Throw on write failure so the message is requeued, not archived (would lose the OCR).
+  if (updErr) throw new Error(`persist OCR for scan page ${args.scan_page_id} failed: ${updErr.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +295,7 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
     }
     const match = await matchProfile(admin, classId, detectedSisId, detectedName, roster);
 
-    await admin
+    const { error: matchErr } = await admin
       .from("exam_scanned_submissions")
       .update({
         detected_name: detectedName ?? null,
@@ -303,9 +305,13 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
         match_status: match.profile_id ? "suggested" : "unmatched"
       })
       .eq("id", scannedId);
+    // Throw on write failure so the message requeues instead of being archived with the
+    // match result lost.
+    if (matchErr) throw new Error(`persist match for scanned submission ${scannedId} failed: ${matchErr.message}`);
   }
 
-  await admin.from("exam_scan_batches").update({ status: "review" }).eq("id", batch.id);
+  const { error: reviewErr } = await admin.from("exam_scan_batches").update({ status: "review" }).eq("id", batch.id);
+  if (reviewErr) throw new Error(`set batch ${batch.id} to review failed: ${reviewErr.message}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,8 +361,11 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     return;
   }
 
+  // Not (or no longer) a confirmed match -> idempotent skip, not an error. enqueue_exam_finalize
+  // only queues confirmed submissions, so reaching here means the decision changed after the
+  // message was enqueued; throwing would needlessly DLQ the message and error the batch.
   if (scanned.match_status !== "confirmed" || !scanned.matched_profile_id) {
-    throw new Error(`scanned submission ${scanned.id} is not a confirmed match`);
+    return;
   }
   const profileId = scanned.matched_profile_id as string;
 
@@ -411,7 +420,7 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
       });
       if (up.error) throw new Error(`upload ${storageKey} failed: ${up.error.message}`);
       if (!existingNames.has(name)) {
-        await admin.from("submission_files").insert({
+        const { error: fileErr } = await admin.from("submission_files").insert({
           submission_id: submissionId,
           name,
           class_id: classId,
@@ -422,6 +431,7 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
           storage_key: storageKey,
           contents: null
         });
+        if (fileErr) throw new Error(`insert submission file ${name} failed: ${fileErr.message}`);
       }
       pageRefs.push({ page_number: i + 1, storage_key: storageKey, width: p.width ?? 0, height: p.height ?? 0 });
     }
@@ -479,10 +489,13 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     }
 
     // Stamp the completion marker LAST — only now is this scanned submission fully finalized.
-    await admin
+    // Throw on failure so the message requeues (otherwise finalize "succeeds" but the batch
+    // never completes and the work is silently re-done on the next enqueue).
+    const { error: stampErr } = await admin
       .from("exam_scanned_submissions")
       .update({ finalized_at: new Date().toISOString() })
       .eq("id", scanned.id);
+    if (stampErr) throw new Error(`stamp finalized_at for ${scanned.id} failed: ${stampErr.message}`);
   }
 
   await maybeCompleteBatch(admin, scanned.batch_id);
@@ -578,8 +591,10 @@ if (Deno.env.get("SENTRY_DSN")) {
 
 Deno.serve((req) => {
   const secret = req.headers.get("x-edge-function-secret");
-  const expected = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-  if (secret !== expected) {
+  // Fail closed: never fall back to a hard-coded secret. If EDGE_FUNCTION_SECRET is unset
+  // the function rejects every request rather than accepting a guessable default.
+  const expected = Deno.env.get("EDGE_FUNCTION_SECRET");
+  if (!expected || secret !== expected) {
     return new Response(JSON.stringify({ error: "Invalid secret" }), {
       status: 401,
       headers: { "Content-Type": "application/json" }
