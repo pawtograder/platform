@@ -2000,12 +2000,24 @@ $$;
 grant execute on function public.attach_no_repo_submission_files(bigint, jsonb) to authenticated;
 
 -- (B2) Owner-scoped read/write RLS on the submission-files bucket for the
--- no-repo upload flow lives in supabase/storage-policies.sql, NOT here: the
--- migration role does not own storage.objects, so CREATE POLICY on it fails
--- with "must be owner of table objects" during db reset / managed deploy (same
--- reason 20260217000000_binary_submission_files.sql commented its policies out).
--- That file is applied as a superuser (supabase_admin) after the database is up
--- — by CI in .github/workflows/deploy.yml, and locally per AGENTS.md.
+-- no-repo upload flow. Plain CREATE POLICY on storage.objects, inline like the
+-- avatars / uploads-rls policy migrations. Gated by
+-- public.can_access_submission_storage_path(name) from 20260217000000.
+-- Idempotent: drop-then-create so reset / re-run is safe.
+-- NOTE: requires the pinned Supabase CLI (2.92.1, see package.json / AGENTS.md).
+-- Older CLIs (e.g. 2.77.0) fail `db reset` here with "must be owner of table
+-- objects" due to a race with the storage container re-owning storage.objects
+-- mid-reset — a CLI-version bug, not a problem with this SQL. 2.92.1 applies it
+-- cleanly in both `supabase start` and `db reset`.
+drop policy if exists "submission-files owner can read" on storage.objects;
+create policy "submission-files owner can read"
+  on storage.objects for select to authenticated
+  using (bucket_id = 'submission-files' and public.can_access_submission_storage_path(name));
+
+drop policy if exists "submission-files owner can insert" on storage.objects;
+create policy "submission-files owner can insert"
+  on storage.objects for insert to authenticated
+  with check (bucket_id = 'submission-files' and public.can_access_submission_storage_path(name));
 
 -- (B3) No-auth core that creates an empty active 'upload' submission for a
 -- given scope (deactivating any prior active one). Shared by the student

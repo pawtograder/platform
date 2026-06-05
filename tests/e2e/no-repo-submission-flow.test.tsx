@@ -15,19 +15,6 @@ type AssignmentWithRubric = Awaited<ReturnType<typeof insertAssignment>>;
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
-/**
- * The submission-files storage RLS policies live in supabase/storage-policies.sql
- * and must be applied by a superuser after the DB is up (CI does this via
- * .github/workflows/deploy.yml; see AGENTS.md for local). storage.objects is
- * owned by supabase_storage_admin, so migrations/seed (run as the non-superuser
- * `postgres`) can't create them. Where they aren't provisioned, a client storage
- * write is RLS-denied — detect that so the storage-specific assertions skip
- * cleanly (the submission/file-row data contract is covered by other tests).
- */
-function storagePolicyMissing(err: { message?: string } | null | undefined): boolean {
-  return !!err && /row-level security/i.test(err.message ?? "");
-}
-
 // Tests for the create_no_repo_submission RPC introduced in PR #781
 // (migration: 20260522130002_assignment-no-repo-submission.sql).
 //
@@ -544,10 +531,6 @@ test.describe("Two-phase upload flow: storage + grading (PR #781)", () => {
     const { error: uploadErr } = await studentClient.storage
       .from("submission-files")
       .upload(storageKey, Buffer.from(contents), { contentType: "text/plain", upsert: true });
-    test.skip(
-      storagePolicyMissing(uploadErr),
-      "submission-files storage policies not provisioned here (apply supabase/storage-policies.sql; CI applies it via deploy.yml once that workflow is on staging)"
-    );
     expect(uploadErr).toBeNull();
 
     // Phase 2b: register the file row.
@@ -781,10 +764,6 @@ test.describe("Staff create submission on behalf of a student (PR #781)", () => 
     const { error: upErr } = await gc.storage
       .from("submission-files")
       .upload(key, Buffer.from(bytes), { contentType: "application/octet-stream", upsert: true });
-    test.skip(
-      storagePolicyMissing(upErr),
-      "submission-files storage policies not provisioned here (apply supabase/storage-policies.sql; CI applies it via deploy.yml once that workflow is on staging)"
-    );
     expect(upErr).toBeNull();
     const { error: attachErr } = await (gc.rpc as CallableFunction)("attach_no_repo_submission_files", {
       p_submission_id: submissionId,
