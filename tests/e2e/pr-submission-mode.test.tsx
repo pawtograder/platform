@@ -127,7 +127,7 @@ test.describe("PR submission mode (ingest + RLS)", () => {
 
     const { data: sub } = await supabase
       .from("submissions")
-      .select("id, pr_number, base_sha, head_sha, sha, pr_state, is_active, submitted_via, ordinal")
+      .select("id, pr_number, base_sha, head_sha, sha, pr_state, is_active, submitted_via, ordinal, run_number, run_attempt")
       .eq("id", subId!)
       .single();
     expect(sub).toMatchObject({
@@ -137,7 +137,13 @@ test.describe("PR submission mode (ingest + RLS)", () => {
       sha: "head001", // sha mirrors head for back-compat
       pr_state: "open",
       is_active: true,
-      submitted_via: "pr"
+      submitted_via: "pr",
+      // PR-mode submissions are not backed by a GitHub Actions run: run_number is the
+      // 0 sentinel (matching the push-direct path) and is NOT overloaded with the PR
+      // number — that lives in pr_number. run_attempt carries the version ordinal so
+      // the (repository, sha, run_number, run_attempt) unique constraint stays distinct.
+      run_number: 0,
+      run_attempt: sub!.ordinal
     });
 
     const { data: link } = await supabase

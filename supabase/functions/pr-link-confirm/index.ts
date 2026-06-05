@@ -20,6 +20,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getPullRequest } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
+import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -86,7 +87,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
   // Read the PR's current head/base straight from GitHub (the webhook payload
   // that created the candidate may be stale by now).
   const pr = await getPullRequest(link.pr_repo, link.pr_number, scope);
-  const prState = pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open";
+  const prState = prStateFromPullRequest(pr);
 
   const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
     p_assignment_id: link.assignment_id,

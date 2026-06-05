@@ -2211,6 +2211,22 @@ function Comments() {
   );
 }
 
+/**
+ * Read-only "Required PR open" indicator for the grading view. Shown only when the assignment
+ * has `require_pr_open` enabled (a configured-but-otherwise-unconsumed signal): a PR is considered
+ * open when its `pr_state` is `open` or `reopened`. Purely informational — it does not affect the
+ * computed grade.
+ */
+function RequiredPrOpenIndicator({ prState }: { prState: string | null }) {
+  const isOpen = prState === "open" || prState === "reopened";
+  return (
+    <HStack gap={1} fontSize="sm" color={isOpen ? "fg.success" : "fg.error"}>
+      <Icon as={isOpen ? FaCheckCircle : FaTimesCircle} />
+      <Text>Required PR open: {isOpen ? "Yes" : "No"}</Text>
+    </HStack>
+  );
+}
+
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -2334,6 +2350,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   (Download)
                 </Link>
               </HStack>
+            )}
+            {/* Read-only grading signal: when the assignment requires an open PR, surface whether
+                this submission's PR is currently open. Derived entirely from already-loaded fields
+                (submission.pr_state + assignment.require_pr_open) — does NOT change grade computation. */}
+            {isGraderOrInstructor && assignment?.submission_mode === "pr" && assignment?.require_pr_open && (
+              <RequiredPrOpenIndicator prState={submission.pr_state} />
             )}
           </VStack>
         </Box>

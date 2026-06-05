@@ -230,6 +230,19 @@ begin
        or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
      );
 
+  -- run_number / run_attempt mean "GitHub Actions run number / attempt" everywhere
+  -- else (views, exports, the workflow-runs UI). PR-mode submissions are not backed
+  -- by an Actions run, so run_number is 0 -- the same sentinel the push-direct path
+  -- (`createPushDirectSubmission` in github-repo-webhook) uses. The PR number lives
+  -- solely in the dedicated `pr_number` column; never overload run_number with it.
+  --
+  -- run_attempt carries the per-submitter version ordinal (NOT 0): the
+  -- `submissions_repository_sha_run_unique (repository, sha, run_number, run_attempt)`
+  -- constraint is shared across submitters in PR mode (repository is the upstream
+  -- repo, not a per-student repo). Setting both to 0 would collide if the same head
+  -- sha is ingested again under a different PR number for one submitter (e.g. close a
+  -- PR, reopen a new one from the same branch tip). Keying run_attempt to the ordinal
+  -- keeps each version row distinct without resurrecting the PR-number overload.
   insert into public.submissions(
     assignment_id, class_id, profile_id, assignment_group_id,
     repository, sha, head_sha, base_sha, pr_number, pr_state,
@@ -237,7 +250,7 @@ begin
   ) values (
     p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
     p_pr_repo, p_head_sha, p_head_sha, p_base_sha, p_pr_number, p_pr_state,
-    v_ordinal, p_pr_number, v_ordinal, true, 'pr'
+    v_ordinal, 0, v_ordinal, true, 'pr'
   )
   returning id into v_submission_id;
 

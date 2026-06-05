@@ -26,6 +26,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
+import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import {
   ingestSubmissionFilesFromRepo,
   SubmissionFileTooLargeError,
@@ -1904,22 +1905,6 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
   }
 });
 
-// Normalize a GitHub PR payload into the small state vocabulary we store on
-// submissions/links: open | draft | closed | merged. (reopened arrives as the
-// "reopened" action with state "open", which maps to open here.)
-function prStateFromPayload(pr: PullRequestEvent["pull_request"]): string {
-  if (pr.merged_at || (pr as { merged?: boolean }).merged) {
-    return "merged";
-  }
-  if (pr.state === "closed") {
-    return "closed";
-  }
-  if (pr.draft) {
-    return "draft";
-  }
-  return "open";
-}
-
 // Ingest a pull request as a submission for any pr-mode assignment whose
 // upstream repo is the repo this PR targets. This is the "webhook-direct"
 // path: no autograder workflow is involved — we resolve the PR to a
@@ -1941,7 +1926,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const headSha = pr.head.sha;
   const baseSha = pr.base.sha;
   const authorLogin = pr.user?.login;
-  const prState = prStateFromPayload(pr);
+  const prState = prStateFromPullRequest(pr);
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
