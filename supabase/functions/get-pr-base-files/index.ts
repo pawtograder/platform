@@ -126,8 +126,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
       // cloneRepository goes through getOctoKit's shared throttle (the GitHub
       // rate-limiter) + circuit-breaker. getRepoToCloneConsideringE2E resolves
       // `<real>--<suffix>` E2E repos to the real fixture repo so E2E real-clone
-      // runs work.
-      const zipBuffer = await cloneRepository(getRepoToCloneConsideringE2E(upstreamRepo), baseSha, scope);
+      // runs work. For E2E the base_sha is synthetic (won't exist in the fixture),
+      // so clone at HEAD — mirroring the autograder's `isE2ERun ? "HEAD" : sha`.
+      const isE2E = upstreamRepo.startsWith(END_TO_END_REPO_PREFIX);
+      const zipBuffer = await cloneRepository(
+        getRepoToCloneConsideringE2E(upstreamRepo),
+        isE2E ? "HEAD" : baseSha,
+        scope
+      );
       files = await collectTextFilesFromZipBuffer(zipBuffer);
     } catch (e) {
       // Degrade gracefully: surface the error so the caller falls back to the
