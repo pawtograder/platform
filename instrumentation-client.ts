@@ -131,7 +131,10 @@ Sentry.init({
         // `undefined.call(...)`. `installStaleBundleRecovery()` reloads to self-heal;
         // this just keeps the transient deploy-skew event out of Sentry. Gated on
         // the webpack-runtime stack so genuine `reading 'call'` bugs still report.
-        if (exception.type === "TypeError" && exception.value?.includes("reading 'call'")) {
+        if (
+          exception.type === "TypeError" &&
+          /reading 'call'|undefined is not an object \(evaluating '[^']*\.call'\)/.test(exception.value ?? "")
+        ) {
           const frames = exception.stacktrace?.frames ?? [];
           const fromWebpackRuntime = frames.some((f) => /webpack[-.]/.test(f.filename ?? ""));
           if (fromWebpackRuntime) {

@@ -59,8 +59,7 @@ export function isStaleBundleError(error: unknown): boolean {
   //   Safari:  undefined is not an object
   const factoryMissing =
     /Cannot read propert(?:y|ies) of undefined \(reading '(?:call|default)'\)/.test(message) ||
-    /undefined is not an object \(evaluating '[^']*\.call'\)/.test(message) ||
-    /undefined is not a function/.test(message);
+    /undefined is not an object \(evaluating '[^']*\.call'\)/.test(message);
 
   if (factoryMissing) {
     // Only treat it as a stale bundle when the throw comes from the webpack
@@ -128,15 +127,19 @@ export function installStaleBundleRecovery(options: { reload?: () => void } = {}
 
   const onRejection = (event: PromiseRejectionEvent) => {
     if (!isStaleBundleError(event.reason)) return;
-    // Mark handled so it doesn't surface as a fatal unhandled rejection / Sentry noise.
-    event.preventDefault();
-    recoverFromStaleBundle(reload);
+    const didRecover = recoverFromStaleBundle(reload);
+    if (didRecover) {
+      // Mark handled so it doesn't surface as a fatal unhandled rejection / Sentry noise.
+      event.preventDefault();
+    }
   };
 
   const onError = (event: ErrorEvent) => {
     if (!isStaleBundleError(event.error ?? event.message)) return;
-    event.preventDefault();
-    recoverFromStaleBundle(reload);
+    const didRecover = recoverFromStaleBundle(reload);
+    if (didRecover) {
+      event.preventDefault();
+    }
   };
 
   window.addEventListener("unhandledrejection", onRejection);

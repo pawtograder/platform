@@ -74,7 +74,7 @@ describe("installStaleBundleRecovery", () => {
 
     // Loop guard: a second stale-bundle error within the cooldown must NOT reload again.
     const prevented2 = dispatchRejection(err);
-    expect(prevented2).toBe(true);
+    expect(prevented2).toBe(false);
     expect(reloadCalls).toBe(1);
 
     uninstall();
