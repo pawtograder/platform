@@ -65,6 +65,24 @@ async function downloadImage(admin: Admin, bucket: string, path: string): Promis
   return new Uint8Array(await data.arrayBuffer());
 }
 
+// Download an image at most once per cache. Lets a single doMatch group / finalize pass
+// reuse the same page bytes (e.g. SIS-id and name regions on one page, or a page that is
+// both copied to submission-files and read for answer structuring) instead of re-fetching.
+// Caches the in-flight promise so even concurrent reads of one path share a single fetch.
+function downloadImageCached(
+  admin: Admin,
+  cache: Map<string, Promise<Uint8Array>>,
+  bucket: string,
+  path: string
+): Promise<Uint8Array> {
+  let pending = cache.get(path);
+  if (!pending) {
+    pending = downloadImage(admin, bucket, path);
+    cache.set(path, pending);
+  }
+  return pending;
+}
+
 // ---------------------------------------------------------------------------
 // process_page: OCR one scan page
 // ---------------------------------------------------------------------------
@@ -198,10 +216,14 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
   const nameRegion = (idRegions ?? []).find((r) => r.kind === "name") as IdRegion | undefined;
 
   // Read the identity within one region (or the whole first page when region is null).
-  const readRegionIdentity = async (region: IdRegion | undefined, groupPages: typeof pages) => {
+  const readRegionIdentity = async (
+    region: IdRegion | undefined,
+    groupPages: typeof pages,
+    cache: Map<string, Promise<Uint8Array>>
+  ) => {
     const pageNumber = region?.page_number ?? 1;
     const page = groupPages[Math.min(pageNumber - 1, groupPages.length - 1)] ?? groupPages[0];
-    const bytes = await downloadImage(admin, "exam-scans", page.image_path);
+    const bytes = await downloadImageCached(admin, cache, "exam-scans", page.image_path);
     const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
     const rect: NormRect | null = region
       ? { x: region.x, y: region.y, width: region.width, height: region.height }
@@ -254,15 +276,18 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
     // read the whole first page.
     let detectedSisId: string | undefined;
     let detectedName: string | undefined;
+    // Shared per-group cache: when both identity regions are on the same page, that page
+    // image is fetched once rather than once per region.
+    const idImageCache = new Map<string, Promise<Uint8Array>>();
     if (sisRegion && nameRegion) {
       const [sisRes, nameRes] = await Promise.all([
-        readRegionIdentity(sisRegion, groupPages),
-        readRegionIdentity(nameRegion, groupPages)
+        readRegionIdentity(sisRegion, groupPages, idImageCache),
+        readRegionIdentity(nameRegion, groupPages, idImageCache)
       ]);
       detectedSisId = sisRes.sisId;
       detectedName = nameRes.name;
     } else {
-      const res = await readRegionIdentity(sisRegion ?? nameRegion, groupPages);
+      const res = await readRegionIdentity(sisRegion ?? nameRegion, groupPages, idImageCache);
       detectedSisId = res.sisId;
       detectedName = res.name;
     }
@@ -286,34 +311,29 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
 // ---------------------------------------------------------------------------
 // finalize: create the submission, copy raw pages, assemble the exam_v1 artifact
 // ---------------------------------------------------------------------------
-// The exam artifact is the single source of truth for "this scanned submission is
-// fully finalized": it is written last, after the submission row and all page files.
+// exam_scanned_submissions.finalized_at is the single source of truth for "fully
+// finalized": set at the very end of finalize, after the submission row, page files, and
+// exam artifact are all written. The exam_v1 format tag still marks the artifact's data
+// and backs the partial unique index.
 const EXAM_ARTIFACT_FORMAT = "exam_v1";
 
-async function hasExamArtifact(admin: Admin, submissionId: number): Promise<boolean> {
-  const { data } = await admin.from("submission_artifacts").select("data").eq("submission_id", submissionId);
-  return (data ?? []).some((a) => (a.data as { format?: string } | null)?.format === EXAM_ARTIFACT_FORMAT);
-}
-
-// Mark the batch completed once every confirmed scanned submission has its exam
-// artifact. Re-evaluated on every finalize (including retries of already-done work)
-// so a crash in the final step can't leave the batch stuck in "finalizing".
+// Complete the batch once no confirmed scanned submission is still unfinalized. Re-checked
+// on every finalize (including retries of already-done work) so a crash in the last step
+// can't leave the batch stuck in "finalizing".
 async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> {
-  const { data: confirmed } = await admin
+  const { count: confirmedCount } = await admin
     .from("exam_scanned_submissions")
-    .select("submission_id")
+    .select("id", { count: "exact", head: true })
     .eq("batch_id", batchId)
     .eq("match_status", "confirmed");
-  const rows = confirmed ?? [];
-  const subIds = rows.map((r) => r.submission_id).filter((id): id is number => id != null);
-  // not done if any confirmed submission lacks a submission row yet
-  if (rows.length === 0 || subIds.length !== rows.length) return;
-  const { count } = await admin
-    .from("submission_artifacts")
+  if ((confirmedCount ?? 0) === 0) return;
+  const { count: pending } = await admin
+    .from("exam_scanned_submissions")
     .select("id", { count: "exact", head: true })
-    .in("submission_id", subIds)
-    .eq("data->>format", EXAM_ARTIFACT_FORMAT);
-  if ((count ?? 0) >= subIds.length) {
+    .eq("batch_id", batchId)
+    .eq("match_status", "confirmed")
+    .is("finalized_at", null);
+  if ((pending ?? 0) === 0) {
     await admin.from("exam_scan_batches").update({ status: "completed" }).eq("id", batchId);
   }
 }
@@ -322,16 +342,15 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
   const provider = getExamVisionProvider();
   const { data: scanned, error } = await admin
     .from("exam_scanned_submissions")
-    .select("id, exam_id, batch_id, matched_profile_id, match_status, submission_id")
+    .select("id, exam_id, batch_id, matched_profile_id, match_status, submission_id, finalized_at")
     .eq("id", args.scanned_submission_id)
     .single();
   if (error || !scanned) throw new Error(`scanned submission ${args.scanned_submission_id} not found`);
 
   // Already finalized -> idempotent no-op, regardless of the current match_status (a
-  // confirmation may have been changed after this message was enqueued). Mirrors the old
-  // submission_id short-circuit but keys off the artifact (the true completion marker),
-  // and still re-checks batch completion so a crash in that last step can't strand it.
-  if (scanned.submission_id && (await hasExamArtifact(admin, scanned.submission_id))) {
+  // confirmation may have been changed after this message was enqueued). Still re-check
+  // batch completion so a crash in that last step can't strand the batch.
+  if (scanned.finalized_at) {
     await maybeCompleteBatch(admin, scanned.batch_id);
     return;
   }
@@ -350,9 +369,11 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
   if (rpcErr || !subId) throw new Error(`exam_create_submission failed: ${rpcErr?.message}`);
   const submissionId = subId as number;
 
-  // Resume point: if the artifact is already present this submission was finalized on a
-  // previous attempt — skip the (re)build but still re-check batch completion below.
-  if (!(await hasExamArtifact(admin, submissionId))) {
+  // Build the submission's files + artifact, then stamp finalized_at. We only reach here
+  // when finalized_at is NULL; every step below is idempotent so a resumed finalize (after
+  // a crash) re-runs them safely. pageBytes fetches each page image at most once.
+  {
+    const pageBytes = new Map<string, Promise<Uint8Array>>();
     const { data: batch } = await admin
       .from("exam_scan_batches")
       .select("pages_per_exam")
@@ -382,7 +403,7 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     for (let i = 0; i < groupPages.length; i++) {
       const p = groupPages[i];
       const name = `exam-page-${i + 1}.png`;
-      const bytes = await downloadImage(admin, "exam-scans", p.image_path);
+      const bytes = await downloadImageCached(admin, pageBytes, "exam-scans", p.image_path);
       const storageKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/files/${name}`;
       const up = await admin.storage.from("submission-files").upload(storageKey, bytes, {
         contentType: "image/png",
@@ -425,7 +446,7 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
       const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
       if (answerType && answerType !== "free_text" && ocrText) {
         try {
-          const bytes = await downloadImage(admin, "exam-scans", page.image_path);
+          const bytes = await downloadImageCached(admin, pageBytes, "exam-scans", page.image_path);
           const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
           const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
           structuredValue = structured.value;
@@ -442,11 +463,10 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
       });
     }
 
-    // The artifact is written LAST and is the completion marker. We reach here only when
-    // no exam_v1 artifact exists yet (hasExamArtifact guard above), so a plain insert is
-    // correct; the partial unique index (submission_artifacts_one_exam_v1_per_submission)
-    // guarantees at most one. A concurrent finalize that already inserted it trips that
-    // unique violation — treat it as "already done" rather than failing the message.
+    // The exam artifact (written before the finalized_at stamp). The partial unique index
+    // (submission_artifacts_one_exam_v1_per_submission) guarantees at most one; a concurrent
+    // finalize that already inserted it trips that unique violation, which we treat as
+    // "already done" rather than failing the message.
     const { error: artErr } = await admin.from("submission_artifacts").insert({
       submission_id: submissionId,
       class_id: classId,
@@ -457,6 +477,12 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     if (artErr && !/duplicate key|unique/i.test(artErr.message)) {
       throw new Error(`artifact insert failed: ${artErr.message}`);
     }
+
+    // Stamp the completion marker LAST — only now is this scanned submission fully finalized.
+    await admin
+      .from("exam_scanned_submissions")
+      .update({ finalized_at: new Date().toISOString() })
+      .eq("id", scanned.id);
   }
 
   await maybeCompleteBatch(admin, scanned.batch_id);

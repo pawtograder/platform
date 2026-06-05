@@ -112,7 +112,12 @@ create table if not exists public.exam_scanned_submissions (
   match_status text not null default 'unmatched'
     check (match_status in ('unmatched','suggested','confirmed','skipped')),
   extracted jsonb,
-  submission_id bigint references public.submissions(id) on delete set null
+  submission_id bigint references public.submissions(id) on delete set null,
+  -- Single completion marker for this scanned submission's finalize. Set (transactionally
+  -- at the end of finalize) only once the submission, its page files, and the exam artifact
+  -- are all written. NULL = not finalized (never started OR crashed mid-finalize), which is
+  -- exactly the set enqueue_exam_finalize re-enqueues and maybeCompleteBatch waits on.
+  finalized_at timestamptz
 );
 
 create table if not exists public.exam_scan_pages (
@@ -652,17 +657,13 @@ begin
     raise exception 'Access denied: staff only';
   end if;
 
-  -- Re-enqueue every confirmed submission that does NOT yet have its finished exam
-  -- artifact. This is the crash-safety signal: a submission whose row exists but whose
-  -- finalize crashed before writing the artifact (submission_id set, no exam_v1 artifact)
-  -- is picked back up here, as is one that never started (submission_id null).
+  -- Re-enqueue every confirmed submission that is not yet finalized. finalized_at is the
+  -- crash-safety signal: a submission whose finalize crashed before completing (finalized_at
+  -- still NULL, whether or not a partial submission/artifact exists) is picked back up here,
+  -- as is one that never started.
   for rec in select ss.id from public.exam_scanned_submissions ss
              where ss.batch_id = p_batch_id and ss.match_status = 'confirmed'
-               and not exists (
-                 select 1 from public.submission_artifacts sa
-                 where sa.submission_id = ss.submission_id
-                   and sa.data->>'format' = 'exam_v1'
-               ) loop
+               and ss.finalized_at is null loop
     perform pgmq_public.send('exam_processing', jsonb_build_object(
       'method', 'finalize', 'class_id', v_class_id, 'batch_id', p_batch_id,
       'args', jsonb_build_object('scanned_submission_id', rec.id)));

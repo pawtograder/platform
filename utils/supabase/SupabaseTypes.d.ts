@@ -316,6 +316,7 @@ export type Database = {
           exam_id: number;
           exam_index: number;
           extracted: Json | null;
+          finalized_at: string | null;
           id: number;
           match_confidence: number | null;
           match_status: string;
@@ -331,6 +332,7 @@ export type Database = {
           exam_id: number;
           exam_index: number;
           extracted?: Json | null;
+          finalized_at?: string | null;
           id?: number;
           match_confidence?: number | null;
           match_status?: string;
@@ -346,6 +348,7 @@ export type Database = {
           exam_id?: number;
           exam_index?: number;
           extracted?: Json | null;
+          finalized_at?: string | null;
           id?: number;
           match_confidence?: number | null;
           match_status?: string;

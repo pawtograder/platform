@@ -256,15 +256,17 @@ test.describe("Exam grading OCR pipeline", () => {
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
-    expect(reCountDone).toBe(0); // every confirmed submission already has its artifact
+    expect(reCountDone).toBe(0); // every confirmed submission is already finalized (finalized_at set)
 
-    // --- 9) crash-safety: a finalize that died before writing the artifact resumes ---
-    // Simulate the crash by dropping one submission's exam artifact, then re-finalize.
+    // --- 9) crash-safety: a finalize that died before stamping finalized_at resumes ---
+    // Simulate a crash mid-finalize: clear finalized_at and drop the artifact on one
+    // submission, then re-finalize.
     const victim = (submissions ?? [])[0]!;
     const { data: filesBefore } = await supabase.from("submission_files").select("id").eq("submission_id", victim.id);
     await supabase.from("submission_artifacts").delete().eq("submission_id", victim.id).eq("data->>format", "exam_v1");
+    await supabase.from("exam_scanned_submissions").update({ finalized_at: null }).eq("submission_id", victim.id);
 
-    // only the one submission missing its artifact gets re-enqueued
+    // only the one unfinalized submission gets re-enqueued
     const { data: reCount } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(reCount).toBe(1);
 
