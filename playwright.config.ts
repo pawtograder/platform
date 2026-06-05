@@ -13,6 +13,12 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  /* One-time gate before any worker spawns: probe PostgREST until its
+     schema cache is loaded. Deployed previews don't admit traffic until
+     this finishes, so test setup never races a partial cache. See
+     tests/wait-for-schema-cache.ts for the why. Local `supabase start`
+     paths short-circuit when SUPABASE_SERVICE_ROLE_KEY is unset. */
+  globalSetup: "./tests/wait-for-schema-cache.ts",
   /* Run tests in files in parallel */
   fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

@@ -1,7 +1,12 @@
 "use client";
 
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import {
+  useRubricCheck,
+  useRubricCriteria,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionController, useSubmissionFileComment } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -29,7 +34,7 @@ import {
 import { useUpdate } from "@refinedev/core";
 import { format } from "date-fns";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { FaCheckCircle, FaEyeSlash, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaEyeSlash, FaPlus, FaRegEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { GroupMemberLabelText } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
@@ -70,6 +75,13 @@ export type CodeFileProps = {
   onFileSelect?: (fileId: number) => void;
   openFileIds?: number[];
   onFileClose?: (fileId: number) => void;
+  /**
+   * All submission files, for the language layer to index and to create models for cross-file
+   * go-to-definition targets. Independent of `files`/tabs — does not change what is displayed.
+   */
+  indexFiles?: SubmissionFile[];
+  /** Invoked when go-to-definition lands in a different file, so the host can switch the active file. */
+  onNavigateToFile?: (fileId: number) => void;
 };
 
 type CodeLineCommentContextType = {
@@ -102,11 +114,12 @@ export function CodeLineCommentsPortal({
   comments: SubmissionFileComment[];
   onHeightChange?: (height: number) => void;
 }) {
-  const { submission, showCommentsFeature, file, expanded, submissionReviewId } = useCodeLineCommentContext();
+  const { submission, showCommentsFeature, file, expanded, close, submissionReviewId } = useCodeLineCommentContext();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
   const hasARegradeRequest = comments.some((comment) => comment.regrade_request_id !== null);
-  const [showReply, setShowReply] = useState(isReplyEnabled);
+  // Default to a compact, read-only view of existing comments; the full add-comment form only mounts
+  // once the grader clicks "Add comment" so the overlay stays small while skimming.
+  const [showReply, setShowReply] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const commentsToDisplay = useMemo(() => {
@@ -119,7 +132,7 @@ export function CodeLineCommentsPortal({
     ret.sort((a, b) => {
       if (a.rubric_check_id && !b.rubric_check_id) return -1;
       if (!a.rubric_check_id && b.rubric_check_id) return 1;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id;
     });
     return ret;
   }, [comments, isGraderOrInstructor, submission.released]);
@@ -137,7 +150,7 @@ export function CodeLineCommentsPortal({
 
       // Measure the actual content height
       const height = container.scrollHeight;
-      onHeightChange(height + 20); // Add some padding
+      onHeightChange(height + 8); // Add a little padding
     };
 
     // Debounced update function
@@ -191,39 +204,62 @@ export function CodeLineCommentsPortal({
       borderTop="1px solid"
       borderBottom="1px solid"
       borderColor="border.emphasized"
-      p={2}
+      p={1}
     >
       <Box
         position="relative"
         maxW="xl"
         fontFamily={"sans-serif"}
-        m={2}
+        m={1}
         borderWidth="1px"
         borderColor="border.emphasized"
         borderRadius="md"
-        p={2}
+        p={1}
         backgroundColor="bg"
         boxShadow="sm"
       >
-        {commentsToDisplay.map((comment) =>
-          comment.rubric_check_id ? (
-            <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
-          ) : (
-            <CodeLineComment key={comment.id} comment_id={comment.id} />
-          )
-        )}
+        {/* Per-overlay dismiss as a flow header row inside the comment card — right-aligned to the card
+            (not the full, possibly-scrolled zone width, which pushed it off-screen) and above the
+            comments so it never overlaps a comment's own action menu. Collapses just this line. */}
+        <Flex justify="flex-end" mb={1}>
+          <Tooltip openDelay={300} closeDelay={100} content="Hide comments on this line">
+            <Button
+              aria-label="Hide comments on this line"
+              size="2xs"
+              variant="ghost"
+              colorPalette="gray"
+              minW="auto"
+              h="auto"
+              p={1}
+              onClick={() => close(lineNumber)}
+            >
+              <Icon as={FaTimes} />
+            </Button>
+          </Tooltip>
+        </Flex>
+        <VStack align="stretch" gap={1}>
+          {commentsToDisplay.map((comment) =>
+            comment.rubric_check_id ? (
+              <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
+            ) : (
+              <CodeLineComment key={comment.id} comment_id={comment.id} />
+            )
+          )}
+        </VStack>
         {showReply && !hasARegradeRequest && (
           <LineCommentForm
             lineNumber={lineNumber}
             submission={submission}
             file={file}
             submissionReviewId={submissionReviewId}
+            onCancel={() => setShowReply(false)}
+            onSubmitted={() => setShowReply(false)}
           />
         )}
         {!showReply && !hasARegradeRequest && (
-          <Box display="flex" justifyContent="flex-end">
-            <Button colorPalette="green" onClick={() => setShowReply(true)}>
-              Add Comment
+          <Box display="flex" justifyContent="flex-end" mt={1}>
+            <Button size="2xs" variant="ghost" colorPalette="green" onClick={() => setShowReply(true)}>
+              <Icon as={FaPlus} /> Add comment
             </Button>
           </Box>
         )}
@@ -278,6 +314,77 @@ function CheckScoreEditor({
               {sign}
               {opt.points} {opt.label}
             </option>
+          ))}
+        </NativeSelectField>
+      </NativeSelectRoot>
+    </HStack>
+  );
+}
+
+/** The default points a check applies when (re)assigned: a single-value check's points, or the first
+ * sub-option's points for a multi-option check (the grader can then refine via CheckScoreEditor). */
+function defaultPointsForCheck(check: RubricCheck): number {
+  if (isRubricCheckDataWithOptions(check.data)) {
+    return check.data.options[0]?.points ?? 0;
+  }
+  return check.points ?? 0;
+}
+
+/**
+ * Lets a grader change WHICH rubric check an annotation comment is associated with (within the same
+ * rubric), grouped by criteria. Picking a different check reassigns `rubric_check_id` and resets
+ * `points` to that check's default — the score control then offers the new check's options.
+ */
+function CheckSelector({
+  currentCheckId,
+  rubricId,
+  onChange
+}: {
+  currentCheckId: number;
+  rubricId: number;
+  onChange: (args: { rubricCheckId: number; points: number }) => void;
+}) {
+  const checks = useRubricChecksByRubric(rubricId);
+  const criteria = useRubricCriteriaByRubric(rubricId);
+
+  const groups = useMemo(() => {
+    const annotationChecks = checks.filter((c) => c.is_annotation);
+    return criteria
+      .filter((cr) => annotationChecks.some((c) => c.rubric_criteria_id === cr.id))
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((cr) => ({
+        criteria: cr,
+        checks: annotationChecks.filter((c) => c.rubric_criteria_id === cr.id).sort((a, b) => a.ordinal - b.ordinal)
+      }));
+  }, [checks, criteria]);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <HStack gap={1}>
+      <Text fontSize="sm" color="fg.muted">
+        Check:
+      </Text>
+      <NativeSelectRoot size="sm" width="auto">
+        <NativeSelectField
+          aria-label="Change rubric check"
+          value={String(currentCheckId)}
+          onChange={(e) => {
+            const id = Number(e.target.value);
+            if (id === currentCheckId) return;
+            const next = checks.find((c) => c.id === id);
+            if (next) onChange({ rubricCheckId: id, points: defaultPointsForCheck(next) });
+          }}
+        >
+          {groups.map((g) => (
+            <optgroup key={g.criteria.id} label={g.criteria.name}>
+              {g.checks.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
+                  {!isRubricCheckDataWithOptions(c.data) ? ` (${g.criteria.is_additive ? "+" : "-"}${c.points})` : ""}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </NativeSelectField>
       </NativeSelectRoot>
@@ -398,10 +505,23 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                 {isEditing ? (
                   <VStack align="stretch" gap={2} w="100%">
                     {/*
-                      Score and comment are independent (issue #307): the score editor persists
-                      immediately on change, so a grader can adjust a score without touching — or
-                      re-saving — the comment. The comment box below saves the comment text on its own.
+                      Check association, score, and comment are independent and each persists
+                      immediately on change (issue #307): a grader can reassign the check, adjust the
+                      score, or edit the text without re-saving the others. Reassigning the check also
+                      resets the points to the new check's default (and re-points the score control).
                     */}
+                    {!comment.regrade_request_id && (
+                      <CheckSelector
+                        currentCheckId={rubricCheck.id}
+                        rubricId={rubricCriteria.rubric_id}
+                        onChange={({ rubricCheckId, points }) => {
+                          void submissionController.submission_file_comments.update(comment.id, {
+                            rubric_check_id: rubricCheckId,
+                            points
+                          });
+                        }}
+                      />
+                    )}
                     {isScoreEditable && (
                       <CheckScoreEditor
                         rubricCheck={rubricCheck}
