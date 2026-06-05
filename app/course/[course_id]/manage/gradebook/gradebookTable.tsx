@@ -2498,13 +2498,23 @@ function GradebookColumnHeader({
                   </WrappedTooltip>
                 </Box>
               ) : releaseStatus.kind === "mixed" ? (
-                <Box
-                  position="relative"
-                  zIndex={100}
-                  cursor="pointer"
-                  onClick={() => setShowReleaseStats(true)}
-                  aria-label="View release details"
-                >
+<Box
+  as="button"
+  type="button"
+  position="relative"
+  zIndex={100}
+  cursor="pointer"
+  bg="transparent"
+  border="none"
+  onClick={() => setShowReleaseStats(true)}
+  onKeyDown={(e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setShowReleaseStats(true);
+    }
+  }}
+  aria-label="View release details"
+>
                   <WrappedTooltip
                     content={`Mixed: ${releaseStatus.released} of ${releaseStatus.total} students can see their grade — click for details`}
                   >
@@ -2512,25 +2522,53 @@ function GradebookColumnHeader({
                   </WrappedTooltip>
                 </Box>
               ) : releaseStatus.kind === "released" ? (
-                <Box
-                  position="relative"
-                  zIndex={100}
-                  cursor={isNormalColumn ? "pointer" : undefined}
-                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
-                  aria-label={isNormalColumn ? "View release details" : undefined}
-                >
+<Box
+  as="button"
+  type="button"
+  position="relative"
+  zIndex={100}
+  cursor={isNormalColumn ? "pointer" : undefined}
+  bg="transparent"
+  border="none"
+  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
+  onKeyDown={
+    isNormalColumn
+      ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setShowReleaseStats(true);
+          }
+        }
+      : undefined
+  }
+  aria-label={isNormalColumn ? "View release details" : undefined}
+>
                   <WrappedTooltip content="Released to all students">
                     <Icon as={FaLockOpen} size="sm" color="green.500" />
                   </WrappedTooltip>
                 </Box>
               ) : (
-                <Box
-                  position="relative"
-                  zIndex={100}
-                  cursor={isNormalColumn ? "pointer" : undefined}
-                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
-                  aria-label={isNormalColumn ? "View release details" : undefined}
-                >
+<Box
+  as="button"
+  type="button"
+  position="relative"
+  zIndex={100}
+  cursor={isNormalColumn ? "pointer" : undefined}
+  bg="transparent"
+  border="none"
+  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
+  onKeyDown={
+    isNormalColumn
+      ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setShowReleaseStats(true);
+          }
+        }
+      : undefined
+  }
+  aria-label={isNormalColumn ? "View release details" : undefined}
+>
                   <WrappedTooltip content="Not released to students">
                     <Icon as={FaLock} size="sm" color="orange.500" />
                   </WrappedTooltip>
