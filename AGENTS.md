@@ -91,3 +91,23 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 - The staging Supabase backend (`.env.local.staging`) has signups disabled; use local Supabase for full dev.
 - Docker in this cloud VM requires `fuse-overlayfs` storage driver and `iptables-legacy`. These are configured during initial setup.
 - Edge Functions should be started with `.env.local` when needed: `npx supabase functions serve --env-file .env.local`.
+
+### GitHub App webhook subscription (ACTION REQUIRED for deployment ingestion)
+
+The App-level webhook event subscription lives in the **GitHub App settings UI**, not in this repo
+(there is no app manifest/IaC). The authoritative list of events Pawtograder handlers expect is
+`GITHUB_APP_WEBHOOK_EVENTS` in `supabase/functions/github-repo-configure-webhook/index.ts`. When you add
+a handler in `github-repo-webhook/index.ts`, add the event there **and** subscribe the App to it.
+
+**Deployment ingestion (`github_deployments`, PR-submission-mode Phase 4)** needs the App subscribed to
+**Deployment** and **Deployment status** — until then no `deployment_status` deliveries arrive and the
+table stays empty (the ingestion code + table are already in place). To enable (needs org/App admin):
+
+1. GitHub → the org's **Pawtograder GitHub App** → **Settings** → **Permissions & events**.
+2. Ensure the **Deployments** repository permission is granted (Read-only is enough), then under
+   **Subscribe to events** check **Deployment** and **Deployment status**. Save (re-accept the permission
+   prompt on installations if shown).
+3. **Verify:** trigger a deployment on a tracked repo (or replay a `deployment_status` delivery from the
+   App's **Advanced → Recent Deliveries**), then confirm a row lands:
+   `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "select repository_name, environment, state from public.github_deployments order by id desc limit 5;"`
+   (locally) or query `github_deployments` on the target environment.
