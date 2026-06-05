@@ -69,7 +69,7 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 test.describe("Quick-apply palette + shortcuts (productivity layer)", () => {
   test.setTimeout(120_000);
 
-  test("Cmd/Ctrl+K opens the palette in Monaco and applies a no-comment check", async ({ page }) => {
+  test("Cmd/Ctrl+. opens the palette in Monaco and applies a no-comment check", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });

@@ -226,7 +226,8 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
 
     useEffect(() => {
       const handler = (e: KeyboardEvent) => {
-        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+        // Cmd/Ctrl+. — matches the Monaco editor and the shortcuts help dialog.
+        if (!(e.metaKey || e.ctrlKey) || e.key !== ".") return;
         if (!isHoveredRef.current) return;
         const target = e.target as HTMLElement | null;
         if (target?.closest("textarea, input, select, [contenteditable='true'], [role='dialog']")) return;

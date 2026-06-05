@@ -2,8 +2,8 @@
 
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "@/components/ui/code-file-shared";
 import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
-import { useSubmissionFileComments, useWritableSubmissionReviews } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useSubmissionFileComments } from "@/hooks/useSubmission";
+import { useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { useMemo } from "react";
 
@@ -30,12 +30,7 @@ export type RubricContextMenuAction = {
  * writable, otherwise fall back to the first writable review (the same default the workspace uses).
  */
 export function useRubricAnnotationActions(file: SubmissionFile | null) {
-  const activeReview = useActiveSubmissionReview();
-  const writableReviews = useWritableSubmissionReviews();
-  const review = useMemo(() => {
-    if (activeReview && writableReviews?.some((r) => r.id === activeReview.id)) return activeReview;
-    return writableReviews?.[0];
-  }, [activeReview, writableReviews]);
+  const review = useDefaultWritableSubmissionReview();
   const rubric = useRubricWithParts(review?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
@@ -53,11 +48,19 @@ export function useRubricAnnotationActions(file: SubmissionFile | null) {
         check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
     );
 
+    // Order criteria exactly as the rubric sidebar does: by rubric-part ordinal, then by the
+    // criteria's ordinal within its part (criteria ordinals are part-scoped, so a global ordinal sort
+    // would interleave parts).
+    const partOrdinalById = new Map((rubric?.rubric_parts ?? []).map((p) => [p.id, p.ordinal]));
     const criteriaWithChecks = rubricCriteria
       .filter((criteria: RubricCriteria) =>
         annotationChecks.some((check: RubricCheck) => check.rubric_criteria_id === criteria.id)
       )
-      .sort((a, b) => a.ordinal - b.ordinal);
+      .sort(
+        (a, b) =>
+          (partOrdinalById.get(a.rubric_part_id) ?? 0) - (partOrdinalById.get(b.rubric_part_id) ?? 0) ||
+          a.ordinal - b.ordinal
+      );
 
     criteriaWithChecks.forEach((criteria: RubricCriteria) => {
       const checksForCriteria = annotationChecks
@@ -94,7 +97,7 @@ export function useRubricAnnotationActions(file: SubmissionFile | null) {
     });
 
     return actions;
-  }, [rubricCriteria, rubricChecks, file, existingComments]);
+  }, [rubricCriteria, rubricChecks, file, existingComments, rubric?.rubric_parts]);
 
   const actionsByCriteria = useMemo(() => {
     const map = new Map<number, RubricContextMenuAction[]>();

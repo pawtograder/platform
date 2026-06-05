@@ -44,6 +44,7 @@ import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
 import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
+import { toaster } from "./toaster";
 
 export type RubricCheckSubOption = {
   label: string;
@@ -342,7 +343,7 @@ function CheckSelector({
 }: {
   currentCheckId: number;
   rubricId: number;
-  onChange: (args: { rubricCheckId: number; points: number }) => void;
+  onChange: (args: { rubricCheckId: number; points: number; commentRequired: boolean }) => void;
 }) {
   const checks = useRubricChecksByRubric(rubricId);
   const criteria = useRubricCriteriaByRubric(rubricId);
@@ -373,7 +374,12 @@ function CheckSelector({
             const id = Number(e.target.value);
             if (id === currentCheckId) return;
             const next = checks.find((c) => c.id === id);
-            if (next) onChange({ rubricCheckId: id, points: defaultPointsForCheck(next) });
+            if (next)
+              onChange({
+                rubricCheckId: id,
+                points: defaultPointsForCheck(next),
+                commentRequired: !!next.is_comment_required
+              });
           }}
         >
           {groups.map((g) => (
@@ -514,11 +520,25 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                       <CheckSelector
                         currentCheckId={rubricCheck.id}
                         rubricId={rubricCriteria.rubric_id}
-                        onChange={({ rubricCheckId, points }) => {
-                          void submissionController.submission_file_comments.update(comment.id, {
-                            rubric_check_id: rubricCheckId,
-                            points
-                          });
+                        onChange={({ rubricCheckId, points, commentRequired }) => {
+                          // Mirror the apply path's invariant: a check that requires a comment can't be
+                          // assigned to an empty annotation. Block (the select reverts since it's
+                          // controlled by the comment) and tell the grader to add a comment first.
+                          if (commentRequired && !(comment.comment ?? "").trim()) {
+                            toaster.error({
+                              title: "Comment required",
+                              description: "Add a comment before switching to a check that requires one."
+                            });
+                            return;
+                          }
+                          void submissionController.submission_file_comments
+                            .update(comment.id, { rubric_check_id: rubricCheckId, points })
+                            .catch((err) => {
+                              toaster.error({
+                                title: "Could not change check",
+                                description: err instanceof Error ? err.message : "Try again."
+                              });
+                            });
                         }}
                       />
                     )}
@@ -528,7 +548,14 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                         rubricCriteria={rubricCriteria}
                         points={comment.points ?? 0}
                         onChange={({ points }) => {
-                          void submissionController.submission_file_comments.update(comment.id, { points });
+                          void submissionController.submission_file_comments
+                            .update(comment.id, { points })
+                            .catch((err) => {
+                              toaster.error({
+                                title: "Could not update score",
+                                description: err instanceof Error ? err.message : "Try again."
+                              });
+                            });
                         }}
                       />
                     )}

@@ -16,7 +16,7 @@ import {
   parseSymbols,
   resolveDefinition,
   type FileSymbols
-} from "../../supabase/functions/_shared/CodeSymbolParser";
+} from "@/supabase/functions/_shared/CodeSymbolParser";
 
 function symbolNamed(symbols: ReturnType<typeof parseSymbols>, name: string) {
   return symbols.find((s) => s.name === name);

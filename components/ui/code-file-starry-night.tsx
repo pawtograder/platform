@@ -885,9 +885,10 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   if (!visible) {
     return null;
   }
-  //Adjust top so that it is less likely to end up off of the screen
-  if (top + 250 > window.innerHeight && window.innerHeight > 250) {
-    top = top - 250;
+  //Adjust top so that it is less likely to end up off of the screen (don't mutate the prop).
+  let adjustedTop = top;
+  if (adjustedTop + 250 > window.innerHeight && window.innerHeight > 250) {
+    adjustedTop = adjustedTop - 250;
   }
 
   const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
@@ -942,7 +943,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
     <Portal>
       <Box
         zIndex={1000}
-        top={top}
+        top={adjustedTop}
         left={left}
         position="fixed"
         bg="bg.subtle"
