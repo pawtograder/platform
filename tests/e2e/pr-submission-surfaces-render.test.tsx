@@ -231,8 +231,9 @@ test.describe("PR submission surfaces (render smoke)", () => {
     await expect(page.getByText("Pull request submission")).toBeVisible({ timeout: 30_000 });
     const baseShort = BASE_SHA.substring(0, 7);
     const headShort = HEAD_SHA.substring(0, 7);
-    // The base (xxxxxxx) -> head (yyyyyyy) sentence.
-    await expect(page.getByText(new RegExp(`${baseShort}.*${headShort}`))).toBeVisible();
+    // The base (xxxxxxx) -> head (yyyyyyy) context appears (the descriptive
+    // sentence and the compare link both contain it; assert at least one shows).
+    await expect(page.getByText(new RegExp(`${baseShort}.*${headShort}`)).first()).toBeVisible();
     // The GitHub compare link is rendered when the submission has a repository
     // (it always does here). It is the deterministic local outcome (the base
     // tree isn't fetchable under the E2E mock, so we fall back to this link),
@@ -250,6 +251,21 @@ test.describe("PR submission surfaces (render smoke)", () => {
   // Results subpage — the manual/rubric grading empty-state (has_autograder=false).
   // ---------------------------------------------------------------------------
   test("Results subpage renders the manual/rubric grading empty-state (has_autograder=false)", async ({ page }) => {
+    // The empty-state shows only when there's NO grader_result (has_autograder=false
+    // alone doesn't hide an existing result — see results/page.tsx). The pre-baked
+    // fixture has one; its child FKs are NO-ACTION (no cascade), so delete
+    // bottom-up (test_output → tests → output → result) before asserting.
+    const { data: grs } = await supabase.from("grader_results").select("id").eq("submission_id", prSubmissionId!);
+    const grIds = (grs ?? []).map((g) => g.id);
+    if (grIds.length) {
+      const { data: grTests } = await supabase.from("grader_result_tests").select("id").in("grader_result_id", grIds);
+      const testIds = (grTests ?? []).map((t) => t.id);
+      if (testIds.length)
+        await supabase.from("grader_result_test_output").delete().in("grader_result_test_id", testIds);
+      await supabase.from("grader_result_tests").delete().in("grader_result_id", grIds);
+      await supabase.from("grader_result_output").delete().in("grader_result_id", grIds);
+      await supabase.from("grader_results").delete().in("id", grIds);
+    }
     await loginAsUser(page, student!, course);
     await page.goto(`/course/${course.id}/assignments/${prAssignment!.id}/submissions/${prSubmissionId}/results`);
 
