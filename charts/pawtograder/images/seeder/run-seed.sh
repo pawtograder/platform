@@ -86,6 +86,33 @@ if ! psql -tAc "SELECT to_regclass('public.classes') IS NOT NULL" | grep -q '^t$
 fi
 
 # -----------------------------------------------------------------------------
+# Phase 2b — wait for the Auth HTTP API (gotrue, via Kong) to actually serve.
+# -----------------------------------------------------------------------------
+# Phase 2 only proves the auth SCHEMA exists in postgres. SeedDB.ts creates its
+# users through the gotrue admin HTTP API ($SUPABASE_URL/auth/v1), which can
+# still be cold when this post-install hook fires the instant the stack comes
+# up — that race aborts seeding partway through. Poll gotrue's health endpoint
+# until it answers 200 (node 22 ships a global fetch; the image has no curl).
+auth_ready() {
+  node -e '
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    fetch(process.env.SUPABASE_URL + "/auth/v1/health", { headers: { apikey: key } })
+      .then((r) => process.exit(r.ok ? 0 : 1))
+      .catch(() => process.exit(1));
+  ' 2>/dev/null
+}
+ready=0
+for i in $(seq 1 60); do
+  if auth_ready; then ready=1; echo "[seed] auth HTTP API ready"; break; fi
+  echo "[seed] waiting for auth HTTP API ($i/60)"
+  sleep 3
+done
+if [ "$ready" -ne 1 ]; then
+  echo "[seed] auth HTTP API ($SUPABASE_URL/auth/v1) not serving after 180s" >&2
+  exit 1
+fi
+
+# -----------------------------------------------------------------------------
 # Phase 3 — idempotency check
 # -----------------------------------------------------------------------------
 # SeedDB.ts always creates a NEW class with the configured name. If we
