@@ -11221,6 +11221,29 @@ export type Database = {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: undefined;
       };
+      ingest_pr_submission: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id: number;
+          p_auto_confirm?: boolean;
+          p_base_sha?: string;
+          p_head_sha?: string;
+          p_pr_number: number;
+          p_pr_repo: string;
+          p_pr_state?: string;
+          p_profile_id?: string;
+        };
+        Returns: number;
+      };
+      set_pr_state: {
+        Args: {
+          p_assignment_id: number;
+          p_pr_number: number;
+          p_pr_repo: string;
+          p_pr_state: string;
+        };
+        Returns: undefined;
+      };
       create_all_repos_for_assignment:
         | {
             Args: {

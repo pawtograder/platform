@@ -1511,10 +1511,171 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
   }
 });
 
-// Handle pull_request events (to track when sync PRs are merged)
+// Normalize a GitHub PR payload into the small state vocabulary we store on
+// submissions/links: open | draft | closed | merged. (reopened arrives as the
+// "reopened" action with state "open", which maps to open here.)
+function prStateFromPayload(pr: PullRequestEvent["pull_request"]): string {
+  if (pr.merged_at || (pr as { merged?: boolean }).merged) {
+    return "merged";
+  }
+  if (pr.state === "closed") {
+    return "closed";
+  }
+  if (pr.draft) {
+    return "draft";
+  }
+  return "open";
+}
+
+// Ingest a pull request as a submission for any pr-mode assignment whose
+// upstream repo is the repo this PR targets. This is the "webhook-direct"
+// path: no autograder workflow is involved — we resolve the PR to a
+// (student/group, assignment) and call ingest_pr_submission, which creates the
+// submission version and (via the after-insert trigger) its grading review.
+async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope): Promise<void> {
+  const action = payload.action;
+  // Lifecycle actions that can change a PR's head sha or its open/closed state.
+  const RELEVANT = ["opened", "reopened", "synchronize", "edited", "ready_for_review", "converted_to_draft", "closed"];
+  if (!RELEVANT.includes(action)) {
+    return;
+  }
+
+  const upstreamRepo = payload.repository.full_name; // owner/name PRs target
+  const pr = payload.pull_request;
+  const baseRef = pr.base.ref;
+  const headRef = pr.head.ref;
+  const prNumber = pr.number;
+  const headSha = pr.head.sha;
+  const baseSha = pr.base.sha;
+  const authorLogin = pr.user?.login;
+  const prState = prStateFromPayload(pr);
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  // Which assignments treat this repo as their upstream/class repo? (Could be
+  // several — the same handout repo can back assignments in multiple classes.)
+  const { data: assignments, error: assignmentsError } = await adminSupabase
+    .from("assignments")
+    .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
+    .eq("submission_mode", "pr")
+    .ilike("upstream_repo", upstreamRepo);
+  if (assignmentsError) {
+    Sentry.captureException(assignmentsError, scope);
+    return;
+  }
+  if (!assignments || assignments.length === 0) {
+    return; // Not an upstream repo for any pr-mode assignment.
+  }
+
+  scope.setTag("pr_submission_repo", upstreamRepo);
+  scope.setTag("pr_number", prNumber.toString());
+
+  if (!authorLogin) {
+    return;
+  }
+  // PR author -> Pawtograder user.
+  const { data: userRow } = await adminSupabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", authorLogin)
+    .maybeSingle();
+  if (!userRow) {
+    scope.setTag("github_username", authorLogin);
+    Sentry.captureMessage("PR author has no Pawtograder user", scope);
+    return;
+  }
+  const userId = userRow.user_id;
+
+  for (const a of assignments) {
+    // Identification gate: which PRs count as a submission for this assignment.
+    if (a.pr_identification === "branch_convention") {
+      if (!a.pr_branch_convention) {
+        continue;
+      }
+      let re: RegExp;
+      try {
+        re = new RegExp(a.pr_branch_convention);
+      } catch {
+        continue; // Misconfigured convention — skip rather than crash the webhook.
+      }
+      if (!re.test(headRef)) {
+        continue;
+      }
+    } else {
+      // base_branch + manual both require targeting the configured base branch.
+      if (baseRef !== (a.upstream_base_branch ?? "main")) {
+        continue;
+      }
+    }
+
+    // Resolve the submitter's private profile in this assignment's class.
+    const { data: role } = await adminSupabase
+      .from("user_roles")
+      .select("private_profile_id")
+      .eq("user_id", userId)
+      .eq("class_id", a.class_id)
+      .eq("role", "student")
+      .maybeSingle();
+    if (!role?.private_profile_id) {
+      continue; // Author isn't a student in this class.
+    }
+    const profileId = role.private_profile_id;
+
+    // If the student is in a group for this assignment, attribute to the group.
+    const { data: groupMember } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("assignment_group_id, assignment_groups!inner(assignment_id)")
+      .eq("profile_id", profileId)
+      .eq("assignment_groups.assignment_id", a.id)
+      .maybeSingle();
+    const groupId = groupMember?.assignment_group_id ?? null;
+
+    // Closing/merging never creates a new version — just reflect the state.
+    if (action === "closed") {
+      const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
+        p_assignment_id: a.id,
+        p_pr_repo: upstreamRepo,
+        p_pr_number: prNumber,
+        p_pr_state: prState
+      });
+      if (stateError) {
+        Sentry.captureException(stateError, scope);
+      }
+      continue;
+    }
+
+    const { error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
+      p_assignment_id: a.id,
+      p_profile_id: groupId ? undefined : profileId,
+      p_assignment_group_id: groupId ?? undefined,
+      p_pr_repo: upstreamRepo,
+      p_pr_number: prNumber,
+      p_base_sha: baseSha,
+      p_head_sha: headSha,
+      p_pr_state: prState,
+      p_auto_confirm: a.pr_identification !== "manual"
+    });
+    if (ingestError) {
+      Sentry.captureException(ingestError, scope);
+    }
+  }
+}
+
+// Handle pull_request events (PR-mode submissions + tracking sync PR merges)
 eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "pull_request", payload);
+
+  // PR-mode submission ingestion runs first and independently of the sync-PR
+  // bookkeeping below; a failure here must not block that.
+  try {
+    await handlePrSubmission(payload, scope);
+  } catch (error) {
+    Sentry.captureException(error, scope);
+  }
 
   // Only handle "closed" events where the PR was merged
   if (payload.action !== "closed" || !payload.pull_request.merged) {
