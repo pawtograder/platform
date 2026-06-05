@@ -259,6 +259,77 @@ const TEMPLATES: Record<string, SeederConfig> = {
     }
   },
 
+  // Marketing screenshot class: a believable ~500-student CS course tuned to
+  // showcase every feature area in the marketing site (big-class grading
+  // dashboard + conflicts, multi-level rubrics, autograder/test insights,
+  // office hours, and an expression-driven gradebook). Reproducible via:
+  //   npm run seed -- --template marketing
+  marketing: {
+    className: "CS 3650: Computer Systems (Now With 100% More Segfaults)",
+    students: 500,
+    graders: 20,
+    instructors: 4,
+    assignments: 8,
+    // Spread assignments across the term so some are released/graded (past),
+    // one or two are mid-grading (recent), and a few are upcoming (future).
+    dateRangeStart: -56,
+    dateRangeEnd: 14,
+    manualGradedColumns: 0, // specification scheme generates its own columns
+    rubricConfig: {
+      // Richer than the other templates so the hand-grading view looks full:
+      // multiple parts, several criteria each, and enough checks to show
+      // additive/deductive/multi-level + annotation checks side by side.
+      minPartsPerAssignment: 3,
+      maxPartsPerAssignment: 5,
+      minCriteriaPerPart: 2,
+      maxCriteriaPerPart: 3,
+      minChecksPerCriteria: 3,
+      maxChecksPerCriteria: 5
+    },
+    sectionsAndTags: {
+      // Multiple class + lab sections drive the "section-level grader pools"
+      // and "bulk-assign by lab leader" stories.
+      numClassSections: 4,
+      numLabSections: 8,
+      numStudentTags: 5,
+      numGraderTags: 6
+    },
+    labAssignments: {
+      numLabAssignments: 6,
+      minutesDueAfterLab: 1440 // 24 hours
+    },
+    groupAssignments: {
+      numGroupAssignments: 3,
+      numLabGroupAssignments: 2
+    },
+    helpRequests: {
+      numHelpRequests: 60,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 40,
+      maxMembersPerRequest: 4
+    },
+    discussions: {
+      postsPerTopic: 12,
+      maxRepliesPerPost: 10,
+      numAdditionalTopics: 8
+    },
+    gradingScheme: "specification",
+    surveyConfig: {
+      numSurveys: 5,
+      numTemplates: 3,
+      responseRate: 0.75,
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
+    },
+    rateLimitOverrides: {
+      assignments: {
+        maxInsertsPerSecond: 1,
+        description: "Assignment creation (500 students → many gradebook columns per assignment)"
+      }
+    }
+  },
+
   custom: {
     className: "Custom Configuration Class",
     students: 100,
@@ -504,7 +575,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "tcrs", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "marketing", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:
