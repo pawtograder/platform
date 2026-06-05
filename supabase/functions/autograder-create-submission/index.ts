@@ -21,6 +21,11 @@ import {
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import {
+  ingestSubmissionFilesFromZip,
+  SubmissionFileTooLargeError,
+  SubmissionTooLargeError
+} from "../_shared/SubmissionIngestion.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { Buffer } from "node:buffer";
@@ -90,63 +95,11 @@ function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): 
   return sha256Hex(Buffer.from(combinedInput, "utf-8"));
 }
 
-/**
- * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
- * no leading/trailing slashes. Preserves safe subpaths for display names.
- */
-function getSafeRelativePath(name: string): string {
-  const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-  const segments = normalized.split("/").filter((s) => s.length > 0);
-  const resolved: string[] = [];
-  for (const seg of segments) {
-    if (seg === ".") continue;
-    if (seg === "..") {
-      if (resolved.length > 0) resolved.pop();
-      continue;
-    }
-    resolved.push(seg);
-  }
-  const result = resolved.join("/");
-  if (result === "") return "unnamed";
-  return result;
-}
-
-/** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space per segment. */
-function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
-  return resolvedRelativePath
-    .split("/")
-    .map((seg) => {
-      let out = "";
-      for (const ch of seg.normalize("NFC")) {
-        out += /\p{White_Space}/u.test(ch) ? " " : ch;
-      }
-      return out.replace(/ +/g, " ").trim();
-    })
-    .join("/");
-}
-
-/**
- * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
- * Replaces any character outside the allowed set with underscore.
- */
-function sanitizeSegmentForSupabaseStorage(seg: string): string {
-  const normalized = seg.normalize("NFC");
-  const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
-  let out = "";
-  for (const ch of normalized) {
-    if (allowed.has(ch)) out += ch;
-    else if (/\p{White_Space}/u.test(ch)) out += " ";
-    else out += "_";
-  }
-  const trimmed = out.replace(/ +/g, " ").trim();
-  const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
-  return collapsed.length > 0 ? collapsed : "unnamed";
-}
-
-function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
-  if (resolvedRelativePath === "") return "unnamed";
-  return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
-}
+// Path sanitization, binary detection, the per-file write loop, the size
+// guards and the combined empty-submission hash now live in the shared
+// `_shared/SubmissionIngestion.ts` core (one writer for autograder + pr-mode +
+// push-direct). `sha256Hex` / `combinedHashFromPerFileHexHashes` are kept above
+// because the E2E_MOCK_GITHUB fast path still computes the empty hash inline.
 
 async function safeCleanupRejectedSubmission(params: {
   adminSupabase: SupabaseClient<Database>;
@@ -1521,204 +1474,54 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             );
           }
 
-          // Binary file detection by extension
-          const BINARY_EXTENSIONS = new Set([
-            // Images (SVG excluded — text-based XML, stored inline for markdown image resolution)
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".bmp",
-            ".ico",
-            ".webp",
-            ".tiff",
-            ".tif",
-            // Documents
-            ".pdf",
-            ".doc",
-            ".docx",
-            ".xls",
-            ".xlsx",
-            ".ppt",
-            ".pptx",
-            // Archives
-            ".zip",
-            ".tar",
-            ".gz",
-            ".bz2",
-            ".7z",
-            ".rar",
-            // Media
-            ".mp3",
-            ".mp4",
-            ".wav",
-            ".avi",
-            ".mov",
-            ".webm",
-            // Fonts
-            ".woff",
-            ".woff2",
-            ".ttf",
-            ".otf",
-            ".eot",
-            // Other binary
-            ".class",
-            ".jar",
-            ".exe",
-            ".dll",
-            ".so",
-            ".dylib",
-            ".o",
-            ".pyc",
-            ".sqlite",
-            ".db",
-            ".bin",
-            ".dat"
-          ]);
-
-          const MIME_TYPES: Record<string, string> = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".bmp": "image/bmp",
-            ".ico": "image/x-icon",
-            ".svg": "image/svg+xml",
-            ".webp": "image/webp",
-            ".tiff": "image/tiff",
-            ".tif": "image/tiff",
-            ".pdf": "application/pdf",
-            ".zip": "application/zip",
-            ".gz": "application/gzip",
-            ".mp3": "audio/mpeg",
-            ".mp4": "video/mp4",
-            ".wav": "audio/wav",
-            ".woff": "font/woff",
-            ".woff2": "font/woff2",
-            ".ttf": "font/ttf",
-            ".otf": "font/otf"
-          };
-
-          const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
-
-          function getFileExtension(name: string): string {
-            const lastDot = name.lastIndexOf(".");
-            return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
-          }
-
-          function isBinaryFile(name: string): boolean {
-            return BINARY_EXTENSIONS.has(getFileExtension(name));
-          }
-
-          // One in-flight file buffer at a time (zipball is already fully buffered by GitHub).
-          // Parallel Promise.all here used to multiply peak RAM by the number / size of files.
+          // Write the matched files via the unified ingestion core (the single
+          // writer shared with pr-mode + push-direct). We pass the same glob
+          // matcher used to compute `submittedFiles` above as `fileFilter`, so
+          // the core ingests exactly that set; behavior (path sanitization,
+          // binary set, storage keys, per-file 50 MB cap, combined empty hash)
+          // is byte-for-byte identical to the previous inline loop. The two
+          // pre-unzip size guards already ran above on the same buffer, so the
+          // core's redundant guards never fire differently.
           if (submission_id === undefined) {
             throw new UserVisibleError("Internal error: submission id missing while saving files", 500);
           }
-          const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
-          const file_hashes: Record<string, string> = {};
-          const usedBinaryStorageRelPaths = new Set<string>();
-
-          for (const zipEntry of submittedFiles) {
-            const name = stripTopDir(zipEntry.path);
-            const contents = await zipEntry.buffer();
-
-            if (contents.length > MAX_FILE_SIZE) {
+          let isEmpty: boolean;
+          try {
+            const ingestResult = await ingestSubmissionFilesFromZip({
+              adminSupabase,
+              zipBuffer: repo,
+              submissionId: submission_id,
+              classId: repoData.assignments.class_id!,
+              profileId: repoData.profile_id,
+              groupId: repoData.assignment_group_id,
+              fileFilter: (rel) => expectedFiles.some((pattern) => micromatch.isMatch(rel, pattern)),
+              detectEmptyForAssignmentId: repoData.assignment_id,
+              scope
+            });
+            // detectEmptyForAssignmentId is set, so isEmpty is always non-null here.
+            isEmpty = ingestResult.isEmpty ?? false;
+          } catch (ingestErr) {
+            if (ingestErr instanceof SubmissionFileTooLargeError) {
               throw new UserVisibleError(
-                `File "${name}" exceeds the 50 MB size limit (${(contents.length / (1024 * 1024)).toFixed(1)} MB).`,
+                `File "${ingestErr.fileName}" exceeds the 50 MB size limit (${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB).`,
                 400
               );
             }
-
-            file_hashes[name] = sha256Hex(contents);
-
-            if (isBinaryFile(name)) {
-              const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
-              let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
-              if (usedBinaryStorageRelPaths.has(storageRelPath)) {
-                const extDup = getFileExtension(storageRelPath);
-                const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
-                let n = 2;
-                while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
-                storageRelPath = `${base}__${n}${extDup}`;
-              }
-              usedBinaryStorageRelPaths.add(storageRelPath);
-
-              const ext = getFileExtension(logicalPath);
-              const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${storageRelPath}`;
-
-              const { error: storageError } = await adminSupabase.storage
-                .from("submission-files")
-                .upload(storageKey, contents, {
-                  contentType: mimeType,
-                  upsert: true
-                });
-              if (storageError) {
-                Sentry.captureException(storageError, scope);
-                throw new UserVisibleError(
-                  `Internal error: Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`
-                );
-              }
-
-              const { error: dbError } = await adminSupabase.from("submission_files").insert({
-                submission_id: submission_id,
-                name: logicalPath,
-                profile_id: repoData.profile_id,
-                assignment_group_id: repoData.assignment_group_id,
-                contents: null,
-                class_id: repoData.assignments.class_id!,
-                is_binary: true,
-                file_size: contents.length,
-                mime_type: mimeType,
-                storage_key: storageKey
-              });
-              if (dbError) {
-                const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
-                if (removeErr.error) {
-                  Sentry.captureException(removeErr.error, scope);
-                }
-                Sentry.captureException(dbError, scope);
-                throw new UserVisibleError(
-                  `Internal error: Failed to insert binary file record for "${logicalPath}": ${dbError.message}`
-                );
-              }
-            } else {
-              const { error: textFileError } = await adminSupabase.from("submission_files").insert({
-                submission_id: submission_id,
-                name: name,
-                profile_id: repoData.profile_id,
-                assignment_group_id: repoData.assignment_group_id,
-                contents: contents.toString("utf-8"),
-                class_id: repoData.assignments.class_id!,
-                is_binary: false,
-                file_size: contents.length
-              });
-              if (textFileError) {
-                Sentry.captureException(textFileError, scope);
-                throw new UserVisibleError(
-                  `Internal error: Failed to insert text submission file "${name}": ${textFileError.message}`
-                );
-              }
+            if (ingestErr instanceof SubmissionTooLargeError) {
+              await rejectOversizedSubmission(
+                ingestErr.kind === "download" ? "zip_too_large" : "unzipped_too_large",
+                ingestErr.observedMb,
+                ingestErr.limitMb,
+                ingestErr.kind
+              );
             }
+            // Storage/DB write failures from the core surface as plain Errors;
+            // wrap them as the same user-visible internal error the inline loop
+            // used to throw so the workflow_run_error path is unchanged.
+            const message = ingestErr instanceof Error ? ingestErr.message : String(ingestErr);
+            throw new UserVisibleError(`Internal error: ${message}`);
           }
 
-          const submissionCombinedHash = combinedHashFromPerFileHexHashes(file_hashes);
-
-          // Empty submission detection:
-          // If the submitted expected files match ANY recorded handout version for the assignment,
-          // mark the submission as empty.
-          const { data: match, error: matchError } = await adminSupabase
-            .from("assignment_handout_file_hashes")
-            .select("id")
-            .eq("assignment_id", repoData.assignment_id)
-            .eq("combined_hash", submissionCombinedHash)
-            .limit(1)
-            .maybeSingle();
-          if (matchError) {
-            Sentry.captureException(matchError, scope);
-          }
-          const isEmpty = !!match;
           if (submission_id !== undefined) {
             const { error: updateError } = await adminSupabase
               .from("submissions")

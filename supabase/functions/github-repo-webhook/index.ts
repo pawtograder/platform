@@ -21,10 +21,12 @@ import {
   getOctoKit,
   triggerWorkflow,
   SecondaryRateLimitError,
-  PrimaryRateLimitError
+  PrimaryRateLimitError,
+  END_TO_END_REPO_PREFIX
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
+import { ingestSubmissionFilesFromRepo } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
@@ -317,6 +319,168 @@ async function checkCircuitBreakerOpen(
   }
 }
 
+/**
+ * Push-mode zero-runner submission creation.
+ *
+ * For a push-mode assignment with no autograder, a `#submit` push is a complete
+ * submission on its own — there is no grade.yml workflow to run. This creates
+ * the submissions row directly (mirroring the column set the autograder uses, so
+ * the existing BEFORE/AFTER-INSERT triggers assign ordinal/is_active and
+ * provision the grading review) and ingests the repo's files via the shared
+ * ingestion core. No repository_check_run and no triggerWorkflow dispatch.
+ *
+ * `submitted_via` is set to 'git' (the submissions_submitted_via_valid CHECK
+ * allows 'git' | 'upload' | 'manual' | 'pr'; this is a git-push submission, the
+ * same channel as the autograder path, which leaves it null). run_number /
+ * run_attempt are 0 since there is no GitHub Actions run backing this.
+ *
+ * Due-date handling mirrors the autograder's core gate: compute the final due
+ * date via calculate_final_due_date and, if the push is after it, skip creating
+ * a submission — unless the commit is #NOT-GRADED and the assignment allows it.
+ * (The autograder's late-token auto-apply / staff-bypass nuances rely on OIDC
+ * actor + check-run context that the webhook doesn't have, and are intentionally
+ * not replicated here.)
+ *
+ * Idempotent: re-delivery of the same push is a no-op if a submission already
+ * exists for this (repository, sha).
+ */
+async function createPushDirectSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  payload: PushEvent,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  opts: { allowNotGradedSubmissions: boolean; scope: Sentry.Scope }
+): Promise<void> {
+  const { allowNotGradedSubmissions, scope } = opts;
+  const headCommit = payload.head_commit;
+  if (!headCommit) return; // guarded by caller, narrows the type
+  const repoName = payload.repository.full_name;
+  const sha = headCommit.id;
+  const isNotGraded = headCommit.message.toUpperCase().includes("#NOT-GRADED");
+
+  // Idempotency: a re-delivered webhook must not create a duplicate submission
+  // for the same commit. (run_number/run_attempt are always 0 here, so
+  // repository+sha uniquely identifies this push-direct submission.)
+  const { data: existing, error: existingErr } = await adminSupabase
+    .from("submissions")
+    .select("id")
+    .eq("repository", repoName)
+    .eq("sha", sha)
+    .limit(1)
+    .maybeSingle();
+  if (existingErr) {
+    Sentry.captureException(existingErr, scope);
+    throw existingErr;
+  }
+  if (existing) {
+    scope.setTag("push_direct_submission_skipped", "already_exists");
+    console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
+    return;
+  }
+
+  // Resolve a profile id for the due-date calculation. For group repos use any
+  // member's profile (mirrors the autograder fallback).
+  let profileId = studentRepo.profile_id;
+  if (!profileId && studentRepo.assignment_group_id) {
+    const { data: member } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("profile_id")
+      .eq("assignment_group_id", studentRepo.assignment_group_id)
+      .limit(1)
+      .maybeSingle();
+    if (member) profileId = member.profile_id;
+  }
+
+  // Due-date gate (uses the same RPC the autograder uses).
+  const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
+    assignment_id_param: studentRepo.assignment_id,
+    student_profile_id_param: profileId || "0xd34db34f",
+    assignment_group_id_param: studentRepo.assignment_group_id || undefined
+  });
+  if (dueDateError) {
+    Sentry.captureException(dueDateError, scope);
+    throw dueDateError;
+  }
+  // head_commit.timestamp and the RPC result are both absolute instants, so a
+  // plain Date comparison is correct (course time zone only affects display).
+  const pushTime = headCommit.timestamp ? new Date(headCommit.timestamp) : new Date();
+  const finalDueDate = new Date(finalDueDateResult);
+  if (pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions)) {
+    scope.setTag("push_direct_submission_skipped", "after_due_date");
+    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
+    return;
+  }
+
+  // Create the submission row. Column set mirrors the autograder insert so the
+  // BEFORE-INSERT trigger (ordinal/is_active) and AFTER-INSERT hook (grading
+  // review) run identically. Do NOT set ordinal/is_active/grading_review_id.
+  const { data: inserted, error: insertError } = await adminSupabase
+    .from("submissions")
+    .insert({
+      profile_id: studentRepo.profile_id,
+      assignment_group_id: studentRepo.assignment_group_id,
+      assignment_id: studentRepo.assignment_id,
+      repository: repoName,
+      repository_id: studentRepo.id,
+      sha,
+      run_number: 0,
+      run_attempt: 0,
+      class_id: studentRepo.class_id,
+      submitted_via: "git",
+      is_not_graded: isNotGraded
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
+    // a no-op so we don't force GitHub to retry the whole delivery.
+    if (insertError.code === "23505") {
+      scope.setTag("push_direct_submission_insert_race", "true");
+      return;
+    }
+    Sentry.captureException(insertError, scope);
+    throw insertError;
+  }
+  const submissionId = inserted.id;
+  scope.setTag("submission_id", submissionId.toString());
+  console.log(`Created push-direct submission ${submissionId} for ${repoName}@${sha}`);
+
+  // E2E fast path: under E2E_MOCK_GITHUB an E2E student repo isn't a real GitHub
+  // repo, so bypass the clone and write a single canned file (parallels the
+  // PrSubmissionFiles / autograder-create-submission E2E mocks) so this push
+  // path is end-to-end testable without GitHub.
+  const e2eMock = Deno.env.get("E2E_MOCK_GITHUB") === "true" && repoName.startsWith(END_TO_END_REPO_PREFIX);
+  if (e2eMock) {
+    const mockContents = `// push-direct submission mock for ${repoName}@${sha}\n`;
+    const { error: mockErr } = await adminSupabase.from("submission_files").insert({
+      submission_id: submissionId,
+      name: "Main.java",
+      profile_id: studentRepo.profile_id,
+      assignment_group_id: studentRepo.assignment_group_id,
+      contents: mockContents,
+      class_id: studentRepo.class_id,
+      is_binary: false,
+      file_size: mockContents.length
+    });
+    if (mockErr) {
+      Sentry.captureException(mockErr, scope);
+      throw mockErr;
+    }
+    return;
+  }
+
+  // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
+  await ingestSubmissionFilesFromRepo({
+    adminSupabase,
+    submissionId,
+    classId: studentRepo.class_id,
+    profileId: studentRepo.profile_id,
+    groupId: studentRepo.assignment_group_id,
+    repo: repoName,
+    sha,
+    scope
+  });
+}
+
 type GitHubCommit = PushEvent["commits"][number];
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
@@ -336,9 +500,12 @@ async function handlePushToStudentRepo(
   // (submission_mode='pr'), a push to the fork's main is NOT a submission and
   // must not create a check run or dispatch grade.yml — the PR webhook handles
   // submissions. Skip rather than spin up a grading workflow.
+  // Also load has_autograder + due-date inputs for the push-mode zero-runner
+  // path below (a push-mode assignment with no autograder creates the
+  // submission directly here instead of dispatching grade.yml).
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
-    .select("submission_mode")
+    .select("submission_mode, has_autograder, allow_not_graded_submissions")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -365,6 +532,27 @@ async function handlePushToStudentRepo(
     return;
   }
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
+
+  // Push-mode zero-runner path: when an assignment is push-mode AND has no
+  // autograder, a `#submit` push needs no GitHub Actions run to package the
+  // code — we already have access to the repo. Instead of creating a
+  // repository_check_run and dispatching grade.yml (which would consume runner
+  // minutes for nothing), create the submission row directly and ingest the
+  // repo's files via the shared ingestion core. The has_autograder=true path is
+  // untouched and falls through to the existing check-run + triggerWorkflow
+  // logic below.
+  if (
+    pushAssignment?.submission_mode === "push" &&
+    pushAssignment?.has_autograder === false &&
+    payload.head_commit.message.includes("#submit")
+  ) {
+    scope.setTag("push_direct_submission", "true");
+    await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
+      allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
+      scope
+    });
+    return;
+  }
 
   // Extract org for circuit breaker check
   const org = repoName.split("/")[0];
