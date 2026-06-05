@@ -43,8 +43,10 @@ function extractDependenciesFromExpression(
           if (args[0]?.type === "ConstantNode") {
             const argVal = args[0].value;
             if (typeof argVal === "string") {
-              const pool = depKey === "assignments" ? availableAssignments : availableColumns;
-              const matching = pool.filter((d) => minimatch(d.slug, argVal));
+const pool = depKey === "assignments" ? availableAssignments : availableColumns;
+const matching = pool.filter((d) =>
+  functionName === "assignment_released" ? d.slug === argVal : minimatch(d.slug, argVal)
+);
               if (matching.length > 0) {
                 if (!dependencies[depKey]) dependencies[depKey] = new Set<number>();
                 matching.forEach((d) => dependencies[depKey].add(d.id));

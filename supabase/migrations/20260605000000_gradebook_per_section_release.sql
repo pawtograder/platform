@@ -122,6 +122,8 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.set_gradebook_column_students_released(bigint, jsonb, boolean) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.set_gradebook_column_students_released(bigint, jsonb, boolean) FROM anon;
 GRANT EXECUTE ON FUNCTION public.set_gradebook_column_students_released(bigint, jsonb, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_gradebook_column_students_released(bigint, jsonb, boolean) TO service_role;
 

@@ -495,12 +495,11 @@ class GradebookWhatIfController {
       }) as ImportFunction;
       // assignment_released(slug): in the student-facing what-if, every visible assignment value
       // is by definition released, so a non-null lookup means released.
-      imports["assignment_released"] = ((_context: ExpressionContext, assignmentSlug: string | string[]) => {
-        const assignmentsFn = imports["assignments"] as (ctx: ExpressionContext, slug: string | string[]) => unknown;
-        const releasedFor = (slug: string) => assignmentsFn(_context, slug) != null;
-        if (Array.isArray(assignmentSlug)) return assignmentSlug.map(releasedFor);
-        return releasedFor(assignmentSlug);
-      }) as ImportFunction;
+imports["assignment_released"] = ((_context: ExpressionContext, assignmentSlug: string | string[]) => {
+  const releasedFor = (slug: string) => this.gradebookController.assignments?.some((a) => a.slug === slug) ?? false;
+  if (Array.isArray(assignmentSlug)) return assignmentSlug.map(releasedFor);
+  return releasedFor(assignmentSlug);
+}) as ImportFunction;
       // Client what-if runs in the student UI: users only see public-facing grades and
       // is_private_calculation is always false here. Server-side recalculation sets
       // enforcePrivateCalculationMatch: true; keep it false for this path.
