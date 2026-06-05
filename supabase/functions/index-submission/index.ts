@@ -8,8 +8,14 @@ import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandl
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<IndexSubmissionResponse> {
-  const { submission_id } = (await req.json()) as IndexSubmissionRequest;
   scope?.setTag("function", "index-submission");
+  let body: IndexSubmissionRequest;
+  try {
+    body = (await req.json()) as IndexSubmissionRequest;
+  } catch {
+    throw new UserVisibleError("Invalid JSON body", 400);
+  }
+  const { submission_id } = body;
   if (typeof submission_id !== "number") {
     throw new UserVisibleError("submission_id is required", 400);
   }

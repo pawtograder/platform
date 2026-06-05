@@ -14,9 +14,12 @@ import {
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Verifies #307 part 1: applying a rubric check that does NOT require a comment is a single click
-// ("Apply"), with no forced comment step; a check that DOES require a comment keeps the old flow.
-// Asserts DB state (the persisted submission_file_comments row), not just the UI.
+// Verifies #307 part 1: applying a rubric check that does NOT require a comment is immediate (pick the
+// check from the criteria flyout, no forced comment step); a check that DOES require a comment opens
+// the comment dialog first. Asserts DB state (the persisted submission_file_comments row), not just UI.
+//
+// Menu flow: right-click a line → Monaco context menu lists the criteria (with a ▸) → click the
+// criteria → a flyout ([data-rubric-quick-pick]) lists that criteria's checks → click a check.
 
 let course: Course;
 let instructor: TestingUser | undefined;
@@ -90,6 +93,33 @@ async function openFiles(page: Parameters<typeof loginAsUser>[0]) {
   await expect(page.getByText("public static void main(")).toBeVisible();
 }
 
+// Right-click a line, then open the criteria flyout from the Monaco context menu (all annotation
+// checks here live in one criteria, so there is a single "… ▸" item). Monaco virtualizes lines, so
+// scroll the target line into the rendered DOM first (lower lines can be out of view once an existing
+// comment overlay + the editor chrome consume height).
+async function openCriteriaFlyout(page: Parameters<typeof loginAsUser>[0], lineText: string) {
+  const line = page.locator(".view-line", { hasText: lineText });
+  for (let i = 0; i < 12 && (await line.count()) === 0; i++) {
+    await page.locator(".monaco-editor").first().hover();
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(150);
+  }
+  await line
+    .first()
+    .scrollIntoViewIfNeeded()
+    .catch(() => {});
+  await line.first().click({ button: "right" });
+  const criteria = page.locator(".monaco-menu .action-item", { hasText: "▸" }).first();
+  await criteria.hover();
+  await criteria.click();
+  const flyout = page.locator("[data-rubric-quick-pick]");
+  if (!(await flyout.isVisible().catch(() => false))) {
+    await page.keyboard.press("Enter");
+  }
+  await expect(flyout).toBeVisible({ timeout: 10_000 });
+  return flyout;
+}
+
 test.describe("One-click check apply (#307)", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(120_000);
@@ -100,16 +130,12 @@ test.describe("One-click check apply (#307)", () => {
 
     const check1 = assignment!.rubricChecks.find((c) => c.name === "Grading Review Check 1")!;
 
-    await page.getByText("public static void main(").click({ button: "right" });
-    await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
-
-    // The one-click "Apply" button is present because the check does not require a comment.
-    const applyBtn = page.getByRole("button", { name: "Apply", exact: true });
-    await expect(applyBtn).toBeVisible();
-    await applyBtn.click();
-
-    // Popup closes without ever needing the comment box.
-    await page.getByText("Annotate line 4 with a check:").waitFor({ state: "hidden" });
+    // Picking a no-comment check from the flyout applies it immediately — no comment step.
+    const flyout = await openCriteriaFlyout(page, "public static void main(");
+    await flyout
+      .getByText(/Grading Review Check 1\b/)
+      .first()
+      .click();
 
     await expect
       .poll(async () => {
@@ -137,10 +163,10 @@ test.describe("One-click check apply (#307)", () => {
     await loginAsUser(page, instructor!, course);
     await openFiles(page);
 
-    await page.getByText("public int doMath(int a, int").click({ button: "right" });
-    await page.getByRole("option", { name: "Comment Required Check" }).click();
+    const flyout = await openCriteriaFlyout(page, "public int doMath(int a, int");
+    await flyout.getByText("Comment Required Check").click();
 
-    // No immediate Apply button for a comment-required check.
+    // A comment-required check opens the comment dialog (no immediate Apply button).
     await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(0);
     // The comment-required placeholder is shown.
     await expect(page.getByRole("textbox", { name: /Add a comment about this check/ })).toBeVisible();
@@ -148,7 +174,6 @@ test.describe("One-click check apply (#307)", () => {
     // Supplying the comment then applies it.
     await page.getByRole("textbox", { name: /Add a comment about this check/ }).fill("Required note");
     await page.getByRole("button", { name: "Add Check" }).click();
-    await page.getByText(/Annotate line \d+ with a check:/).waitFor({ state: "hidden" });
 
     await expect
       .poll(async () => {

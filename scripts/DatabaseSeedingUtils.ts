@@ -5914,7 +5914,7 @@ export class Circle implements Shape {
                 }))
               )
               .select("id, name"),
-          1
+          sampleSubmissionFiles.length
         );
         if (fileErr) {
           throw new Error(`Failed to create submission_files for submission ${index + 1}: ${fileErr.message}`);
@@ -5944,7 +5944,7 @@ export class Circle implements Shape {
                 .from("submission_file_symbol_index")
                 .upsert(indexRows, { onConflict: "submission_file_id" })
                 .select("submission_file_id"),
-            1
+            indexRows.length
           );
           if (indexErr) {
             throw new Error(`Failed to index submission_files for submission ${index + 1}: ${indexErr.message}`);

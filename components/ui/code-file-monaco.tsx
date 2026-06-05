@@ -2,7 +2,7 @@
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Text } from "@chakra-ui/react";
 import { useColorMode } from "@/components/ui/color-mode";
@@ -140,13 +140,21 @@ function getMonacoLanguage(fileName: string): string {
 
   return languageMap[extension] || "plaintext";
 }
+type OpenCodeEditorInput = {
+  resource: { toString(): string };
+  options?: { selection?: { startLineNumber?: number; startColumn?: number } };
+};
+type OpenCodeEditorFn = (input: OpenCodeEditorInput, source: unknown) => Promise<unknown>;
+
 const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
   (
     { file: singleFile, files, activeFileId, onFileSelect, openFileIds, onFileClose, indexFiles, onNavigateToFile },
     ref
   ) => {
     const submission = useSubmission();
-    const submissionReview = useActiveSubmissionReview();
+    // Apply rubric checks to the same review whose checks the menu offers (the default writable
+    // review), so a saved annotation's submission_review_id always matches its rubric_check's rubric.
+    const submissionReview = useDefaultWritableSubmissionReview();
     const showCommentsFeature = true;
     const { colorMode } = useColorMode();
 
@@ -174,7 +182,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     );
 
     const submissionController = useSubmissionController();
-    const review = useActiveSubmissionReview();
+    const review = submissionReview;
     const { private_profile_id, public_profile_id } = useClassProfiles();
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const graderPseudonymousMode = useGraderPseudonymousMode();
@@ -403,14 +411,23 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     const viewZonesRef = useRef<Map<number, string>>(new Map());
     const viewZoneHeightsRef = useRef<Map<number, number>>(new Map());
     const highlightDecorationRef = useRef<string | null>(null);
+    const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const symbolIndexRef = useRef<SymbolIndex>({ byName: new Map() });
     const symbolsByFileIdRef = useRef<Map<number, CodeSymbol[]>>(new Map());
     const indexedFileIdsRef = useRef<Set<number>>(new Set());
     const filesByIdRef = useRef<Map<number, SubmissionFile>>(new Map());
     const currentFileIdRef = useRef<number | undefined>(undefined);
+    const symbolsLoadingRef = useRef<boolean>(true);
     // Cross-file go-to-definition switches the displayed file asynchronously; remember where to land.
     const pendingRevealRef = useRef<{ fileId: number; line: number; column: number } | null>(null);
-    const notIndexedNotifiedRef = useRef<boolean>(false);
+    // Track the monkey-patched code-editor opener so we can restore it on unmount (the service can be
+    // shared across editor instances; leaving stale overrides would accumulate and leak closures).
+    const editorServiceRef = useRef<{ openCodeEditor: OpenCodeEditorFn } | null>(null);
+    const baseOpenCodeEditorRef = useRef<OpenCodeEditorFn | null>(null);
+    const overrideOpenCodeEditorRef = useRef<OpenCodeEditorFn | null>(null);
+    // File ids already shown the "not yet indexed" notice (per-file, so each un-indexed file notifies
+    // at most once instead of a single session-wide latch that a false fire could consume).
+    const notIndexedNotifiedRef = useRef<Set<number>>(new Set());
     const providerDisposablesRef = useRef<Array<{ dispose: () => void }>>([]);
 
     // Sync viewZoneNodes state to ref for use in callbacks
@@ -420,7 +437,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
     // Server-side code-symbol index for this submission (powers go-to-definition). Parsing happens
     // at ingestion, not here — we only read the stored symbols and assemble the cross-file index.
-    const { symbolsByFileId, indexedFileIds } = useSubmissionFileSymbols(submission?.id);
+    const { symbolsByFileId, indexedFileIds, isLoading: symbolsLoading } = useSubmissionFileSymbols(submission?.id);
     const symbolIndex = useMemo(() => {
       const filesById = new Map(languageFiles.map((f) => [f.id, f]));
       const fileSymbols = [...symbolsByFileId.entries()].map(([fileId, symbols]) => ({
@@ -443,11 +460,22 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       indexedFileIdsRef.current = indexedFileIds;
     }, [indexedFileIds]);
     useEffect(() => {
+      symbolsLoadingRef.current = symbolsLoading;
+    }, [symbolsLoading]);
+    useEffect(() => {
       filesByIdRef.current = new Map(languageFiles.map((f) => [f.id, f]));
     }, [languageFiles]);
     useEffect(() => {
       currentFileIdRef.current = currentFile?.id;
     }, [currentFile]);
+
+    // The editor instance persists across tab switches (stable key), but `expanded` holds bare line
+    // numbers — so without resetting it on file change, expanding line N in one file would expand
+    // line N in the next. Clear it when the active file changes; the new file's comments re-expand via
+    // onCommentsEnter.
+    useEffect(() => {
+      setExpanded([]);
+    }, [currentFile?.id]);
 
     // Track pending height updates to batch them
     const pendingHeightUpdatesRef = useRef<Map<number, number>>(new Map());
@@ -571,8 +599,13 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               const decorationIds = editorRef.current.deltaDecorations([], decorations);
               highlightDecorationRef.current = decorationIds[0];
 
-              // Fade out after 2 seconds
-              setTimeout(() => {
+              // Fade out after 2 seconds. Track the timer so a rapid re-trigger or unmount can cancel
+              // it — otherwise it can fire on a disposed editor (editorRef is not nulled on unmount).
+              if (highlightTimeoutRef.current) {
+                clearTimeout(highlightTimeoutRef.current);
+              }
+              highlightTimeoutRef.current = setTimeout(() => {
+                highlightTimeoutRef.current = null;
                 if (editorRef.current && highlightDecorationRef.current) {
                   editorRef.current.deltaDecorations([highlightDecorationRef.current], []);
                   highlightDecorationRef.current = null;
@@ -776,11 +809,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           return undefined;
         };
 
-        // One-time, gentle notice when go-to-definition is attempted on a file the server hasn't
+        // Gentle, once-per-file notice when go-to-definition is attempted on a file the server hasn't
         // indexed yet (old submission pre-backfill, or an unsupported language).
-        const notifyNotIndexed = () => {
-          if (notIndexedNotifiedRef.current) return;
-          notIndexedNotifiedRef.current = true;
+        const notifyNotIndexed = (fileId: number) => {
+          if (notIndexedNotifiedRef.current.has(fileId)) return;
+          notIndexedNotifiedRef.current.add(fileId);
           toaster.create({
             title: "Not yet indexed",
             description: "Go to definition isn't available for this file yet — it works once indexing completes.",
@@ -806,11 +839,16 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             provideDefinition: (model, position) => {
               const word = model.getWordAtPosition(position);
               if (!word) return [];
-              const currentFileId = fileIdForModel(model) ?? null;
-              // The index is read from the server; if this file wasn't indexed there's nothing to
-              // resolve against — tell the user rather than silently doing nothing.
-              if (currentFileId !== null && !indexedFileIdsRef.current.has(currentFileId)) {
-                notifyNotIndexed();
+              // Only answer for models owned by THIS editor instance — in split view both panes
+              // register a provider for the same language, and Monaco invokes them all.
+              const currentFileId = fileIdForModel(model);
+              if (currentFileId === undefined) return [];
+              // While the server index is still loading we can't tell indexed from un-indexed, so stay
+              // silent. Once loaded, if this file has no index row, tell the user (once) rather than
+              // silently doing nothing.
+              if (symbolsLoadingRef.current) return [];
+              if (!indexedFileIdsRef.current.has(currentFileId)) {
+                notifyNotIndexed(currentFileId);
                 return [];
               }
               const resolved = resolveDefinition(word.word, currentFileId, symbolIndexRef.current);
@@ -875,23 +913,14 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         // one attached to this standalone editor, which the default opener cannot switch to (it
         // returns null). Override it to switch the displayed file via onNavigateToFile and remember
         // where to land; the model-switch effect performs the reveal once the new file mounts.
-        const editorService = (
-          editor as unknown as {
-            _codeEditorService?: {
-              openCodeEditor: (
-                input: {
-                  resource: { toString(): string };
-                  options?: { selection?: { startLineNumber?: number; startColumn?: number } };
-                },
-                source: unknown
-              ) => Promise<unknown>;
-            };
-          }
-        )._codeEditorService;
+        const editorService = (editor as unknown as { _codeEditorService?: { openCodeEditor: OpenCodeEditorFn } })
+          ._codeEditorService;
         if (editorService && typeof editorService.openCodeEditor === "function" && onNavigateToFile) {
           const openBase = editorService.openCodeEditor.bind(editorService);
-          editorService.openCodeEditor = async (input, source) => {
+          const override: OpenCodeEditorFn = async (input, source) => {
             const result = await openBase(input, source);
+            // Only handle resources that belong to THIS instance's models; otherwise defer to the
+            // base (which may be another pane's override in a shared-service chain).
             if (result === null && input?.resource) {
               const target = [...modelsRef.current.entries()].find(
                 ([, m]) => m.uri.toString() === input.resource.toString()
@@ -909,6 +938,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             }
             return result;
           };
+          editorService.openCodeEditor = override;
+          editorServiceRef.current = editorService;
+          baseOpenCodeEditorRef.current = openBase;
+          overrideOpenCodeEditorRef.current = override;
         }
 
         // Update decorations when comments change
@@ -1022,6 +1055,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       const providerDisposables = providerDisposablesRef.current;
 
       return () => {
+        if (highlightTimeoutRef.current) {
+          clearTimeout(highlightTimeoutRef.current);
+          highlightTimeoutRef.current = null;
+        }
         models.forEach((model) => model.dispose());
         models.clear();
         decorations.clear();
@@ -1029,6 +1066,15 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         setViewZoneNodes(new Map());
         providerDisposables.forEach((disposable) => disposable.dispose());
         providerDisposables.length = 0;
+        // Restore the code-editor opener if our override is still the installed one (avoids leaving a
+        // stale closure over this disposed instance on a service that may be shared across editors).
+        const svc = editorServiceRef.current;
+        if (svc && baseOpenCodeEditorRef.current && svc.openCodeEditor === overrideOpenCodeEditorRef.current) {
+          svc.openCodeEditor = baseOpenCodeEditorRef.current;
+        }
+        editorServiceRef.current = null;
+        baseOpenCodeEditorRef.current = null;
+        overrideOpenCodeEditorRef.current = null;
       };
     }, []);
 

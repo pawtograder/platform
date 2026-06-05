@@ -20,26 +20,39 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
+const DEFAULT_CONCURRENCY = 5;
+
+/** Parse a CLI numeric flag value, throwing a clear error if it's missing or not a finite number. */
+function requireFiniteNumber(flag: string, value: string | undefined): number {
+  const n = Number(value);
+  if (value === undefined || !Number.isFinite(n)) {
+    throw new Error(`${flag} requires a numeric value (got: ${value ?? "<missing>"})`);
+  }
+  return n;
+}
+
 function parseArgs(argv: string[]) {
-  const opts: { class?: number; assignment?: number; limit?: number; concurrency: number } = { concurrency: 5 };
+  const opts: { class?: number; assignment?: number; limit?: number; concurrency: number } = {
+    concurrency: DEFAULT_CONCURRENCY
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = argv[i + 1];
     switch (arg) {
       case "--class":
-        opts.class = Number(value);
+        opts.class = requireFiniteNumber(arg, value);
         i++;
         break;
       case "--assignment":
-        opts.assignment = Number(value);
+        opts.assignment = requireFiniteNumber(arg, value);
         i++;
         break;
       case "--limit":
-        opts.limit = Number(value);
+        opts.limit = requireFiniteNumber(arg, value);
         i++;
         break;
       case "--concurrency":
-        opts.concurrency = Math.max(1, Number(value));
+        opts.concurrency = Math.max(1, requireFiniteNumber(arg, value));
         i++;
         break;
       default:
@@ -107,6 +120,10 @@ async function main() {
   console.log(
     `Done. Indexed ${totalIndexed} file(s) across ${targets.length - failed} submission(s); ${failed} failed.`
   );
+  // Surface partial backfills to CI/automation with a non-zero exit.
+  if (failed > 0) {
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

@@ -78,9 +78,27 @@ export function useUserPreferences(): UseUserPreferencesResult {
         throw fetchError;
       }
 
-      const current = parseUserPreferencesFromDb(row?.preferences as Json | null | undefined);
+      const raw = row?.preferences as unknown;
+      const rawObj = raw && typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+
+      const current = parseUserPreferencesFromDb(raw as Json | null | undefined);
       const merged = mergeUserPreferences(current, patch);
-      const payload = merged as unknown as Json;
+
+      // Preserve unknown keys by layering typed prefs over the existing json object.
+      const rawGrading = rawObj["grading"];
+      const rawGradingObj =
+        rawGrading && typeof rawGrading === "object" && rawGrading !== null && !Array.isArray(rawGrading)
+          ? (rawGrading as Record<string, unknown>)
+          : {};
+
+      const payload = {
+        ...rawObj,
+        ...merged,
+        grading: {
+          ...rawGradingObj,
+          ...merged.grading
+        }
+      } as unknown as Json;
 
       const { error: updateError } = await supabase
         .from("users")

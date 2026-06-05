@@ -20,14 +20,12 @@ const MIN_CREDIBLE_WIDTH = 200;
 export function useStableDesktop(): boolean {
   const raw = useBreakpointValue({ base: false, lg: true }, { ssr: false });
   const [stable, setStable] = useState<boolean>(raw ?? false);
-  const lastCredible = useRef<boolean>(raw ?? false);
 
   useEffect(() => {
     if (raw === undefined) return;
     // Ignore the transient sub-200px widths that only occur during screenshot capture; those would
     // otherwise flip us to the mobile layout and remount the editor.
     if (typeof window !== "undefined" && window.innerWidth < MIN_CREDIBLE_WIDTH) return;
-    lastCredible.current = raw;
     setStable(raw);
   }, [raw]);
 
