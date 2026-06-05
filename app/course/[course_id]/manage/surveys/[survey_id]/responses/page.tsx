@@ -62,7 +62,8 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
       *,
       profiles:profiles!survey_responses_profile_id_fkey (
         id,
-        name
+        name,
+        sortable_name
       )
     `
     )

@@ -12,6 +12,7 @@ export type SurveyResponseWithProfile = SurveyResponse & {
   profiles: {
     id: string;
     name: string | null;
+    sortable_name?: string | null;
     sis_user_id?: string | null;
   };
 };
@@ -43,12 +44,22 @@ export function getSurveyResponseProfileName(response: {
   return (response.profiles?.name ?? response.profile_name ?? "").trim();
 }
 
+/** Seed-stable tiebreak when profile name and submitted_at match (email, then sortable_name). */
+export function getSurveyResponseStableTiebreakKey(response: {
+  profile_email?: string | null;
+  profiles?: { sortable_name?: string | null } | null;
+}): string {
+  const email = (response.profile_email ?? "").trim();
+  if (email) return email;
+  return (response.profiles?.sortable_name ?? "").trim();
+}
+
 /** Stable comparator for survey response lists (table, analytics, CSV). */
 export function compareSurveyResponsesByProfile<
   T extends {
-    profile_id: string;
-    profiles?: { name: string | null } | null;
+    profiles?: { name: string | null; sortable_name?: string | null } | null;
     profile_name?: string | null;
+    profile_email?: string | null;
     submitted_at?: string | null;
   }
 >(a: T, b: T): number {
@@ -58,14 +69,16 @@ export function compareSurveyResponsesByProfile<
   if (byName !== 0) return byName;
   const bySubmitted = (a.submitted_at ?? "").localeCompare(b.submitted_at ?? "");
   if (bySubmitted !== 0) return bySubmitted;
-  return a.profile_id.localeCompare(b.profile_id);
+  return getSurveyResponseStableTiebreakKey(a).localeCompare(getSurveyResponseStableTiebreakKey(b), undefined, {
+    sensitivity: "base"
+  });
 }
 
 export function sortSurveyResponsesByProfile<
   T extends {
-    profile_id: string;
-    profiles?: { name: string | null } | null;
+    profiles?: { name: string | null; sortable_name?: string | null } | null;
     profile_name?: string | null;
+    profile_email?: string | null;
     submitted_at?: string | null;
   }
 >(responses: T[]): T[] {

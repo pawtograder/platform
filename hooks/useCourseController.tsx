@@ -2673,11 +2673,11 @@ export function usePublishedSurveys() {
  * Type for survey response with profile data
  */
 export type SurveyResponseWithProfile = Database["public"]["Tables"]["survey_responses"]["Row"] & {
-  profiles: { id: string; name: string | null } | null;
+  profiles: { id: string; name: string | null; sortable_name?: string | null } | null;
 };
 
 type SurveyResponseRowWithProfiles = Database["public"]["Tables"]["survey_responses"]["Row"] & {
-  profiles: { id: string; name: string | null } | null;
+  profiles: { id: string; name: string | null; sortable_name?: string | null } | null;
 };
 
 /**
@@ -2707,7 +2707,8 @@ export function useSurveyResponses(surveyId: string | undefined) {
           *,
           profiles:profiles!survey_responses_profile_id_fkey (
             id,
-            name
+            name,
+            sortable_name
           )
         `
         )

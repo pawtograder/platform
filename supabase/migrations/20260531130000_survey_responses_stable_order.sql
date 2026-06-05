@@ -37,7 +37,24 @@ AS $$
         AND up.role IN ('instructor', 'grader')
     ) AS allowed
   )
-  SELECT *
+  SELECT
+    combined.response_id,
+    combined.profile_id,
+    combined.profile_name,
+    combined.is_submitted,
+    combined.submitted_at,
+    combined.response,
+    combined.group_id,
+    combined.group_name,
+    combined.group_member_count,
+    combined.mentor_profile_id,
+    combined.mentor_name,
+    combined.profile_email,
+    combined.mentor_email,
+    combined.lab_section_id,
+    combined.lab_section_name,
+    combined.class_section_id,
+    combined.class_section_name
   FROM (
     SELECT
       sr.id AS response_id,
@@ -56,6 +73,7 @@ AS $$
       ag.mentor_profile_id,
       mentor_p.name AS mentor_name,
       u.email AS profile_email,
+      p.sortable_name AS profile_sortable_name,
       mentor_u.email AS mentor_email,
       ur.lab_section_id,
       ls.name AS lab_section_name,
@@ -102,6 +120,7 @@ AS $$
       NULL::uuid AS mentor_profile_id,
       NULL::text AS mentor_name,
       u.email AS profile_email,
+      p.sortable_name AS profile_sortable_name,
       NULL::text AS mentor_email,
       ur.lab_section_id,
       ls.name AS lab_section_name,
@@ -148,6 +167,7 @@ AS $$
       ag.mentor_profile_id,
       mentor_p.name AS mentor_name,
       u.email AS profile_email,
+      p.sortable_name AS profile_sortable_name,
       mentor_u.email AS mentor_email,
       ur.lab_section_id,
       ls.name AS lab_section_name,
@@ -181,7 +201,11 @@ AS $$
       AND s.deleted_at IS NULL
       AND s.assignment_id IS NULL
   ) combined
-  ORDER BY combined.profile_name NULLS LAST, combined.submitted_at NULLS LAST, combined.profile_id;
+  ORDER BY
+    combined.profile_name NULLS LAST,
+    combined.submitted_at NULLS LAST,
+    combined.profile_email NULLS LAST,
+    combined.profile_sortable_name NULLS LAST;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_survey_responses_with_full_context(uuid, bigint) TO authenticated;
