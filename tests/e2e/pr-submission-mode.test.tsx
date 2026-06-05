@@ -127,7 +127,9 @@ test.describe("PR submission mode (ingest + RLS)", () => {
 
     const { data: sub } = await supabase
       .from("submissions")
-      .select("id, pr_number, base_sha, head_sha, sha, pr_state, is_active, submitted_via, ordinal, run_number, run_attempt")
+      .select(
+        "id, pr_number, base_sha, head_sha, sha, pr_state, is_active, submitted_via, ordinal, run_number, run_attempt"
+      )
       .eq("id", subId!)
       .single();
     expect(sub).toMatchObject({
