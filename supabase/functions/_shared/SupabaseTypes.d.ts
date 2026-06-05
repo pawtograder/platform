@@ -173,6 +173,30 @@ export type Database = {
         };
         Relationships: [];
       };
+      assignment_dashboard_views: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          config: Json;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id?: number;
+          config: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          config?: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [];
+      };
       assignment_due_date_exceptions: {
         Row: {
           assignment_group_id: number | null;
@@ -11713,6 +11737,14 @@ export type Database = {
         }[];
       };
       get_llm_tags_breakdown: { Args: never; Returns: Json };
+      get_rubric_check_application_stats: {
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
+        Returns: Json;
+      };
+      get_rubric_report_cohort_members: {
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
+        Returns: number[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;

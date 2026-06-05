@@ -92,9 +92,12 @@ export default function GradeLedgerHeader({
 
   const isCapped = isGraded && totalPossible !== null && (total as number) > totalPossible;
 
+  // Clamp to [0, 100]: the headline still shows the true (possibly negative or capped) total, but
+  // the progress bar itself must stay within range — Chakra's Progress rejects values below its
+  // min (0) or above its max, so a negative total would otherwise throw an uncaught error.
   const progressValue =
     isGraded && totalPossible !== null && totalPossible > 0
-      ? Math.min(100, ((total as number) / totalPossible) * 100)
+      ? Math.max(0, Math.min(100, ((total as number) / totalPossible) * 100))
       : null;
 
   return (

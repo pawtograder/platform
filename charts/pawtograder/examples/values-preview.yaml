@@ -202,7 +202,10 @@ monitoring:
 # so PR-sync re-runs are no-ops.
 seed:
   enabled: true
-  template: small
+  # micro (not small): previews just need a usable demo class, and small
+  # seeds ~45k rows over ~9min at the 100 ops/sec limit — too close to the
+  # deploy's --wait-for-jobs timeout. micro is far faster.
+  template: micro
   # Pin the three sample-login emails into the seed itself so reviewers
   # can log in with these accounts and they're real participants in the
   # simulation (have submissions / grading assignments / etc).
