@@ -18,6 +18,7 @@
  * This allows multiple test environments to have separate user pools.
  */
 import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
+import { getSymbolLanguage, parseSymbols } from "@/supabase/functions/_shared/CodeSymbolParser";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
@@ -5605,33 +5606,125 @@ final;`,
     // previous chunked path produced under contention.
     console.log(`   Processing ${submissionsToCreate.length} submissions per-row in parallel...`);
 
-    const sampleJavaCode = `package com.pawtograder.example.java;
+    // A multi-file, multi-language submission with real cross-file references, so seeded submissions
+    // exercise the grading viewer's cross-file "go to definition" (Java/Python/TypeScript). Each
+    // language has an entrypoint that references a symbol defined in a sibling file via a valid
+    // class/module path.
+    const sampleSubmissionFiles: { name: string; contents: string }[] = [
+      {
+        name: "com/pawtograder/example/java/Entrypoint.java",
+        contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
-        System.out.println("Hello, World!");
+        Greeter greeter = new Greeter();
+        System.out.println(greeter.getMessage());
+
+        MathHelper helper = new MathHelper();
+        System.out.println(helper.doMath(2, 3));
     }
+}
+`
+      },
+      {
+        name: "com/pawtograder/example/java/Greeter.java",
+        contents: `package com.pawtograder.example.java;
 
-  /*
-   * This method takes two integers and returns their sum.
-   * 
-   * @param a the first integer
-   * @param b the second integer
-   * @return the sum of a and b
-   */
-  public int doMath(int a, int b) {
-      return a+b;
-  }
+/** Produces the greeting shown at startup. */
+public class Greeter {
+    public String getMessage() {
+        return "Hello, World!";
+    }
+}
+`
+      },
+      {
+        name: "com/pawtograder/example/java/MathHelper.java",
+        contents: `package com.pawtograder.example.java;
 
-  /**
-   * This method returns a message, "Hello, World!"
-   * @return
-   */
-  public String getMessage() {
-      
-      return "Hello, World!";
+public class MathHelper {
+    /**
+     * Takes two integers and returns their sum.
+     *
+     * @param a the first integer
+     * @param b the second integer
+     * @return the sum of a and b
+     */
+    public int doMath(int a, int b) {
+        return a + b;
+    }
+}
+`
+      },
+      {
+        name: "calculator.py",
+        contents: `from mathutils import add, Calculator
+
+
+def main():
+    calc = Calculator()
+    total = add(2, 3)
+    print(calc.describe(total))
+
+
+if __name__ == "__main__":
+    main()
+`
+      },
+      {
+        name: "mathutils.py",
+        contents: `def add(a, b):
+    return a + b
+
+
+class Calculator:
+    def describe(self, value):
+        return f"Result: {value}"
+`
+      },
+      {
+        name: "app.ts",
+        contents: `import { Circle, Shape } from "./shapes";
+
+const shapes: Shape[] = [new Circle(2)];
+
+export function totalArea(items: Shape[]): number {
+  return items.reduce((sum, shape) => sum + shape.area(), 0);
+}
+
+console.log(totalArea(shapes));
+`
+      },
+      {
+        name: "shapes.ts",
+        contents: `export interface Shape {
+  area(): number;
+}
+
+export class Circle implements Shape {
+  constructor(private radius: number) {}
+
+  area(): number {
+    return Math.PI * this.radius * this.radius;
   }
-}`;
+}
+`
+      }
+    ];
+
+    // Pre-parse the (identical-across-submissions) files once so each submission only needs to
+    // upsert the symbol-index rows. Mirrors what the index-submission edge function does at ingestion.
+    const sampleFileSymbolsByName = new Map(
+      sampleSubmissionFiles
+        .map((f) => ({ name: f.name, language: getSymbolLanguage(f.name) }))
+        .filter((x): x is { name: string; language: NonNullable<ReturnType<typeof getSymbolLanguage>> } => {
+          return x.language !== null;
+        })
+        .map((x) => {
+          const file = sampleSubmissionFiles.find((f) => f.name === x.name)!;
+          return [x.name, { language: x.language, symbols: parseSymbols(file.contents, file.name) }] as const;
+        })
+    );
 
     const llmPrompt =
       "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.";
@@ -5804,25 +5897,58 @@ public class Entrypoint {
           throw new Error(`Failed to create submission ${index + 1}: ${submissionErr?.message ?? "no row"}`);
         }
 
-        // 4. submission_file
-        const { error: fileErr } = await this.rateLimitManager.trackAndLimit(
+        // 4. submission_files (multi-file, multi-language so go-to-definition is exercisable)
+        const { data: fileRows, error: fileErr } = await this.rateLimitManager.trackAndLimit(
           "submission_files",
           () =>
             supabase
               .from("submission_files")
-              .insert({
-                name: "sample.java",
-                contents: sampleJavaCode,
-                class_id,
-                submission_id: submissionId,
-                profile_id: studentProfileId,
-                assignment_group_id: groupId
-              })
-              .select("id"),
+              .insert(
+                sampleSubmissionFiles.map((f) => ({
+                  name: f.name,
+                  contents: f.contents,
+                  class_id,
+                  submission_id: submissionId,
+                  profile_id: studentProfileId,
+                  assignment_group_id: groupId
+                }))
+              )
+              .select("id, name"),
           1
         );
         if (fileErr) {
-          throw new Error(`Failed to create submission_file for submission ${index + 1}: ${fileErr.message}`);
+          throw new Error(`Failed to create submission_files for submission ${index + 1}: ${fileErr.message}`);
+        }
+
+        // 4b. Build the code-symbol index for those files so cross-file "go to definition" works in
+        // the grading viewer right after seeding (the autograder path does this at real ingestion).
+        const indexRows: Database["public"]["Tables"]["submission_file_symbol_index"]["Insert"][] = [];
+        for (const row of fileRows ?? []) {
+          const parsed = sampleFileSymbolsByName.get(row.name);
+          if (!parsed) continue;
+          indexRows.push({
+            submission_file_id: row.id,
+            submission_id: submissionId,
+            class_id,
+            profile_id: studentProfileId,
+            assignment_group_id: groupId,
+            language: parsed.language,
+            symbols: parsed.symbols as unknown as Json
+          });
+        }
+        if (indexRows.length > 0) {
+          const { error: indexErr } = await this.rateLimitManager.trackAndLimit(
+            "submission_file_symbol_index",
+            () =>
+              supabase
+                .from("submission_file_symbol_index")
+                .upsert(indexRows, { onConflict: "submission_file_id" })
+                .select("submission_file_id"),
+            1
+          );
+          if (indexErr) {
+            throw new Error(`Failed to index submission_files for submission ${index + 1}: ${indexErr.message}`);
+          }
         }
 
         // 5. grader_result

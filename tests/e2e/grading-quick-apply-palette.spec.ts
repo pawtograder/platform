@@ -14,7 +14,7 @@ import {
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Verifies the productivity keyboard layer: the Cmd/Ctrl+K quick-apply palette inside the Monaco
+// Verifies the productivity keyboard layer: the Cmd/Ctrl+. quick-apply palette inside the Monaco
 // editor, and that the grading shortcuts are documented in the app's global "?" shortcuts dialog.
 // Monaco is opt-in via a user preference, so we set it in the DB before logging in.
 
@@ -80,8 +80,15 @@ test.describe("Quick-apply palette + shortcuts (productivity layer)", () => {
     const mainLine = page.locator(".view-line", { hasText: "main" }).first();
     await mainLine.click();
 
-    // Open the quick-apply palette scoped to the editor.
-    await page.keyboard.press("ControlOrMeta+K");
+    // The quick-apply chord is scoped to the editor (editor.addAction), so the editor's hidden input
+    // must actually hold keyboard focus before we press it — a .view-line click alone doesn't reliably
+    // focus Monaco's textarea on WebKit. Focus it explicitly and confirm before sending the chord.
+    const editorInput = page.locator(".monaco-editor textarea.inputarea").first();
+    await editorInput.focus();
+    await expect(editorInput).toBeFocused();
+
+    // Open the quick-apply palette scoped to the editor (Cmd/Ctrl+. — not Cmd/Ctrl+K, which is global search).
+    await page.keyboard.press("ControlOrMeta+Period");
     const palette = page.getByRole("dialog", { name: "Quick-apply rubric check" });
     await expect(palette).toBeVisible();
 

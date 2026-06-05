@@ -34,6 +34,7 @@ export function RubricQuickPick({ isOpen, title, items, onSelect, onClose, posit
         maxW="500px"
         maxH="400px"
         overflowY="auto"
+        data-rubric-quick-pick=""
       >
         <VStack gap={0} align="stretch">
           <Box p={3} borderBottom="1px solid" borderColor="border.emphasized">

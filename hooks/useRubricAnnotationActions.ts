@@ -2,7 +2,7 @@
 
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "@/components/ui/code-file-shared";
 import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
-import { useSubmissionFileComments } from "@/hooks/useSubmission";
+import { useSubmissionFileComments, useWritableSubmissionReviews } from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { useMemo } from "react";
@@ -24,9 +24,18 @@ export type RubricContextMenuAction = {
  * line menu, and the keyboard quick-apply palette) so the `max_annotations` cap, sub-option expansion,
  * and criteria grouping behave identically everywhere. A check that has reached its `max_annotations`
  * is omitted.
+ *
+ * Only checks from the default writable review's rubric are offered: graders should apply checks to a
+ * review they can actually write to, never to a read-only one. We prefer the active review when it is
+ * writable, otherwise fall back to the first writable review (the same default the workspace uses).
  */
 export function useRubricAnnotationActions(file: SubmissionFile | null) {
-  const review = useActiveSubmissionReview();
+  const activeReview = useActiveSubmissionReview();
+  const writableReviews = useWritableSubmissionReviews();
+  const review = useMemo(() => {
+    if (activeReview && writableReviews?.some((r) => r.id === activeReview.id)) return activeReview;
+    return writableReviews?.[0];
+  }, [activeReview, writableReviews]);
   const rubric = useRubricWithParts(review?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);

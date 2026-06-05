@@ -1553,7 +1553,17 @@ export default function FilesView() {
     if (file.is_binary) {
       return <BinaryFilePreview key={file.id} file={file} />;
     }
-    return <CodeFile key={file.id} ref={primary ? codeFileRef : undefined} file={file} />;
+    // Stable key per pane (not per file): keep the Monaco instance mounted across tab switches so it
+    // swaps models in place instead of remounting — remounting caused a white flash between files.
+    return (
+      <CodeFile
+        key={primary ? "code-file-primary" : "code-file-split"}
+        ref={primary ? codeFileRef : undefined}
+        file={file}
+        indexFiles={submission.submission_files}
+        onNavigateToFile={primary ? handleSelectFile : setSplitFileId}
+      />
+    );
   };
 
   // A VS Code-style tab strip over the open files. `extra` renders trailing controls (e.g. close-split).

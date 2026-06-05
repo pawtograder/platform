@@ -29,6 +29,7 @@
     "seed:demo": "npx tsx scripts/SeedDemoClass.ts",
     "seed:demo:fixtures": "npx tsx scripts/demo/GenerateDemoFixtures.ts",
     "seed:demo:init-manifest": "npx tsx scripts/demo/InitDemoManifest.ts",
+    "reindex:submissions": "npx tsx scripts/ReindexSubmissions.ts",
     "audit:student-repos": "npx tsx scripts/AuditStudentRepos.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "test:functions": "cd supabase/functions/gradebook-column-recalculate && deno test --allow-read --allow-env --allow-net expression/",

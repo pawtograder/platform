@@ -1,5 +1,4 @@
 "use client";
-import { Tooltip } from "@/components/ui/tooltip";
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
@@ -8,8 +7,8 @@ import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } fr
 import { Badge, Box, Button, Flex, HStack, Icon, Text } from "@chakra-ui/react";
 import { useColorMode } from "@/components/ui/color-mode";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
-import { FaComments, FaTimes } from "react-icons/fa";
+import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
+import { FaComments, FaEyeSlash, FaTimes } from "react-icons/fa";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 import { createPortal } from "react-dom";
@@ -21,14 +20,16 @@ import { useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
 import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { AnnotationCommentDialog } from "./annotation-comment-dialog";
 import {
-  parseJavaFile,
   buildSymbolIndex,
-  resolveType,
-  findReferences,
+  resolveDefinition,
+  getSymbolLanguage,
   type SymbolIndex,
-  type JavaFileSymbols,
-  type JavaSymbol
-} from "@/lib/java-language-service";
+  type CodeSymbol,
+  type CodeSymbolKind,
+  type SymbolLanguage
+} from "@/supabase/functions/_shared/CodeSymbolParser";
+import { useSubmissionFileSymbols } from "@/hooks/useSubmissionFileSymbols";
+import * as Sentry from "@sentry/nextjs";
 import {
   isRubricCheckDataWithOptions,
   RubricCheckSubOption,
@@ -140,7 +141,10 @@ function getMonacoLanguage(fileName: string): string {
   return languageMap[extension] || "plaintext";
 }
 const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
-  ({ file: singleFile, files, activeFileId, onFileSelect, openFileIds, onFileClose }, ref) => {
+  (
+    { file: singleFile, files, activeFileId, onFileSelect, openFileIds, onFileClose, indexFiles, onNavigateToFile },
+    ref
+  ) => {
     const submission = useSubmission();
     const submissionReview = useActiveSubmissionReview();
     const showCommentsFeature = true;
@@ -148,6 +152,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
     // Support both single file (legacy) and multi-file (new) modes
     const allFiles = useMemo(() => files || (singleFile ? [singleFile] : []), [files, singleFile]);
+
+    // Files the language layer should know about: the full submission file set (for cross-file
+    // go-to-definition), falling back to whatever is displayed. Drives model creation + the symbol
+    // index, independent of which files are shown as tabs.
+    const languageFiles = useMemo(() => indexFiles ?? allFiles, [indexFiles, allFiles]);
 
     // Determine which files are "open" (in tabs)
     const openFiles = useMemo(() => {
@@ -171,7 +180,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     const graderPseudonymousMode = useGraderPseudonymousMode();
     const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
-    // Keyboard quick-apply palette (productivity layer). Opened with Cmd/Ctrl+K while the editor is
+    // Keyboard quick-apply palette (productivity layer). Opened with Cmd/Ctrl+. while the editor is
     // focused; lists the same rubric actions as the right-click menu for the cursor's line.
     const { menuActions: quickApplyActions } = useRubricAnnotationActions(currentFile ?? null);
     const [quickApply, setQuickApply] = useState<{ isOpen: boolean; line: number }>({ isOpen: false, line: 1 });
@@ -373,7 +382,18 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       [saveScrollPosition]
     );
 
+    // Monaco's text-model registry is global (keyed by URI), but each editor pane creates a model per
+    // file. In split view two panes mount at once, so they must not request the same URI — otherwise
+    // the second pane throws "Cannot add model because it already exists!". Scope every model URI to
+    // this instance via a unique authority; `uri.path` is unchanged, so filename lookups still work.
+    const instanceId = useId().replace(/[^a-zA-Z0-9]/g, "");
+
     const [expanded, setExpanded] = useState<number[]>([]);
+    // Flips true once the (dynamically imported) Monaco editor has mounted. Effects that draw view
+    // zones key off this so they re-run after mount — otherwise comments that load before the editor
+    // is ready set `expanded` while `editorRef` is still null, and their overlays never get drawn
+    // until something else changes `expanded` (e.g. toggling hide/show).
+    const [editorReady, setEditorReady] = useState(false);
     const [viewZoneNodes, setViewZoneNodes] = useState<Map<number, HTMLElement>>(new Map());
     const viewZoneNodesRef = useRef<Map<number, HTMLElement>>(new Map());
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -383,14 +403,51 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     const viewZonesRef = useRef<Map<number, string>>(new Map());
     const viewZoneHeightsRef = useRef<Map<number, number>>(new Map());
     const highlightDecorationRef = useRef<string | null>(null);
-    const symbolIndexRef = useRef<SymbolIndex | null>(null);
-    const fileSymbolsRef = useRef<Map<number, JavaFileSymbols>>(new Map());
+    const symbolIndexRef = useRef<SymbolIndex>({ byName: new Map() });
+    const symbolsByFileIdRef = useRef<Map<number, CodeSymbol[]>>(new Map());
+    const indexedFileIdsRef = useRef<Set<number>>(new Set());
+    const filesByIdRef = useRef<Map<number, SubmissionFile>>(new Map());
+    const currentFileIdRef = useRef<number | undefined>(undefined);
+    // Cross-file go-to-definition switches the displayed file asynchronously; remember where to land.
+    const pendingRevealRef = useRef<{ fileId: number; line: number; column: number } | null>(null);
+    const notIndexedNotifiedRef = useRef<boolean>(false);
     const providerDisposablesRef = useRef<Array<{ dispose: () => void }>>([]);
 
     // Sync viewZoneNodes state to ref for use in callbacks
     useEffect(() => {
       viewZoneNodesRef.current = viewZoneNodes;
     }, [viewZoneNodes]);
+
+    // Server-side code-symbol index for this submission (powers go-to-definition). Parsing happens
+    // at ingestion, not here — we only read the stored symbols and assemble the cross-file index.
+    const { symbolsByFileId, indexedFileIds } = useSubmissionFileSymbols(submission?.id);
+    const symbolIndex = useMemo(() => {
+      const filesById = new Map(languageFiles.map((f) => [f.id, f]));
+      const fileSymbols = [...symbolsByFileId.entries()].map(([fileId, symbols]) => ({
+        fileId,
+        fileName: filesById.get(fileId)?.name ?? "",
+        symbols
+      }));
+      return buildSymbolIndex(fileSymbols);
+    }, [symbolsByFileId, languageFiles]);
+
+    // Monaco language providers are registered once at mount and read these refs at invocation time,
+    // so keep them current as the index loads / the active file changes.
+    useEffect(() => {
+      symbolIndexRef.current = symbolIndex;
+    }, [symbolIndex]);
+    useEffect(() => {
+      symbolsByFileIdRef.current = symbolsByFileId;
+    }, [symbolsByFileId]);
+    useEffect(() => {
+      indexedFileIdsRef.current = indexedFileIds;
+    }, [indexedFileIds]);
+    useEffect(() => {
+      filesByIdRef.current = new Map(languageFiles.map((f) => [f.id, f]));
+    }, [languageFiles]);
+    useEffect(() => {
+      currentFileIdRef.current = currentFile?.id;
+    }, [currentFile]);
 
     // Track pending height updates to batch them
     const pendingHeightUpdatesRef = useRef<Map<number, number>>(new Map());
@@ -422,6 +479,15 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         // Batch updates using requestAnimationFrame
         heightUpdateRafRef.current = requestAnimationFrame(() => {
           if (!editorRef.current) return;
+
+          // The line may have been collapsed (its zone removed by updateViewZones) between scheduling
+          // and running this RAF — the comment portal's ResizeObserver keeps these updates in flight.
+          // Re-adding the zone now would resurrect an empty band that holds space for a collapsed
+          // comment, so bail unless this exact zone is still the tracked one for the line.
+          if (viewZonesRef.current.get(lineNumber) !== zoneId) {
+            heightUpdateRafRef.current = null;
+            return;
+          }
 
           editorRef.current.changeViewZones((accessor) => {
             try {
@@ -607,6 +673,14 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
         const fileId = file.id;
 
+        // Drop any in-flight / queued height updates: they captured zone ids that we're about to
+        // invalidate, and applying them after the rebuild would resurrect zones for collapsed lines.
+        if (heightUpdateRafRef.current !== null) {
+          cancelAnimationFrame(heightUpdateRafRef.current);
+          heightUpdateRafRef.current = null;
+        }
+        pendingHeightUpdatesRef.current.clear();
+
         // Remove all existing view zones for this file
         const existingZoneIds = Array.from(viewZonesRef.current.entries())
           .filter(([, zoneId]) => zoneId !== undefined)
@@ -663,38 +737,21 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       []
     );
 
-    // Parse Java files and build symbol index
-    useEffect(() => {
-      const javaFiles = allFiles.filter((f) => f.name.endsWith(".java") && f.contents != null);
-      if (javaFiles.length === 0) return;
-
-      const parsedSymbols: JavaFileSymbols[] = [];
-      for (const file of javaFiles) {
-        try {
-          const parsed = parseJavaFile(file.contents ?? "", file.id, file.name);
-          parsedSymbols.push(parsed);
-          fileSymbolsRef.current.set(file.id, parsed);
-        } catch {
-          // Skip files that fail to parse
-        }
-      }
-
-      if (parsedSymbols.length > 0) {
-        symbolIndexRef.current = buildSymbolIndex(parsedSymbols);
-      }
-    }, [allFiles]);
-
     // Handle Monaco editor mount
     const handleEditorDidMount = useCallback(
       (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+        setEditorReady(true);
 
-        // Create models for all files
-        allFiles.forEach((f) => {
+        // Create models for every submission file (not just the displayed one) so cross-file
+        // go-to-definition can target them. Scoped to this editor instance so split panes don't
+        // collide on the global model registry.
+        languageFiles.forEach((f) => {
           if (!modelsRef.current.has(f.id)) {
             const language = getMonacoLanguage(f.name);
-            const model = monaco.editor.createModel(f.contents ?? "", language, monaco.Uri.parse(`file:///${f.name}`));
+            const uri = monaco.Uri.from({ scheme: "file", authority: `pane-${instanceId}`, path: `/${f.name}` });
+            const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(f.contents ?? "", language, uri);
             modelsRef.current.set(f.id, model);
           }
         });
@@ -711,229 +768,147 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         providerDisposablesRef.current.forEach((disposable) => disposable.dispose());
         providerDisposablesRef.current = [];
 
-        // Register Java language providers if we have Java files
-        const hasJavaFiles = allFiles.some((f) => f.name.endsWith(".java"));
-        if (hasJavaFiles) {
-          // Register definition provider
-          const definitionProvider = monaco.languages.registerDefinitionProvider("java", {
+        // Map a Monaco model back to its submission file id (modelsRef is keyed by file id).
+        const fileIdForModel = (model: editor.ITextModel): number | undefined => {
+          for (const [fileId, m] of modelsRef.current.entries()) {
+            if (m === model) return fileId;
+          }
+          return undefined;
+        };
+
+        // One-time, gentle notice when go-to-definition is attempted on a file the server hasn't
+        // indexed yet (old submission pre-backfill, or an unsupported language).
+        const notifyNotIndexed = () => {
+          if (notIndexedNotifiedRef.current) return;
+          notIndexedNotifiedRef.current = true;
+          toaster.create({
+            title: "Not yet indexed",
+            description: "Go to definition isn't available for this file yet — it works once indexing completes.",
+            type: "info"
+          });
+          Sentry.captureMessage("Go-to-definition attempted on an un-indexed submission file", "info");
+        };
+
+        const SYMBOL_KIND_MAP: Record<CodeSymbolKind, MonacoEditor.languages.SymbolKind> = {
+          class: monaco.languages.SymbolKind.Class,
+          interface: monaco.languages.SymbolKind.Interface,
+          enum: monaco.languages.SymbolKind.Enum,
+          type: monaco.languages.SymbolKind.Interface,
+          method: monaco.languages.SymbolKind.Method,
+          constructor: monaco.languages.SymbolKind.Constructor,
+          field: monaco.languages.SymbolKind.Field,
+          function: monaco.languages.SymbolKind.Function,
+          variable: monaco.languages.SymbolKind.Variable
+        };
+
+        const registerProvidersForLanguage = (languageId: string) => {
+          const definitionProvider = monaco.languages.registerDefinitionProvider(languageId, {
             provideDefinition: (model, position) => {
               const word = model.getWordAtPosition(position);
-              if (!word || !symbolIndexRef.current) return [];
-
-              const fileName = model.uri.path.replace("file:///", "");
-              const currentFile = allFiles.find((f) => f.name === fileName);
-              if (!currentFile) return [];
-
-              const currentFileData = fileSymbolsRef.current.get(currentFile.id);
-              if (!currentFileData) return [];
-
-              // Try to resolve the type
-              const resolved = resolveType(word.word, currentFileData, symbolIndexRef.current);
-              if (resolved) {
-                const targetFile = allFiles.find((f) => f.id === resolved.fileId);
-                if (targetFile) {
-                  const targetModel = modelsRef.current.get(targetFile.id);
-                  if (targetModel) {
-                    return {
-                      uri: targetModel.uri,
-                      range: {
-                        startLineNumber: resolved.line,
-                        startColumn: resolved.column,
-                        endLineNumber: resolved.line,
-                        endColumn: resolved.column + resolved.name.length
-                      }
-                    };
-                  }
-                }
+              if (!word) return [];
+              const currentFileId = fileIdForModel(model) ?? null;
+              // The index is read from the server; if this file wasn't indexed there's nothing to
+              // resolve against — tell the user rather than silently doing nothing.
+              if (currentFileId !== null && !indexedFileIdsRef.current.has(currentFileId)) {
+                notifyNotIndexed();
+                return [];
               }
-
-              // Fallback: find symbol by name
-              const symbols = symbolIndexRef.current.byName.get(word.word) || [];
-              if (symbols.length > 0) {
-                const symbol = symbols[0];
-                const targetFile = allFiles.find((f) => f.id === symbol.fileId);
-                if (targetFile) {
-                  const targetModel = modelsRef.current.get(targetFile.id);
-                  if (targetModel) {
-                    return {
-                      uri: targetModel.uri,
-                      range: {
-                        startLineNumber: symbol.line,
-                        startColumn: symbol.column,
-                        endLineNumber: symbol.line,
-                        endColumn: symbol.column + symbol.name.length
-                      }
-                    };
-                  }
+              const resolved = resolveDefinition(word.word, currentFileId, symbolIndexRef.current);
+              if (!resolved) return [];
+              const targetModel = modelsRef.current.get(resolved.fileId);
+              if (!targetModel) return [];
+              return {
+                uri: targetModel.uri,
+                range: {
+                  startLineNumber: resolved.line,
+                  startColumn: resolved.column,
+                  endLineNumber: resolved.line,
+                  endColumn: resolved.column + resolved.name.length
                 }
-              }
-
-              return [];
+              };
             }
           });
           providerDisposablesRef.current.push(definitionProvider);
 
-          // Register reference provider
-          const referenceProvider = monaco.languages.registerReferenceProvider("java", {
-            provideReferences: (model, position) => {
-              const word = model.getWordAtPosition(position);
-              if (!word || !symbolIndexRef.current) return [];
-
-              const symbols = symbolIndexRef.current.byName.get(word.word) || [];
-              if (symbols.length === 0) return [];
-
-              const symbol = symbols[0];
-              const references = findReferences(
-                symbol,
-                symbolIndexRef.current,
-                allFiles.map((f) => ({ id: f.id, contents: f.contents ?? "" }))
-              );
-
-              return references
-                .map((ref) => {
-                  const targetFile = allFiles.find((f) => f.id === ref.fileId);
-                  if (!targetFile) return null;
-                  const targetModel = modelsRef.current.get(targetFile.id);
-                  if (!targetModel) return null;
-
-                  return {
-                    uri: targetModel.uri,
-                    range: {
-                      startLineNumber: ref.line,
-                      startColumn: ref.column,
-                      endLineNumber: ref.line,
-                      endColumn: ref.column + word.word.length
-                    }
-                  };
-                })
-                .filter((ref): ref is NonNullable<typeof ref> => ref !== null);
-            }
-          });
-          providerDisposablesRef.current.push(referenceProvider);
-
-          // Register document symbol provider for "Go to Symbol" (Cmd+Shift+O)
-          const documentSymbolProvider = monaco.languages.registerDocumentSymbolProvider("java", {
+          // Document symbols power "Go to Symbol" (Cmd+Shift+O).
+          const documentSymbolProvider = monaco.languages.registerDocumentSymbolProvider(languageId, {
             provideDocumentSymbols: (model) => {
-              // Early return if model or URI is invalid
-              if (!model || !model.uri) {
-                return [];
-              }
-
-              // Validate URI has required properties before proceeding
-              let uri = model.uri;
-              if (!uri || typeof uri.toString !== "function") {
-                return [];
-              }
-
-              // Ensure URI has a scheme property - Monaco requires this
-              // If scheme is missing, recreate URI with explicit scheme
-              if (uri.scheme === undefined || uri.scheme === null) {
-                try {
-                  const uriString = uri.toString();
-                  if (uriString && uriString.startsWith("file://")) {
-                    // Extract path and recreate URI with explicit scheme
-                    const path = uri.path || uri.fsPath || uriString.replace(/^file:\/\/\/+/, "");
-                    uri = monaco.Uri.parse(`file:///${path}`);
-                    // Verify new URI has scheme
-                    if (uri.scheme !== "file") {
-                      return [];
-                    }
-                  } else {
-                    return [];
-                  }
-                } catch {
-                  return [];
-                }
-              } else if (uri.scheme !== "file") {
-                return [];
-              }
-
-              try {
-                // Extract filename from URI - handle both path and fsPath
-                const uriPath = uri.path || uri.fsPath || uri.toString().replace(/^file:\/\/\/+/, "");
-                const fileName = uriPath.replace(/^\/+/, "").replace(/^file:\/\/\/+/, "");
-
-                const currentFile = allFiles.find((f) => {
-                  // Try exact match first
-                  if (f.name === fileName) return true;
-                  // Try matching just the filename part
-                  const fileBaseName = f.name.split("/").pop();
-                  const uriBaseName = fileName.split("/").pop();
-                  return fileBaseName === uriBaseName;
+              if (!model || !model.uri || model.uri.scheme !== "file") return [];
+              const fileId = fileIdForModel(model);
+              if (fileId === undefined) return [];
+              const symbols = symbolsByFileIdRef.current.get(fileId);
+              if (!symbols) return [];
+              return symbols
+                .filter((symbol) => symbol && symbol.name && symbol.line)
+                .map((symbol) => {
+                  const range = {
+                    startLineNumber: Math.max(1, symbol.line || 1),
+                    startColumn: Math.max(1, symbol.column || 1),
+                    endLineNumber: Math.max(1, symbol.line || 1),
+                    endColumn: Math.max(1, (symbol.column || 1) + (symbol.name?.length || 0))
+                  };
+                  return {
+                    name: symbol.name,
+                    kind: SYMBOL_KIND_MAP[symbol.kind] ?? monaco.languages.SymbolKind.Variable,
+                    detail: "",
+                    tags: [],
+                    range,
+                    selectionRange: range
+                  };
                 });
-
-                if (!currentFile) {
-                  return [];
-                }
-
-                const fileSymbols = fileSymbolsRef.current.get(currentFile.id);
-                if (!fileSymbols || !fileSymbols.symbols || !Array.isArray(fileSymbols.symbols)) {
-                  return [];
-                }
-
-                // Final check: ensure URI has scheme property before creating symbols
-                if (uri.scheme !== "file") {
-                  return [];
-                }
-
-                const symbols = fileSymbols.symbols
-                  .filter((symbol) => symbol && symbol.name && symbol.line)
-                  .map((symbol) => {
-                    try {
-                      const kindMap: Record<JavaSymbol["kind"], MonacoEditor.languages.SymbolKind> = {
-                        class: monaco.languages.SymbolKind.Class,
-                        interface: monaco.languages.SymbolKind.Interface,
-                        enum: monaco.languages.SymbolKind.Enum,
-                        method: monaco.languages.SymbolKind.Method,
-                        constructor: monaco.languages.SymbolKind.Constructor,
-                        field: monaco.languages.SymbolKind.Field
-                      };
-
-                      const kind = kindMap[symbol.kind] || monaco.languages.SymbolKind.Variable;
-                      const detail = symbol.returnType
-                        ? symbol.returnType
-                        : symbol.parameters && Array.isArray(symbol.parameters) && symbol.parameters.length > 0
-                          ? `(${symbol.parameters.join(", ")})`
-                          : undefined;
-
-                      // Critical: verify URI has scheme before creating location
-                      if (!uri || uri.scheme !== "file") {
-                        return null;
-                      }
-
-                      const range = {
-                        startLineNumber: Math.max(1, symbol.line || 1),
-                        startColumn: Math.max(1, symbol.column || 1),
-                        endLineNumber: Math.max(1, symbol.line || 1),
-                        endColumn: Math.max(1, (symbol.column || 1) + (symbol.name?.length || 0))
-                      };
-
-                      if (!uri || uri.scheme !== "file") {
-                        return null;
-                      }
-
-                      return {
-                        name: symbol.name || "",
-                        kind,
-                        detail: detail ?? "",
-                        tags: [],
-                        range,
-                        selectionRange: range,
-                        containerName: symbol.parent
-                      };
-                    } catch {
-                      return null;
-                    }
-                  })
-                  .filter((s): s is NonNullable<typeof s> => s !== null);
-
-                return symbols;
-              } catch {
-                return [];
-              }
             }
           });
           providerDisposablesRef.current.push(documentSymbolProvider);
+        };
+
+        // Register providers once per language present among the submission files.
+        const languagesPresent = new Set<SymbolLanguage>();
+        for (const f of languageFiles) {
+          const lang = getSymbolLanguage(f.name);
+          if (lang) languagesPresent.add(lang);
+        }
+        for (const lang of languagesPresent) {
+          registerProvidersForLanguage(lang);
+        }
+
+        // Cross-file navigation: a definition in another file resolves to a different model than the
+        // one attached to this standalone editor, which the default opener cannot switch to (it
+        // returns null). Override it to switch the displayed file via onNavigateToFile and remember
+        // where to land; the model-switch effect performs the reveal once the new file mounts.
+        const editorService = (
+          editor as unknown as {
+            _codeEditorService?: {
+              openCodeEditor: (
+                input: {
+                  resource: { toString(): string };
+                  options?: { selection?: { startLineNumber?: number; startColumn?: number } };
+                },
+                source: unknown
+              ) => Promise<unknown>;
+            };
+          }
+        )._codeEditorService;
+        if (editorService && typeof editorService.openCodeEditor === "function" && onNavigateToFile) {
+          const openBase = editorService.openCodeEditor.bind(editorService);
+          editorService.openCodeEditor = async (input, source) => {
+            const result = await openBase(input, source);
+            if (result === null && input?.resource) {
+              const target = [...modelsRef.current.entries()].find(
+                ([, m]) => m.uri.toString() === input.resource.toString()
+              );
+              if (target && target[0] !== currentFileIdRef.current) {
+                const selection = input.options?.selection;
+                pendingRevealRef.current = {
+                  fileId: target[0],
+                  line: selection?.startLineNumber ?? 1,
+                  column: selection?.startColumn ?? 1
+                };
+                onNavigateToFile(target[0]);
+                return source ?? editor;
+              }
+            }
+            return result;
+          };
         }
 
         // Update decorations when comments change
@@ -963,7 +938,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         const quickApplyAction = editor.addAction({
           id: "rubric-quick-apply",
           label: "Apply rubric check…",
-          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+          // Cmd/Ctrl+. ("quick action", like VS Code's code-action) — deliberately NOT Cmd/Ctrl+K,
+          // which the app reserves for global search. Bind BOTH the CtrlCmd and WinCtrl variants so the
+          // chord fires regardless of whether the browser reports a Mac platform (Monaco maps CtrlCmd to
+          // Cmd on Mac, Ctrl elsewhere) — otherwise Ctrl+. silently no-ops on Safari/WebKit.
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Period, monaco.KeyMod.WinCtrl | monaco.KeyCode.Period],
           // "navigation" is Monaco's first context-menu group, and a negative order pins this to the
           // very top of the right-click menu (above "Add Comment…" and the per-criteria submenus).
           contextMenuGroupId: "navigation",
@@ -975,16 +954,26 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         });
         providerDisposablesRef.current.push(quickApplyAction);
       },
-      [allFiles, currentFile, commentsByLine, expanded, updateGlyphDecorations, updateViewZones]
+      [
+        languageFiles,
+        currentFile,
+        commentsByLine,
+        expanded,
+        instanceId,
+        onNavigateToFile,
+        updateGlyphDecorations,
+        updateViewZones
+      ]
     );
 
-    // Update decorations and view zones when comments or expanded state changes
+    // Update decorations and view zones when comments or expanded state changes (and once the editor
+    // becomes ready, so overlays for comments that loaded pre-mount get drawn).
     useEffect(() => {
       if (editorRef.current && monacoRef.current && currentFile) {
         updateGlyphDecorations(editorRef.current, monacoRef.current, commentsByLine);
         updateViewZones(editorRef.current, monacoRef.current, commentsByLine, expanded, currentFile);
       }
-    }, [commentsByLine, expanded, currentFile, updateGlyphDecorations, updateViewZones]);
+    }, [commentsByLine, expanded, currentFile, editorReady, updateGlyphDecorations, updateViewZones]);
 
     // Restore scroll when view zones finish updating
     useEffect(() => {
@@ -1009,6 +998,17 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           if (monacoRef.current) {
             updateGlyphDecorations(editorRef.current, monacoRef.current, commentsByLine);
             updateViewZones(editorRef.current, monacoRef.current, commentsByLine, expanded, currentFile);
+          }
+          // Land on a cross-file go-to-definition target once its file has become active.
+          const pending = pendingRevealRef.current;
+          if (pending && pending.fileId === currentFile.id) {
+            pendingRevealRef.current = null;
+            const ed = editorRef.current;
+            requestAnimationFrame(() => {
+              ed.revealLineInCenter(pending.line);
+              ed.setPosition({ lineNumber: pending.line, column: pending.column });
+              ed.focus();
+            });
           }
         }
       }
@@ -1079,6 +1079,19 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               fontSize: "14px",
               cursor: "pointer"
             }
+          },
+          // The comment overlays live in Monaco view zones, but `.view-lines` (the code text layer)
+          // is painted after `.view-zones` with the same `z-index: auto`, so it sits on top and
+          // swallows clicks meant for the overlay's buttons. Lift the view-zone layer above the text
+          // so its controls are clickable, but keep the container click-through (pointer-events: none)
+          // so clicks on actual code lines still reach `.view-lines` for cursor placement — only the
+          // zone content itself re-enables pointer events.
+          "& .view-zones": {
+            zIndex: 2,
+            pointerEvents: "none"
+          },
+          "& .view-zones > *": {
+            pointerEvents: "auto"
           }
         }}
       >
@@ -1112,7 +1125,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               return (
                 <Flex
                   key={f.id}
-                  bg={isActive ? "bg.default" : "bg.subtle"}
+                  bg={isActive ? "bg" : "bg.subtle"}
                   borderRight="1px solid"
                   borderColor="border.emphasized"
                   alignItems="center"
@@ -1120,7 +1133,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
                   px={3}
                   py={2}
                   cursor="pointer"
-                  _hover={{ bg: isActive ? "bg.default" : "bg.muted" }}
+                  _hover={{ bg: isActive ? "bg" : "bg.muted" }}
                   onClick={() => {
                     if (onFileSelect) {
                       onFileSelect(f.id);
@@ -1172,33 +1185,30 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             {currentFile.name}
           </Text>
           <HStack>
-            {showCommentsFeature && commentsForCurrentFile.length > 0 && (
+            {showCommentsFeature && allFileComments.length > 0 && (
               <>
                 <Text fontSize="xs" color="text.subtle">
-                  {commentsForCurrentFile.length} {commentsForCurrentFile.length === 1 ? "comment" : "comments"}
+                  {allFileComments.length} {allFileComments.length === 1 ? "comment" : "comments"}
                 </Text>
-                <Tooltip
-                  openDelay={300}
-                  closeDelay={100}
-                  content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
+                <Button
+                  variant={commentsForCurrentFile.length > 0 ? "solid" : "outline"}
+                  size="xs"
+                  colorPalette="teal"
+                  onClick={() => {
+                    setExpanded((prev) => {
+                      // Hide if any of this file's comments are currently shown; otherwise show them all.
+                      const anyShown = allFileComments.some((c) => prev.includes(c.line));
+                      if (anyShown) {
+                        const lines = new Set(allFileComments.map((c) => c.line));
+                        return prev.filter((l) => !lines.has(l));
+                      }
+                      return Array.from(new Set([...prev, ...allFileComments.map((c) => c.line)]));
+                    });
+                  }}
                 >
-                  <Button
-                    variant={expanded.length > 0 ? "solid" : "outline"}
-                    size="xs"
-                    p={0}
-                    colorPalette="teal"
-                    onClick={() => {
-                      setExpanded((prev) => {
-                        if (prev.length === 0) {
-                          return allFileComments.map((comment) => comment.line);
-                        }
-                        return [];
-                      });
-                    }}
-                  >
-                    <Icon as={FaComments} m={0} />
-                  </Button>
-                </Tooltip>
+                  <Icon as={commentsForCurrentFile.length > 0 ? FaEyeSlash : FaComments} />
+                  {commentsForCurrentFile.length > 0 ? "Hide all comments" : "Show all comments"}
+                </Button>
               </>
             )}
           </HStack>

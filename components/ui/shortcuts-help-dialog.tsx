@@ -175,7 +175,7 @@ export default function ShortcutsHelpDialog() {
                   label="Quick-apply a rubric check (in the editor)"
                   keys={
                     <>
-                      <Kbd>{MOD}</Kbd>+<Kbd>K</Kbd>
+                      <Kbd>{MOD}</Kbd>+<Kbd>.</Kbd>
                     </>
                   }
                 />

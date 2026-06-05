@@ -200,7 +200,7 @@ export function CommandPalette({
       <Box
         w="600px"
         maxW="90vw"
-        bg="bg.default"
+        bg="bg.panel"
         border="1px solid"
         borderColor="border.emphasized"
         borderRadius="md"
