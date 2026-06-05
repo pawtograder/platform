@@ -129,11 +129,10 @@ fi
 # Phase 4 — run the realistic seeder
 # -----------------------------------------------------------------------------
 echo "[seed] running scripts/SeedDB.ts --template ${SEED_TEMPLATE}"
-# SeedDB.ts loads config from the environment (fed by the K8s Secret), not from
-# a file. Its dotenv.config({ path: ".env.local", quiet: true }) silently
-# tolerates a missing .env.local — so DON'T create one here: the image runs as
-# USER node but WORKDIR /app is root-owned, and writing into it fails with
-# "Permission denied", which aborts the whole seed.
+# No .env.local is created here: SeedDB.ts reads its config from the environment
+# (exported above / fed by the K8s Secret), and its
+# dotenv.config({ path: ".env.local", quiet: true }) call silently tolerates a
+# missing file — so the seeder needs no dotenv file at all.
 npx tsx scripts/SeedDB.ts --template "${SEED_TEMPLATE}"
 
 echo "[seed] done"
