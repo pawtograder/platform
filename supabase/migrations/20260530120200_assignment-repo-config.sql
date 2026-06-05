@@ -330,7 +330,11 @@ begin
     return;
   end if;
 
-  if auth.uid() is not null and not public.authorizeforclassinstructor(v_course_id::bigint) then
+  if auth.uid() is not null and not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = auth.uid()
+      and (up.role = 'admin' or (up.class_id = v_course_id::bigint and up.role = 'instructor'))
+  ) then
     raise exception 'Access denied: Only instructors can force-create repos for class %', v_course_id;
   end if;
 
@@ -532,7 +536,11 @@ begin
       if class_id is null then
         raise exception 'Force create for all classes requires service role';
       end if;
-      if not public.authorizeforclassinstructor(class_id::bigint) then
+      if not exists (
+        select 1 from public.user_privileges up
+        where up.user_id = auth.uid()
+          and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role = 'instructor'))
+      ) then
         raise exception 'Access denied: Only instructors can force-create repos for class %', class_id;
       end if;
     end if;
@@ -753,7 +761,11 @@ begin
     raise exception 'Assignment % is not in no_submission mode (repo_mode=%)', p_assignment_id, v_repo_mode;
   end if;
 
-  if not public.authorizeforclassinstructor(v_class_id::bigint) then
+  if not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = auth.uid()
+      and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role = 'instructor'))
+  ) then
     raise exception 'Access denied: only instructors can create manual submissions for class %', v_class_id
       using errcode = '42501';
   end if;
@@ -834,7 +846,11 @@ begin
         raise exception 'All repositories must belong to the same class';
     end if;
 
-    if not public.authorizeforclassinstructor(v_class_id) then
+    if not exists (
+        select 1 from public.user_privileges up
+        where up.user_id = auth.uid()
+          and (up.role = 'admin' or (up.class_id = v_class_id and up.role = 'instructor'))
+    ) then
         raise exception 'Only instructors can queue repository syncs';
     end if;
 
@@ -1178,7 +1194,11 @@ begin
     return;
   end if;
 
-  if auth.uid() is not null and not public.authorizeforclassinstructor(course_id::bigint) then
+  if auth.uid() is not null and not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = auth.uid()
+      and (up.role = 'admin' or (up.class_id = course_id::bigint and up.role = 'instructor'))
+  ) then
     raise exception 'Access denied: Only instructors can force-create repos for class %', course_id;
   end if;
 
@@ -1244,7 +1264,11 @@ begin
     if auth.uid() is null then
         raise exception 'Not authenticated';
     end if;
-    if not public.authorizeforclassinstructor(p_class_id) then
+    if not exists (
+        select 1 from public.user_privileges up
+        where up.user_id = auth.uid()
+          and (up.role = 'admin' or (up.class_id = p_class_id and up.role = 'instructor'))
+    ) then
         raise exception 'Only instructors can publish group changes';
     end if;
 
@@ -1934,7 +1958,27 @@ begin
   end if;
   -- The submission owner / group members can attach their own uploads;
   -- instructors and graders can attach when submitting on behalf of a student.
-  if not (public.authorize_for_submission(p_submission_id) or public.authorizeforclassgrader(v_class_id)) then
+  -- Inline user_privileges check (was authorize_for_submission OR
+  -- authorizeforclassgrader): admin anywhere, staff in the class, the direct
+  -- profile owner, or a member of the owning assignment group. Uses the
+  -- submission columns already loaded above (v_profile_id, v_assignment_group_id).
+  if not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = v_user_id
+      and (
+        up.role = 'admin'
+        or (up.class_id = v_class_id and up.role in ('instructor', 'grader'))
+        or up.private_profile_id = v_profile_id
+        or (
+          v_assignment_group_id is not null
+          and exists (
+            select 1 from public.assignment_groups_members mem
+            where mem.assignment_group_id = v_assignment_group_id
+              and mem.profile_id = up.private_profile_id
+          )
+        )
+      )
+  ) then
     raise exception 'Access denied for submission %', p_submission_id using errcode = '42501';
   end if;
   if v_submitted_via is distinct from 'upload' then
@@ -2126,7 +2170,11 @@ begin
   if v_repo_mode <> 'none' then
     raise exception 'Assignment % does not accept uploads (repo_mode=%)', p_assignment_id, v_repo_mode;
   end if;
-  if not public.authorizeforclassgrader(v_class_id::bigint) then
+  if not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = auth.uid()
+      and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role in ('instructor', 'grader')))
+  ) then
     raise exception 'Access denied: only graders/instructors can create submissions on behalf of students for class %', v_class_id
       using errcode = '42501';
   end if;

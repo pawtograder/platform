@@ -102,8 +102,16 @@ CREATE POLICY "github_deployments_read"
 ON public.github_deployments
 FOR SELECT
 USING (
-  -- Path 1: staff in the class
-  public.authorizeforclassgrader(class_id)
+  -- Path 1: staff in the class. Inline user_privileges check (not
+  -- authorizeforclassgrader) so the per-row RLS predicate stays planner-friendly,
+  -- matching the user_privileges checks in Paths 2/3 below: admin anywhere, else
+  -- instructor/grader in this class. class_id is qualified to disambiguate from
+  -- up.class_id.
+  EXISTS (
+    SELECT 1 FROM public.user_privileges up
+    WHERE up.user_id = auth.uid()
+      AND (up.role = 'admin' OR (up.class_id = github_deployments.class_id AND up.role IN ('instructor', 'grader')))
+  )
   OR
   -- Path 2: a repository the student owns (profile or group)
   (

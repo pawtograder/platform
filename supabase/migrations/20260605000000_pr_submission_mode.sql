@@ -119,26 +119,51 @@ CREATE INDEX idx_submission_pr_links_assignment
 ALTER TABLE public.submission_pr_links ENABLE ROW LEVEL SECURITY;
 
 -- Staff (instructors + graders) can do anything with links in their class.
+-- Inline user_privileges check (not authorizeforclassgrader) so the planner can
+-- optimize the per-row RLS predicate: admin anywhere, else instructor/grader in
+-- this class. class_id is qualified to avoid ambiguity with up.class_id.
 CREATE POLICY "Staff CRUD pr links in class"
 ON public.submission_pr_links
 FOR ALL
-USING (public.authorizeforclassgrader(class_id))
-WITH CHECK (public.authorizeforclassgrader(class_id));
+USING (
+  EXISTS (
+    SELECT 1 FROM public.user_privileges up
+    WHERE up.user_id = auth.uid()
+      AND (up.role = 'admin' OR (up.class_id = submission_pr_links.class_id AND up.role IN ('instructor', 'grader')))
+  )
+)
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.user_privileges up
+    WHERE up.user_id = auth.uid()
+      AND (up.role = 'admin' OR (up.class_id = submission_pr_links.class_id AND up.role IN ('instructor', 'grader')))
+  )
+);
 
--- Students can read their own links (direct or via group membership).
+-- Students can read their own links (direct or via group membership). Inline
+-- user_privileges checks throughout (admin anywhere, else profile ownership or
+-- group membership) rather than authorizeforprofile / a user_roles join.
 CREATE POLICY "Students read own pr links"
 ON public.submission_pr_links
 FOR SELECT
 USING (
-  public.authorizeforprofile(profile_id)
+  EXISTS (
+    SELECT 1 FROM public.user_privileges up
+    WHERE up.user_id = auth.uid()
+      AND (
+        up.role = 'admin'
+        OR up.private_profile_id = submission_pr_links.profile_id
+        OR up.public_profile_id = submission_pr_links.profile_id
+      )
+  )
   OR (
     assignment_group_id IS NOT NULL
     AND EXISTS (
       SELECT 1
       FROM public.assignment_groups_members mem
-      JOIN public.user_roles r ON r.private_profile_id = mem.profile_id
+      JOIN public.user_privileges up ON up.private_profile_id = mem.profile_id
       WHERE mem.assignment_group_id = submission_pr_links.assignment_group_id
-        AND r.user_id = auth.uid()
+        AND up.user_id = auth.uid()
     )
   )
 );
