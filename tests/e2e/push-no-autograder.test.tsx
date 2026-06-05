@@ -243,3 +243,266 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(subs ?? []).toHaveLength(0);
   });
 });
+
+// pr-mode push guard: a push to a tracked student repo whose assignment is
+// submission_mode='pr' must be a no-op in the push handler. The PR webhook owns
+// submissions in that mode, so the push must NOT create a submission, a
+// repository_check_run, or workflow_events (no grade.yml dispatch).
+test.describe("Push to a pr-mode repo is a no-op (no submission / check run / workflow)", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  const RUN_PREFIX = getTestRunPrefix();
+  const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  let classId: number;
+  let student: TestingUser;
+  let assignmentId: number;
+  let repoId: number;
+  let repoName: string;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E PR-mode Push Guard ${RUN_PREFIX}` });
+    classId = cls.id;
+
+    student = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `PR Guard Student ${RUN_PREFIX}`,
+      email: `e2e-prguard-${SAFE_ID}@pawtograder.net`
+    });
+
+    const a = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `PR-mode Push Guard ${RUN_PREFIX}`,
+      assignment_slug: `e2e-prguard-${SAFE_ID}`
+    });
+    assignmentId = a.id;
+
+    // pr-mode assignment. (has_autograder is irrelevant: the pr-mode guard
+    // returns before the zero-runner branch is even considered.)
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({ submission_mode: "pr", upstream_repo: `pawtograder-playground/prguard-upstream-${SAFE_ID}` })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+
+    // A tracked student repo for this pr-mode assignment (the fork). Use the E2E
+    // prefix only so that IF the guard regressed and ingestion ran, it would
+    // still avoid a real clone; the assertions below require it does NOT run.
+    repoName = `${END_TO_END_REPO_PREFIX}--prguard-${SAFE_ID}`;
+    const { data: repo, error: repoErr } = await supabase
+      .from("repositories")
+      .insert({
+        assignment_id: assignmentId,
+        repository: repoName,
+        class_id: classId,
+        profile_id: student.private_profile_id,
+        synced_handout_sha: "none"
+      })
+      .select("id")
+      .single();
+    expect(repoErr).toBeNull();
+    repoId = repo!.id;
+  });
+
+  test("DB precondition: assignment is pr-mode", async () => {
+    const { data: a } = await supabase.from("assignments").select("submission_mode").eq("id", assignmentId).single();
+    expect(a!.submission_mode).toBe("pr");
+  });
+
+  test("#submit push to a pr-mode fork creates NO submission, NO check run, NO workflow events", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `aa11bb22${SAFE_ID}`.slice(0, 40);
+    // Even a #submit message must be ignored on the push side in pr-mode.
+    const res = await deliverPush(makePushDetail(repoName, sha, "Done #submit"), `e2e-prguard-${SAFE_ID}-1`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    // Give the handler a beat, then assert the guard produced nothing.
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+
+    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
+    expect(checkRuns ?? []).toHaveLength(0);
+
+    const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
+    expect(wfEvents ?? []).toHaveLength(0);
+  });
+});
+
+// Server-time due-date gate: createPushDirectSubmission gates on the webhook
+// RECEIVE time (server now()), not head_commit.timestamp. A commit whose
+// timestamp is in the future (student-controllable via `git commit --date=...`)
+// pushed to a past-due assignment must NOT create a submission.
+test.describe("Push-direct submission honors the server-time due-date gate", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  const RUN_PREFIX = getTestRunPrefix();
+  const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  let classId: number;
+  let student: TestingUser;
+  let assignmentId: number;
+  let repoName: string;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E Push Due-Date ${RUN_PREFIX}` });
+    classId = cls.id;
+
+    student = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `Push Due Student ${RUN_PREFIX}`,
+      email: `e2e-pushdue-${SAFE_ID}@pawtograder.net`
+    });
+
+    // Due in the PAST. allow_not_graded_submissions defaults false, so even a
+    // graded #submit after the deadline must be rejected.
+    const a = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), -2).toISOString(),
+      release_date: addDays(new Date(), -7).toUTCString(),
+      name: `Push Due-Date ${RUN_PREFIX}`,
+      assignment_slug: `e2e-pushdue-${SAFE_ID}`
+    });
+    assignmentId = a.id;
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({ submission_mode: "push", has_autograder: false })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+
+    repoName = `${END_TO_END_REPO_PREFIX}--pushdue-${SAFE_ID}`;
+    const { error: repoErr } = await supabase.from("repositories").insert({
+      assignment_id: assignmentId,
+      repository: repoName,
+      class_id: classId,
+      profile_id: student.private_profile_id,
+      synced_handout_sha: "none"
+    });
+    expect(repoErr).toBeNull();
+  });
+
+  test("#submit push with a FUTURE commit timestamp on a past-due assignment creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `f00dface${SAFE_ID}`.slice(0, 40);
+    // Build a push whose head_commit.timestamp is far in the FUTURE. If the gate
+    // (wrongly) trusted the commit ts, this would slip through; it must not.
+    const detail = makePushDetail(repoName, sha, "Late but backdated #submit");
+    const futureTs = addDays(new Date(), 30).toISOString();
+    detail.head_commit.timestamp = futureTs;
+    detail.commits[0].timestamp = futureTs;
+
+    const res = await deliverPush(detail, `e2e-pushdue-${SAFE_ID}-1`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+  });
+});
+
+// 23514 group-transition: when a student has joined an assignment group, the
+// submissions BEFORE-INSERT trigger rejects an INDIVIDUAL submission with
+// check_violation (SQLSTATE 23514). createPushDirectSubmission must catch that
+// and skip gracefully (no submission, webhook still returns 200) -- the group
+// repo's push handles submissions instead.
+test.describe("Push-direct submission skips gracefully on the group-transition 23514", () => {
+  test.describe.configure({ timeout: 180_000 });
+
+  const RUN_PREFIX = getTestRunPrefix();
+  const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  let classId: number;
+  let instructor: TestingUser;
+  let student: TestingUser;
+  let assignmentId: number;
+  let individualRepoName: string;
+
+  test.beforeAll(async () => {
+    const cls = await createClass({ name: `E2E Push Group-Transition ${RUN_PREFIX}` });
+    classId = cls.id;
+
+    instructor = await createUserInClass({
+      role: "instructor",
+      class_id: classId,
+      name: `Push GT Instructor ${RUN_PREFIX}`,
+      email: `e2e-pushgt-instr-${SAFE_ID}@pawtograder.net`
+    });
+    student = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `Push GT Student ${RUN_PREFIX}`,
+      email: `e2e-pushgt-${SAFE_ID}@pawtograder.net`
+    });
+
+    const a = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      release_date: addDays(new Date(), -1).toUTCString(),
+      name: `Push Group-Transition ${RUN_PREFIX}`,
+      assignment_slug: `e2e-pushgt-${SAFE_ID}`,
+      group_config: "both"
+    });
+    assignmentId = a.id;
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({ submission_mode: "push", has_autograder: false })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+
+    // The student's INDIVIDUAL repo (profile_id set, no assignment_group_id).
+    individualRepoName = `${END_TO_END_REPO_PREFIX}--pushgt-indiv-${SAFE_ID}`;
+    const { error: repoErr } = await supabase.from("repositories").insert({
+      assignment_id: assignmentId,
+      repository: individualRepoName,
+      class_id: classId,
+      profile_id: student.private_profile_id,
+      synced_handout_sha: "none"
+    });
+    expect(repoErr).toBeNull();
+
+    // Put the student in a group for this assignment. With an active group
+    // membership, the submissions insert trigger raises 23514 for an INDIVIDUAL
+    // submission insert.
+    const { data: group, error: groupErr } = await supabase
+      .from("assignment_groups")
+      .insert({ name: `Push GT Group ${RUN_PREFIX}`, class_id: classId, assignment_id: assignmentId })
+      .select("id")
+      .single();
+    expect(groupErr).toBeNull();
+    const { error: memberErr } = await supabase.from("assignment_groups_members").insert({
+      assignment_group_id: group!.id,
+      profile_id: student.private_profile_id,
+      assignment_id: assignmentId,
+      class_id: classId,
+      added_by: instructor.private_profile_id
+    });
+    expect(memberErr).toBeNull();
+  });
+
+  test("#submit push to the INDIVIDUAL repo of a now-grouped student creates NO submission and returns ok", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `beadfeed${SAFE_ID}`.slice(0, 40);
+    const res = await deliverPush(
+      makePushDetail(individualRepoName, sha, "Submit from my individual repo #submit"),
+      `e2e-pushgt-${SAFE_ID}-1`
+    );
+    // The 23514 is caught and skipped: the webhook must still succeed (no 500).
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id")
+      .eq("repository", individualRepoName)
+      .eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+  });
+});
