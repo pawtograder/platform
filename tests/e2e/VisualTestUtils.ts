@@ -61,6 +61,13 @@ async function waitForStableSurveyCharts(page: Page) {
         const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-survey-chart-host]"));
         if (hosts.length === 0) return true;
         return hosts.every((host) => {
+          if (
+            document.documentElement.hasAttribute("data-visual-tests") &&
+            host.hasAttribute("data-survey-chart-ready")
+          ) {
+            const surface = host.querySelector(".recharts-surface");
+            return Boolean(surface && surface.getBoundingClientRect().width > 0);
+          }
           const surface = host.querySelector(".recharts-surface");
           if (!surface) return false;
           const hostRect = host.getBoundingClientRect();

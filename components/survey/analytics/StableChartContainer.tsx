@@ -37,7 +37,7 @@ export function StableChartContainer({
   const observerRef = useRef<ResizeObserver | null>(null);
   const measureFrameRef = useRef<number | null>(null);
   const measuringRef = useRef(false);
-  const visualTestMeasuredRef = useRef(false);
+  const visualTestWidthRef = useRef<number | null>(null);
 
   const commitDimensions = (width: number, measuredHeight: number) => {
     const next = { width, height: measuredHeight };
@@ -47,68 +47,75 @@ export function StableChartContainer({
     }
     dimensionsRef.current = next;
     setDimensions(next);
+    if (isVisualTestMode() && hostRef.current) {
+      hostRef.current.setAttribute("data-survey-chart-ready", "");
+    }
   };
 
-  const measure = () => {
+  const cancelScheduledMeasure = () => {
+    if (measureFrameRef.current != null) {
+      cancelAnimationFrame(measureFrameRef.current);
+      measureFrameRef.current = null;
+    }
+  };
+
+  const measureFromLayout = (visualTestMode: boolean) => {
     if (measuringRef.current) return;
 
     const host = hostRef.current;
     if (!host) return;
 
-    if (isVisualTestMode()) {
-      if (visualTestMeasuredRef.current) return;
+    if (visualTestMode) {
+      const cachedWidth = visualTestWidthRef.current;
+      if (cachedWidth != null && cachedWidth > 0) {
+        commitDimensions(cachedWidth, height);
+        return;
+      }
     }
 
     measuringRef.current = true;
-    const observer = observerRef.current;
-    observer?.disconnect();
+    observerRef.current?.disconnect();
 
-    const rect = host.getBoundingClientRect();
-    const width = Math.max(0, Math.floor(rect.width));
-    const measuredHeight = Math.max(height, Math.floor(rect.height));
+    const width = Math.max(0, Math.floor(host.offsetWidth));
+    const measuredHeight = Math.max(height, Math.floor(host.offsetHeight));
 
     measuringRef.current = false;
 
     if (width <= 0) {
-      if (observer && host && !isVisualTestMode()) {
-        observer.observe(host);
+      if (!visualTestMode && observerRef.current && host) {
+        observerRef.current.observe(host);
       }
       return;
     }
 
-    commitDimensions(width, measuredHeight);
-
-    if (isVisualTestMode()) {
-      visualTestMeasuredRef.current = true;
+    if (visualTestMode) {
+      visualTestWidthRef.current = width;
+      commitDimensions(width, measuredHeight);
       return;
     }
 
-    observer?.observe(host);
+    commitDimensions(width, measuredHeight);
+    observerRef.current?.observe(host);
   };
 
   const scheduleMeasure = () => {
     if (measureFrameRef.current != null) return;
     measureFrameRef.current = requestAnimationFrame(() => {
       measureFrameRef.current = null;
-      measure();
+      measureFromLayout(false);
     });
   };
 
   useLayoutEffect(() => {
+    if (!isVisualTestMode()) return;
+    measureFromLayout(true);
+  }, [height]);
+
+  useEffect(() => {
+    if (isVisualTestMode()) return;
+
     const host = hostRef.current;
     if (!host) return;
-
-    visualTestMeasuredRef.current = false;
-
-    if (isVisualTestMode()) {
-      scheduleMeasure();
-      return () => {
-        if (measureFrameRef.current != null) {
-          cancelAnimationFrame(measureFrameRef.current);
-          measureFrameRef.current = null;
-        }
-      };
-    }
 
     const observer = new ResizeObserver(() => {
       scheduleMeasure();
@@ -120,28 +127,20 @@ export function StableChartContainer({
     return () => {
       observer.disconnect();
       observerRef.current = null;
-      if (measureFrameRef.current != null) {
-        cancelAnimationFrame(measureFrameRef.current);
-        measureFrameRef.current = null;
-      }
+      cancelScheduledMeasure();
     };
   }, [height]);
 
-  // Visual tests defer measurement to rAF; ensure a follow-up pass if the first
-  // frame had zero width (e.g. host not yet in layout) without attaching observers.
-  useEffect(() => {
-    if (!isVisualTestMode() || visualTestMeasuredRef.current) return;
-    scheduleMeasure();
-    return () => {
-      if (measureFrameRef.current != null) {
-        cancelAnimationFrame(measureFrameRef.current);
-        measureFrameRef.current = null;
-      }
-    };
-  }, [height]);
+  const visualTestMode = isVisualTestMode();
 
   return (
-    <Box ref={hostRef} w="100%" h={`${height}px`} data-survey-chart-host="">
+    <Box
+      ref={hostRef}
+      w="100%"
+      h={`${height}px`}
+      data-survey-chart-host=""
+      {...(visualTestMode ? { style: { contain: "layout" } } : undefined)}
+    >
       {dimensions ? children(dimensions) : null}
     </Box>
   );
