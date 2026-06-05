@@ -5832,6 +5832,27 @@ export type Database = {
         };
         Relationships: [];
       };
+      pr_base_tree_cache: {
+        Row: {
+          base_sha: string;
+          fetched_at: string;
+          files: Json;
+          upstream_repo: string;
+        };
+        Insert: {
+          base_sha: string;
+          fetched_at?: string;
+          files: Json;
+          upstream_repo: string;
+        };
+        Update: {
+          base_sha?: string;
+          fetched_at?: string;
+          files?: Json;
+          upstream_repo?: string;
+        };
+        Relationships: [];
+      };
       profiles: {
         Row: {
           avatar_url: string | null;

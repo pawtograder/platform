@@ -102,14 +102,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
   scope?.setTag("upstream_repo", upstreamRepo);
   scope?.setTag("base_sha", baseSha);
 
-  // The pr_base_tree_cache table is created in 20260607000000_pr_base_tree_cache
-  // and is not in the generated Database types yet, so reach it through an
-  // untyped client handle. Flagged for type regen.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cacheTable = (adminSupabase as any).from("pr_base_tree_cache");
-
   // Cache check: content-addressed by the immutable (upstream_repo, base_sha).
-  const { data: cached } = await cacheTable
+  const { data: cached } = await adminSupabase
+    .from("pr_base_tree_cache")
     .select("files")
     .eq("upstream_repo", upstreamRepo)
     .eq("base_sha", baseSha)
@@ -145,9 +140,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
 
   // Write-once: the keyed commit is immutable, so a concurrent writer that beat
   // us is fine — ignore the conflict and return what we fetched.
-  const { error: upsertError } = await cacheTable.upsert(
+  const { error: upsertError } = await adminSupabase.from("pr_base_tree_cache").upsert(
     { upstream_repo: upstreamRepo, base_sha: baseSha, files },
-    { onConflict: "upstream_repo,base_sha", ignoreDuplicates: true }
+    {
+      onConflict: "upstream_repo,base_sha",
+      ignoreDuplicates: true
+    }
   );
   if (upsertError) {
     // The fetch succeeded; a cache-write failure shouldn't fail the request.

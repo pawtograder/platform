@@ -54,22 +54,9 @@ async function ingest(args: IngestArgs) {
 
 type GetPrBaseFilesResponse = { files: Record<string, string>; error?: string };
 
-/** Read a pr_base_tree_cache row (the table isn't in the generated types yet). */
+/** Read a pr_base_tree_cache row. */
 async function readCacheRow(upstreamRepo: string, baseSha: string) {
-  const { data } = await (
-    supabase as unknown as {
-      from: (t: string) => {
-        select: (c: string) => {
-          eq: (
-            c: string,
-            v: string
-          ) => {
-            eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { fetched_at: string } | null }> };
-          };
-        };
-      };
-    }
-  )
+  const { data } = await supabase
     .from("pr_base_tree_cache")
     .select("fetched_at")
     .eq("upstream_repo", upstreamRepo)
@@ -80,18 +67,7 @@ async function readCacheRow(upstreamRepo: string, baseSha: string) {
 
 /** Count pr_base_tree_cache rows for a (upstream_repo, base_sha). */
 async function countCacheRows(upstreamRepo: string, baseSha: string): Promise<number> {
-  const { count } = await (
-    supabase as unknown as {
-      from: (t: string) => {
-        select: (
-          c: string,
-          o: { count: "exact"; head: true }
-        ) => {
-          eq: (c: string, v: string) => { eq: (c: string, v: string) => Promise<{ count: number | null }> };
-        };
-      };
-    }
-  )
+  const { count } = await supabase
     .from("pr_base_tree_cache")
     .select("upstream_repo", { count: "exact", head: true })
     .eq("upstream_repo", upstreamRepo)
@@ -271,18 +247,7 @@ test.describe("PR base-tree cache (get-pr-base-files + immutable cache + RLS)", 
     const ownerClient = await createAuthenticatedClient(owner);
     // RLS-enabled with no client policy + grants revoked => no rows (and/or a
     // permission error). Either way the client gets nothing back.
-    const { data } = await (
-      ownerClient as unknown as {
-        from: (t: string) => {
-          select: (c: string) => {
-            eq: (c: string, v: string) => Promise<{ data: unknown[] | null }>;
-          };
-        };
-      }
-    )
-      .from("pr_base_tree_cache")
-      .select("upstream_repo")
-      .eq("upstream_repo", UPSTREAM);
+    const { data } = await ownerClient.from("pr_base_tree_cache").select("upstream_repo").eq("upstream_repo", UPSTREAM);
     expect(data ?? []).toHaveLength(0);
   });
 });
