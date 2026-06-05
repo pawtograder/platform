@@ -58,6 +58,18 @@ export function buildBranchProtectionRules(cfg: BranchProtectionConfig): Ruleset
 }
 
 /**
+ * True when a config requests no protection at all (every flag off), i.e.
+ * `buildBranchProtectionRules` would be empty. Callers should skip ALL of
+ * GitHub's repository-rulesets endpoints in this case: there is no rule to
+ * enforce, and hitting those endpoints requires the repository-administration
+ * permission — which some installations (e.g. staging) do not grant — so an
+ * unconditional rulesets round-trip would needlessly fail repo/handout creation.
+ */
+export function requestsNoBranchProtection(cfg: BranchProtectionConfig): boolean {
+  return buildBranchProtectionRules(cfg).length === 0;
+}
+
+/**
  * Normalised form used for ordering-insensitive equality. Sorting by `type`
  * gives a stable canonical form; parameter objects are stringified after sort.
  */

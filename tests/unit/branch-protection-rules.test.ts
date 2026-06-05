@@ -7,7 +7,8 @@ import {
   DEFAULT_BRANCH_PROTECTION,
   buildBranchProtectionRules,
   diffBranchProtectionRules,
-  planBranchProtectionAction
+  planBranchProtectionAction,
+  requestsNoBranchProtection
 } from "@/supabase/functions/_shared/branchProtection";
 
 describe("buildBranchProtectionRules", () => {
@@ -61,6 +62,33 @@ describe("buildBranchProtectionRules", () => {
         requiredReviewers: 5
       })
     ).toEqual([{ type: "non_fast_forward" }]);
+  });
+});
+
+describe("requestsNoBranchProtection", () => {
+  // Gates the early return in applyBranchProtectionRuleset: when true, NO
+  // GitHub rulesets endpoint is hit at all.
+  it("is true when every protection flag is off", () => {
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 })).toBe(
+      true
+    );
+  });
+
+  it("is true for a handout repo with force-push protection disabled (the staging case)", () => {
+    // assignment-create-handout-repo builds exactly this when protect_block_force_push is false.
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 })).toBe(
+      true
+    );
+  });
+
+  it("is false for the default config (force-push still blocked)", () => {
+    expect(requestsNoBranchProtection(DEFAULT_BRANCH_PROTECTION)).toBe(false);
+  });
+
+  it("is false when a pull request is required even with no minimum reviewers", () => {
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: true, requiredReviewers: 0 })).toBe(
+      false
+    );
   });
 });
 

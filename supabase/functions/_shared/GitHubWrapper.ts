@@ -37,7 +37,8 @@ import {
   BRANCH_PROTECTION_RULESET_NAME,
   type BranchProtectionConfig,
   DEFAULT_BRANCH_PROTECTION,
-  planBranchProtectionAction
+  planBranchProtectionAction,
+  requestsNoBranchProtection
 } from "./branchProtection.ts";
 
 import { createHash } from "node:crypto";
@@ -1195,6 +1196,19 @@ export async function applyBranchProtectionRuleset(
   scope?.setTag("block_force_push", String(cfg.blockForcePush));
   scope?.setTag("require_pull_request", String(cfg.requirePullRequest));
   scope?.setTag("required_reviewers", String(cfg.requiredReviewers));
+
+  // No protection requested → nothing to enforce. Skip every rulesets endpoint
+  // (the GET list/detail, and any create/update/delete) entirely. Two reasons:
+  // there is no rule to add, and on installations whose GitHub App lacks the
+  // repository-administration permission (e.g. staging) any rulesets call 403s,
+  // which would otherwise fail handout/repo creation. This is placed before the
+  // E2E stub seam so a no-op stays a true no-op in every mode. NOTE: we
+  // intentionally do NOT delete a pre-existing same-named ruleset when
+  // protection is turned off — no caller relies on that reconfigure behavior.
+  if (requestsNoBranchProtection(cfg)) {
+    scope?.setTag("ruleset_action", "skip_no_rules");
+    return;
+  }
 
   // E2E stub seam — record the intent and skip the GitHub round-trip.
   if (isGithubStubEnabled()) {
