@@ -2004,10 +2004,10 @@ grant execute on function public.attach_no_repo_submission_files(bigint, jsonb) 
 -- avatars / uploads-rls policy migrations. Gated by
 -- public.can_access_submission_storage_path(name) from 20260217000000.
 -- Idempotent: drop-then-create so reset / re-run is safe.
--- NOTE: requires the pinned Supabase CLI (2.92.1, see package.json / AGENTS.md).
+-- NOTE: requires the pinned Supabase CLI (2.105.0, see package.json / AGENTS.md).
 -- Older CLIs (e.g. 2.77.0) fail `db reset` here with "must be owner of table
 -- objects" due to a race with the storage container re-owning storage.objects
--- mid-reset — a CLI-version bug, not a problem with this SQL. 2.92.1 applies it
+-- mid-reset — a CLI-version bug, not a problem with this SQL. 2.105.0 applies it
 -- cleanly in both `supabase start` and `db reset`.
 drop policy if exists "submission-files owner can read" on storage.objects;
 create policy "submission-files owner can read"
