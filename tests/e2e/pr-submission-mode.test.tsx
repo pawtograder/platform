@@ -378,11 +378,7 @@ test.describe("PR submission mode (group ingest + cross-scope deactivation)", ()
     expect(indivErr).toBeNull();
     expect(typeof indivId).toBe("number");
 
-    const { data: indivBefore } = await supabase
-      .from("submissions")
-      .select("is_active")
-      .eq("id", indivId!)
-      .single();
+    const { data: indivBefore } = await supabase.from("submissions").select("is_active").eq("id", indivId!).single();
     expect(indivBefore?.is_active).toBe(true);
 
     // Form the group AFTER the individual submission exists.
@@ -436,11 +432,7 @@ test.describe("PR submission mode (group ingest + cross-scope deactivation)", ()
     });
 
     // Cross-scope deactivation: the member's prior individual submission is now inactive.
-    const { data: indivAfter } = await supabase
-      .from("submissions")
-      .select("is_active")
-      .eq("id", indivId!)
-      .single();
+    const { data: indivAfter } = await supabase.from("submissions").select("is_active").eq("id", indivId!).single();
     expect(indivAfter?.is_active).toBe(false);
 
     // Exactly one active submission across the whole group scope (the members'

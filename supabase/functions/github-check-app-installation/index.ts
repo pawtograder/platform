@@ -35,10 +35,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckAp
   scope?.setTag("repo", repo);
 
   if (!repo || !repo.includes("/")) {
-    throw new UserVisibleError('Repository must be in "owner/name" form');
+    throw new UserVisibleError('Repository must be in "owner/name" form', 400);
   }
   if (!class_id) {
-    throw new UserVisibleError("class_id is required");
+    throw new UserVisibleError("class_id is required", 400);
   }
 
   // Authorize: caller must be an instructor in this class.
