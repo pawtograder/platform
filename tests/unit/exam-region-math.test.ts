@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { boxCenterInRegion, wordsInRegion, type WordBox } from "../../lib/exam/regionMath";
+import { boxCenterInRegion, wordsInRegion, type WordBox } from "@/lib/exam/regionMath";
 
 describe("boxCenterInRegion", () => {
   const region = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 }; // covers 0.2..0.6

@@ -15,17 +15,31 @@ export default function ExamOverviewPage() {
 
   useEffect(() => {
     const supabase = createClient();
-    supabase
-      .from("exams")
-      .select("status, num_pages")
-      .eq("assignment_id", assignmentId)
-      .maybeSingle()
-      .then(({ data }) => {
+    let active = true;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("exams")
+          .select("status, num_pages")
+          .eq("assignment_id", assignmentId)
+          .maybeSingle();
+        if (!active) return;
+        if (error) {
+          setStatus("Unable to load exam status");
+          return;
+        }
         setStatus(
           data ? `Template configured (${data.num_pages} page(s), status: ${data.status})` : "No exam template yet"
         );
-        setLoading(false);
-      });
+      } catch {
+        if (active) setStatus("Unable to load exam status");
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [assignmentId]);
 
   const base = `/course/${courseId}/manage/assignments/${assignmentId}/exam`;

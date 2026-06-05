@@ -33,7 +33,8 @@ async function archive(admin: Admin, msgId: number): Promise<void> {
 }
 
 async function requeue(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  const next: ExamAsyncEnvelope = { ...env, retry_count: (env.retry_count ?? 0) + 1 };
+  // Preserve the (method, args) pairing of the discriminated envelope; only bump retry_count.
+  const next = { ...env, retry_count: (env.retry_count ?? 0) + 1 };
   await admin.schema("pgmq_public").rpc("send", {
     queue_name: QUEUE,
     message: next as unknown as Json,
@@ -520,12 +521,13 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   }
 
   try {
+    // env.args is narrowed by env.method (discriminated ExamAsyncEnvelope) — no casts needed.
     if (env.method === "process_page") {
-      await processPage(admin, env.args as ProcessPageArgs);
+      await processPage(admin, env.args);
     } else if (env.method === "match") {
-      await doMatch(admin, env.class_id, env.args as MatchArgs);
+      await doMatch(admin, env.class_id, env.args);
     } else if (env.method === "finalize") {
-      await finalize(admin, env.class_id, env.args as FinalizeArgs);
+      await finalize(admin, env.class_id, env.args);
     } else {
       throw new Error(`unknown method ${(env as { method: string }).method}`);
     }

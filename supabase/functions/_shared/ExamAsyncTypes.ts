@@ -8,11 +8,11 @@ export type FinalizeArgs = { scanned_submission_id: number };
 
 export type ExamAsyncArgs = ProcessPageArgs | MatchArgs | FinalizeArgs;
 
-export type ExamAsyncEnvelope = {
-  method: ExamAsyncMethod;
-  class_id: number;
-  batch_id: number;
-  args: ExamAsyncArgs;
-  retry_count?: number;
-  debug_id?: string;
-};
+type ExamAsyncMeta = { class_id: number; batch_id: number; retry_count?: number; debug_id?: string };
+
+// Discriminated on `method` so an envelope can't pair the wrong args with a method
+// (e.g. method "finalize" with MatchArgs); the worker's dispatch narrows args by method.
+export type ExamAsyncEnvelope =
+  | ({ method: "process_page"; args: ProcessPageArgs } & ExamAsyncMeta)
+  | ({ method: "match"; args: MatchArgs } & ExamAsyncMeta)
+  | ({ method: "finalize"; args: FinalizeArgs } & ExamAsyncMeta);

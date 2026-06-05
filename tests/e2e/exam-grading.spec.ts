@@ -34,7 +34,10 @@ test.describe("Exam grading OCR pipeline", () => {
     const bob = await createUserInClass({ role: "student", class_id: course.id, name: "Bob Jones" });
     // Unique SIS ids per run: users.sis_user_id is globally unique, so fixed ids would
     // collide across parallel browser projects and across re-runs against a persistent DB.
-    const sisBase = 100000 + Math.floor(Math.random() * 800000);
+    // Derive deterministically from the freshly-created (sequence-unique) class id rather
+    // than Math.random(); the ×10 spacing means even consecutive class ids across parallel
+    // runs can't overlap on base+1/+2/+9. (Stays within int4.)
+    const sisBase = 100000 + ((course.id * 10) % 2_000_000_000);
     const aliceSis = sisBase + 1;
     const bobSis = sisBase + 2;
     const unknownSis = sisBase + 9; // intentionally never assigned -> stays unmatched

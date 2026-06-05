@@ -509,7 +509,9 @@ begin
           where id = v_crit_id;
       end if;
 
-      -- level 3 -> rubric_checks (children of r2)
+      -- level 3 -> rubric_checks (children of r2). Intentionally INSERT-ONLY (unlike parts
+      -- and criteria above, which upsert): once a check exists we never overwrite it, so a
+      -- grader's manual edits to a generated check survive re-syncing the exam structure.
       for r3 in select * from public.exam_questions
                 where exam_id = p_exam_id and level = 3 and parent_id = r2.id order by ordinal loop
         if not exists (

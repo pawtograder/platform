@@ -55,12 +55,19 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
     let mounted = true;
     async function load() {
       const client = createClient();
+      const pages = data?.pages ?? [];
+      // Sign all page URLs in parallel (was serial — slow first paint for multi-page exams).
+      const signed = await Promise.all(
+        pages.map((p) =>
+          client.storage
+            .from("submission-files")
+            .createSignedUrl(p.storage_key, 60 * 60 * 24)
+            .then(({ data: s }) => [p.page_number, s?.signedUrl] as const)
+        )
+      );
       const next: Record<number, string> = {};
-      for (const p of data?.pages ?? []) {
-        const { data: signed } = await client.storage
-          .from("submission-files")
-          .createSignedUrl(p.storage_key, 60 * 60 * 24);
-        if (signed?.signedUrl) next[p.page_number] = signed.signedUrl;
+      for (const [pageNumber, url] of signed) {
+        if (url) next[pageNumber] = url;
       }
       if (mounted) {
         setUrls(next);

@@ -69,7 +69,8 @@ export async function uploadExamScanBatch(
       class_id: classId,
       exam_id: examId,
       total_pages: rasters.length,
-      pages_per_exam: Math.max(1, pagesPerExam),
+      // pages_per_exam is an integer column; guard against decimals / NaN from the caller.
+      pages_per_exam: Math.max(1, Math.floor(Number.isFinite(pagesPerExam) ? pagesPerExam : 1)),
       status: "uploaded"
     })
     .select("id")

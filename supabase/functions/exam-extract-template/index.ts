@@ -3,12 +3,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { assertUserIsInstructorOrGrader, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { ExamExtractTemplateRequest } from "../_shared/FunctionTypes.d.ts";
 import { getExamVisionProvider, type PageImage } from "../_shared/examVision.ts";
 
-type ExtractTemplateRequest = { exam_id: number };
-
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { exam_id } = (await req.json()) as ExtractTemplateRequest;
+  const { exam_id } = (await req.json()) as ExamExtractTemplateRequest;
   scope?.setTag("function", "exam-extract-template");
   scope?.setTag("exam_id", String(exam_id));
 

@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { examCount, groupByExam } from "../../lib/exam/split";
+import { examCount, groupByExam } from "@/lib/exam/split";
 
 describe("groupByExam", () => {
   it("splits a flat page list into per-exam groups", () => {
