@@ -256,6 +256,20 @@ export type RegradeRequestNotification = NotificationEnvelope & {
       }
   );
 
+// Sent when an instructor promotes a late commit to be the student's active
+// submission after extending the deadline (deadline-extension regrade flow).
+export type SubmissionRegradedNotification = NotificationEnvelope & {
+  type: "submission_regraded";
+  action: "promoted_after_extension";
+  submission_id: number;
+  old_submission_id: number | null;
+  assignment_id: number;
+  old_score: number | null;
+  new_score: number | null;
+  regraded_by: string;
+  regraded_by_name: string;
+};
+
 // function truncateString(str: string, maxLength: number) {
 //   if (str.length <= maxLength) {
 //     return str;
@@ -513,6 +527,36 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
   );
 }
 
+function SubmissionRegradedNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as SubmissionRegradedNotification;
+  const regrader = useUserProfile(body.regraded_by);
+
+  const formatScore = (s: number | null) => (s === null || s === undefined ? "?" : `${s}`);
+  const delta =
+    body.old_score !== null && body.old_score !== undefined && body.new_score !== null && body.new_score !== undefined
+      ? body.new_score - body.old_score
+      : null;
+  const direction = delta === null ? "" : delta > 0 ? " (↑)" : delta < 0 ? " (↓)" : " (no change)";
+
+  if (!regrader) {
+    return <Skeleton height="40px" width="100%" />;
+  }
+
+  return (
+    <HStack align="flex-start" gap="3">
+      <Avatar.Root size="sm" flexShrink="0">
+        <Avatar.Image src={regrader?.avatar_url} alt="" />
+        <Avatar.Fallback fontSize="xs">{regrader?.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
+      <VStack align="flex-start" gap="1" flex="1">
+        <Markdown style={NOTIFICATION_BODY_STYLE}>
+          {`**${body.regraded_by_name}** accepted a later commit for grading after extending the deadline. Your autograder score changed from **${formatScore(body.old_score)}** to **${formatScore(body.new_score)}**${direction}.`}
+        </Markdown>
+      </VStack>
+    </HStack>
+  );
+}
+
 function SystemNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as SystemNotification;
 
@@ -595,6 +639,9 @@ function getNotificationUrl(notification: Notification, course_id: string): stri
   } else if (body.type === "regrade_request") {
     const regradeBody = body as RegradeRequestNotification;
     return `/course/${course_id}/assignments/${regradeBody.assignment_id}/submissions/${regradeBody.submission_id}/files#regrade-request-${regradeBody.regrade_request_id}`;
+  } else if (body.type === "submission_regraded") {
+    const regradedBody = body as SubmissionRegradedNotification;
+    return `/course/${course_id}/assignments/${regradedBody.assignment_id}/submissions/${regradedBody.submission_id}/files`;
   }
 
   // Email notifications and assignment group member notifications don't have specific URLs
@@ -714,6 +761,8 @@ export default function NotificationTeaser({
     teaser = <SystemNotificationTeaser notification={notification} />;
   } else if (body.type === "regrade_request") {
     teaser = <RegradeRequestNotificationTeaser notification={notification} />;
+  } else if (body.type === "submission_regraded") {
+    teaser = <SubmissionRegradedNotificationTeaser notification={notification} />;
   } else {
     teaser = <Markdown>{`*Unknown notification type: ${body.type}*`}</Markdown>;
   }

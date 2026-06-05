@@ -23,22 +23,26 @@ async function markCheckRunRequested({
   adminSupabase,
   checkRun,
   triggeredBy,
-  requestedAt
+  requestedAt,
+  stageOnly
 }: {
   adminSupabase: SupabaseClient<Database>;
   checkRun: RepositoryCheckRunRow;
   triggeredBy: string;
   requestedAt: string;
+  stageOnly: boolean;
 }): Promise<RepositoryCheckRunRow> {
   const { data: updated, error: updateError } = await adminSupabase
     .from("repository_check_runs")
     .update({
       triggered_by: triggeredBy,
+      // `stage_only` is a newer column; cast until generated types are regenerated.
+      stage_only: stageOnly,
       status: {
         ...statusObject(checkRun.status),
         requested_at: requestedAt
       }
-    })
+    } as Database["public"]["Tables"]["repository_check_runs"]["Update"])
     .eq("id", checkRun.id)
     .select("*")
     .single();
@@ -52,12 +56,14 @@ async function upsertManualCheckRun({
   adminSupabase,
   repoData,
   commit,
-  triggeredBy
+  triggeredBy,
+  stageOnly
 }: {
   adminSupabase: SupabaseClient<Database>;
   repoData: Database["public"]["Tables"]["repositories"]["Row"];
   commit: GetCommitResponse["data"];
   triggeredBy: string;
+  stageOnly: boolean;
 }): Promise<RepositoryCheckRunRow> {
   // `commit.sha` is the canonical full lowercase sha returned by the GitHub API.
   // Always key DB lookups off it so short / mixed-case input from callers does
@@ -75,7 +81,7 @@ async function upsertManualCheckRun({
   }
   const now = new Date().toISOString();
   if (existing) {
-    return await markCheckRunRequested({ adminSupabase, checkRun: existing, triggeredBy, requestedAt: now });
+    return await markCheckRunRequested({ adminSupabase, checkRun: existing, triggeredBy, requestedAt: now, stageOnly });
   }
 
   const commitDate = commit.commit.author?.date ?? commit.commit.committer?.date ?? null;
@@ -91,6 +97,8 @@ async function upsertManualCheckRun({
       sha: canonicalSha,
       profile_id: repoData.profile_id,
       triggered_by: triggeredBy,
+      // `stage_only` is a newer column; cast until generated types are regenerated.
+      stage_only: stageOnly,
       status: {
         created_at: now,
         commit_author: commitAuthor,
@@ -98,7 +106,7 @@ async function upsertManualCheckRun({
         created_by: `manual trigger by ${triggeredBy}`,
         requested_at: now
       }
-    })
+    } as Database["public"]["Tables"]["repository_check_runs"]["Insert"])
     .select("*")
     .single();
   if (!insertError) {
@@ -119,14 +127,15 @@ async function upsertManualCheckRun({
       `Failed to recover raced repository check run insert: ${racedError?.message ?? "not found"}`
     );
   }
-  return await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now });
+  return await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now, stageOnly });
 }
 
 export async function handleRequest(
   req: Request,
   scope: Sentry.Scope
 ): Promise<{ message: string; repository_check_run_id: number }> {
-  const { repository, sha, class_id } = (await req.json()) as AutograderTriggerGradingWorkflowRequest;
+  const { repository, sha, class_id, stage_only } = (await req.json()) as AutograderTriggerGradingWorkflowRequest;
+  const stageOnly = stage_only === true;
   if (!repository || typeof repository !== "string" || !repository.includes("/")) {
     throw new SecurityError("Invalid repository");
   }
@@ -183,7 +192,8 @@ export async function handleRequest(
     adminSupabase,
     repoData,
     commit,
-    triggeredBy: enrollment.private_profile_id
+    triggeredBy: enrollment.private_profile_id,
+    stageOnly
   });
 
   await triggerWorkflow(repository, commit.sha, "grade.yml", scope);

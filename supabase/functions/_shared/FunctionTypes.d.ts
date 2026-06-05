@@ -310,6 +310,9 @@ export type AutograderTriggerGradingWorkflowRequest = {
   repository: string;
   sha: string;
   class_id: number;
+  // When true, a submission created from this trigger is marked is_staged=true
+  // (deadline-extension regrade preview) instead of becoming the active submission.
+  stage_only?: boolean;
 };
 export type AutograderTriggerGradingWorkflowResponse = {
   message: string;
