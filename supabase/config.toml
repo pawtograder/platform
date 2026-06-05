@@ -92,6 +92,12 @@ public = false
 [storage.buckets.uploads]
 public = true
 
+[storage.buckets.exam-templates]
+public = false
+
+[storage.buckets.exam-scans]
+public = false
+
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
 # public = false
@@ -691,6 +697,18 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
+
+[functions.exam-async-worker]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-async-worker/deno.json"
+entrypoint = "./functions/exam-async-worker/index.ts"
+
+[functions.exam-extract-template]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-extract-template/deno.json"
+entrypoint = "./functions/exam-extract-template/index.ts"
 
 [functions.gradebook-column-inserted]
 enabled = true

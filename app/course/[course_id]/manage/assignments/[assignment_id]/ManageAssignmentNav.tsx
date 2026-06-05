@@ -18,7 +18,8 @@ import {
   FaPooStorm,
   FaSearch,
   FaShieldAlt,
-  FaUsers
+  FaUsers,
+  FaFileAlt
 } from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
@@ -43,6 +44,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     instructorsOnly: true
   },
   { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
+  {
+    label: "Exam (Scan & OCR)",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/exam`,
+    icon: FaFileAlt,
+    instructorsOnly: "graderOrInstructor"
+  },
   {
     label: "Repository Status",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
