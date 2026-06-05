@@ -411,6 +411,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     const viewZonesRef = useRef<Map<number, string>>(new Map());
     const viewZoneHeightsRef = useRef<Map<number, number>>(new Map());
     const highlightDecorationRef = useRef<string | null>(null);
+    const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const symbolIndexRef = useRef<SymbolIndex>({ byName: new Map() });
     const symbolsByFileIdRef = useRef<Map<number, CodeSymbol[]>>(new Map());
     const indexedFileIdsRef = useRef<Set<number>>(new Set());
@@ -598,8 +599,13 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               const decorationIds = editorRef.current.deltaDecorations([], decorations);
               highlightDecorationRef.current = decorationIds[0];
 
-              // Fade out after 2 seconds
-              setTimeout(() => {
+              // Fade out after 2 seconds. Track the timer so a rapid re-trigger or unmount can cancel
+              // it — otherwise it can fire on a disposed editor (editorRef is not nulled on unmount).
+              if (highlightTimeoutRef.current) {
+                clearTimeout(highlightTimeoutRef.current);
+              }
+              highlightTimeoutRef.current = setTimeout(() => {
+                highlightTimeoutRef.current = null;
                 if (editorRef.current && highlightDecorationRef.current) {
                   editorRef.current.deltaDecorations([highlightDecorationRef.current], []);
                   highlightDecorationRef.current = null;
@@ -1049,6 +1055,10 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       const providerDisposables = providerDisposablesRef.current;
 
       return () => {
+        if (highlightTimeoutRef.current) {
+          clearTimeout(highlightTimeoutRef.current);
+          highlightTimeoutRef.current = null;
+        }
         models.forEach((model) => model.dispose());
         models.clear();
         decorations.clear();

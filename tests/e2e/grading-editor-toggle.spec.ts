@@ -79,7 +79,12 @@ test.describe("Grading editor view toggle", () => {
     // The preference persisted to the DB.
     await expect
       .poll(async () => {
-        const { data } = await supabase.from("users").select("preferences").eq("user_id", instructor!.user_id).single();
+        const { data, error } = await supabase
+          .from("users")
+          .select("preferences")
+          .eq("user_id", instructor!.user_id)
+          .single();
+        if (error) throw new Error(`Failed to read user preferences: ${error.message}`);
         return (data?.preferences as { grading?: { useMonacoEditor?: boolean } } | null)?.grading?.useMonacoEditor;
       })
       .toBe(false);
