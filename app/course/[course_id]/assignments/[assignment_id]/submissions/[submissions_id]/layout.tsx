@@ -94,6 +94,8 @@ import {
   FaInfo,
   FaQuestionCircle,
   FaRobot,
+  FaRocket,
+  FaTasks,
   FaTimesCircle
 } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -2242,13 +2244,23 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // else files.
   const defaultSubPage =
     !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
-  const activeSubPage = explicitSubPage ?? defaultSubPage;
+  // repo-analytics / checks / deployments aren't returned by
+  // getSubmissionFilesOrResultsTab; on those pages don't fall back to the default
+  // core tab, or it would render a second highlighted tab alongside the real one.
+  const isNonCoreSubPage = /\/(repo-analytics|checks|deployments)(?:\/|$|\?|#)/.test(pathname);
+  const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
+  // Checks/Deployments are PR-mode surfaces — only relevant when this submission
+  // came from a PR (has a pr_number/pr_state) or the assignment is configured in
+  // PR submission mode. Keeps these tabs off the (majority) push-mode submissions
+  // rather than cluttering every submission. Mirrors how repo-analytics is gated.
+  const isPrSubmission =
+    submission.pr_number != null || submission.pr_state != null || assignment?.submission_mode === "pr";
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2457,6 +2469,22 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Files
           </Button>
         </NextLink>
+        {isPrSubmission && (
+          <>
+            <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
+              <Button variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+                <Icon as={FaTasks} />
+                Checks
+              </Button>
+            </NextLink>
+            <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
+              <Button variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+                <Icon as={FaRocket} />
+                Deployments
+              </Button>
+            </NextLink>
+          </>
+        )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
           <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
             <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>

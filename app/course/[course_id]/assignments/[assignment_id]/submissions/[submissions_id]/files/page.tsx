@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import CodeFile, {
   formatPoints,
@@ -1153,6 +1154,45 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   }
 }
 
+/**
+ * For PR submissions (base_sha + head_sha present) the Files view represents a
+ * base→head diff rather than a plain snapshot. We surface that framing here and
+ * link to GitHub's native compare view for the authoritative per-file diff.
+ *
+ * TODO(pr-diff): render per-file base→head diffs inline (reusing the
+ * `generateSimpleDiff` helper from the submission layout). That needs the BASE
+ * tree contents, which are not snapshotted client-side today — `submission_files`
+ * only carries the HEAD snapshot. Wiring that up requires a base-tree fetch
+ * (edge function / RPC) that does not exist yet, so we intentionally do not
+ * invent a backend here and show the head snapshot + the GitHub compare link.
+ */
+function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  // Only meaningful for PR submissions that have both endpoints of the diff.
+  if (!submission.base_sha || !submission.head_sha) {
+    return null;
+  }
+  const base = submission.base_sha;
+  const head = submission.head_sha;
+  const compareUrl = submission.repository
+    ? `https://github.com/${submission.repository}/compare/${base}...${head}`
+    : null;
+  return (
+    <Alert status="info" title="Pull request submission" mb={3}>
+      <VStack align="start" gap={1}>
+        <Text fontSize="sm">
+          This submission is a pull request. The files below are the head snapshot ({head.substring(0, 7)}); the
+          authoritative base→head diff (base {base.substring(0, 7)}) is on GitHub.
+        </Text>
+        {compareUrl && (
+          <Link href={compareUrl} target="_blank">
+            View the {base.substring(0, 7)}…{head.substring(0, 7)} diff on GitHub
+          </Link>
+        )}
+      </VStack>
+    </Alert>
+  );
+}
+
 export default function FilesView() {
   const searchParams = useSearchParams();
   const submissionData = useSubmissionMaybe();
@@ -1487,6 +1527,7 @@ export default function FilesView() {
 
   return (
     <>
+      <PrDiffNotice submission={submission} />
       <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
         <Box w={"100%"} minW={"100%"}>
           <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
