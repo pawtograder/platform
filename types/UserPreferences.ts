@@ -5,7 +5,10 @@ import type { Json } from "@/utils/supabase/SupabaseTypes";
  * Add new top-level keys or nested sections here as the app grows.
  */
 export type UserPreferencesGrading = {
-  /** When true, submission file grading uses Monaco; when false, plain text (no Monaco bundle). */
+  /**
+   * When true (the default), submission-file grading uses the Monaco editor (cross-file go-to-def,
+   * inline rubric checks, etc.); when false, the classic plain / starry-night view (no Monaco bundle).
+   */
   useMonacoEditor: boolean;
 };
 
@@ -15,7 +18,7 @@ export type UserPreferences = {
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   grading: {
-    useMonacoEditor: false
+    useMonacoEditor: true
   }
 };
 

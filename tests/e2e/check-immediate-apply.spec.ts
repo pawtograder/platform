@@ -94,9 +94,21 @@ async function openFiles(page: Parameters<typeof loginAsUser>[0]) {
 }
 
 // Right-click a line, then open the criteria flyout from the Monaco context menu (all annotation
-// checks here live in one criteria, so there is a single "… ▸" item).
+// checks here live in one criteria, so there is a single "… ▸" item). Monaco virtualizes lines, so
+// scroll the target line into the rendered DOM first (lower lines can be out of view once an existing
+// comment overlay + the editor chrome consume height).
 async function openCriteriaFlyout(page: Parameters<typeof loginAsUser>[0], lineText: string) {
-  await page.getByText(lineText).click({ button: "right" });
+  const line = page.locator(".view-line", { hasText: lineText });
+  for (let i = 0; i < 12 && (await line.count()) === 0; i++) {
+    await page.locator(".monaco-editor").first().hover();
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(150);
+  }
+  await line
+    .first()
+    .scrollIntoViewIfNeeded()
+    .catch(() => {});
+  await line.first().click({ button: "right" });
   const criteria = page.locator(".monaco-menu .action-item", { hasText: "▸" }).first();
   await criteria.hover();
   await criteria.click();
