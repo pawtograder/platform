@@ -497,6 +497,30 @@ export async function confirmPrLink(
   });
 }
 
+export type GetPrBaseFilesResponse = {
+  /** Text files of the upstream base tree as { "path": "contents" }. */
+  files: Record<string, string>;
+  /** Present when the base fetch failed; the caller should fall back to the GitHub compare link. */
+  error?: string;
+};
+
+/**
+ * Fetch the upstream BASE tree (text files) for a pr-mode submission so the
+ * Files view can render an inline base->head diff (head comes from the already
+ * loaded `submission_files`). Results are served from an immutable, content
+ * addressed cache; only one GitHub clone happens per (upstream_repo, base_sha).
+ * Returns `{ files: {} }` for non-pr submissions or on clone failure so the UI
+ * can degrade to the GitHub compare link.
+ */
+export async function getPrBaseFiles(
+  submissionId: number,
+  supabase: SupabaseClient<Database>
+): Promise<GetPrBaseFilesResponse> {
+  return await invokeEdgeFunction<GetPrBaseFilesResponse>(supabase, "get-pr-base-files", {
+    body: { submission_id: submissionId }
+  });
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,

@@ -274,6 +274,59 @@ export type IngestResult = {
 };
 
 /**
+ * Parse a zipball buffer into `{ strippedPath: contents }` for TEXT files only,
+ * applying the exact same size guards / top-dir stripping / binary detection /
+ * path sanitization as the submission writer. Binaries are skipped (the caller —
+ * the PR base-tree cache — only diffs text). Read-only: this neither writes
+ * submission_files nor touches storage, so it's safe to use for the base side of
+ * a PR diff (which is not a submission).
+ *
+ * Shares the writer's guards so a pathological base tree can't blow the edge
+ * isolate's heap any more than a pathological student repo can.
+ */
+export function collectTextFilesFromZipBuffer(zipBuffer: Buffer): Promise<Record<string, string>> {
+  return (async () => {
+    if (zipBuffer.length > MAX_SUBMISSION_ZIP_BYTES) {
+      throw new SubmissionTooLargeError("download", Math.ceil(zipBuffer.length / (1024 * 1024)), MAX_SUBMISSION_ZIP_MB);
+    }
+
+    const zip = await openZip.buffer(zipBuffer);
+
+    const totalUncompressedBytes = zip.files.reduce(
+      (sum: number, f: { uncompressedSize?: number }) => sum + (f.uncompressedSize ?? 0),
+      0
+    );
+    if (totalUncompressedBytes > MAX_SUBMISSION_UNZIPPED_BYTES) {
+      throw new SubmissionTooLargeError(
+        "extracted",
+        Math.ceil(totalUncompressedBytes / (1024 * 1024)),
+        MAX_SUBMISSION_UNZIPPED_MB
+      );
+    }
+
+    const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
+    const files = zip.files.filter((f: { path: string; type: string }) => {
+      if (f.type !== "File") return false;
+      const rel = stripTopDir(f.path);
+      if (rel === "") return false;
+      if (isBinaryFile(rel)) return false;
+      return true;
+    });
+
+    const out: Record<string, string> = {};
+    for (const zipEntry of files) {
+      const name = stripTopDir(zipEntry.path);
+      const contents: Buffer = await zipEntry.buffer();
+      if (contents.length > MAX_FILE_SIZE) {
+        throw new SubmissionFileTooLargeError(name, contents.length);
+      }
+      out[name] = contents.toString("utf-8");
+    }
+    return out;
+  })();
+}
+
+/**
  * Write the files from an already-downloaded zipball into submission_files.
  *
  * The two size guards throw `SubmissionTooLargeError`; the per-file cap throws
