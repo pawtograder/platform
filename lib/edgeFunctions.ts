@@ -481,6 +481,22 @@ export async function checkAppInstallation(
   });
 }
 
+export type PrLinkConfirmResponse = { submission_id: number | null };
+
+/**
+ * Confirms which candidate pull request is the submission PR for a pr-mode
+ * assignment and ingests its current state as a submission. Used by the student
+ * "which PR is your submission?" picker and by staff linking a PR manually.
+ */
+export async function confirmPrLink(
+  params: { link_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<PrLinkConfirmResponse> {
+  return await invokeEdgeFunction<PrLinkConfirmResponse>(supabase, "pr-link-confirm", {
+    body: params
+  });
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,
