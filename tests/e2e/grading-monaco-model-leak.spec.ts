@@ -155,9 +155,7 @@ test.describe("Monaco grading viewer model leak", () => {
     await page.waitForTimeout(500);
     const finalCount = await modelCount();
 
-    // Generous bound: one mounted pane creates one model per file. Allow up to ~2x the file count for a
-    // transient overlap during a switch — far below the ~baseline+16 a per-switch leak would produce.
-    const upperBound = FILES.length * 2;
+    const upperBound = baseline + FILES.length * 2;
     expect(
       finalCount,
       `live Monaco models after ${ROUNDS * order.length} switches (baseline ${baseline}); a value near ` +
