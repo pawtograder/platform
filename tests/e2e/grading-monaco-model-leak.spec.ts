@@ -32,7 +32,10 @@ dotenv.config({ path: ".env.local", quiet: true });
 const FILES: { name: string; contents: string }[] = [
   { name: "alpha.py", contents: "# ALPHA_MARKER\nclass Alpha:\n    def run(self):\n        return 1\n" },
   { name: "bravo.py", contents: "# BRAVO_MARKER\nclass Bravo:\n    def run(self):\n        return 2\n" },
-  { name: "charlie.ts", contents: "// CHARLIE_MARKER\nexport class Charlie {\n  run(): number {\n    return 3;\n  }\n}\n" },
+  {
+    name: "charlie.ts",
+    contents: "// CHARLIE_MARKER\nexport class Charlie {\n  run(): number {\n    return 3;\n  }\n}\n"
+  },
   { name: "delta.ts", contents: "// DELTA_MARKER\nexport class Delta {\n  run(): number {\n    return 4;\n  }\n}\n" }
 ];
 
