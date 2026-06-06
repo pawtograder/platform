@@ -933,7 +933,7 @@ export async function createUserInClass({
     publicProfileData = newPublicProfileData;
     privateProfileData = newPrivateProfileData;
 
-    await supabase.from("user_roles").insert({
+    const { error: roleInsertError } = await supabase.from("user_roles").insert({
       user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
@@ -942,6 +942,13 @@ export async function createUserInClass({
       class_section_id: section_id,
       lab_section_id: lab_section_id
     });
+    // Check the insert: an unchecked failure here (e.g. a cold PostgREST
+    // schema cache on a fresh stack) makes the .single() read-back below find
+    // 0 rows and throw the misleading "Failed to get profile" instead of the
+    // real cause. Fail loudly at the actual point of failure.
+    if (roleInsertError) {
+      throw new Error(`Failed to create ${role} user_role in class ${class_id}: ${roleInsertError.message}`);
+    }
   } else if (section_id || lab_section_id) {
     await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
       supabase

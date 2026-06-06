@@ -199,6 +199,46 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Phase 2c — wait for PostgREST to serve the freshly-migrated schema.
+# -----------------------------------------------------------------------------
+# SeedDB.ts does all its writes through PostgREST (the REST API behind
+# $SUPABASE_URL/rest/v1), not raw SQL. On a fresh install the migrations Job
+# creates public.* only moments before this hook fires, and PostgREST caches
+# the schema — until it reloads, requests against the just-migrated tables hit
+# a stale cache and the seeder fails partway with a confusing downstream error
+# (observed 2026-06-06: "Failed to get profile: Cannot coerce the result to a
+# single JSON object" — the user_roles read-back found 0 rows because the write
+# never landed through the cold cache; deterministic on every fresh preview).
+# Nudge a reload (NOTIFY pgrst) and poll until REST actually serves a migrated
+# table before we start seeding.
+rest_probe() {
+  node -e '
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    const url = process.env.SUPABASE_URL + "/rest/v1/classes?select=id&limit=1";
+    fetch(url, { headers: { apikey: key, Authorization: "Bearer " + key } })
+      .then(async (r) => {
+        if (process.env.SEED_REST_VERBOSE) console.error("    GET /rest/v1/classes -> HTTP " + r.status + " " + (await r.text()).slice(0, 200));
+        process.exit(r.ok ? 0 : 1);
+      })
+      .catch((e) => { if (process.env.SEED_REST_VERBOSE) console.error("    " + (e && e.message ? e.message : e)); process.exit(1); });
+  ' 2>/dev/null
+}
+psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
+ready=0
+for i in $(seq 1 60); do
+  if rest_probe; then ready=1; log "PostgREST serving migrated schema (public.classes)"; break; fi
+  # Re-nudge each iteration: PostgREST coalesces reload NOTIFYs, so this is cheap.
+  psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
+  log "waiting for PostgREST schema cache ($i/60)"
+  sleep 3
+done
+if [ "$ready" -ne 1 ]; then
+  err "PostgREST ($SUPABASE_URL/rest/v1) not serving migrated schema after 180s; last probe:"
+  SEED_REST_VERBOSE=1 rest_probe || true
+  fail "PostgREST schema cache cold — writes would silently fail"
+fi
+
+# -----------------------------------------------------------------------------
 # Phase 3 — idempotency check
 # -----------------------------------------------------------------------------
 # SeedDB.ts always creates a NEW class with the configured name. If we
