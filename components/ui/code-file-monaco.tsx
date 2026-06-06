@@ -7,7 +7,7 @@ import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } fr
 import { Badge, Box, Button, Flex, HStack, Icon, Text } from "@chakra-ui/react";
 import { useColorMode } from "@/components/ui/color-mode";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { FaComments, FaEyeSlash, FaTimes } from "react-icons/fa";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
@@ -47,6 +47,10 @@ const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.de
 
 export type { RubricCheckSubOption, RubricCheckDataWithOptions, CodeFileHandle, CodeFileProps };
 export { isRubricCheckDataWithOptions };
+
+// Monotonic counter used to give every editor mount a unique model-URI authority (see instanceIdRef).
+// Module-scoped so it is shared across all panes in the (single, client-only) bundle.
+let paneInstanceSeq = 0;
 
 // Map file extensions to Monaco language IDs
 function getMonacoLanguage(fileName: string): string {
@@ -394,7 +398,19 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
     // file. In split view two panes mount at once, so they must not request the same URI — otherwise
     // the second pane throws "Cannot add model because it already exists!". Scope every model URI to
     // this instance via a unique authority; `uri.path` is unchanged, so filename lookups still work.
-    const instanceId = useId().replace(/[^a-zA-Z0-9]/g, "");
+    //
+    // This is a *per-mount* id, deliberately NOT useId(): useId is stable for a given position in the
+    // React tree, so when this editor remounts at the same position — and it remounts constantly (the
+    // page swaps in a loading skeleton on every file switch, and React keeps the outgoing page mounted
+    // during route transitions) — the old and new mounts would share an authority. The new mount would
+    // then adopt the previous mount's models via getModel(), tangling which instance owns and disposes
+    // them and leaking models into monaco's global (singleton) registry. A fresh id per mount gives
+    // every instance a private model namespace it alone creates and tears down on unmount.
+    const instanceIdRef = useRef<string>("");
+    if (!instanceIdRef.current) {
+      instanceIdRef.current = `${paneInstanceSeq++}`;
+    }
+    const instanceId = instanceIdRef.current;
 
     const [expanded, setExpanded] = useState<number[]>([]);
     // Flips true once the (dynamically imported) Monaco editor has mounted. Effects that draw view
@@ -780,6 +796,14 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         monacoRef.current = monaco;
         setEditorReady(true);
 
+        // @monaco-editor/react creates its own throwaway model from the (empty) `value` prop and
+        // attaches it before onMount fires. We immediately replace it with our own per-file models
+        // below, which orphans that throwaway. The library only disposes `editor.getModel()` on
+        // unmount — by then that's *our* model, not its original — so the throwaway leaks one model
+        // per mount. Monaco is a singleton, so these accumulate across the whole SPA session until a
+        // full reload. Capture it now and dispose it once we've swapped in our model.
+        const libraryInitialModel = editor.getModel();
+
         // Create models for every submission file (not just the displayed one) so cross-file
         // go-to-definition can target them. Scoped to this editor instance so split panes don't
         // collide on the global model registry.
@@ -798,6 +822,12 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           if (model) {
             editor.setModel(model);
           }
+        }
+
+        // Dispose the library's throwaway model now that ours is attached. Guard against the case
+        // where we never swapped (no currentFile) and it's still the editor's active model.
+        if (libraryInitialModel && libraryInitialModel !== editor.getModel() && !libraryInitialModel.isDisposed()) {
+          libraryInitialModel.dispose();
         }
 
         // Clean up old providers
@@ -1062,8 +1092,23 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           clearTimeout(highlightTimeoutRef.current);
           highlightTimeoutRef.current = null;
         }
-        models.forEach((model) => model.dispose());
+        models.forEach((model) => {
+          if (!model.isDisposed()) model.dispose();
+        });
         models.clear();
+        // Safety net: dispose any straggler models scoped to this mount's authority that never made it
+        // into modelsRef (e.g. an interrupted mount, or a model created but not yet tracked). Each
+        // mount owns a unique authority, so this only ever touches our own models — and every undisposed
+        // model keeps a listener on monaco's global services, which is exactly the leak we're fixing.
+        const monaco = monacoRef.current;
+        if (monaco) {
+          const authority = `pane-${instanceId}`;
+          for (const model of monaco.editor.getModels()) {
+            if (!model.isDisposed() && model.uri.authority === authority) {
+              model.dispose();
+            }
+          }
+        }
         decorations.clear();
         viewZones.clear();
         setViewZoneNodes(new Map());
@@ -1079,7 +1124,8 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         baseOpenCodeEditorRef.current = null;
         overrideOpenCodeEditorRef.current = null;
       };
-    }, []);
+      // instanceId is a stable per-mount constant, so this still only runs cleanup on unmount.
+    }, [instanceId]);
 
     // Handle editor before mount (worker setup)
     const handleEditorWillMount = useCallback(() => {
