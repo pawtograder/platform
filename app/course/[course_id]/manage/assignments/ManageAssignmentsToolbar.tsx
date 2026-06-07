@@ -3,6 +3,7 @@
 import { Button, HStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import SyncStaffTeamButton from "@/app/course/[course_id]/manage/assignments/syncStaffTeamButton";
+import InitializeGithubButton from "@/app/course/[course_id]/manage/assignments/initializeGithubButton";
 
 export function ManageAssignmentsToolbar({ courseId }: { courseId: number }) {
   return (
@@ -13,6 +14,7 @@ export function ManageAssignmentsToolbar({ courseId }: { courseId: number }) {
       <Button size="xs" asChild variant="outline">
         <NextLink href={`/course/${courseId}/manage/regrade-requests`}>All regrade requests</NextLink>
       </Button>
+      <InitializeGithubButton course_id={courseId} />
       <SyncStaffTeamButton course_id={courseId} />
     </HStack>
   );
