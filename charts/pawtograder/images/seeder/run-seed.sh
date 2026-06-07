@@ -211,27 +211,32 @@ fi
 # confirmed deterministic — direct-SQL inserts persisted while the seeder's
 # identical REST inserts vanished, and the rest pod had 0 restarts).
 #
-# A read/schema probe is NOT sufficient (reads work the whole time). Gate on a
-# real write round-trip instead: REST-insert a throwaway row, require REST to
-# read it back, then delete it via SQL (reliable). revoked_token_ids is a
-# self-contained leaf table (no triggers, no inbound FKs, single text PK), so a
-# throwaway insert/delete has no side effects. Nudge a schema reload each pass.
+# A read/schema probe is NOT sufficient (reads work the whole time). Nor is a
+# write to a non-RLS table: the lost writes are specifically service_role REST
+# inserts into RLS-enabled tables (profiles, user_roles) — a plain leaf table
+# without RLS persists fine through the same window and would mask the problem.
+# So probe the ACTUAL failing path: a service_role REST insert into an
+# RLS-enabled table, confirmed via a REST read-back, deleted via SQL.
+# github_circuit_breakers is the cleanest such table — RLS on with an explicit
+# service_role ALL-policy, no triggers, no FKs, simple (scope,key) text PK — so
+# a throwaway insert/delete has no side effects. Nudge a schema reload each pass.
 PROBE_TOKEN="__seed_write_probe__"
 export PROBE_TOKEN
 rest_write_probe() {
   node -e '
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
     const h = { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json", Prefer: "return=minimal" };
-    const base = process.env.SUPABASE_URL + "/rest/v1/revoked_token_ids";
-    fetch(base, { method: "POST", headers: h, body: JSON.stringify({ token_id: process.env.PROBE_TOKEN }) })
+    const base = process.env.SUPABASE_URL + "/rest/v1/github_circuit_breakers";
+    const tok = process.env.PROBE_TOKEN;
+    fetch(base, { method: "POST", headers: h, body: JSON.stringify({ scope: tok, key: tok }) })
       .then((w) => { if (!w.ok) process.exit(1);
-        return fetch(base + "?token_id=eq." + encodeURIComponent(process.env.PROBE_TOKEN) + "&select=token_id", { headers: h }); })
+        return fetch(base + "?scope=eq." + encodeURIComponent(tok) + "&select=scope", { headers: h }); })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("read HTTP " + r.status))))
       .then((rows) => process.exit(Array.isArray(rows) && rows.length >= 1 ? 0 : 1))
       .catch(() => process.exit(1));
   ' 2>/dev/null
 }
-clear_probe() { psql -tAc "DELETE FROM public.revoked_token_ids WHERE token_id='${PROBE_TOKEN}'" >/dev/null 2>&1 || true; }
+clear_probe() { psql -tAc "DELETE FROM public.github_circuit_breakers WHERE scope='${PROBE_TOKEN}'" >/dev/null 2>&1 || true; }
 clear_probe
 psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
 ready=0
