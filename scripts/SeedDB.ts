@@ -691,7 +691,13 @@ async function main() {
 
     await runSeeding(config);
   } catch (error) {
-    console.error("❌ Seeding failed:", error);
+    // Log with a greppable `[seed]` prefix and ALWAYS include the stack — when
+    // this runs as a k8s post-install hook the pod is often gone before its
+    // logs can be read, so the one log line we do get needs to carry the full
+    // trace, not just the message. (See the 2026-06-06 preview-deploy seed
+    // failure, where a transient error left no actionable trace.)
+    const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
+    console.error(`[seed] ❌ Seeding failed: ${detail}`);
     process.exit(1);
   }
 }

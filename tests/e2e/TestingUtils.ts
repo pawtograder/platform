@@ -885,11 +885,37 @@ export async function createUserInClass({
   let publicProfileData: { id: string }, privateProfileData: { id: string };
 
   if (existingRole.length > 0 && !roleCheckError) {
-    // User already enrolled in class, get existing profile data
+    // User already enrolled in class, get existing profile data. This also
+    // covers the real demo class: the create_user_ensure_profiles_and_demo
+    // trigger provisions a profile + role for the is_demo class when the auth
+    // user is created, so the role already exists here and we just reuse it.
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
-  } else if (class_id !== 1) {
-    // User not enrolled or new class, create profiles and enrollment
+    // Apply any requested section assignment to the pre-existing role.
+    if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
+  } else {
+    // Not enrolled (and the trigger didn't provision us — e.g. a normal,
+    // non-is_demo class). Create profiles + enrollment ourselves.
+    //
+    // NOTE: this used to be `else if (class_id !== 1)`, which assumed class 1
+    // is always the trigger-provisioned demo class and skipped provisioning
+    // for it. On a fresh database the seeder's own (non-demo) class gets id 1,
+    // so that skip left every seeded user with no profile/role and the
+    // read-back below failed with "Failed to get profile". The existingRole
+    // check above already handles the genuine demo-class case, so gating on
+    // class_id is both wrong and unnecessary.
     const { data: newPublicProfileDataList, error: publicProfileError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("profiles", () =>
@@ -933,7 +959,7 @@ export async function createUserInClass({
     publicProfileData = newPublicProfileData;
     privateProfileData = newPrivateProfileData;
 
-    await supabase.from("user_roles").insert({
+    const { error: roleInsertError } = await supabase.from("user_roles").insert({
       user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
@@ -942,18 +968,13 @@ export async function createUserInClass({
       class_section_id: section_id,
       lab_section_id: lab_section_id
     });
-  } else if (section_id || lab_section_id) {
-    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
-      supabase
-        .from("user_roles")
-        .update({
-          class_section_id: section_id,
-          lab_section_id: lab_section_id
-        })
-        .eq("user_id", userId)
-        .eq("class_id", class_id)
-        .select("id")
-    );
+    // Check the insert: an unchecked failure here (e.g. a cold PostgREST
+    // schema cache on a fresh stack) makes the .single() read-back below find
+    // 0 rows and throw the misleading "Failed to get profile" instead of the
+    // real cause. Fail loudly at the actual point of failure.
+    if (roleInsertError) {
+      throw new Error(`Failed to create ${role} user_role in class ${class_id}: ${roleInsertError.message}`);
+    }
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
