@@ -199,43 +199,54 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Phase 2c — wait for PostgREST to serve the freshly-migrated schema.
+# Phase 2c — wait until PostgREST table WRITES actually persist.
 # -----------------------------------------------------------------------------
-# SeedDB.ts does all its writes through PostgREST (the REST API behind
-# $SUPABASE_URL/rest/v1), not raw SQL. On a fresh install the migrations Job
-# creates public.* only moments before this hook fires, and PostgREST caches
-# the schema — until it reloads, requests against the just-migrated tables hit
-# a stale cache and the seeder fails partway with a confusing downstream error
-# (observed 2026-06-06: "Failed to get profile: Cannot coerce the result to a
-# single JSON object" — the user_roles read-back found 0 rows because the write
-# never landed through the cold cache; deterministic on every fresh preview).
-# Nudge a reload (NOTIFY pgrst) and poll until REST actually serves a migrated
-# table before we start seeding.
-rest_probe() {
+# SeedDB.ts writes every profile and user_role through PostgREST (the REST API
+# behind $SUPABASE_URL/rest/v1), not raw SQL. On a fresh install there is a
+# window where PostgREST returns success for a table .insert() that never lands
+# in the database — reads, RPCs and direct SQL all work in that window, ONLY
+# REST table-writes are lost. The seeder then fails partway with a confusing
+# downstream error ("Failed to get profile: Cannot coerce the result to a
+# single JSON object") when its read-back finds 0 rows (2026-06-07 incident;
+# confirmed deterministic — direct-SQL inserts persisted while the seeder's
+# identical REST inserts vanished, and the rest pod had 0 restarts).
+#
+# A read/schema probe is NOT sufficient (reads work the whole time). Gate on a
+# real write round-trip instead: REST-insert a throwaway row, require REST to
+# read it back, then delete it via SQL (reliable). revoked_token_ids is a
+# self-contained leaf table (no triggers, no inbound FKs, single text PK), so a
+# throwaway insert/delete has no side effects. Nudge a schema reload each pass.
+PROBE_TOKEN="__seed_write_probe__"
+export PROBE_TOKEN
+rest_write_probe() {
   node -e '
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-    const url = process.env.SUPABASE_URL + "/rest/v1/classes?select=id&limit=1";
-    fetch(url, { headers: { apikey: key, Authorization: "Bearer " + key } })
-      .then(async (r) => {
-        if (process.env.SEED_REST_VERBOSE) console.error("    GET /rest/v1/classes -> HTTP " + r.status + " " + (await r.text()).slice(0, 200));
-        process.exit(r.ok ? 0 : 1);
-      })
-      .catch((e) => { if (process.env.SEED_REST_VERBOSE) console.error("    " + (e && e.message ? e.message : e)); process.exit(1); });
+    const h = { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json", Prefer: "return=minimal" };
+    const base = process.env.SUPABASE_URL + "/rest/v1/revoked_token_ids";
+    fetch(base, { method: "POST", headers: h, body: JSON.stringify({ token_id: process.env.PROBE_TOKEN }) })
+      .then((w) => { if (!w.ok) process.exit(1);
+        return fetch(base + "?token_id=eq." + encodeURIComponent(process.env.PROBE_TOKEN) + "&select=token_id", { headers: h }); })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("read HTTP " + r.status))))
+      .then((rows) => process.exit(Array.isArray(rows) && rows.length >= 1 ? 0 : 1))
+      .catch(() => process.exit(1));
   ' 2>/dev/null
 }
+clear_probe() { psql -tAc "DELETE FROM public.revoked_token_ids WHERE token_id='${PROBE_TOKEN}'" >/dev/null 2>&1 || true; }
+clear_probe
 psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
 ready=0
 for i in $(seq 1 60); do
-  if rest_probe; then ready=1; log "PostgREST serving migrated schema (public.classes)"; break; fi
+  clear_probe                         # start each attempt from a clean slate
+  if rest_write_probe; then ready=1; log "PostgREST table-writes persisting (REST write+read round-trip confirmed)"; clear_probe; break; fi
+  clear_probe                         # a "succeeded but didn't land" probe leaves nothing, but be safe
   # Re-nudge each iteration: PostgREST coalesces reload NOTIFYs, so this is cheap.
   psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
-  log "waiting for PostgREST schema cache ($i/60)"
+  log "waiting for PostgREST table-writes to persist ($i/60)"
   sleep 3
 done
 if [ "$ready" -ne 1 ]; then
-  err "PostgREST ($SUPABASE_URL/rest/v1) not serving migrated schema after 180s; last probe:"
-  SEED_REST_VERBOSE=1 rest_probe || true
-  fail "PostgREST schema cache cold — writes would silently fail"
+  err "PostgREST table-writes not durable after 180s — a REST .insert() returns OK but the row never lands (reads/RPCs/SQL all work). Seeding writes profiles/user_roles through REST and would fail partway."
+  fail "PostgREST table-writes not durable"
 fi
 
 # -----------------------------------------------------------------------------
