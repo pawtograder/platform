@@ -145,7 +145,7 @@ by a *.preview.pawtograder.net wildcard TLS cert (a wildcard spans only one
 label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 */}}
 {{- define "pawtograder.api.hostname" -}}
-{{- if .Values.global.apiHostnameFlatten -}}
+{{- if and .Values.global.apiHostnameFlatten (contains "." .Values.global.hostname) -}}
 {{- $parts := splitn "." 2 .Values.global.hostname -}}
 {{- printf "%s-api.%s" $parts._0 $parts._1 -}}
 {{- else -}}

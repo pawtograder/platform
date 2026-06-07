@@ -72,5 +72,5 @@ That single line keeps `api_hostname` (used by the web build args, the seeder
 
 Revert the `values-preview.yaml` change and restore the two `preview.yml` lines;
 previews go back to per-PR issuance. The wildcard cert + reflector can stay (they
-do no harm) or be removed with `kubectl delete -f wildcard-certificate.yaml` and
+do no harm) or be removed with `kubectl delete -f deploy/preview-tls/wildcard-certificate.yaml` and
 `helm uninstall -n reflector reflector`.
