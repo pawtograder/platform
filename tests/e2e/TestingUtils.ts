@@ -891,6 +891,20 @@ export async function createUserInClass({
     // user is created, so the role already exists here and we just reuse it.
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
+    // Apply any requested section assignment to the pre-existing role.
+    if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
   } else {
     // Not enrolled (and the trigger didn't provision us — e.g. a normal,
     // non-is_demo class). Create profiles + enrollment ourselves.
@@ -961,18 +975,6 @@ export async function createUserInClass({
     if (roleInsertError) {
       throw new Error(`Failed to create ${role} user_role in class ${class_id}: ${roleInsertError.message}`);
     }
-  } else if (section_id || lab_section_id) {
-    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
-      supabase
-        .from("user_roles")
-        .update({
-          class_section_id: section_id,
-          lab_section_id: lab_section_id
-        })
-        .eq("user_id", userId)
-        .eq("class_id", class_id)
-        .select("id")
-    );
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
