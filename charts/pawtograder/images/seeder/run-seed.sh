@@ -199,62 +199,6 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Phase 2c — wait until PostgREST table WRITES actually persist.
-# -----------------------------------------------------------------------------
-# SeedDB.ts writes every profile and user_role through PostgREST (the REST API
-# behind $SUPABASE_URL/rest/v1), not raw SQL. On a fresh install there is a
-# window where PostgREST returns success for a table .insert() that never lands
-# in the database — reads, RPCs and direct SQL all work in that window, ONLY
-# REST table-writes are lost. The seeder then fails partway with a confusing
-# downstream error ("Failed to get profile: Cannot coerce the result to a
-# single JSON object") when its read-back finds 0 rows (2026-06-07 incident;
-# confirmed deterministic — direct-SQL inserts persisted while the seeder's
-# identical REST inserts vanished, and the rest pod had 0 restarts).
-#
-# A read/schema probe is NOT sufficient (reads work the whole time). Nor is a
-# write to a non-RLS table: the lost writes are specifically service_role REST
-# inserts into RLS-enabled tables (profiles, user_roles) — a plain leaf table
-# without RLS persists fine through the same window and would mask the problem.
-# So probe the ACTUAL failing path: a service_role REST insert into an
-# RLS-enabled table, confirmed via a REST read-back, deleted via SQL.
-# github_circuit_breakers is the cleanest such table — RLS on with an explicit
-# service_role ALL-policy, no triggers, no FKs, simple (scope,key) text PK — so
-# a throwaway insert/delete has no side effects. Nudge a schema reload each pass.
-PROBE_TOKEN="__seed_write_probe__"
-export PROBE_TOKEN
-rest_write_probe() {
-  node -e '
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-    const h = { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json", Prefer: "return=minimal" };
-    const base = process.env.SUPABASE_URL + "/rest/v1/github_circuit_breakers";
-    const tok = process.env.PROBE_TOKEN;
-    fetch(base, { method: "POST", headers: h, body: JSON.stringify({ scope: tok, key: tok }) })
-      .then((w) => { if (!w.ok) process.exit(1);
-        return fetch(base + "?scope=eq." + encodeURIComponent(tok) + "&select=scope", { headers: h }); })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("read HTTP " + r.status))))
-      .then((rows) => process.exit(Array.isArray(rows) && rows.length >= 1 ? 0 : 1))
-      .catch(() => process.exit(1));
-  ' 2>/dev/null
-}
-clear_probe() { psql -tAc "DELETE FROM public.github_circuit_breakers WHERE scope='${PROBE_TOKEN}'" >/dev/null 2>&1 || true; }
-clear_probe
-psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
-ready=0
-for i in $(seq 1 60); do
-  clear_probe                         # start each attempt from a clean slate
-  if rest_write_probe; then ready=1; log "PostgREST table-writes persisting (REST write+read round-trip confirmed)"; clear_probe; break; fi
-  clear_probe                         # a "succeeded but didn't land" probe leaves nothing, but be safe
-  # Re-nudge each iteration: PostgREST coalesces reload NOTIFYs, so this is cheap.
-  psql -tAc "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
-  log "waiting for PostgREST table-writes to persist ($i/60)"
-  sleep 3
-done
-if [ "$ready" -ne 1 ]; then
-  err "PostgREST table-writes not durable after 180s — a REST .insert() returns OK but the row never lands (reads/RPCs/SQL all work). Seeding writes profiles/user_roles through REST and would fail partway."
-  fail "PostgREST table-writes not durable"
-fi
-
-# -----------------------------------------------------------------------------
 # Phase 3 — idempotency check
 # -----------------------------------------------------------------------------
 # SeedDB.ts always creates a NEW class with the configured name. If we

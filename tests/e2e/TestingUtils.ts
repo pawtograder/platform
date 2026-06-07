@@ -885,11 +885,23 @@ export async function createUserInClass({
   let publicProfileData: { id: string }, privateProfileData: { id: string };
 
   if (existingRole.length > 0 && !roleCheckError) {
-    // User already enrolled in class, get existing profile data
+    // User already enrolled in class, get existing profile data. This also
+    // covers the real demo class: the create_user_ensure_profiles_and_demo
+    // trigger provisions a profile + role for the is_demo class when the auth
+    // user is created, so the role already exists here and we just reuse it.
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
-  } else if (class_id !== 1) {
-    // User not enrolled or new class, create profiles and enrollment
+  } else {
+    // Not enrolled (and the trigger didn't provision us — e.g. a normal,
+    // non-is_demo class). Create profiles + enrollment ourselves.
+    //
+    // NOTE: this used to be `else if (class_id !== 1)`, which assumed class 1
+    // is always the trigger-provisioned demo class and skipped provisioning
+    // for it. On a fresh database the seeder's own (non-demo) class gets id 1,
+    // so that skip left every seeded user with no profile/role and the
+    // read-back below failed with "Failed to get profile". The existingRole
+    // check above already handles the genuine demo-class case, so gating on
+    // class_id is both wrong and unnecessary.
     const { data: newPublicProfileDataList, error: publicProfileError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("profiles", () =>

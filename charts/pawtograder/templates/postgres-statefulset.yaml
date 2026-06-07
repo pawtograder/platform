@@ -51,18 +51,6 @@ spec:
             - "config_file=/etc/postgresql/postgresql.conf"
             - "-c"
             - "hba_file=/etc/postgresql/pg_hba.conf"
-            # DEBUG (chore/seed-logging, REVERT before merge): log every
-            # statement with the role (%u), application (%a) and transaction id
-            # (%x) so we can see exactly what happens to the seeder's
-            # profiles/user_roles REST inserts on a fresh install — which role
-            # runs them, whether they're wrapped in a transaction, and whether
-            # that transaction commits or rolls back.
-            - "-c"
-            - "log_statement=all"
-            - "-c"
-            - "log_min_error_statement=error"
-            - "-c"
-            - "log_line_prefix=%m [%p] u=%u db=%d app=%a xid=%x "
           env:
             - name: POSTGRES_DB
               value: {{ .Values.postgres.database | quote }}
