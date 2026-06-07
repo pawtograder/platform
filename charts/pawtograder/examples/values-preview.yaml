@@ -19,7 +19,14 @@
 global:
   # Set per-preview from CI: e.g. pr-123.preview.pawtograder.net
   hostname: REPLACE_PER_PREVIEW.preview.pawtograder.net
-  apiOnSeparateHost: true
+  # Serve the Supabase API same-origin (path-routed: /auth/v1, /rest/v1, …) on
+  # the single preview host instead of a separate api.<host>. This means one
+  # hostname per preview, fully covered by the shared *.preview.pawtograder.net
+  # wildcard cert — there is no two-label api.pr-N.preview host that a wildcard
+  # could not cover. REQUIRES the matching preview.yml build-arg change (see
+  # deploy/preview-tls/README.md): NEXT_PUBLIC_SUPABASE_URL / SUPABASE_URL must
+  # point at the main hostname, not api.<hostname>.
+  apiOnSeparateHost: false
   # Previews run on the general worker pool, NOT the prod-staging tier.
   # Keep node selectors / tolerations empty.
   nodeSelector: {}
@@ -31,20 +38,23 @@ global:
 secrets:
   autogenerate: true
 
-# Single Ingress for the chart's main hosts. The cert-manager annotation
-# auto-provisions a Certificate per preview from the *.pawtograder.net
-# wildcard issuer.
+# Single Ingress for the chart's main host. No cert-manager.io/cluster-issuer
+# annotation on purpose: previews do NOT mint their own cert. They consume the
+# shared *.preview.pawtograder.net wildcard cert, which is reflected into every
+# pawtograder-preview-* namespace as Secret `pawtograder-preview-wildcard-tls`.
+# This avoids Let's Encrypt's per-identifier (5/wk) and per-domain (50/wk) rate
+# limits that per-PR issuance hits under churn. See deploy/preview-tls/.
 ingress:
   enabled: true
   className: nginx
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-body-size: "55m"
   tls:
     enabled: true
-    secretName: pawtograder-preview-tls
+    # The reflected wildcard Secret (NOT a per-preview cert-manager secret).
+    secretName: pawtograder-preview-wildcard-tls
 
 # ----- Postgres on shared ceph-rbd (no local SSD) ----------------------------
 postgres:
