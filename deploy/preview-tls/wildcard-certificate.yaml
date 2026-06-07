@@ -15,10 +15,12 @@
 # rate limit is never touched again. The cert auto-renews once; renewals are
 # re-reflected automatically.
 #
-# This covers the single-label app host pr-N.preview.pawtograder.net. The api is
-# served same-origin on that host (global.apiOnSeparateHost: false in
-# values-preview.yaml), so there is no api.pr-N.preview.pawtograder.net host to
-# cover — a TLS wildcard only spans one label and could not cover it anyway.
+# A TLS wildcard spans only ONE label, so it covers single-label hosts under
+# preview.pawtograder.net. Previews keep a separate API host but flatten it to a
+# single label (pr-N-api.preview.pawtograder.net, via global.apiHostnameFlatten)
+# so both the app host (pr-N.preview…) and the api host (pr-N-api.preview…) fall
+# under this one wildcard. The old two-label api.pr-N.preview… form could never
+# be wildcard-covered.
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

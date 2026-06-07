@@ -19,14 +19,14 @@
 global:
   # Set per-preview from CI: e.g. pr-123.preview.pawtograder.net
   hostname: REPLACE_PER_PREVIEW.preview.pawtograder.net
-  # Serve the Supabase API same-origin (path-routed: /auth/v1, /rest/v1, …) on
-  # the single preview host instead of a separate api.<host>. This means one
-  # hostname per preview, fully covered by the shared *.preview.pawtograder.net
-  # wildcard cert — there is no two-label api.pr-N.preview host that a wildcard
-  # could not cover. REQUIRES the matching preview.yml build-arg change (see
-  # deploy/preview-tls/README.md): NEXT_PUBLIC_SUPABASE_URL / SUPABASE_URL must
-  # point at the main hostname, not api.<hostname>.
-  apiOnSeparateHost: false
+  # Keep the API on its own host (prod-like topology), but FLATTEN it to a
+  # single label — pr-123-api.preview.pawtograder.net instead of
+  # api.pr-123.preview.pawtograder.net — so the shared *.preview.pawtograder.net
+  # wildcard cert covers it (a TLS wildcard spans only one label). REQUIRES the
+  # matching preview.yml change (see deploy/preview-tls/README.md):
+  # api_hostname must use the same pr-<N>-api.<domain> scheme.
+  apiOnSeparateHost: true
+  apiHostnameFlatten: true
   # Previews run on the general worker pool, NOT the prod-staging tier.
   # Keep node selectors / tolerations empty.
   nodeSelector: {}

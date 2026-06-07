@@ -21,10 +21,12 @@ touched.
    `ingress.tls.secretName` at the reflected Secret and drops the
    `cert-manager.io/cluster-issuer` annotation, so previews consume the shared
    cert instead of minting their own.
-5. Previews serve the Supabase API **same-origin** (`global.apiOnSeparateHost:
-   false`) so there's a single hostname per preview, fully covered by the
-   wildcard. (A TLS wildcard spans one label, so it could never cover the old
-   two-label `api.pr-N.preview.pawtograder.net` host.)
+5. Previews keep a **separate API host** but flatten it to a single label
+   (`global.apiHostnameFlatten: true`): `pr-N-api.preview.pawtograder.net`
+   instead of `api.pr-N.preview.pawtograder.net`. Both the app host and the api
+   host are then single labels under `preview.pawtograder.net`, so the one
+   wildcard covers both. (A TLS wildcard spans one label, so it could never
+   cover the old two-label `api.pr-N.preview…` host.)
 
 ## Rollout (run in order; merge the chart change LAST)
 
@@ -50,23 +52,21 @@ or previews break.
 
 ## Required companion change in `.github/workflows/preview.yml`
 
-Switching to same-origin API means the web app must be **built** to call the
-API on the main host (Next.js bakes `NEXT_PUBLIC_*` at build time). This file
-is a GitHub Actions workflow, which the automation token here can't push — apply
-it by hand:
+The web image bakes the API URL at build time (`NEXT_PUBLIC_SUPABASE_URL`), and
+that URL flows from the `meta` job's `api_hostname`. Flatten it to the same
+`pr-<N>-api` scheme the chart now derives, so the built app calls the host the
+wildcard actually covers. This is a GitHub Actions workflow file, which the
+automation token here can't push — apply it by hand:
 
 ```diff
-   build-args: |
-     NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
--    NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
-+    NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.hostname }}
-     ...
--    SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
-+    SUPABASE_URL=https://${{ needs.meta.outputs.hostname }}
+       hostname="pr-${preview_id}.${PREVIEW_DOMAIN}"
+-      api_hostname="api.pr-${preview_id}.${PREVIEW_DOMAIN}"
++      api_hostname="pr-${preview_id}-api.${PREVIEW_DOMAIN}"
 ```
 
-(`api_hostname`/the `api.` host can then be dropped from the `meta` job and the
-PR-comment "API:" line, but that's cosmetic — leaving them is harmless.)
+That single line keeps `api_hostname` (used by the web build args, the seeder
+`SUPABASE_URL`, and the PR-comment "API:" link) in lockstep with the chart's
+`pawtograder.api.hostname` helper. No other workflow change is needed.
 
 ## Rollback
 
