@@ -24,7 +24,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: assignment } = await adminSupabase
     .from("assignments")
     .select(
-      "id, slug, class_id, repo_mode, source_assignment_id, template_repo, latest_template_sha, " +
+      "id, slug, class_id, repo_mode, submission_mode, source_assignment_id, template_repo, latest_template_sha, " +
         "protect_block_force_push, protect_require_pull_request, protect_required_reviewers, " +
         "classes(slug,github_org)"
     )
@@ -156,10 +156,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   // Only persist the template_repo pointer after GitHub creation + permission
   // sync succeed, so a partial failure does not leave the assignment pointing
-  // at a repo that does not exist.
+  // at a repo that does not exist. For pr-mode the handout IS the upstream repo
+  // (students fork it and PR back to it), so point upstream_repo at the same
+  // repo here — the github-repo-webhook PR ingestion matches upstream_repo
+  // against the repo a PR targets, and handout == upstream must never drift.
+  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
   await adminSupabase
     .from("assignments")
-    .update({ template_repo: `${handoutRepoOrg}/${handoutRepoName}` })
+    .update({
+      template_repo: handoutFullName,
+      ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
+    })
     .eq("id", assignment_id);
 
   return {
