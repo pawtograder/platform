@@ -36,9 +36,10 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { DeadlineRegradeBatch, fetchOpenRegradeBatch } from "@/lib/deadlineRegrade";
 import NextLink from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AssignmentsTable from "./assignmentsTable";
 import GradingStatusPanel from "./GradingStatusPanel";
 import RubricReport from "./RubricReport";
@@ -204,6 +205,22 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   // Cohort pushed from the rubric report to filter the submissions table (button or drill-in).
   const [tableCohort, setTableCohort] = useState<{ ids: number[]; label: string } | null>(null);
 
+  // Open "re-grade late commits" review session for this assignment, if any.
+  const [regradeBatch, setRegradeBatch] = useState<DeadlineRegradeBatch | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchOpenRegradeBatch(supabase, Number(assignment_id))
+      .then((b) => {
+        if (!cancelled) setRegradeBatch(b);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, assignment_id]);
+
   // Distinct section / lab names for the filter control.
   const { classSections, labSections } = useMemo(() => collectSectionOptions(rows), [rows]);
 
@@ -226,8 +243,25 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
 
   const repositoriesHref = `/course/${course_id}/manage/assignments/${assignment_id}/repositories`;
 
+  const regradeHref = `/course/${course_id}/manage/assignments/${assignment_id}/regrade-late-commits`;
+
   return (
     <VStack align="stretch" gap={8} p={4}>
+      {regradeBatch && (
+        <CardRoot borderColor="border.warning" bg="bg.warning">
+          <CardBody>
+            <HStack justify="space-between" wrap="wrap" gap={3}>
+              <Text fontSize="sm">
+                The deadline was extended on this assignment. There are late commits awaiting your review for
+                re-grading.
+              </Text>
+              <Button asChild size="sm" colorPalette="orange">
+                <NextLink href={regradeHref}>Review late commits</NextLink>
+              </Button>
+            </HStack>
+          </CardBody>
+        </CardRoot>
+      )}
       <GradingStatusPanel
         rows={rows}
         assignmentId={Number(assignment_id)}

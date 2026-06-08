@@ -850,6 +850,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
         false;
 
+      // A staged submission (deadline-extension regrade preview) is graded but
+      // never auto-activated. `stage_only` is a newer column carried on the
+      // manually-triggered check run; cast until generated types are regenerated.
+      const isStagedSubmission =
+        (hasRealCheckRun && (checkRun as { stage_only?: boolean }).stage_only === true) || false;
+      scope?.setTag("is_staged", isStagedSubmission.toString());
+
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
       scope?.setTag("user_role", checkRun.user_roles?.role || "unknown");
@@ -1200,8 +1207,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               run_attempt: Number.parseInt(decoded.run_attempt),
               class_id: repoData.assignments.class_id!,
               repository_check_run_id: checkRun?.id,
-              is_not_graded: isNotGradedSubmission
-            })
+              is_not_graded: isNotGradedSubmission,
+              // `is_staged` is a newer column; cast until generated types are regenerated.
+              is_staged: isStagedSubmission
+            } as Database["public"]["Tables"]["submissions"]["Insert"])
             .select("id")
             .single();
 
@@ -1231,6 +1240,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const checkRunUpdate: {
           status: CheckRunStatus;
           triggered_by?: null;
+          stage_only?: boolean;
         } = {
           status: {
             ...(checkRun.status as CheckRunStatus),
@@ -1240,7 +1250,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         if (staffTriggeredBy !== null) {
           checkRunUpdate.triggered_by = null;
         }
-        await adminSupabase.from("repository_check_runs").update(checkRunUpdate).eq("id", checkRun.id);
+        // Consume `stage_only` too, so a later real push of the same (repo, sha)
+        // does not inherit staged behavior from this check run.
+        if (isStagedSubmission) {
+          checkRunUpdate.stage_only = false;
+        }
+        await adminSupabase
+          .from("repository_check_runs")
+          .update(checkRunUpdate as Database["public"]["Tables"]["repository_check_runs"]["Update"])
+          .eq("id", checkRun.id);
       }
 
       try {
