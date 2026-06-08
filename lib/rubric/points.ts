@@ -23,6 +23,33 @@ export function maxPointsForCriterion(criteria: CriterionScoreShape): number {
   return totalPoints;
 }
 
+type CriterionEarnedShape = Pick<HydratedRubricCriteria, "is_additive" | "is_deduction_only" | "total_points">;
+
+/**
+ * Points a single criterion contributes to a student's grade, given `appliedPoints` — the summed
+ * magnitude of its applied checks (always a non-negative sum of stored point magnitudes). Mirrors
+ * the three scoring branches in the backend recompute
+ * (`20260604000000_floor-submission-review-score-at-zero.sql`):
+ *
+ * - deduction-only: best case 0, floored at -total_points  → max(-applied, -total_points)
+ * - additive:       sum of applied points, capped           → min(applied, total_points)
+ * - non-additive:   total_points minus applied deductions   → max(total_points - applied, 0)
+ *
+ * Deduction-only MUST be handled before the non-additive branch. A pure-deduction criterion has a
+ * max of 0 (see {@link maxPointsForCriterion}); routing it through `total_points - applied` would
+ * credit a positive score above that max, so any section total summed from these per-criterion
+ * values would exceed its possible points (earned > max).
+ */
+export function earnedPointsForCriterion(criteria: CriterionEarnedShape, appliedPoints: number): number {
+  const totalPoints = criteria.total_points ?? 0;
+  if (criteria.is_deduction_only) {
+    const earned = Math.max(-appliedPoints, -totalPoints);
+    return earned === 0 ? 0 : earned; // normalize -0 → 0 (Math.max yields -0 when applied is 0)
+  }
+  if (criteria.is_additive) return Math.min(appliedPoints, totalPoints);
+  return Math.max(totalPoints - appliedPoints, 0);
+}
+
 export type AssignToStudentPartSummary = {
   partId: number;
   name: string;

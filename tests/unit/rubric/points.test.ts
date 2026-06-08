@@ -1,6 +1,7 @@
 import {
   computeRubricMaxPoints,
   computeRubricPointsBreakdown,
+  earnedPointsForCriterion,
   hasSplitGradingParts,
   maxPointsForCriterion
 } from "@/lib/rubric/points";
@@ -112,6 +113,47 @@ describe("maxPointsForCriterion", () => {
         total_points: null as unknown as number,
         rubric_checks: [{ points: null as unknown as number }]
       })
+    ).toBe(0);
+  });
+});
+
+describe("earnedPointsForCriterion", () => {
+  it("additive: sum of applied points, capped at total_points", () => {
+    expect(earnedPointsForCriterion(criterion({ is_additive: true, total_points: 5 }), 3)).toBe(3);
+    expect(earnedPointsForCriterion(criterion({ is_additive: true, total_points: 5 }), 8)).toBe(5);
+  });
+
+  it("non-additive: total_points minus applied deductions, floored at 0", () => {
+    expect(earnedPointsForCriterion(criterion({ is_additive: false, total_points: 4 }), 1)).toBe(3);
+    expect(earnedPointsForCriterion(criterion({ is_additive: false, total_points: 4 }), 10)).toBe(0);
+  });
+
+  it("deduction-only: non-positive, floored at -total_points (never credits points)", () => {
+    // This is the issue #823 case: "Code Complexity" with a -1 deduction must show -1, not 2.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 1)
+    ).toBe(-1);
+    // No deductions applied → best case is 0.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 0)
+    ).toBe(0);
+    // Deductions beyond the cap floor at -total_points.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 5)
+    ).toBe(-3);
+  });
+
+  it("earned never exceeds maxPointsForCriterion for the same criterion", () => {
+    const c = criterion({ is_additive: false, is_deduction_only: true, total_points: 3 });
+    expect(earnedPointsForCriterion(c, 1)).toBeLessThanOrEqual(maxPointsForCriterion({ ...c, rubric_checks: [] }));
+  });
+
+  it("handles missing total_points safely", () => {
+    expect(
+      earnedPointsForCriterion(
+        { is_additive: true, is_deduction_only: false, total_points: null as unknown as number },
+        2
+      )
     ).toBe(0);
   });
 });
