@@ -1,6 +1,7 @@
 import {
   computeRubricMaxPoints,
   computeRubricPointsBreakdown,
+  earnedPointsForCriterion,
   hasSplitGradingParts,
   maxPointsForCriterion
 } from "@/lib/rubric/points";
@@ -112,6 +113,60 @@ describe("maxPointsForCriterion", () => {
         total_points: null as unknown as number,
         rubric_checks: [{ points: null as unknown as number }]
       })
+    ).toBe(0);
+  });
+});
+
+describe("earnedPointsForCriterion", () => {
+  it("additive: caps the applied sum at total_points", () => {
+    expect(earnedPointsForCriterion(criterion({ is_additive: true, total_points: 2 }), 2)).toBe(2);
+    expect(earnedPointsForCriterion(criterion({ is_additive: true, total_points: 4 }), 9)).toBe(4);
+  });
+
+  it("non-additive: subtracts applied deductions from total_points, floored at 0", () => {
+    expect(earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 2)).toBe(
+      3
+    );
+    expect(earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 9)).toBe(
+      0
+    );
+  });
+
+  it("deduction-only: contributes a non-positive penalty, floored at -total_points", () => {
+    // Issue #823: the reported "Code Complexity" criterion was deduction-only with a single −1
+    // deduction applied. It must contribute −1 (a penalty), NOT total_points − 1.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 1)
+    ).toBe(-1);
+    // No deductions applied → 0, never the criterion's total_points.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 0)
+    ).toBe(0);
+    // Cannot lose more than total_points.
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: true, total_points: 3 }), 9)
+    ).toBe(-3);
+  });
+
+  it("never exceeds maxPointsForCriterion for any mode (so rolled-up earned <= max)", () => {
+    const cases = [
+      criterion({ is_additive: true, total_points: 4, rubric_checks: [check(2), check(3)] }),
+      criterion({ is_additive: false, is_deduction_only: false, total_points: 7, rubric_checks: [check(3)] }),
+      criterion({ is_additive: false, is_deduction_only: true, total_points: 5, rubric_checks: [check(2)] })
+    ];
+    for (const c of cases) {
+      for (const applied of [0, 1, 2, 5, 9]) {
+        expect(earnedPointsForCriterion(c, applied)).toBeLessThanOrEqual(maxPointsForCriterion(c));
+      }
+    }
+  });
+
+  it("handles missing total_points safely", () => {
+    expect(
+      earnedPointsForCriterion(
+        { is_additive: false, is_deduction_only: true, total_points: null as unknown as number },
+        2
+      )
     ).toBe(0);
   });
 });
