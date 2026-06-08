@@ -203,6 +203,10 @@ edgeFunctions:
     - pawtograder-canvas
     - pawtograder-llm
     - pawtograder-e2e
+    # Edge functions read SENTRY_DSN for server-side error reporting
+    # (_shared/HandlerUtils.ts). The secret also carries the frontend
+    # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
+    - pawtograder-sentry
   e2e:
     enabled: true
     mockGitHub: true

@@ -29,6 +29,7 @@ import {
 } from "../_shared/SubmissionIngestion.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { indexSubmission } from "../_shared/CodeSymbolIndexer.ts";
 import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
@@ -1539,6 +1540,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               400
             );
           }
+          // Best-effort: build the code-symbol index that powers go-to-definition in the grading
+          // viewer. Indexing failures must never fail the submission — the reindex backfill closes
+          // any gaps.
+          if (submission_id !== undefined) {
+            try {
+              const { indexed } = await indexSubmission(adminSupabase, submission_id);
+              scope?.setTag("symbols_indexed_files", indexed.toString());
+            } catch (indexErr) {
+              Sentry.captureException(indexErr, scope);
+            }
+          }
+
           if (isE2ERun && submission_id !== undefined) {
             return {
               grader_url: "not-a-real-url",
