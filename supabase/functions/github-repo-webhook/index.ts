@@ -1902,9 +1902,13 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
 // submission version and (via the after-insert trigger) its grading review.
 async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope): Promise<void> {
   const action = payload.action;
+  console.log(
+    `[PR_INGEST] start repo=${payload.repository.full_name} pr=#${payload.pull_request.number} action=${action}`
+  );
   // Lifecycle actions that can change a PR's head sha or its open/closed state.
   const RELEVANT = ["opened", "reopened", "synchronize", "edited", "ready_for_review", "converted_to_draft", "closed"];
   if (!RELEVANT.includes(action)) {
+    console.log(`[PR_INGEST] skip: action '${action}' not in relevant set`);
     return;
   }
 
@@ -1917,6 +1921,10 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const baseSha = pr.base.sha;
   const authorLogin = pr.user?.login;
   const prState = prStateFromPullRequest(pr);
+
+  // One grep-able prefix (`[PR_INGEST]`) for the whole ingestion path; every
+  // skip/return below logs why, so a silent no-op is diagnosable from logs alone.
+  const ctx = `repo=${upstreamRepo} pr=#${prNumber} action=${action} base=${baseRef} head=${headRef} author=${authorLogin ?? "?"}`;
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -1931,17 +1939,23 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     .eq("submission_mode", "pr")
     .ilike("upstream_repo", upstreamRepo);
   if (assignmentsError) {
+    console.log(`[PR_INGEST] error: assignments lookup failed: ${assignmentsError.message} ${ctx}`);
     Sentry.captureException(assignmentsError, scope);
     return;
   }
   if (!assignments || assignments.length === 0) {
+    console.log(
+      `[PR_INGEST] skip: no submission_mode='pr' assignment with upstream_repo ILIKE '${upstreamRepo}' ${ctx}`
+    );
     return; // Not an upstream repo for any pr-mode assignment.
   }
+  console.log(`[PR_INGEST] matched assignment(s) [${assignments.map((a) => a.id).join(", ")}] ${ctx}`);
 
   scope.setTag("pr_submission_repo", upstreamRepo);
   scope.setTag("pr_number", prNumber.toString());
 
   if (!authorLogin) {
+    console.log(`[PR_INGEST] skip: PR has no author login ${ctx}`);
     return;
   }
   // PR author -> Pawtograder user.
@@ -1951,6 +1965,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     .ilike("github_username", authorLogin)
     .maybeSingle();
   if (!userRow) {
+    console.log(`[PR_INGEST] skip: no Pawtograder user with github_username ILIKE '${authorLogin}' ${ctx}`);
     scope.setTag("github_username", authorLogin);
     Sentry.captureMessage("PR author has no Pawtograder user", scope);
     return;
@@ -1961,20 +1976,31 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     // Identification gate: which PRs count as a submission for this assignment.
     if (a.pr_identification === "branch_convention") {
       if (!a.pr_branch_convention) {
+        console.log(
+          `[PR_INGEST] skip assignment=${a.id}: branch_convention mode but pr_branch_convention unset ${ctx}`
+        );
         continue;
       }
       let re: RegExp;
       try {
         re = new RegExp(a.pr_branch_convention);
       } catch {
+        console.log(
+          `[PR_INGEST] skip assignment=${a.id}: invalid pr_branch_convention /${a.pr_branch_convention}/ ${ctx}`
+        );
         continue; // Misconfigured convention — skip rather than crash the webhook.
       }
       if (!re.test(headRef)) {
+        console.log(
+          `[PR_INGEST] skip assignment=${a.id}: head '${headRef}' fails convention /${a.pr_branch_convention}/ ${ctx}`
+        );
         continue;
       }
     } else {
       // base_branch + manual both require targeting the configured base branch.
-      if (baseRef !== (a.upstream_base_branch ?? "main")) {
+      const expectedBase = a.upstream_base_branch ?? "main";
+      if (baseRef !== expectedBase) {
+        console.log(`[PR_INGEST] skip assignment=${a.id}: base '${baseRef}' != expected '${expectedBase}' ${ctx}`);
         continue;
       }
     }
@@ -1988,6 +2014,9 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
       .eq("role", "student")
       .maybeSingle();
     if (!role?.private_profile_id) {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: author '${authorLogin}' is not a student in class ${a.class_id} ${ctx}`
+      );
       continue; // Author isn't a student in this class.
     }
     const profileId = role.private_profile_id;
@@ -2003,6 +2032,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
     // Closing/merging never creates a new version — just reflect the state.
     if (action === "closed") {
+      console.log(`[PR_INGEST] assignment=${a.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`);
       const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
         p_assignment_id: a.id,
         p_pr_repo: upstreamRepo,
@@ -2010,6 +2040,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
         p_pr_state: prState
       });
       if (stateError) {
+        console.log(`[PR_INGEST] error assignment=${a.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
         Sentry.captureException(stateError, scope);
       }
       continue;
@@ -2027,9 +2058,13 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
       p_auto_confirm: a.pr_identification !== "manual"
     });
     if (ingestError) {
+      console.log(`[PR_INGEST] error assignment=${a.id}: ingest_pr_submission failed: ${ingestError.message} ${ctx}`);
       Sentry.captureException(ingestError, scope);
       continue;
     }
+    console.log(
+      `[PR_INGEST] ingested assignment=${a.id} submission_id=${submissionId ?? "null"} group=${groupId ?? "none"} ${ctx}`
+    );
 
     // ingest_pr_submission only creates the submission row; fetch the PR head
     // fork's files into submission_files so graders have something to view/diff.
@@ -2048,13 +2083,24 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
           headSha,
           scope
         });
+        console.log(
+          `[PR_INGEST] files ingested assignment=${a.id} submission_id=${submissionId} headRepo=${headRepo} ${ctx}`
+        );
       } catch (filesError) {
         // Don't fail the webhook delivery over a file-ingest hiccup; the row
         // exists and a re-delivery (or confirm) will retry idempotently.
+        console.log(
+          `[PR_INGEST] warn assignment=${a.id}: file ingest failed (row still created): ${filesError instanceof Error ? filesError.message : String(filesError)} ${ctx}`
+        );
         Sentry.captureException(filesError, scope);
       }
+    } else {
+      console.log(
+        `[PR_INGEST] assignment=${a.id}: skipped file ingest (submission_id=${submissionId ?? "null"} headRepo=${headRepo ?? "null"} — unconfirmed link or no head repo) ${ctx}`
+      );
     }
   }
+  console.log(`[PR_INGEST] done ${ctx}`);
 }
 
 // Handle pull_request events (PR-mode submissions + tracking sync PR merges)
