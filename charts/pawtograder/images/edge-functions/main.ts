@@ -62,6 +62,15 @@ const ESZIP_DIR = Deno.env.get("EDGE_ESZIP_DIR") || "/home/deno/eszips";
 // Bound the retry recursion so a genuinely broken function can't loop forever.
 const MAX_RETIRED_RETRIES = 5;
 
+// Per-request access log: one line per request tagged with the function name so
+// logs are filterable BY function in Loki/Grafana/`scripts/edge-logs.sh`
+// (`{component="functions"} |= "[fn=<name>]"`). All functions land in this one
+// pod's stdout behind the demuxer, so without this tag you can't isolate one.
+// `<name>` here is `serviceName` (the path segment) and matches the Prometheus
+// `function` label (deno_http_requests_total{function=...}) the dashboard's $fn
+// dropdown is built from. Set EDGE_ACCESS_LOG=0 to silence it (no rebuild).
+const ACCESS_LOG = (Deno.env.get("EDGE_ACCESS_LOG") ?? "1") !== "0";
+
 // Cache of loaded eszip bytes, keyed by function name. The value is a Promise
 // so concurrent first-requests for the same function share a single disk read
 // rather than each allocating their own ~40MB buffer (which under a 50-burst
@@ -126,7 +135,14 @@ Deno.serve(async (req: Request) => {
       cpuTimeHardLimitMs: CPU_HARD_MS,
       noModuleCache: false,
       importMapPath: null,
-      envVars
+      // Tell the isolate which function it's serving so its own logs can be
+      // tagged (see _shared/HandlerUtils.ts). Passed as an env var rather than a
+      // request header so the request object handed to worker.fetch() is left
+      // completely untouched — reconstructing the Request breaks functions that
+      // rely on its underlying stream resource (e.g. `metrics`). Safe because
+      // the worker is created against this function's servicePath, so it only
+      // ever serves `serviceName`.
+      envVars: [...envVars, ["EDGE_FUNCTION_NAME", serviceName] as [string, string]]
     };
     if (eszip) {
       // Pre-bundled path: load the vendored, pre-transpiled module graph from
@@ -170,7 +186,7 @@ Deno.serve(async (req: Request) => {
       // Log the real error server-side, but return a fixed generic message — the
       // raw error can carry worker/runtime internals (paths, stack frames) and
       // this gateway is public-facing (CodeQL: information exposure via stack trace).
-      console.error(`error invoking ${serviceName}:`, e);
+      console.error(`[fn=${serviceName}] error invoking ${serviceName}:`, e);
       return new Response(JSON.stringify({ msg: "internal edge function error" }), {
         status: 500,
         headers: { "content-type": "application/json" }
@@ -178,5 +194,10 @@ Deno.serve(async (req: Request) => {
     }
   };
 
-  return await callWorker();
+  const startedAt = Date.now();
+  const res = await callWorker();
+  if (ACCESS_LOG) {
+    console.log(`[fn=${serviceName}] ${req.method} ${url.pathname} -> ${res.status} ${Date.now() - startedAt}ms`);
+  }
+  return res;
 });

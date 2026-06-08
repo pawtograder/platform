@@ -19,6 +19,32 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
 };
 
+// --- Per-function log tagging -------------------------------------------------
+// All ~49 functions share one pod's stdout behind the demuxer (main.ts), so logs
+// aren't filterable BY function unless each line carries the function name. The
+// demuxer passes the name to each worker as the EDGE_FUNCTION_NAME env var; here
+// we prefix this isolate's console output with `[fn=<name>]` so
+// `{component="functions"} |= "[fn=<name>]"` works in Loki/Grafana/
+// `scripts/edge-logs.sh`. Done once per isolate and safe: the edge-runtime
+// creates each worker against a single function's servicePath, so the isolate
+// only ever serves that one function — the name is constant for its lifetime.
+// Exported so the few functions that don't use wrapRequestHandler can call it
+// at entry too.
+let fnLogContextInstalled = false;
+export function installFunctionLogContext(): string | null {
+  const fn = Deno.env.get("EDGE_FUNCTION_NAME") ?? null;
+  if (fnLogContextInstalled || !fn) return fn;
+  fnLogContextInstalled = true;
+  const prefix = `[fn=${fn}]`;
+  const c = console as unknown as Record<string, (...a: unknown[]) => void>;
+  for (const m of ["log", "info", "warn", "error", "debug"]) {
+    const orig = c[m]?.bind(console);
+    if (!orig) continue;
+    c[m] = (...args: unknown[]) => orig(prefix, ...args);
+  }
+  return fn;
+}
+
 /**
  * Add comprehensive database operation tags to Sentry scope
  */
@@ -202,7 +228,9 @@ export async function wrapRequestHandler(
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+  const functionName = installFunctionLogContext();
   const scope = new Sentry.Scope();
+  if (functionName) scope.setTag("function", functionName);
   scope.setTag("URL", req.url);
   scope.setTag("Method", req.method);
   try {
