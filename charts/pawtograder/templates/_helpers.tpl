@@ -136,9 +136,26 @@ Public URLs.
 {{- printf "https://%s" .Values.global.hostname -}}
 {{- end -}}
 
+{{/*
+The separate-API hostname. Default is "api.<hostname>". When
+global.apiHostnameFlatten is true it instead prefixes "-api" onto the first
+label — pr-123.preview.pawtograder.net -> pr-123-api.preview.pawtograder.net —
+so the host stays a single label under the parent zone and is therefore covered
+by a *.preview.pawtograder.net wildcard TLS cert (a wildcard spans only one
+label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
+*/}}
+{{- define "pawtograder.api.hostname" -}}
+{{- if and .Values.global.apiHostnameFlatten (contains "." .Values.global.hostname) -}}
+{{- $parts := splitn "." 2 .Values.global.hostname -}}
+{{- printf "%s-api.%s" $parts._0 $parts._1 -}}
+{{- else -}}
+{{- printf "api.%s" .Values.global.hostname -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.api.url" -}}
 {{- if .Values.global.apiOnSeparateHost -}}
-{{- printf "https://api.%s" .Values.global.hostname -}}
+{{- printf "https://%s" (include "pawtograder.api.hostname" .) -}}
 {{- else -}}
 {{- printf "https://%s" .Values.global.hostname -}}
 {{- end -}}
