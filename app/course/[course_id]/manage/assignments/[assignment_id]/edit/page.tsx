@@ -107,9 +107,13 @@ export default function EditAssignment() {
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
         }
-        // Clear PR/upstream config when not in PR submission mode so toggling
-        // back to push doesn't leave stale upstream values behind.
-        if (values.submission_mode !== "pr") {
+        // Submission-mode / upstream coupling (Option A): for PR mode the
+        // upstream repo IS the handout (template_repo), so keep them equal.
+        // When not PR, clear PR/upstream config so toggling back to push doesn't
+        // leave stale upstream values behind.
+        if (values.submission_mode === "pr") {
+          values.upstream_repo = values.template_repo ?? null;
+        } else {
           values.upstream_repo = null;
           values.pr_branch_convention = null;
           values.require_pr_open = false;

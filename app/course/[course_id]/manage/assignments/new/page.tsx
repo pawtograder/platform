@@ -155,7 +155,11 @@ export default function NewAssignmentPage() {
             // instructor actually selected PR mode; otherwise leave the columns at
             // their push-mode defaults.
             submission_mode: isPr ? "pr" : "push",
-            upstream_repo: isPr ? getValues("upstream_repo") || null : null,
+            // Option A: the upstream repo IS the handout (template_repo). At
+            // create time template_repo is usually null (the handout is created
+            // afterwards, where the edge function points upstream_repo at it);
+            // for inherited/fork modes it may already be set, so carry it here.
+            upstream_repo: isPr ? getValues("template_repo") || null : null,
             upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
             pr_identification: isPr ? getValues("pr_identification") || "base_branch" : "base_branch",
             pr_branch_convention: isPr ? getValues("pr_branch_convention") || null : null,

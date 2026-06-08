@@ -11,10 +11,8 @@ import {
   Field as CkField,
   Fieldset,
   Input,
-  Link,
   NativeSelectField,
   NativeSelectRoot,
-  Spinner,
   Table,
   Text,
   VStack
@@ -22,8 +20,6 @@ import {
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { checkAppInstallation } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
 import { appendTimezoneOffset } from "@/lib/utils";
@@ -803,94 +799,27 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   );
 }
 
-type InstallCheckStatus = "idle" | "checking" | "ok" | "missing" | "no_repo_access" | "error";
-
 /**
- * How a submission is produced (push vs PR) and, for PR mode, the upstream repo
- * PRs target. The upstream repo may live in a different GitHub org than the
- * class; ptg can only ingest its PRs/checks and receive its webhooks if our
- * GitHub App is installed there, so we check installation and block saving a
- * PR-mode assignment until the upstream repo is reachable.
+ * How a submission is produced (push vs PR). For PR mode the upstream repo PRs
+ * target IS the assignment's handout repo (template_repo) — kept equal so the
+ * two can't drift — so it is shown read-only rather than typed/installation-checked.
  */
 function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }) {
-  const { course_id } = useParams();
   const {
     register,
     control,
     watch,
-    setError,
-    clearErrors,
     formState: { errors }
   } = form;
 
   const submissionMode = watch("submission_mode") ?? "push";
   const prIdentification = watch("pr_identification") ?? "base_branch";
-  const upstreamRepo = watch("upstream_repo");
+  // Option A: for pr-mode the upstream repo IS the handout repo (template_repo) —
+  // students fork the handout and PR back to it. It is set automatically (the
+  // handout-creation edge function points upstream_repo at the handout), shown
+  // read-only here, so there is no separate upstream to type or install-check.
+  const templateRepo = watch("template_repo");
   const isPr = submissionMode === "pr";
-
-  const [check, setCheck] = useState<{ status: InstallCheckStatus; installUrl?: string; message?: string }>({
-    status: "idle"
-  });
-  // The field-level validate closure reads the latest check result via this ref
-  // so it gates Save without re-registering on every status change.
-  const checkRef = useRef(check);
-  useEffect(() => {
-    checkRef.current = check;
-  }, [check]);
-
-  const runCheck = useCallback(
-    async (repo: string | null | undefined) => {
-      if (!repo || !repo.includes("/")) {
-        setCheck({ status: "idle" });
-        return;
-      }
-      setCheck({ status: "checking" });
-      try {
-        const supabase = createClient();
-        const res = await checkAppInstallation({ repo, class_id: Number.parseInt(course_id as string, 10) }, supabase);
-        if (!res.installed) {
-          setCheck({ status: "missing", installUrl: res.install_url });
-        } else if (!res.repo_accessible) {
-          setCheck({ status: "no_repo_access", installUrl: res.install_url });
-        } else {
-          setCheck({ status: "ok" });
-          clearErrors("upstream_repo");
-        }
-      } catch (e) {
-        // Don't hard-block on a transient check failure — surface it but allow save.
-        setCheck({ status: "error", message: e instanceof Error ? e.message : "Installation check failed" });
-      }
-    },
-    [course_id, clearErrors]
-  );
-
-  // Check once when the section first shows an existing upstream repo (editing a
-  // PR-mode assignment), and clear any stale gate when leaving PR mode.
-  useEffect(() => {
-    if (isPr && upstreamRepo && check.status === "idle") {
-      runCheck(upstreamRepo);
-    }
-    if (!isPr) {
-      clearErrors("upstream_repo");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPr]);
-
-  // Surface the gate as an inline field error so onInvalid scrolls to it.
-  useEffect(() => {
-    if (!isPr) return;
-    if (check.status === "missing") {
-      setError("upstream_repo", {
-        type: "manual",
-        message: "The Pawtograder GitHub App is not installed on this repository's organization."
-      });
-    } else if (check.status === "no_repo_access") {
-      setError("upstream_repo", {
-        type: "manual",
-        message: "The app is installed but can't access this repository — grant it access, then re-check."
-      });
-    }
-  }, [check.status, isPr, setError]);
 
   return (
     <CardRoot>
@@ -920,65 +849,16 @@ function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Upstream repository"
-                helperText='The repo PRs target, as "owner/name". May be in a different org than the class — the Pawtograder GitHub App must be installed there.'
-                errorText={errors.upstream_repo?.message?.toString()}
-                invalid={!!errors.upstream_repo}
-                required={true}
+                label="Upstream repository (= handout)"
+                helperText="PRs target this assignment's handout repository — the handout IS the upstream (students fork it and open PRs back), so it's set automatically and can't drift. ⚠ Changing the handout repository after student repos exist will orphan their forks; set it before students start."
               >
-                <Input
-                  placeholder="owner/name"
-                  {...register("upstream_repo", {
-                    validate: (value) => {
-                      if (submissionMode !== "pr") return true;
-                      if (!value) return "Upstream repository is required for PR submission mode";
-                      if (!`${value}`.includes("/")) return 'Use "owner/name" form';
-                      const st = checkRef.current.status;
-                      if (st === "checking") return "Still checking the GitHub App installation…";
-                      if (st === "idle") return "Verify the GitHub App installation before saving";
-                      if (st === "missing")
-                        return "Install the Pawtograder GitHub App on this repository's organization before saving";
-                      if (st === "no_repo_access") return "Grant the app access to this repository before saving";
-                      return true;
-                    },
-                    onBlur: (e) => runCheck((e.target as HTMLInputElement).value)
-                  })}
-                />
-              </Field>
-            </Fieldset.Content>
-            <Fieldset.Content>
-              <Field>
-                <Box display="flex" alignItems="center" gap={3}>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => runCheck(upstreamRepo)}
-                    disabled={check.status === "checking" || !upstreamRepo}
-                  >
-                    {check.status === "checking" ? <Spinner size="xs" /> : null}
-                    Re-check installation
-                  </Button>
-                  {check.status === "ok" && (
-                    <Text fontSize="sm" color="fg.success">
-                      <LuCheck style={{ display: "inline" }} /> App installed and repository accessible
-                    </Text>
-                  )}
-                  {(check.status === "missing" || check.status === "no_repo_access") && check.installUrl && (
-                    <Text fontSize="sm" color="fg.error">
-                      {check.status === "missing"
-                        ? "App not installed on this organization. "
-                        : "App can't access this repository. "}
-                      <Link href={check.installUrl} target="_blank" rel="noopener noreferrer" color="fg.info">
-                        Install / configure the Pawtograder GitHub App
-                      </Link>
-                    </Text>
-                  )}
-                  {check.status === "error" && (
-                    <Text fontSize="sm" color="fg.warning">
-                      Couldn&apos;t verify installation: {check.message}
-                    </Text>
-                  )}
-                </Box>
+                {templateRepo ? (
+                  <Input value={templateRepo} readOnly disabled />
+                ) : (
+                  <Text fontSize="sm" color="fg.muted">
+                    The handout repository (created when you save) will be the upstream students PR against.
+                  </Text>
+                )}
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>
