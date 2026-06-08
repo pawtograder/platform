@@ -70,15 +70,24 @@ if [ "$follow" -eq 1 ] && ! command -v logcli >/dev/null 2>&1; then
 fi
 
 # Otherwise query Loki. Open the tunnel; clean up on exit.
+# Refuse to proceed if the port is already taken — otherwise the readiness probe
+# below would "succeed" against an unrelated process and we'd query the wrong thing.
+if (exec 9<>"/dev/tcp/127.0.0.1/${localport}") 2>/dev/null; then
+  exec 9>&- 9<&-
+  echo "local port ${localport} is already in use; pass --port <free-port>" >&2
+  exit 1
+fi
 echo "==> port-forward ${LOKI_NS}/svc/${LOKI_SVC} -> 127.0.0.1:${localport}  (query: ${LOGQL})" >&2
 kubectl port-forward -n "$LOKI_NS" "svc/${LOKI_SVC}" "${localport}:${LOKI_PORT}" >/dev/null 2>&1 &
 PF_PID=$!
 cleanup() { kill "$PF_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
+up=0
 for _ in $(seq 1 50); do
-  if (exec 3<>"/dev/tcp/127.0.0.1/${localport}") 2>/dev/null; then exec 3>&- 3<&-; break; fi
+  if (exec 3<>"/dev/tcp/127.0.0.1/${localport}") 2>/dev/null; then exec 3>&- 3<&-; up=1; break; fi
   sleep 0.2
 done
+[ "$up" = 1 ] || { echo "Loki tunnel never came up on :${localport}" >&2; exit 1; }
 
 ADDR="http://127.0.0.1:${localport}"
 

@@ -49,6 +49,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --no-build deploys an existing tag; without --tag the default tag is freshly
+# generated and won't exist in the registry, which would patch the Deployment to
+# an unpullable image and take functions down. Require an explicit tag.
+if [ "$do_build" -eq 0 ] && [ -z "$tag" ]; then
+  echo "--no-build requires --tag <existing-image-tag>" >&2
+  exit 2
+fi
+
 require docker; require kubectl; require git
 NAMESPACE="$(resolve_namespace "$env" "$preview" "$namespace")"
 

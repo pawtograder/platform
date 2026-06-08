@@ -333,6 +333,10 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
+        with:
+          # This job handles cluster credentials; no later step needs the git
+          # token, so don't leave it persisted in .git/config.
+          persist-credentials: false
 
       - uses: azure/setup-helm@v4
         with:
@@ -364,6 +368,7 @@ jobs:
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
             --wait \
+            --wait-for-jobs \
             --timeout 15m
 
       - name: Post-deploy status

@@ -59,6 +59,14 @@ PW="$(kubectl get secret "$PG_SECRET" -n "$NAMESPACE" -o jsonpath='{.data.POSTGR
 [ -n "$PW" ] || { echo "could not read ${PG_SECRET}/POSTGRES_PASSWORD in ${NAMESPACE}" >&2; exit 1; }
 PW_ENC="$(jq -rn --arg v "$PW" '$v|@uri')"
 
+# Refuse to proceed if the port is already taken — otherwise the readiness probe
+# below could "succeed" against an unrelated Postgres and we'd run commands
+# (db push, psql, …) against the WRONG database.
+if (exec 9<>"/dev/tcp/127.0.0.1/${localport}") 2>/dev/null; then
+  exec 9>&- 9<&-
+  echo "local port ${localport} is already in use; pass --port <free-port>" >&2
+  exit 1
+fi
 echo "==> port-forward ${NAMESPACE}/svc/${PG_SVC} -> 127.0.0.1:${localport}" >&2
 kubectl port-forward -n "$NAMESPACE" "svc/${PG_SVC}" "${localport}:5432" >/dev/null 2>&1 &
 PF_PID=$!
