@@ -124,12 +124,12 @@ describe("earnedPointsForCriterion", () => {
   });
 
   it("non-additive: subtracts applied deductions from total_points, floored at 0", () => {
-    expect(earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 2)).toBe(
-      3
-    );
-    expect(earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 9)).toBe(
-      0
-    );
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 2)
+    ).toBe(3);
+    expect(
+      earnedPointsForCriterion(criterion({ is_additive: false, is_deduction_only: false, total_points: 5 }), 9)
+    ).toBe(0);
   });
 
   it("deduction-only: contributes a non-positive penalty, floored at -total_points", () => {

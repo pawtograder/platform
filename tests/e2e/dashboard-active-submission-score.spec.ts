@@ -139,11 +139,7 @@ test.describe("dashboard surfaces the active submission's grade (issue #823)", (
   }
 
   async function expectActiveSubmission(submissionId: number, expectedActive: boolean) {
-    const { data, error } = await supabase
-      .from("submissions")
-      .select("is_active")
-      .eq("id", submissionId)
-      .single();
+    const { data, error } = await supabase.from("submissions").select("is_active").eq("id", submissionId).single();
     if (error) {
       throw new Error(`Failed to read submission ${submissionId}: ${error.message}`);
     }
