@@ -2005,19 +2005,25 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
       }
     }
 
-    // Resolve the submitter's private profile in this assignment's class.
+    // Resolve the submitter's private profile in this assignment's class. Any
+    // enrolled member (student, or instructor/grader for testing) can author a
+    // PR submission — staff need to exercise the pr-mode flow on a class without
+    // a separate student account. The submission is attributed to whoever opened
+    // the PR, via their private profile in this class.
     const { data: role } = await adminSupabase
       .from("user_roles")
       .select("private_profile_id")
       .eq("user_id", userId)
       .eq("class_id", a.class_id)
-      .eq("role", "student")
+      .in("role", ["student", "instructor", "grader"])
+      .order("role", { ascending: true })
+      .limit(1)
       .maybeSingle();
     if (!role?.private_profile_id) {
       console.log(
-        `[PR_INGEST] skip assignment=${a.id}: author '${authorLogin}' is not a student in class ${a.class_id} ${ctx}`
+        `[PR_INGEST] skip assignment=${a.id}: author '${authorLogin}' has no student/instructor/grader role in class ${a.class_id} ${ctx}`
       );
-      continue; // Author isn't a student in this class.
+      continue; // Author isn't enrolled in this class.
     }
     const profileId = role.private_profile_id;
 
