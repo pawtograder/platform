@@ -86,7 +86,6 @@ import {
   getStudentFacingErrorMessage,
   GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
 } from "@/lib/studentFacingErrorMessages";
-import { earnedPointsForCriterion } from "@/lib/rubric/points";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
@@ -1299,22 +1298,22 @@ export function RubricCriteria({
     target_student_profile_id: targetStudentProfileId
   });
   const totalPoints = comments.reduce((acc, comment) => acc + (comment.points || 0), 0);
+  const isAdditive = criteria.is_additive;
   const [selectedCheck, setSelectedCheck] = useState<HydratedRubricCheck>();
   let pointsText = "";
   if (criteria.total_points) {
-    // Earned points by criterion mode, via the shared helper that mirrors the canonical
-    // recompute SQL: additive caps at total_points, non-additive floors at 0 (so an
-    // over-deduction never renders a spurious negative), deduction-only is a non-positive
-    // penalty clamped to -total_points.
-    const earned = earnedPointsForCriterion(
-      {
-        is_additive: criteria.is_additive,
-        is_deduction_only: criteria.is_deduction_only,
-        total_points: criteria.total_points
-      },
-      totalPoints
-    );
-    pointsText = `${earned}/${criteria.total_points}`;
+    // Grader-facing running tally. Additive shows the raw applied sum *uncapped* on purpose, so
+    // a grader sees over-cap adjustments (e.g. a +100 regrade tweak → "120.5/20"); the cap is
+    // applied only when the score is computed, not in this tally.
+    if (criteria.is_deduction_only) {
+      pointsText = `-${totalPoints}/${criteria.total_points}`;
+    } else if (isAdditive) {
+      pointsText = `${totalPoints}/${criteria.total_points}`;
+    } else {
+      // Floor the earned tally at 0 so an over-deduction doesn't render a spurious negative
+      // (mirrors the non-additive floor in _submission_review_recompute_scores).
+      pointsText = `${Math.max(criteria.total_points - totalPoints, 0)}/${criteria.total_points}`;
+    }
   }
   const isGrader = useIsGraderOrInstructor();
   const isTaOnly = useIsGrader();
