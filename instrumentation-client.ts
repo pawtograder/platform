@@ -107,9 +107,7 @@ Sentry.init({
     // the page's global onunhandledrejection handler and get attributed to us even though
     // they originate from the user's extensions (e.g. invalid `querySelector` selectors).
     if (
-      event.exception?.values?.some((e) =>
-        e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/"))
-      )
+      event.exception?.values?.some((e) => e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/")))
     ) {
       return null;
     }
