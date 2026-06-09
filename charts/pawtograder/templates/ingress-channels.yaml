@@ -11,11 +11,21 @@ per-host ACME issuance.
 {{- range $c := .Values.channels }}
 {{- if $c.web }}
 {{- $host := include "pawtograder.channel.host" (dict "ctx" $ "channel" $c) }}
-{{- /* An overridden channel.host outside the wildcard zone can't be covered by
-   channelWildcardTlsSecret — fail rather than serve a mismatched cert. The
-   default host (<name>.<global.hostname>) is always under the zone. */ -}}
-{{- if and $.Values.ingress.tls.enabled $c.host (not (hasSuffix (printf ".%s" $.Values.global.hostname) $host)) -}}
-{{- fail (printf "channel %q host %q is not under the wildcard zone *.%s, so channelWildcardTlsSecret can't cover it; use a host under that zone or add per-channel TLS support" $c.name $host $.Values.global.hostname) -}}
+{{- /* Resolve the channel ingress TLS secret:
+   - channels[].tls.secretName, if set, wins (per-channel cert; any host).
+   - otherwise the host must be under the *.<global.hostname> wildcard zone so
+     channelWildcardTlsSecret can cover it (the default <name>.<hostname> host
+     always is); an overridden host outside the zone fails fast rather than
+     serving a mismatched cert. */ -}}
+{{- $tlsSecret := "" }}
+{{- if $.Values.ingress.tls.enabled }}
+{{- if and $c.tls $c.tls.secretName }}
+{{- $tlsSecret = $c.tls.secretName }}
+{{- else if hasSuffix (printf ".%s" $.Values.global.hostname) $host }}
+{{- $tlsSecret = required "channelWildcardTlsSecret is required for channels under the wildcard zone with ingress.tls.enabled (a reflected *.<zone> cert), or set channels[].tls.secretName" $.Values.channelWildcardTlsSecret }}
+{{- else }}
+{{- fail (printf "channel %q host %q is outside the wildcard zone *.%s, so channelWildcardTlsSecret can't cover it; set channels[].tls.secretName for a per-channel cert" $c.name $host $.Values.global.hostname) }}
+{{- end }}
 {{- end }}
 {{- $component := printf "web-%s" $c.name }}
 ---
@@ -43,7 +53,7 @@ spec:
   tls:
     - hosts:
         - {{ $host | quote }}
-      secretName: {{ required "channelWildcardTlsSecret is required when .Values.channels have web + ingress.tls.enabled (a reflected *.<zone> wildcard cert)" $.Values.channelWildcardTlsSecret }}
+      secretName: {{ $tlsSecret }}
   {{- end }}
   rules:
     # Channel hosts always route the API by path to the shared Kong (regardless

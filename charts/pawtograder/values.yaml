@@ -62,6 +62,9 @@ global:
 channels: []
 #  - name: team7
 #    # host: team7.staging.pawtograder.net   # optional; default <name>.<global.hostname>
+#    # tls:
+#    #   secretName: team7-tls   # optional per-channel cert; required if `host` is
+#    #                           # outside the *.<global.hostname> wildcard zone
 #    web:
 #      image:
 #        tag: "team7-<sha>"      # repository/pullPolicy default from web.image
