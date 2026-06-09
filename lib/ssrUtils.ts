@@ -113,15 +113,28 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
 export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
   const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
 
-  const { data: userRole } = await client
+  const { data: userRoles } = await client
     .from("user_roles")
     .select("role, class_id, public_profile_id, private_profile_id")
     .eq("class_id", course_id)
     .eq("user_id", user_id)
-    .eq("disabled", false)
-    .single();
+    .eq("disabled", false);
 
-  return userRole || undefined;
+  if (!userRoles || userRoles.length === 0) {
+    return undefined;
+  }
+
+  // A user may hold more than one non-disabled role in a class — the unique index is on
+  // (user_id, role, class_id), not (user_id, class_id), so e.g. student + grader can coexist.
+  // Resolve to the highest-privilege role (matching the enrollment upgrade logic) instead of
+  // calling `.single()`, which 406s on >1 (and on 0) rows and would lock the user out of a
+  // course they belong to.
+  const roleHierarchy: ReadonlyArray<UserRoleData["role"]> = ["instructor", "grader", "student"];
+  const rank = (role: UserRoleData["role"]) => {
+    const idx = roleHierarchy.indexOf(role);
+    return idx === -1 ? roleHierarchy.length : idx;
+  };
+  return [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0];
 }
 
 export type EffectiveCourseIdentity = UserRoleData & {
