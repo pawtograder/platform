@@ -17,6 +17,7 @@ import useDiscussionThreadChildren, { useDiscussionThreadsController } from "@/h
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Icon, Link, Stack, Text } from "@chakra-ui/react";
@@ -307,7 +308,7 @@ const DiscussionThreadContent = memo(
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={authorProfile.name} />
-                  <Avatar.Image src={authorProfile.avatar_url} alt="" />
+                  <Avatar.Image src={sanitizeImageSrc(authorProfile.avatar_url)} alt="" />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />
