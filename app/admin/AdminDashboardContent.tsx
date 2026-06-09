@@ -1,4 +1,5 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { AdminCoursePicker, EnterCourseAsInstructorButton } from "@/components/admin/EnterCourseAsInstructor";
 import { Button } from "@/components/ui/button";
 import { fetchAdminDashboardStats } from "@/lib/ssr-platform-data";
 import { createAdminClient } from "@/utils/supabase/client";
@@ -132,9 +133,7 @@ export async function AdminDashboardContent() {
                         <TimeZoneAwareDate date={course.created_at} format="dateOnly" />
                       </Text>
                     </VStack>
-                    <Button variant="ghost" size="sm" asChild>
-                      <Link href="/admin/classes">Manage</Link>
-                    </Button>
+                    <EnterCourseAsInstructorButton classId={course.id}>Manage as instructor</EnterCourseAsInstructorButton>
                   </Flex>
                 ))
               ) : (
@@ -153,6 +152,15 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <VStack gap={4}>
+              <AdminCoursePicker />
+              <Button variant="outline" w="full" justifyContent="start" asChild>
+                <Link href="/admin/github-orgs">
+                  <HStack gap={2}>
+                    <Settings size={16} />
+                    <Text>Manage GitHub Orgs</Text>
+                  </HStack>
+                </Link>
+              </Button>
               <Button variant="outline" w="full" justifyContent="start" asChild>
                 <Link href="/admin/classes">
                   <HStack gap={2}>

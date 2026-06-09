@@ -1790,6 +1790,7 @@ export type Database = {
           features: Json | null;
           github_org: string | null;
           gradebook_id: number | null;
+          handout_template_repo: string | null;
           id: number;
           is_demo: boolean;
           late_tokens_per_student: number;
@@ -1797,6 +1798,7 @@ export type Database = {
           office_hours_description: string | null;
           office_hours_ics_url: string | null;
           slug: string | null;
+          solution_template_repo: string | null;
           start_date: string | null;
           term: number | null;
           time_zone: string;
@@ -1813,6 +1815,7 @@ export type Database = {
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
+          handout_template_repo?: string | null;
           id?: number;
           is_demo?: boolean;
           late_tokens_per_student?: number;
@@ -1820,6 +1823,7 @@ export type Database = {
           office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
+          solution_template_repo?: string | null;
           start_date?: string | null;
           term?: number | null;
           time_zone?: string;
@@ -1836,6 +1840,7 @@ export type Database = {
           features?: Json | null;
           github_org?: string | null;
           gradebook_id?: number | null;
+          handout_template_repo?: string | null;
           id?: number;
           is_demo?: boolean;
           late_tokens_per_student?: number;
@@ -1843,6 +1848,7 @@ export type Database = {
           office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
+          solution_template_repo?: string | null;
           start_date?: string | null;
           term?: number | null;
           time_zone?: string;
@@ -3190,6 +3196,36 @@ export type Database = {
           state?: string;
           trip_count?: number;
           updated_at?: string;
+        };
+        Relationships: [];
+      };
+      github_orgs: {
+        Row: {
+          created_at: string;
+          created_by: string | null;
+          default_handout_template_repo: string;
+          default_solution_template_repo: string;
+          org_name: string;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string | null;
+          default_handout_template_repo?: string;
+          default_solution_template_repo?: string;
+          org_name: string;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string | null;
+          default_handout_template_repo?: string;
+          default_solution_template_repo?: string;
+          org_name?: string;
+          updated_at?: string;
+          updated_by?: string | null;
         };
         Relationships: [];
       };
@@ -10761,6 +10797,10 @@ export type Database = {
           updated_at: string;
         }[];
       };
+      admin_enter_course_as_instructor: {
+        Args: { p_class_id: number };
+        Returns: undefined;
+      };
       admin_get_classes: {
         Args: never;
         Returns: {
@@ -10773,6 +10813,31 @@ export type Database = {
           instructor_count: number;
           name: string;
           student_count: number;
+          term: number;
+        }[];
+      };
+      admin_get_github_orgs: {
+        Args: never;
+        Returns: {
+          course_count: number;
+          created_at: string;
+          default_handout_template_repo: string;
+          default_solution_template_repo: string;
+          is_configured: boolean;
+          org_name: string;
+          updated_at: string;
+        }[];
+      };
+      admin_get_org_courses: {
+        Args: { p_org_name: string };
+        Returns: {
+          archived: boolean;
+          effective_handout_template_repo: string;
+          effective_solution_template_repo: string;
+          handout_template_repo: string;
+          id: number;
+          name: string;
+          solution_template_repo: string;
           term: number;
         }[];
       };
@@ -12424,6 +12489,21 @@ export type Database = {
           relname: string;
           severity: string;
         }[];
+      };
+      admin_upsert_github_org: {
+        Args: { p_org_name: string; p_handout?: string; p_solution?: string };
+        Returns: undefined;
+      };
+      resolve_class_template_repos: {
+        Args: { p_class_id: number };
+        Returns: {
+          handout_template_repo: string;
+          solution_template_repo: string;
+        }[];
+      };
+      set_class_template_overrides: {
+        Args: { p_class_id: number; p_handout?: string; p_solution?: string };
+        Returns: undefined;
       };
     };
     Enums: {

@@ -3,10 +3,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-
-const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -48,9 +47,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("id", assignment_id);
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg);
-  const sourceTemplateRepo = template_repo_override ?? TEMPLATE_HANDOUT_REPO_NAME;
-  scope.setTag("source_template_repo", sourceTemplateRepo);
-  await createRepo(handoutRepoOrg, handoutRepoName, sourceTemplateRepo, { is_template_repo: true }, scope);
+  const { handout: resolvedHandoutTemplate } = await resolveTemplateRepos(adminSupabase, class_id);
+  const handoutTemplateRepo = template_repo_override ?? resolvedHandoutTemplate;
+  scope.setTag("handout_template_repo", handoutTemplateRepo);
+  await createRepo(handoutRepoOrg, handoutRepoName, handoutTemplateRepo, { is_template_repo: true }, scope);
   await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, [], scope);
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 

@@ -212,6 +212,20 @@ export type GetFileRequest = {
   repoName: string;
   path: string;
 };
+export type WriteFileRequest = {
+  courseId: number;
+  orgName: string;
+  repoName: string;
+  path: string;
+  content: string;
+  message: string;
+  /** Blob sha of the file being replaced. Omit to create a new file. */
+  sha?: string;
+};
+export type WriteFileResponse = {
+  commit_sha?: string;
+  content_sha?: string;
+};
 export type GithubRepoConfigureWebhookRequest = {
   assignment_id: number;
   new_repo: string;

@@ -89,6 +89,15 @@ export function useIsReadOnly() {
   return isReadOnly;
 }
 
+/**
+ * Returns whether the current user holds a global admin role (a `user_roles` row with
+ * role "admin" in any class). Admins can act as instructors in any course.
+ */
+export function useIsAdmin() {
+  const { allOfMyRoles } = useClassProfiles();
+  return allOfMyRoles.some((r) => r.role === "admin");
+}
+
 type UserRoleWithClassAndUser = GetResult<
   Database["public"],
   Database["public"]["Tables"]["user_roles"]["Row"],
