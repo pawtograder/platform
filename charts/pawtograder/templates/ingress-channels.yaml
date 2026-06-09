@@ -1,0 +1,92 @@
+{{- /*
+Per-deployment-channel Ingress. Each channel with a `web` block gets its own
+single-label host (<name>.<global.hostname>) serving that channel's web
+deployment at /, with the Supabase API paths proxied to the shared Kong (which
+routes /functions/v1 to the channel's functions by host — see
+templates/kong-config.yaml; auth/rest/realtime/storage stay shared). TLS uses the
+*.<zone> wildcard secret (channelWildcardTlsSecret), so adding channels needs no
+per-host ACME issuance.
+*/ -}}
+{{- if and .Values.ingress.enabled .Values.web.enabled }}
+{{- range $c := .Values.channels }}
+{{- if $c.web }}
+{{- $host := include "pawtograder.channel.host" (dict "ctx" $ "channel" $c) }}
+{{- $component := printf "web-%s" $c.name }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" $ "component" $component) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" $ "component" $component) | nindent 4 }}
+  annotations:
+    # Same large-header headroom as the primary ingress: Next.js Server Action
+    # responses carry the ~1.7KB CSP header and cookie-stacked redirects can
+    # overflow nginx's default proxy buffers (502 "upstream sent too big header").
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    {{- with $.Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
+  {{- end }}
+  {{- if $.Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ required "channelWildcardTlsSecret is required when .Values.channels have web + ingress.tls.enabled (a reflected *.<zone> wildcard cert)" $.Values.channelWildcardTlsSecret }}
+  {{- end }}
+  rules:
+    # Channel hosts always route the API by path to the shared Kong (regardless
+    # of global.apiOnSeparateHost) so a channel needs only one single-label host.
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /rest/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /realtime/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /storage/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /functions/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.componentName" (dict "ctx" $ "component" $component) }}
+                port:
+                  number: {{ $.Values.web.service.port }}
+{{- end }}
+{{- end }}
+{{- end }}

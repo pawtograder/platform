@@ -162,6 +162,22 @@ label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 {{- end -}}
 
 {{/*
+Per-deployment-channel public host. Each channel (.Values.channels[]) is served
+on its own single-label host so a *.<zone> wildcard TLS cert covers it; the
+channel runs web + edge-functions code against the shared data plane, and the app
+redirects each course to its channel's host (classes.deployment_channel). Defaults
+to "<name>.<global.hostname>"; an entry may set `host` to override.
+Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
+*/}}
+{{- define "pawtograder.channel.host" -}}
+{{- if .channel.host -}}
+{{- .channel.host -}}
+{{- else -}}
+{{- printf "%s.%s" .channel.name .ctx.Values.global.hostname -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Internal service hostnames.
 */}}
 {{- define "pawtograder.postgres.host" -}}
