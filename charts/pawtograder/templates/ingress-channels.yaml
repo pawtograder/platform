@@ -11,6 +11,12 @@ per-host ACME issuance.
 {{- range $c := .Values.channels }}
 {{- if $c.web }}
 {{- $host := include "pawtograder.channel.host" (dict "ctx" $ "channel" $c) }}
+{{- /* An overridden channel.host outside the wildcard zone can't be covered by
+   channelWildcardTlsSecret — fail rather than serve a mismatched cert. The
+   default host (<name>.<global.hostname>) is always under the zone. */ -}}
+{{- if and $.Values.ingress.tls.enabled $c.host (not (hasSuffix (printf ".%s" $.Values.global.hostname) $host)) -}}
+{{- fail (printf "channel %q host %q is not under the wildcard zone *.%s, so channelWildcardTlsSecret can't cover it; use a host under that zone or add per-channel TLS support" $c.name $host $.Values.global.hostname) -}}
+{{- end }}
 {{- $component := printf "web-%s" $c.name }}
 ---
 apiVersion: networking.k8s.io/v1

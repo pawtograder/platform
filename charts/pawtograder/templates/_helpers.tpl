@@ -170,11 +170,15 @@ to "<name>.<global.hostname>"; an entry may set `host` to override.
 Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
 */}}
 {{- define "pawtograder.channel.host" -}}
-{{- if .channel.host -}}
-{{- .channel.host -}}
-{{- else -}}
-{{- printf "%s.%s" .channel.name .ctx.Values.global.hostname -}}
+{{- $name := required "channels[].name is required" .channel.name -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
 {{- end -}}
+{{- $host := default (printf "%s.%s" $name .ctx.Values.global.hostname) .channel.host -}}
+{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $host) -}}
+{{- fail (printf "invalid channel host %q for channel %q: must be a DNS hostname" $host $name) -}}
+{{- end -}}
+{{- $host -}}
 {{- end -}}
 
 {{/*
