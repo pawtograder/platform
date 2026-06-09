@@ -23,6 +23,7 @@ import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { useTableControllerValueById } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
@@ -53,7 +54,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
         <HStack align="start" gap="2" alignSelf="flex-start">
           {userProfile ? (
             <Avatar.Root size="xs">
-              <Avatar.Image src={userProfile?.avatar_url} alt="" />
+              <Avatar.Image src={sanitizeImageSrc(userProfile?.avatar_url)} alt="" />
               <Avatar.Fallback>{userProfile?.name?.charAt(0) || "?"}</Avatar.Fallback>
             </Avatar.Root>
           ) : (

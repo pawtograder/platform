@@ -18,6 +18,7 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
 import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -296,7 +297,7 @@ const DropBoxAvatar = ({
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
                 >
-                  <Avatar.Image src={avatarLink || undefined} alt="" />
+                  <Avatar.Image src={sanitizeImageSrc(avatarLink)} alt="" />
                   <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                 </Avatar.Root>
                 {isHovered && (
@@ -734,7 +735,7 @@ function UserSettingsMenu() {
         <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
           <Avatar.Root size="sm" colorPalette="gray">
             <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-            <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
           </Avatar.Root>
         </IconButton>
       </Drawer.Trigger>
@@ -748,7 +749,7 @@ function UserSettingsMenu() {
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
                       <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
