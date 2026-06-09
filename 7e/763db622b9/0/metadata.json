@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "7e763db622b9",
+  "session_id": "32f5d09a-799e-40d5-82cf-c863259fb252",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-09T18:02:50.518730982Z",
+  "branch": "fix/sentry-querystring-and-extension-noise",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "instrumentation-client.ts",
+    "lib/TableController.ts",
+    "tests/unit/table-controller-query-mutation.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "493c1b445ade",
+  "token_usage": {
+    "input_tokens": 2916,
+    "cache_creation_tokens": 329155,
+    "cache_read_tokens": 11068985,
+    "output_tokens": 33330,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-09T18:02:49.822796068Z",
+    "agent_lines": 164,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 164,
+    "total_lines_changed": 168,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 34055,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "app/admin/github-orgs/[org]/page.tsx": 269,
+        "app/admin/github-orgs/layout.tsx": 9,
+        "app/admin/github-orgs/page.tsx": 82,
+        "app/course/[course_id]/manage/course/github/page.tsx": 166,
+        "app/course/[course_id]/manage/layout.tsx": 15,
+        "complete-session.txt": 6118,
+        "components/admin/AdminViewingBanner.tsx": 49,
+        "components/admin/EnterCourseAsInstructor.tsx": 116,
+        "components/github/RepoFileEditor.tsx": 386,
+        "lib/schemas/github-workflow.schema.json": 1939,
+        "lib/schemas/pawtograder.schema.json": 102,
+        "lti-session-html/index.html": 1298,
+        "lti-session-html/page-001.html": 7572,
+        "lti-session-html/page-002.html": 1916,
+        "lti-session-html/page-003.html": 6484,
+        "lti-session-html/page-004.html": 579,
+        "lti-session-html/page-005.html": 735,
+        "lti-session-html/page-006.html": 577,
+        "lti-session-html/page-007.html": 498,
+        "lti-session-html/page-008.html": 324,
+        "lti-session-html/page-009.html": 2513,
+        "lti-session-html/page-010.html": 729,
+        "lti-session-html/page-011.html": 652,
+        "playwright-report-canvas/index.html": 77,
+        "supabase/functions/repository-write-file/deno.json": 3,
+        "supabase/functions/repository-write-file/index.ts": 92,
+        "supabase/migrations/20260529140000_github_org_templates.sql": 317,
+        "tests/e2e/admin-act-as-instructor.test.tsx": 103,
+        "tests/e2e/github-org-templates.test.tsx": 129,
+        "tests/e2e/lti/.canvas-e2e.json": 26,
+        "tests/e2e/repo-file-editor.test.tsx": 180
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 34068,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 34219,
+      "agent_lines_removed": 4
+    }
+  ]
+}

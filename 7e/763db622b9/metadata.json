@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "7e763db622b9",
+  "strategy": "manual-commit",
+  "branch": "fix/sentry-querystring-and-extension-noise",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "instrumentation-client.ts",
+    "lib/TableController.ts",
+    "tests/unit/table-controller-query-mutation.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/763db622b9/0/metadata.json",
+      "transcript": "/7e/763db622b9/0/full.jsonl",
+      "content_hash": "/7e/763db622b9/0/content_hash.txt",
+      "prompt": "/7e/763db622b9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2916,
+    "cache_creation_tokens": 329155,
+    "cache_read_tokens": 11068985,
+    "output_tokens": 33330,
+    "api_call_count": 41
+  }
+}
