@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "e37d465903d6",
+  "strategy": "manual-commit",
+  "branch": "feature/github-org-config",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "app/admin/AdminDashboardContent.tsx",
+    "app/admin/github-orgs/[org]/page.tsx",
+    "app/admin/github-orgs/layout.tsx",
+    "app/admin/github-orgs/page.tsx",
+    "app/admin/layout.tsx",
+    "app/course/[course_id]/dynamicCourseNav.tsx",
+    "app/course/[course_id]/manage/assignments/[assignment_id]/autograder/page.tsx",
+    "app/course/[course_id]/manage/course/github/page.tsx",
+    "app/course/[course_id]/manage/layout.tsx",
+    "components/admin/AdminViewingBanner.tsx",
+    "components/admin/EnterCourseAsInstructor.tsx",
+    "components/github/RepoFileEditor.tsx",
+    "components/ui/autograder-configuration.tsx",
+    "hooks/useClassProfiles.tsx",
+    "lib/edgeFunctions.ts",
+    "lib/schemas/pawtograder.schema.json",
+    "package.json",
+    "supabase/config.toml",
+    "supabase/functions/_shared/FunctionTypes.d.ts",
+    "supabase/functions/_shared/GitHubSyncHelpers.ts",
+    "supabase/functions/_shared/GitHubWrapper.ts",
+    "supabase/functions/assignment-create-handout-repo/index.ts",
+    "supabase/functions/assignment-create-solution-repo/index.ts",
+    "supabase/functions/repository-write-file/deno.json",
+    "supabase/functions/repository-write-file/index.ts",
+    "supabase/migrations/20260529140000_github_org_templates.sql",
+    "tests/e2e/admin-act-as-instructor.test.tsx",
+    "tests/e2e/github-org-templates.test.tsx",
+    "tests/e2e/repo-file-editor.test.tsx",
+    "utils/supabase/SupabaseTypes.d.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e3/7d465903d6/0/metadata.json",
+      "transcript": "/e3/7d465903d6/0/full.jsonl",
+      "content_hash": "/e3/7d465903d6/0/content_hash.txt",
+      "prompt": "/e3/7d465903d6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44654,
+    "cache_creation_tokens": 1290748,
+    "cache_read_tokens": 113926732,
+    "output_tokens": 304484,
+    "api_call_count": 398
+  }
+}
