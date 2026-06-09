@@ -23,7 +23,6 @@ export default function NewAssignmentPage() {
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
       allow_not_graded_submissions: true,
-      permit_empty_submissions: true,
       require_tokens_before_due_date: true
     }
   });
@@ -64,6 +63,10 @@ export default function NewAssignmentPage() {
               enabled: isEnabled,
               deadline_offset: isEnabled ? getValues("deadline_offset") : null,
               allow_early: isEnabled ? getValues("allow_early") : null,
+              release_at:
+                isEnabled && getValues("self_review_release_at")
+                  ? new TZDate(getValues("self_review_release_at"), timezone).toISOString()
+                  : null,
               class_id: course_id
             }
           },
@@ -87,12 +90,15 @@ export default function NewAssignmentPage() {
               ? new TZDate(getValues("release_date"), timezone).toISOString()
               : "",
             due_date: getValues("due_date") ? new TZDate(getValues("due_date"), timezone).toISOString() : "",
+            suggested_due_date: getValues("suggested_due_date")
+              ? new TZDate(getValues("suggested_due_date"), timezone).toISOString()
+              : null,
             allow_late: getValues("allow_late"),
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,
             require_tokens_before_due_date: getValues("require_tokens_before_due_date") !== false,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
-            permit_empty_submissions: getValues("permit_empty_submissions") !== false,
+            permit_empty_submissions: false,
             total_points: getValues("total_points"),
             template_repo: getValues("template_repo"),
             submission_files: getValues("submission_files"),
@@ -104,6 +110,17 @@ export default function NewAssignmentPage() {
             max_group_size: getValues("max_group_size") || null,
             allow_student_formed_groups: getValues("allow_student_formed_groups"),
             enable_repo_analytics: getValues("enable_repo_analytics") || false,
+            grader_pseudonymous_mode: getValues("grader_pseudonymous_mode") || false,
+            show_leaderboard: getValues("show_leaderboard") || false,
+            minutes_due_after_lab:
+              getValues("minutes_due_after_lab") === null ||
+              getValues("minutes_due_after_lab") === undefined ||
+              (getValues("minutes_due_after_lab") as unknown as string) === ""
+                ? null
+                : getValues("minutes_due_after_lab"),
+            regrade_deadline: getValues("regrade_deadline")
+              ? new TZDate(getValues("regrade_deadline"), timezone).toISOString()
+              : null,
             self_review_setting_id: settings.data.id as number,
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()

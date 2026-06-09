@@ -1,0 +1,153 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pawtograder.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+  annotations:
+    # Next.js Server Action responses always carry the large CSP header
+    # set by middleware.ts (~1.7 KB). With nginx-ingress's defaults
+    # (proxy_buffer_size 4k / proxy_buffers 4 4k) the response header
+    # block — CSP + Vary + Cache-Control + Link + set-cookie — overflows
+    # the single buffer on redirects, the upstream gets reset, and nginx
+    # returns 502 with "upstream sent too big header". Make it 16k so we
+    # have headroom for cookie-stacked redirects too.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.global.hostname | quote }}
+        {{- if .Values.global.apiOnSeparateHost }}
+        - {{ include "pawtograder.api.hostname" . | quote }}
+        {{- end }}
+        {{- range .Values.ingress.extraHosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.hostname | quote }}
+      http:
+        paths:
+          {{- if not .Values.global.apiOnSeparateHost }}
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /rest/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /realtime/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /storage/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /functions/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.web.host" . }}
+                port:
+                  number: {{ .Values.web.service.port }}
+    {{- if .Values.global.apiOnSeparateHost }}
+    - host: {{ include "pawtograder.api.hostname" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+    {{- end }}
+    {{- /*
+    extraHosts get the same routing as the primary hostname so a TLS
+    SAN listed in .ingress.tls.hosts actually serves traffic. Without
+    this, requests to those hostnames hit the ingress controller's
+    default backend (404).
+    */ -}}
+    {{- range .Values.ingress.extraHosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          {{- if not $.Values.global.apiOnSeparateHost }}
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /rest/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /realtime/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /storage/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /functions/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.web.host" $ }}
+                port:
+                  number: {{ $.Values.web.service.port }}
+    {{- end }}
+{{- end }}

@@ -1,5 +1,5 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { Redis } from "./Redis.ts";
+import { bottleneckRedisOptions } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -141,17 +141,22 @@ function buildRedisBottleneck(
   opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
   clearDatastore: boolean
 ): Bottleneck {
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL")!;
-  const host = upstashUrl.replace("https://", "");
-  const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN")!;
+  // bottleneckRedisOptions picks ioredis (REDIS_URL) or the Upstash
+  // adapter (UPSTASH_REDIS_REST_*) automatically. Callers of this
+  // helper currently assume at least one is configured — the
+  // getCreateContentLimiter path is only invoked when Redis-backed
+  // limiting is desired, so falling through to "no Redis" would defeat
+  // the purpose. Throw to surface mis-configuration loudly.
+  const redisOpts = bottleneckRedisOptions();
+  if (!redisOpts) {
+    throw new Error("buildRedisBottleneck called without REDIS_URL or UPSTASH_REDIS_REST_URL+TOKEN");
+  }
   return new Bottleneck({
     id,
     ...opts,
-    datastore: "ioredis",
     timeout: 600000,
     clearDatastore,
-    clientOptions: { host, password, username: "default", tls: {}, port: 6379 },
-    Redis
+    ...redisOpts
   });
 }
 
@@ -208,12 +213,18 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
   const opts = { reservoir: 40, maxConcurrent: 40, reservoirRefreshAmount: 40, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+  // Use the shared Redis store whenever ANY backend is configured — REDIS_URL
+  // first, then Upstash — which is exactly what bottleneckRedisOptions() (and
+  // buildRedisBottleneck below) already encode. Gating on UPSTASH_* SPECIFICALLY
+  // made this fall back to a LOCAL per-isolate limiter on REDIS_URL-only
+  // deployments, so each of the N edge replicas independently granted the full
+  // 40/min content quota → real GitHub secondary-rate-limit risk under load.
+  if (bottleneckRedisOptions()) {
     limiter = buildRedisBottleneck(id, opts, false);
     withSettingsKeyRecovery(limiter, id, opts, createContentLimiters, key);
   } else {
-    console.log("No Upstash URL or token found, using local limiter");
-    Sentry.captureMessage("No Upstash URL or token found, using local limiter");
+    console.log("No Redis backend (REDIS_URL or UPSTASH_*) found, using local create-content limiter");
+    Sentry.captureMessage("No Redis backend (REDIS_URL or UPSTASH_*) found, using local create-content limiter");
     limiter = new Bottleneck({ id, ...opts });
   }
   createContentLimiters.set(key, limiter);
@@ -291,22 +302,24 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   });
   if (installations.length === 0) {
     let connection: Bottleneck.IORedisConnection | undefined;
-    if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
-      const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
-      const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+    // Back the GitHub API throttle with the shared Redis whenever ANY backend is
+    // configured (REDIS_URL first, then Upstash), via the same env-based factory
+    // the rest of the app uses. Previously this only built a connection when
+    // UPSTASH_* was set; on a REDIS_URL-only deployment `connection` stayed
+    // undefined, so @octokit/plugin-throttling fell back to a LOCAL per-isolate
+    // limiter — the GitHub rate limit was NOT coordinated across the (12-20)
+    // edge replicas, and no `b_pawtograder-production_*` state landed in the
+    // shared Redis for the metrics function to read. (The old UPSTASH_* branch
+    // also referenced an unimported `Redis` identifier, so it would have thrown
+    // a ReferenceError if ever taken.)
+    const throttleRedisOpts = bottleneckRedisOptions();
+    if (throttleRedisOpts) {
       connection = new Bottleneck.IORedisConnection({
-        clientOptions: {
-          host,
-          password,
-          username: "default",
-          tls: {},
-          port: 6379
-        },
-        Redis
+        clientOptions: throttleRedisOpts.clientOptions,
+        Redis: throttleRedisOpts.Redis
       });
       try {
         // Log connection lifecycle for verification
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         connection.ready
           .then(() => {
             console.log("IORedisConnection ready for GitHub throttling");
@@ -318,7 +331,6 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
       } catch (e) {
         console.error("Failed to attach IORedisConnection logging", e);
       }
-      connection.on("error", (err: Error) => console.error(err));
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
@@ -401,6 +413,26 @@ export async function resolveRef(action_repository: string, action_ref: string, 
   }
   throw new UserVisibleError(`Ref not found: ${action_ref} in ${action_repository}`);
 }
+/**
+ * Rebase a storage signed URL from the internal SUPABASE_URL origin onto the
+ * public API origin.
+ *
+ * Edge functions talk to storage through the in-cluster Kong service
+ * (SUPABASE_URL=http://pawtograder-kong:8000), so signed URLs come back with
+ * that host — which the external grading runner (GitHub Actions) can't resolve
+ * ("getaddrinfo ENOTFOUND pawtograder-kong"). The signature covers only the
+ * object path + expiry, not the host, so we can safely swap the origin to
+ * SUPABASE_PUBLIC_URL (e.g. https://api.staging.pawtograder.net) before handing
+ * the link to an external consumer. No-op when SUPABASE_PUBLIC_URL is unset
+ * (e.g. supabase.com hosting, where SUPABASE_URL is already public).
+ */
+export function toPublicSupabaseUrl(url: string): string {
+  const publicBase = Deno.env.get("SUPABASE_PUBLIC_URL");
+  const internalBase = Deno.env.get("SUPABASE_URL");
+  if (!publicBase || !internalBase || !url.startsWith(internalBase)) return url;
+  return publicBase.replace(/\/+$/, "") + url.slice(internalBase.length);
+}
+
 export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_tarball_url");
   scope?.setTag("repository", repo);
@@ -443,7 +475,7 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
     if (linkAge < fiftyFiveMinutes) {
       scope?.setTag("cache_hit", "true");
       return {
-        download_link: cachedLink.signed_url,
+        download_link: toPublicSupabaseUrl(cachedLink.signed_url),
         sha: resolved_sha
       };
     }
@@ -505,7 +537,7 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
   // Ignore errors from cache update (optimistic concurrency)
 
   return {
-    download_link: signedUrl,
+    download_link: toPublicSupabaseUrl(signedUrl),
     sha: resolved_sha
   };
 }

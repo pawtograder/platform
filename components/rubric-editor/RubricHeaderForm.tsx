@@ -55,6 +55,14 @@ export function RubricHeaderForm({ rubric, onChange, validationErrors }: RubricH
           </Switch>
         </Field>
       )}
+      <Field helperText="When enabled, students cannot see this rubric's contents (parts, criteria, checks) until a review on it has been assigned to them. Use this for self-review rubrics where seeing the questions before submitting would bias the student's work.">
+        <Switch
+          checked={rubric.hide_unless_assigned ?? false}
+          onCheckedChange={(details) => onChange({ ...rubric, hide_unless_assigned: details.checked })}
+        >
+          Hide from students until assigned
+        </Switch>
+      </Field>
     </Stack>
   );
 }

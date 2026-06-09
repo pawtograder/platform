@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import {
   useHelpQueues,
-  useHelpRequests,
+  useStudentVisibleHelpRequests,
   useHelpRequestStudents,
   useConnectionStatus
 } from "@/hooks/useOfficeHoursRealtime";
@@ -29,7 +29,7 @@ export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
 
   // Use individual hooks for better performance and maintainability
   const allHelpQueues = useHelpQueues();
-  const allHelpRequests = useHelpRequests();
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const allHelpRequestStudents = useHelpRequestStudents();
   const { connectionStatus } = useConnectionStatus();
 
@@ -46,10 +46,9 @@ export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
     if (!allHelpRequests) return [];
     const allForQueue = allHelpRequests.filter((request) => request.help_queue === queueId);
 
-    const filtered = allForQueue
+    return allForQueue
       .filter((request) => request.status === "open" || request.status === "in_progress")
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    return filtered;
   }, [allHelpRequests, queueId]);
 
   // Get user's help request associations from realtime data

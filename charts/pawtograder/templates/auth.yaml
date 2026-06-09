@@ -1,0 +1,248 @@
+{{- if .Values.auth.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.auth.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.auth.service.port }}
+      targetPort: http
+    {{- if .Values.monitoring.enabled }}
+    # GoTrue's Prometheus exporter runs on a SEPARATE HTTP server (the
+    # main API on :9999 has no /metrics path). Port 9100 by convention,
+    # ClusterIP-only — never published.
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+    {{- end }}
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.auth.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
+spec:
+  replicas: {{ .Values.auth.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "auth") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: gotrue
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.auth.image) }}
+          imagePullPolicy: {{ .Values.auth.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.auth.service.port }}
+            {{- if .Values.monitoring.enabled }}
+            - name: metrics
+              containerPort: 9100
+            {{- end }}
+          env:
+            - name: GOTRUE_API_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_API_PORT
+              value: {{ .Values.auth.service.port | quote }}
+            {{- if .Values.monitoring.enabled }}
+            # GoTrue exposes /metrics on a SECOND HTTP server (see the
+            # Prometheus exporter — separate from the API on 9999).
+            # GOTRUE_METRICS_EXPORTER=prometheus is what flips it on;
+            # GOTRUE_METRICS_ENABLED kept for completeness in case future
+            # gotrue versions move the flag.
+            - name: GOTRUE_METRICS_ENABLED
+              value: "true"
+            - name: GOTRUE_METRICS_EXPORTER
+              value: prometheus
+            - name: GOTRUE_METRICS_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_METRICS_PORT
+              value: "9100"
+            {{- end }}
+            # MUST include the `/auth/v1` gateway prefix: GoTrue builds email
+            # links (recovery/confirmation) and the OAuth callback as
+            # `{API_EXTERNAL_URL}/verify` / `/callback`, and Kong only routes
+            # `/auth/v1/*` to GoTrue. Without the prefix, password-reset links
+            # point at `…/verify` → 404. (The JWT `iss` is pinned separately by
+            # GOTRUE_JWT_ISSUER below, so this doesn't affect token validation.)
+            - name: API_EXTERNAL_URL
+              value: {{ include "pawtograder.api.url" . }}/auth/v1
+            - name: GOTRUE_SITE_URL
+              value: {{ include "pawtograder.web.url" . }}
+            - name: GOTRUE_URI_ALLOW_LIST
+              value: "{{ include "pawtograder.web.url" . }}/*"
+            - name: GOTRUE_DISABLE_SIGNUP
+              value: {{ .Values.auth.disableSignup | quote }}
+            - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+              value: authenticated
+            - name: GOTRUE_JWT_ADMIN_ROLES
+              value: service_role
+            - name: GOTRUE_JWT_AUD
+              value: authenticated
+            - name: GOTRUE_JWT_EXP
+              value: {{ .Values.auth.jwtExpiry | quote }}
+            - name: GOTRUE_JWT_ISSUER
+              value: "{{ include "pawtograder.api.url" . }}/auth/v1"
+            # Symmetric secret kept for legacy fallback (signing email
+            # confirmation tokens that aren't full session JWTs). User session
+            # signing is driven by GOTRUE_JWT_KEYS below.
+            - name: GOTRUE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            # Asymmetric session signing: a JSON array of private JWKs. The
+            # one with key_ops including "sign" is the active signing key
+            # (ES256 in pawtograder's default keygen).
+            - name: GOTRUE_JWT_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_PRIVATE_JWKS
+            - name: GOTRUE_DB_DRIVER
+              value: postgres
+            # POSTGRES_PASSWORD MUST come before GOTRUE_DB_DATABASE_URL so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}?search_path=auth"
+            - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
+              value: {{ .Values.auth.enableEmailSignup | quote }}
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: {{ .Values.auth.enableEmailAutoconfirm | quote }}
+            - name: GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED
+              value: {{ .Values.auth.enableAnonymousUsers | quote }}
+            # Required for the web app's account-linking flows
+            # (supabase.auth.linkIdentity / unlinkIdentity for GitHub + Discord).
+            # Without it GoTrue returns `manual_linking_disabled`.
+            - name: GOTRUE_SECURITY_MANUAL_LINKING_ENABLED
+              value: {{ .Values.auth.manualLinkingEnabled | quote }}
+            {{- if .Values.auth.customAccessTokenHook.enabled }}
+            - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED
+              value: "true"
+            - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI
+              value: {{ .Values.auth.customAccessTokenHook.uri | quote }}
+            {{- end }}
+            {{- if .Values.auth.external.github.enabled }}
+            - name: GOTRUE_EXTERNAL_GITHUB_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI
+              value: {{ default (printf "%s/auth/v1/callback" (include "pawtograder.api.url" .)) .Values.auth.external.github.redirectUri | quote }}
+            - name: GOTRUE_EXTERNAL_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: GITHUB_OAUTH_CLIENT_ID
+                  optional: true
+            - name: GOTRUE_EXTERNAL_GITHUB_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: GITHUB_OAUTH_CLIENT_SECRET
+                  optional: true
+            {{- end }}
+            {{- if .Values.auth.external.azure.enabled }}
+            - name: GOTRUE_EXTERNAL_AZURE_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_AZURE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: AZURE_OAUTH_CLIENT_ID
+                  optional: true
+            - name: GOTRUE_EXTERNAL_AZURE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: AZURE_OAUTH_CLIENT_SECRET
+                  optional: true
+            {{- end }}
+            {{- if .Values.auth.external.discord.enabled }}
+            - name: GOTRUE_EXTERNAL_DISCORD_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_DISCORD_REDIRECT_URI
+              value: {{ default (printf "%s/auth/v1/callback" (include "pawtograder.api.url" .)) .Values.auth.external.discord.redirectUri | quote }}
+            - name: GOTRUE_EXTERNAL_DISCORD_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: DISCORD_OAUTH_CLIENT_ID
+                  optional: true
+            - name: GOTRUE_EXTERNAL_DISCORD_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: DISCORD_OAUTH_CLIENT_SECRET
+                  optional: true
+            {{- end }}
+            {{- if .Values.auth.smtp.enabled }}
+            - name: GOTRUE_SMTP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.smtp }}
+                  key: SMTP_ADMIN_EMAIL
+            - name: GOTRUE_SMTP_SENDER_NAME
+              value: {{ .Values.auth.smtp.senderName | quote }}
+            - name: GOTRUE_SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.smtp }}
+                  key: SMTP_HOST
+            - name: GOTRUE_SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.smtp }}
+                  key: SMTP_PORT
+            - name: GOTRUE_SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.smtp }}
+                  key: SMTP_USER
+            - name: GOTRUE_SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.smtp }}
+                  key: SMTP_PASS
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.auth.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.auth)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.auth)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

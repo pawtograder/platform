@@ -293,7 +293,7 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
   });
 
-  test("instructor can open edit page by clicking survey title", async ({ page }) => {
+  test("instructor survey title links: draft opens editor, published opens responses", async ({ page }) => {
     const draftTitle = "Clickable Draft Survey";
     const publishedTitle = "Clickable Published Survey";
 
@@ -303,25 +303,28 @@ test.describe("Surveys Page", () => {
       status: "draft"
     });
 
-    const publishedSurvey = await seedSurvey<{ id: string }>(course, instructor, {
+    const publishedSurvey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
       title: publishedTitle,
-      description: "Published row link should open edit",
+      description: "Published row link should open responses",
       status: "published"
     });
 
     await loginAsUser(page, instructor, course);
 
-    // Draft title navigates to edit page
+    // A draft has no responses yet, so its title still opens the editor.
     await page.goto(`/course/${course.id}/manage/surveys`);
     await page.getByRole("link", { name: draftTitle }).click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${draftSurvey.id}/edit`));
     await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
 
-    // Published title also navigates to edit page (new version flow)
+    // A published survey's title opens the responses + analytics view; editing
+    // stays available via the row actions menu (see "Edit (New Version)").
     await page.goto(`/course/${course.id}/manage/surveys`);
     await page.getByRole("link", { name: publishedTitle }).click();
-    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${publishedSurvey.id}/edit`));
-    await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
+    await expect(page).toHaveURL(
+      new RegExp(`/course/${course.id}/manage/surveys/${publishedSurvey.survey_id}/responses`)
+    );
+    await expect(page.getByRole("heading", { name: /Survey Responses/ })).toBeVisible();
   });
 
   test("student dashboard shows no active surveys when none exist", async ({ page }) => {
@@ -409,7 +412,9 @@ test.describe("Surveys Page", () => {
     await page.getByRole("button", { name: "Open Visual Builder" }).click();
     await page.getByRole("button", { name: "Use This Survey" }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     expect(parsed.meta?.title).toBe("Survey Name");
@@ -832,7 +837,9 @@ test.describe("Surveys Page", () => {
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     const metaTitle = parsed.meta?.title ?? parsed.title ?? "Survey Name";
@@ -895,7 +902,9 @@ test.describe("Surveys Page", () => {
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
 
-    const jsonValue = await page.getByRole("textbox", { name: "Survey JSON Configuration" }).inputValue();
+    // The JSON editor now lives in a collapsible "Advanced" accordion; expand it to read the value.
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    const jsonValue = await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue();
     const parsed = JSON.parse(jsonValue);
 
     expect(parsed.pages[0].name).toBe("Custom Page Name");

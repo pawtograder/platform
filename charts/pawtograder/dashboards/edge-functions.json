@@ -1,0 +1,198 @@
+{
+  "uid": "pawtograder-edge-functions",
+  "title": "Pawtograder · Edge Functions",
+  "tags": ["pawtograder", "edge"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "fn",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(deno_http_requests_total, function)",
+        "refresh": 1,
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace (logs)",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values(namespace)",
+        "regex": "/pawtograder-.*/",
+        "refresh": 1,
+        "current": { "selected": true, "text": "pawtograder-staging", "value": "pawtograder-staging" },
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Invocations / s",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(deno_http_requests_total{function=~\"$fn\"}[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error rate (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(deno_http_requests_total{function=~\"$fn\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(deno_http_requests_total{function=~\"$fn\"}[5m])), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "P95 latency",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by(le) (rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Workers active",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(edge_runtime_workers_active)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Invocations per function (RPS)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{function}}",
+          "expr": "sum by(function)(rate(deno_http_requests_total[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "P50/P95/P99 latency by function",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "p50",
+          "legendFormat": "p50 {{function}}",
+          "expr": "histogram_quantile(0.50, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+        },
+        {
+          "refId": "p95",
+          "legendFormat": "p95 {{function}}",
+          "expr": "histogram_quantile(0.95, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+        },
+        {
+          "refId": "p99",
+          "legendFormat": "p99 {{function}}",
+          "expr": "histogram_quantile(0.99, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Top errors by function",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(15, sum by(function, status)(increase(deno_http_requests_total{status=~\"4..|5..\"}[1h])))"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Web app's calls to edge functions",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{function}} ({{status}})",
+          "expr": "sum by(function, status)(rate(web_edge_function_invocation_total[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 40,
+      "type": "logs",
+      "title": "Logs — $namespace / $fn",
+      "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function.",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 38 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "editorMode": "code",
+          "queryType": "range",
+          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

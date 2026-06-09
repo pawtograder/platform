@@ -1,6 +1,7 @@
 "use client";
 
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
   useTableControllerTableValues,
   useTableControllerValueById,
@@ -15,9 +16,10 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useCourseController } from "./useCourseController";
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
+import { buildHelpRequestMembersMap, filterHelpRequestsForStudentView } from "@/lib/viewAsStudentDataMask";
 
 // Type for broadcast messages from the database trigger
 type DatabaseBroadcastMessage = {
@@ -589,6 +591,21 @@ export function useHelpRequestReadReceipts(help_request_id: number | undefined) 
 export function useHelpRequests() {
   const controller = useOfficeHoursController();
   return useTableControllerTableValues(controller.helpRequests);
+}
+
+/** Help requests visible to the effective student identity (masks private rows while view-as). */
+export function useStudentVisibleHelpRequests() {
+  const all = useHelpRequests();
+  const members = useHelpRequestStudents();
+  const { isMasking, studentIds } = useViewAsStudentDataMask();
+
+  return useMemo(() => {
+    if (!isMasking) {
+      return all;
+    }
+    const membersByRequest = buildHelpRequestMembersMap(members);
+    return filterHelpRequestsForStudentView(all, studentIds, membersByRequest);
+  }, [all, members, isMasking, studentIds]);
 }
 
 export function useHelpRequest(id: number | undefined) {

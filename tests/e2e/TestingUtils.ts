@@ -18,6 +18,19 @@ dotenv.config({ path: ".env.local", quiet: true });
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 
+/**
+ * Set a user's grading code-viewer preference (`users.preferences.grading.useMonacoEditor`). The
+ * submission-file viewer defaults to the Monaco editor; specs that exercise the classic
+ * plain/starry-night annotation UI call this with `useMonaco=false` before loading the page.
+ */
+export async function setGradingEditorPreference(userId: string, useMonaco: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("users")
+    .update({ preferences: { grading: { useMonacoEditor: useMonaco } } })
+    .eq("user_id", userId);
+  if (error) throw new Error(`Failed to set grading editor preference: ${error.message}`);
+}
+
 /** True when `dual_active_invariants_version` RPC exists (migration 20260424200000_prevent_dual_active_submissions.sql). */
 export async function isDualActiveSubmissionGuardsMigrated(): Promise<boolean> {
   const { data, error } = await supabase.rpc("dual_active_invariants_version");
@@ -102,10 +115,15 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 
 }
 export async function createClass({
   name,
-  rateLimitManager
-}: { name?: string; rateLimitManager?: RateLimitManager } = {}) {
+  rateLimitManager,
+  slugPrefix = "e2e-ignore-"
+}: { name?: string; rateLimitManager?: RateLimitManager; slugPrefix?: string } = {}) {
   return withRetry(async () => {
     const className = name ?? `E2E Test Class`;
+    // Final slug pattern is `<prefix><sanitized-name>-<id>`. Demo provisioning sets
+    // slugPrefix="demo-" so mirrored repos don't carry the e2e-ignore prefix DB
+    // cleanup scripts rely on.
+    const provisionalSlug = slugPrefix + className.toLowerCase().replace(/ /g, "-");
     const { data: classDataList, error: classError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("classes", () =>
@@ -113,7 +131,7 @@ export async function createClass({
         .from("classes")
         .insert({
           name: className,
-          slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
+          slug: provisionalSlug,
           github_org: "pawtograder-playground",
           start_date: addDays(new Date(), -30).toISOString(),
           end_date: addDays(new Date(), 180).toISOString(),
@@ -140,6 +158,7 @@ export async function createClass({
     if (classError2) {
       throw new Error(`Failed to update class slug: ${classError2.message}`);
     }
+    classData.slug = `${classData.slug}-${classData.id}`;
     return classData;
   });
 }
@@ -510,10 +529,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
-  // Create a separate Supabase client for the user (using anon key)
+  // Create a separate Supabase client for the user (using anon key).
+  // persistSession/autoRefreshToken are off so concurrent clients in the same
+  // process don't clobber each other via the default shared GoTrue storage —
+  // otherwise the second setSession would override the first, leaving both
+  // clients authenticated as whoever logged in last.
   const userSupabase = createClient<Database>(
     process.env.SUPABASE_URL!,
-    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
   );
 
   const data = await verifyOtpWithRetry(testingUser.email, async () => {
@@ -861,11 +885,37 @@ export async function createUserInClass({
   let publicProfileData: { id: string }, privateProfileData: { id: string };
 
   if (existingRole.length > 0 && !roleCheckError) {
-    // User already enrolled in class, get existing profile data
+    // User already enrolled in class, get existing profile data. This also
+    // covers the real demo class: the create_user_ensure_profiles_and_demo
+    // trigger provisions a profile + role for the is_demo class when the auth
+    // user is created, so the role already exists here and we just reuse it.
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
-  } else if (class_id !== 1) {
-    // User not enrolled or new class, create profiles and enrollment
+    // Apply any requested section assignment to the pre-existing role.
+    if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
+  } else {
+    // Not enrolled (and the trigger didn't provision us — e.g. a normal,
+    // non-is_demo class). Create profiles + enrollment ourselves.
+    //
+    // NOTE: this used to be `else if (class_id !== 1)`, which assumed class 1
+    // is always the trigger-provisioned demo class and skipped provisioning
+    // for it. On a fresh database the seeder's own (non-demo) class gets id 1,
+    // so that skip left every seeded user with no profile/role and the
+    // read-back below failed with "Failed to get profile". The existingRole
+    // check above already handles the genuine demo-class case, so gating on
+    // class_id is both wrong and unnecessary.
     const { data: newPublicProfileDataList, error: publicProfileError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("profiles", () =>
@@ -909,7 +959,7 @@ export async function createUserInClass({
     publicProfileData = newPublicProfileData;
     privateProfileData = newPrivateProfileData;
 
-    await supabase.from("user_roles").insert({
+    const { error: roleInsertError } = await supabase.from("user_roles").insert({
       user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
@@ -918,18 +968,13 @@ export async function createUserInClass({
       class_section_id: section_id,
       lab_section_id: lab_section_id
     });
-  } else if (section_id || lab_section_id) {
-    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
-      supabase
-        .from("user_roles")
-        .update({
-          class_section_id: section_id,
-          lab_section_id: lab_section_id
-        })
-        .eq("user_id", userId)
-        .eq("class_id", class_id)
-        .select("id")
-    );
+    // Check the insert: an unchecked failure here (e.g. a cold PostgREST
+    // schema cache on a fresh stack) makes the .single() read-back below find
+    // 0 rows and throw the misleading "Failed to get profile" instead of the
+    // real cause. Fail loudly at the actual point of failure.
+    if (roleInsertError) {
+      throw new Error(`Failed to create ${role} user_role in class ${class_id}: ${roleInsertError.message}`);
+    }
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
@@ -1189,7 +1234,8 @@ export async function insertPreBakedSubmission({
   assignment_id,
   class_id,
   repositorySuffix,
-  rateLimitManager
+  rateLimitManager,
+  files
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -1197,6 +1243,8 @@ export async function insertPreBakedSubmission({
   class_id: number;
   repositorySuffix?: string;
   rateLimitManager?: RateLimitManager;
+  /** Override the default single sample.java with custom files (e.g. a multi-file class path). */
+  files?: { name: string; contents: string }[];
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -1277,14 +1325,10 @@ export async function insertPreBakedSubmission({
   }
   const submissionData = submissionDataList[0];
   const submission_id = submissionData?.id;
-  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
-    "submission_files",
-    () =>
-      supabase
-        .from("submission_files")
-        .insert({
-          name: "sample.java",
-          contents: `package com.pawtograder.example.java;
+  const defaultFiles = [
+    {
+      name: "sample.java",
+      contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
@@ -1293,7 +1337,7 @@ public class Entrypoint {
 
   /*
    * This method takes two integers and returns their sum.
-   * 
+   *
    * @param a the first integer
    * @param b the second integer
    * @return the sum of a and b
@@ -1307,15 +1351,28 @@ public class Entrypoint {
    * @return
    */
   public String getMessage() {
-      
+
       return "Hello, World!";
   }
-}`,
-          class_id: class_id,
-          submission_id: submission_id,
-          profile_id: student_profile_id,
-          assignment_group_id: assignment_group_id
-        })
+}`
+    }
+  ];
+  const filesToInsert = files ?? defaultFiles;
+  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "submission_files",
+    () =>
+      supabase
+        .from("submission_files")
+        .insert(
+          filesToInsert.map((f) => ({
+            name: f.name,
+            contents: f.contents,
+            class_id: class_id,
+            submission_id: submission_id,
+            profile_id: student_profile_id,
+            assignment_group_id: assignment_group_id
+          }))
+        )
         .select("id")
   );
   if (submissionFileError) {
@@ -1499,6 +1556,7 @@ const assignmentIdx = {
 };
 export async function insertAssignment({
   due_date,
+  suggested_due_date,
   lab_due_date_offset,
   allow_not_graded_submissions,
   permit_empty_submissions,
@@ -1516,6 +1574,7 @@ export async function insertAssignment({
   assignment_slug
 }: {
   due_date: string;
+  suggested_due_date?: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   permit_empty_submissions?: boolean;
@@ -1561,6 +1620,7 @@ export async function insertAssignment({
       title: title,
       description: "This is a test assignment for E2E testing",
       due_date: due_date,
+      suggested_due_date: suggested_due_date ?? null,
       minutes_due_after_lab: lab_due_date_offset,
       template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,

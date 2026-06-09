@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
-import { useHelpRequests, useHelpRequestStudents, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentVisibleHelpRequests, useHelpRequestStudents, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 
@@ -19,7 +19,7 @@ export interface ActiveHelpRequestInfo {
 export function useActiveHelpRequest() {
   const { private_profile_id } = useClassProfiles();
   const pathname = usePathname();
-  const allHelpRequests = useHelpRequests();
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const allHelpRequestStudents = useHelpRequestStudents();
   const allHelpQueues = useHelpQueues();
 
