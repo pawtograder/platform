@@ -1,0 +1,54 @@
+{{- /*
+Render-time guard rails. This template emits no resources — it exists to
+`fail` a render whose values combination would be dangerous. Severity is
+keyed off global.environment (dev | preview | staging | production):
+
+  any env      — workflowMetricsLeader on multi-replica web (over-counts
+                 gauges + multiplies DB load); Studio ingress without an
+                 auth layer (full DB control behind a bare URL).
+  staging+prod — secrets.create (plaintext key material in helm release
+                 history); migrations.resetOnDrift (drops schema public —
+                 destroys all application data; these envs hold durable data).
+  production   — e2e bypasses (privileged test paths), secrets.autogenerate
+                 (non-recoverable keys), seed.enabled (demo data), floating
+                 image tags (irreproducible deploys).
+*/ -}}
+{{- $env := .Values.global.environment | default "dev" -}}
+{{- if not (has $env (list "dev" "preview" "staging" "production")) -}}
+{{- fail (printf "global.environment must be one of dev|preview|staging|production (got %q)" $env) -}}
+{{- end -}}
+
+{{- if and .Values.web.enabled .Values.web.workflowMetricsLeader (gt (int .Values.web.replicas) 1) -}}
+{{- fail "web.workflowMetricsLeader requires web.replicas=1 — every leader replica refreshes the DB-backed workflow gauges on each scrape, multiplying DB load and over-counting. Run a dedicated 1-replica metrics leader instead (see values.yaml)." -}}
+{{- end -}}
+
+{{- if and .Values.studio.enabled .Values.studio.ingressEnabled (not .Values.studio.basicAuth.enabled) (not .Values.studio.allowUnauthenticatedIngress) -}}
+{{- fail "studio.ingressEnabled=true without studio.basicAuth.enabled exposes full database control to anyone with the URL. Enable basic-auth, or set studio.allowUnauthenticatedIngress=true to confirm another auth layer (VPN / oauth2-proxy / IP allowlist) fronts this host." -}}
+{{- end -}}
+
+{{- if has $env (list "staging" "production") -}}
+{{- if .Values.secrets.create -}}
+{{- fail (printf "secrets.create=true renders plaintext secret material into the Helm release (values, history, GitOps repo) — not allowed when global.environment=%s. Use ESO / sealed-secrets / pre-created Secrets." $env) -}}
+{{- end -}}
+{{- if .Values.migrations.resetOnDrift -}}
+{{- fail (printf "migrations.resetOnDrift=true drops schema public and replays migrations from scratch — DESTROYS ALL APPLICATION DATA. Not allowed when global.environment=%s; fix the drifted migration instead." $env) -}}
+{{- end -}}
+{{- end -}}
+
+{{- if eq $env "production" -}}
+{{- if or .Values.web.e2e.enabled .Values.edgeFunctions.e2e.enabled .Values.edgeFunctions.e2e.mockGitHub -}}
+{{- fail "web.e2e.enabled / edgeFunctions.e2e.* enable privileged test-only code paths (CSP report-only, e2e helper endpoints, mocked GitHub) — never in production." -}}
+{{- end -}}
+{{- if .Values.secrets.autogenerate -}}
+{{- fail "secrets.autogenerate=true generates non-recoverable key material in-cluster — losing the namespace loses every key (and all encrypted data with it). Production must use ESO / sealed-secrets with keys escrowed in the secret store." -}}
+{{- end -}}
+{{- if .Values.seed.enabled -}}
+{{- fail "seed.enabled=true loads demo classes and canned auth users — never in production." -}}
+{{- end -}}
+{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image -}}
+{{- $tag := $img.tag | default "" -}}
+{{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
+{{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

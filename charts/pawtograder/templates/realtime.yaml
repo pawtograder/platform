@@ -58,10 +58,14 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.realtime) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.realtime) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.realtime.terminationGracePeriodSeconds | default 60 }}
       containers:
         - name: realtime
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.realtime.image) }}
           imagePullPolicy: {{ .Values.realtime.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.realtime) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.realtime.service.port }}

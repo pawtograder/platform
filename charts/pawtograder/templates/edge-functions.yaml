@@ -29,6 +29,7 @@ spec:
   {{- if not .Values.edgeFunctions.autoscaling.enabled }}
   replicas: {{ .Values.edgeFunctions.replicas }}
   {{- end }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.edgeFunctions) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
@@ -39,10 +40,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.edgeFunctions) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.edgeFunctions) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.edgeFunctions.image) }}
           imagePullPolicy: {{ .Values.edgeFunctions.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" .Values.edgeFunctions) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.edgeFunctions.service.port }}
@@ -161,6 +167,16 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          # Generous thresholds: a pod saturated with long-running isolates
+          # may answer TCP slowly, and a restart cancels every in-flight
+          # request — only fire when the runtime is truly wedged.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
           resources:
             {{- toYaml .Values.edgeFunctions.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.edgeFunctions)) }}
@@ -171,4 +187,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.edgeFunctions "name" "functions") | nindent 6 }}
 {{- end }}

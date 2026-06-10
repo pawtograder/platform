@@ -1,0 +1,96 @@
+{{- /*
+NetworkPolicies (networkPolicy.enabled):
+
+  1. default-deny     — no ingress to any pod of this release unless a
+                        policy below allows it. Blocks every other
+                        namespace (other previews, unrelated apps) from
+                        reaching postgres:5432, Kong admin :8001, Redis,
+                        or the unauthenticated metrics ports.
+  2. allow-same-release — pods of this release (incl. Helm hook Jobs, which
+                        carry the same selector labels) talk freely to each
+                        other: kong→upstreams, services→postgres, realtime
+                        BEAM clustering, auth→smtp-relay, …
+  3. allow-ingress-controller — the ingress controller's namespace may reach
+                        the edge-facing pods (web, kong, studio).
+  4. allow-monitoring — Prometheus' namespace may scrape any release pod
+                        (rendered only when monitoring.enabled).
+
+Egress is deliberately unrestricted: web + edge functions call GitHub,
+Discord, SMTP, LLM APIs, S3, …; tightening egress is an overlay concern.
+These objects are inert on a CNI without NetworkPolicy enforcement.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-allow-same-release
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "pawtograder.selectorLabels" . | nindent 14 }}
+    {{- with .Values.networkPolicy.extraIngressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-allow-ingress-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["web", "kong", "studio"]
+    matchLabels:
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-allow-monitoring
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+{{- end }}
+{{- end }}

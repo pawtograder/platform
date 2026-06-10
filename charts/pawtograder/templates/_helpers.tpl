@@ -237,3 +237,103 @@ imagePullSecrets:
 {{- toYaml . | nindent 2 }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Pod-level securityContext. A component that defines its own
+`podSecurityContext` key wins outright (set it to {} to opt a component out
+entirely — postgres-style images whose entrypoints need more than the
+default allows). Otherwise global.podSecurityContext applies.
+Usage: {{ include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.podSecurityContext" -}}
+{{- $sc := .ctx.Values.global.podSecurityContext -}}
+{{- if hasKey .component "podSecurityContext" -}}
+{{- $sc = .component.podSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Container-level securityContext, same precedence rules as
+pawtograder.podSecurityContext. Applied to main containers only — init
+containers and hook Jobs that legitimately need root (apk/apt installs,
+postgres entrypoint chown/su) are left alone.
+Usage: {{ include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.containerSecurityContext" -}}
+{{- $sc := .ctx.Values.global.containerSecurityContext -}}
+{{- if hasKey .component "containerSecurityContext" -}}
+{{- $sc = .component.containerSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+priorityClassName — component override, else global.
+Usage: {{ include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.priorityClassName" -}}
+{{- $p := default .ctx.Values.global.priorityClassName .component.priorityClassName -}}
+{{- with $p }}
+priorityClassName: {{ . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod affinity block. Per-component / global affinity (if set) wins — the
+user opted into custom placement explicitly. Otherwise emit a soft
+podAntiAffinity spreading the component's pods across nodes when its
+`spreadAcrossNodes` value is true (no effect on single-node tiers).
+Generalizes the pattern realtime.yaml pioneered.
+Usage: {{ include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.web "name" "web") | nindent 6 }}
+*/}}
+{{- define "pawtograder.componentAffinity" -}}
+{{- $userAffinity := include "pawtograder.affinity" (dict "ctx" .ctx "component" .component) -}}
+{{- if $userAffinity }}
+affinity:
+  {{- $userAffinity | nindent 2 }}
+{{- else if .component.spreadAcrossNodes }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              {{- include "pawtograder.componentSelectorLabels" (dict "ctx" .ctx "component" .name) | nindent 14 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+preStop drain hook: sleep so the kubelet's endpoint removal propagates to
+kube-proxy/ingress before the process gets SIGTERM, instead of dropping
+in-flight requests. Rendered only when the component sets a non-zero
+preStopSleepSeconds (images without /bin/sh must keep it 0).
+Usage: {{ include "pawtograder.preStop" (dict "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.preStop" -}}
+{{- with .component.preStopSleepSeconds }}
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep {{ . }}"]
+{{- end -}}
+{{- end -}}
+
+{{/*
+Deployment rollout strategy from the component's updateStrategy value.
+Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web) | nindent 2 }}
+*/}}
+{{- define "pawtograder.deploymentStrategy" -}}
+{{- with .component.updateStrategy }}
+strategy:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
