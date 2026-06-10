@@ -21,7 +21,7 @@ metadata:
 spec:
   schedule: {{ .Values.backup.verify.schedule | quote }}
   concurrencyPolicy: Forbid
-  startingDeadlineSeconds: 1800
+  startingDeadlineSeconds: {{ .Values.backup.verify.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:

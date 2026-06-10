@@ -1010,6 +1010,7 @@ backup:
     enabled: true
     schedule: "0 6 * * 1" # weekly, after Monday's backup
     activeDeadlineSeconds: 1800
+    startingDeadlineSeconds: 1800
   # `mc` (MinIO client) is downloaded at runtime because the
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are

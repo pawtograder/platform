@@ -20,6 +20,15 @@ Discord, SMTP, LLM APIs, S3, …; tightening egress is an overlay concern.
 These objects are inert on a CNI without NetworkPolicy enforcement.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
+{{- /* An empty namespaceSelector ({}) matches ALL namespaces — an empty
+     value here would silently turn an allow policy into allow-from-
+     everywhere, defeating default-deny. Refuse to render instead. */}}
+{{- if empty .Values.networkPolicy.ingressControllerNamespaceSelector }}
+{{- fail "networkPolicy.ingressControllerNamespaceSelector must be non-empty when networkPolicy.enabled=true (an empty selector matches every namespace)" }}
+{{- end }}
+{{- if and .Values.monitoring.enabled (empty .Values.networkPolicy.monitoringNamespaceSelector) }}
+{{- fail "networkPolicy.monitoringNamespaceSelector must be non-empty when networkPolicy.enabled=true and monitoring.enabled=true (an empty selector matches every namespace)" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
