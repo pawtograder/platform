@@ -113,6 +113,14 @@ export default function EditAssignment() {
         // leave stale upstream values behind.
         if (values.submission_mode === "pr") {
           values.upstream_repo = values.template_repo ?? null;
+          // "branch_convention" identification is only meaningful with a non-empty regex; if it's
+          // blank, fall back to "base_branch" so we never persist an inconsistent PR config
+          // (branch_convention with no rule to match the submission PR).
+          const convention = (values.pr_branch_convention ?? "").trim();
+          values.pr_branch_convention = convention || null;
+          if (values.pr_identification === "branch_convention" && !convention) {
+            values.pr_identification = "base_branch";
+          }
         } else {
           values.upstream_repo = null;
           values.pr_branch_convention = null;

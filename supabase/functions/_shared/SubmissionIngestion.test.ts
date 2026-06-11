@@ -76,10 +76,10 @@ type StorageUpload = { key: string; size: number; contentType?: string };
  * SubmissionIngestion uses: submission_files insert, assignment_handout_file_hashes
  * select chain, and storage upload/remove.
  */
-function makeFakeSupabase(opts: { handoutCombinedHashes?: Set<string> } = {}) {
+function makeFakeSupabase(opts: { handoutHashesByAssignment?: Map<number, Set<string>> } = {}) {
   const insertedFiles: InsertedFileRow[] = [];
   const storageUploads: StorageUpload[] = [];
-  const handoutHashes = opts.handoutCombinedHashes ?? new Set<string>();
+  const handoutHashesByAssignment = opts.handoutHashesByAssignment ?? new Map<number, Set<string>>();
 
   const handoutQuery = {
     _assignmentId: undefined as number | undefined,
@@ -94,7 +94,11 @@ function makeFakeSupabase(opts: { handoutCombinedHashes?: Set<string> } = {}) {
     },
     // deno-lint-ignore require-await
     async maybeSingle() {
-      const match = this._combinedHash !== undefined && handoutHashes.has(this._combinedHash);
+      // Honor BOTH assignment_id and combined_hash: a hash recorded under one assignment must
+      // not satisfy a lookup scoped to a different assignment. This catches a regression where
+      // ingestSubmissionFilesFromZip queries the handout hashes under the wrong assignment.
+      const hashes = this._assignmentId !== undefined ? handoutHashesByAssignment.get(this._assignmentId) : undefined;
+      const match = this._combinedHash !== undefined && hashes !== undefined && hashes.has(this._combinedHash);
       // reset for any subsequent use
       this._assignmentId = undefined;
       this._combinedHash = undefined;
@@ -266,7 +270,7 @@ Deno.test("ingestSubmissionFilesFromZip: empty detection flips when handout hash
   const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS });
   const matchingHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
 
-  const { client } = makeFakeSupabase({ handoutCombinedHashes: new Set([matchingHash]) });
+  const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[123, new Set([matchingHash])]]) });
 
   const result = await ingestSubmissionFilesFromZip({
     // deno-lint-ignore no-explicit-any
@@ -281,4 +285,27 @@ Deno.test("ingestSubmissionFilesFromZip: empty detection flips when handout hash
 
   assertEquals(result.combinedHash, matchingHash);
   assertEquals(result.isEmpty, true);
+});
+
+Deno.test("ingestSubmissionFilesFromZip: empty detection ignores a hash recorded under a different assignment", async () => {
+  const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS });
+  const matchingHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+
+  // The handout hash is recorded for assignment 999, but ingestion is scoped to assignment 123,
+  // so it must NOT be treated as empty — the lookup is assignment-scoped.
+  const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[999, new Set([matchingHash])]]) });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123
+  });
+
+  assertEquals(result.combinedHash, matchingHash);
+  assertEquals(result.isEmpty, false);
 });

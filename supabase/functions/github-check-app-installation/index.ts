@@ -42,10 +42,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckAp
   }
 
   // Authorize: caller must be an instructor in this class.
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    throw new SecurityError("Missing Authorization header");
+  }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: { headers: { Authorization: req.headers.get("Authorization")! } }
+    global: { headers: { Authorization: authHeader } }
   });
-  const token = req.headers.get("Authorization")!.replace("Bearer ", "");
+  const token = authHeader.replace("Bearer ", "");
   const {
     data: { user }
   } = await supabase.auth.getUser(token);

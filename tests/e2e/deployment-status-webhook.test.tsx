@@ -7,8 +7,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   supabase
-} from "@/tests/e2e/TestingUtils";
-import type { TestingUser } from "@/tests/e2e/TestingUtils";
+} from "./TestingUtils";
+import type { TestingUser } from "./TestingUtils";
 
 // E2E for github_deployments ingestion driven through the REAL
 // github-repo-webhook edge function (the webhook → eventHandler.on(

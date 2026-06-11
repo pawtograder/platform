@@ -378,76 +378,103 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
   const usedBinaryStorageRelPaths = new Set<string>();
 
   // One in-flight file buffer at a time (zipball is already fully buffered).
-  for (const zipEntry of files) {
-    const name = stripTopDir(zipEntry.path);
-    const contents: Buffer = await zipEntry.buffer();
+  //
+  // Track the storage objects and DB rows created so far so we can roll them back if any later
+  // file fails. Without this, a failure on file N leaves a partial submission_files set (and
+  // orphaned storage blobs) attached to the submission while the caller surfaces only an error.
+  const createdStorageKeys: string[] = [];
+  const createdFileNames: string[] = [];
+  try {
+    for (const zipEntry of files) {
+      const name = stripTopDir(zipEntry.path);
+      const contents: Buffer = await zipEntry.buffer();
 
-    if (contents.length > MAX_FILE_SIZE) {
-      throw new SubmissionFileTooLargeError(name, contents.length);
-    }
-
-    file_hashes[name] = sha256Hex(contents);
-
-    if (isBinaryFile(name)) {
-      const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
-      let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
-      if (usedBinaryStorageRelPaths.has(storageRelPath)) {
-        const extDup = getFileExtension(storageRelPath);
-        const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
-        let n = 2;
-        while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
-        storageRelPath = `${base}__${n}${extDup}`;
-      }
-      usedBinaryStorageRelPaths.add(storageRelPath);
-
-      const ext = getFileExtension(logicalPath);
-      const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-      const storageKey = `classes/${classId}/profiles/${storageProfileKey}/submissions/${submissionId}/files/${storageRelPath}`;
-
-      const { error: storageError } = await adminSupabase.storage
-        .from("submission-files")
-        .upload(storageKey, contents, { contentType: mimeType, upsert: true });
-      if (storageError) {
-        Sentry.captureException(storageError, scope);
-        throw new Error(`Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`);
+      if (contents.length > MAX_FILE_SIZE) {
+        throw new SubmissionFileTooLargeError(name, contents.length);
       }
 
-      const { error: dbError } = await adminSupabase.from("submission_files").insert({
-        submission_id: submissionId,
-        name: logicalPath,
-        profile_id: profileId,
-        assignment_group_id: groupId,
-        contents: null,
-        class_id: classId,
-        is_binary: true,
-        file_size: contents.length,
-        mime_type: mimeType,
-        storage_key: storageKey
-      });
-      if (dbError) {
-        const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
-        if (removeErr.error) {
-          Sentry.captureException(removeErr.error, scope);
+      file_hashes[name] = sha256Hex(contents);
+
+      if (isBinaryFile(name)) {
+        const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
+        let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
+        if (usedBinaryStorageRelPaths.has(storageRelPath)) {
+          const extDup = getFileExtension(storageRelPath);
+          const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
+          let n = 2;
+          while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
+          storageRelPath = `${base}__${n}${extDup}`;
         }
-        Sentry.captureException(dbError, scope);
-        throw new Error(`Failed to insert binary file record for "${logicalPath}": ${dbError.message}`);
-      }
-    } else {
-      const { error: textFileError } = await adminSupabase.from("submission_files").insert({
-        submission_id: submissionId,
-        name,
-        profile_id: profileId,
-        assignment_group_id: groupId,
-        contents: contents.toString("utf-8"),
-        class_id: classId,
-        is_binary: false,
-        file_size: contents.length
-      });
-      if (textFileError) {
-        Sentry.captureException(textFileError, scope);
-        throw new Error(`Failed to insert text submission file "${name}": ${textFileError.message}`);
+        usedBinaryStorageRelPaths.add(storageRelPath);
+
+        const ext = getFileExtension(logicalPath);
+        const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+        const storageKey = `classes/${classId}/profiles/${storageProfileKey}/submissions/${submissionId}/files/${storageRelPath}`;
+
+        const { error: storageError } = await adminSupabase.storage
+          .from("submission-files")
+          .upload(storageKey, contents, { contentType: mimeType, upsert: true });
+        if (storageError) {
+          Sentry.captureException(storageError, scope);
+          throw new Error(`Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`);
+        }
+        createdStorageKeys.push(storageKey);
+
+        const { error: dbError } = await adminSupabase.from("submission_files").insert({
+          submission_id: submissionId,
+          name: logicalPath,
+          profile_id: profileId,
+          assignment_group_id: groupId,
+          contents: null,
+          class_id: classId,
+          is_binary: true,
+          file_size: contents.length,
+          mime_type: mimeType,
+          storage_key: storageKey
+        });
+        if (dbError) {
+          Sentry.captureException(dbError, scope);
+          throw new Error(`Failed to insert binary file record for "${logicalPath}": ${dbError.message}`);
+        }
+        createdFileNames.push(logicalPath);
+      } else {
+        const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+          submission_id: submissionId,
+          name,
+          profile_id: profileId,
+          assignment_group_id: groupId,
+          contents: contents.toString("utf-8"),
+          class_id: classId,
+          is_binary: false,
+          file_size: contents.length
+        });
+        if (textFileError) {
+          Sentry.captureException(textFileError, scope);
+          throw new Error(`Failed to insert text submission file "${name}": ${textFileError.message}`);
+        }
+        createdFileNames.push(name);
       }
     }
+  } catch (err) {
+    // Best-effort rollback of everything written so far, then re-throw the original error so the
+    // caller still sees the failure — but without a half-written submission_files set left behind.
+    if (createdStorageKeys.length > 0) {
+      const { error: removeError } = await adminSupabase.storage.from("submission-files").remove(createdStorageKeys);
+      if (removeError) {
+        Sentry.captureException(removeError, scope);
+      }
+    }
+    if (createdFileNames.length > 0) {
+      const { error: deleteError } = await adminSupabase
+        .from("submission_files")
+        .delete()
+        .eq("submission_id", submissionId)
+        .in("name", createdFileNames);
+      if (deleteError) {
+        Sentry.captureException(deleteError, scope);
+      }
+    }
+    throw err;
   }
 
   const combinedHash = combinedHashFromPerFileHexHashes(file_hashes);
@@ -464,9 +491,14 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
       .limit(1)
       .maybeSingle();
     if (matchError) {
+      // Leave isEmpty = null (unknown) on a lookup failure rather than downgrading to "not
+      // empty": silently treating an unverifiable submission as non-empty would disable a
+      // `permit_empty_submissions = false` policy exactly when the check is unavailable. The
+      // caller decides how to treat the unknown state.
       Sentry.captureException(matchError, scope);
+    } else {
+      isEmpty = !!match;
     }
-    isEmpty = !!match;
   }
 
   return { combinedHash, isEmpty };

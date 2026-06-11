@@ -1240,27 +1240,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .eq("combined_hash", submissionCombinedHash)
             .limit(1)
             .maybeSingle();
+          // Mirror the real clone path: a failed handout-hash lookup leaves emptiness unknown
+          // (null) rather than downgrading to "not empty", so a strict no-empty policy isn't
+          // silently disabled when the check is unavailable.
+          let isEmpty: boolean | null = null;
           if (handoutMatchError) {
             Sentry.captureException(handoutMatchError, scope);
+          } else {
+            isEmpty = !!handoutMatch;
           }
-          const isEmpty = !!handoutMatch;
           const { error: emptyUpdateError } = await adminSupabase
             .from("submissions")
-            .update({ is_empty_submission: isEmpty })
+            .update({ is_empty_submission: isEmpty ?? false })
             .eq("id", submission_id);
           if (emptyUpdateError) {
             Sentry.captureException(emptyUpdateError, scope);
           }
           const isGraderOrInstructor = actorIsStaff || isStaffTriggeredSubmission;
-          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+          if (
+            repoData.assignments.permit_empty_submissions === false &&
+            !isGraderOrInstructor &&
+            (isEmpty === null || isEmpty)
+          ) {
             try {
               await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
             } catch (cleanupErr) {
               Sentry.captureException(cleanupErr, scope);
             }
             throw new UserVisibleError(
-              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
-              400
+              isEmpty === null
+                ? "Could not verify whether this submission is empty. Please try submitting again."
+                : "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              isEmpty === null ? 503 : 400
             );
           }
 
@@ -1476,7 +1487,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           if (submission_id === undefined) {
             throw new UserVisibleError("Internal error: submission id missing while saving files", 500);
           }
-          let isEmpty: boolean;
+          let isEmpty: boolean | null;
           try {
             const ingestResult = await ingestSubmissionFilesFromZip({
               adminSupabase,
@@ -1489,8 +1500,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               detectEmptyForAssignmentId: repoData.assignment_id,
               scope
             });
-            // detectEmptyForAssignmentId is set, so isEmpty is always non-null here.
-            isEmpty = ingestResult.isEmpty ?? false;
+            // isEmpty is null when the handout-hash lookup failed (unknown); the rejection gate
+            // below fails closed on null rather than silently allowing a possibly-empty submission.
+            isEmpty = ingestResult.isEmpty;
           } catch (ingestErr) {
             if (ingestErr instanceof SubmissionFileTooLargeError) {
               throw new UserVisibleError(
@@ -1516,7 +1528,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           if (submission_id !== undefined) {
             const { error: updateError } = await adminSupabase
               .from("submissions")
-              .update({ is_empty_submission: isEmpty })
+              .update({ is_empty_submission: isEmpty ?? false })
               .eq("id", submission_id);
             if (updateError) {
               Sentry.captureException(updateError, scope);
@@ -1526,7 +1538,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // If the assignment prohibits empty submissions, reject after determining emptiness.
           // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
           const isGraderOrInstructor = actorIsStaff || isStaffTriggeredSubmission;
-          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+          // Fail closed when empties are prohibited: reject confirmed-empty submissions, and also
+          // reject when emptiness couldn't be determined (isEmpty === null — the handout-hash lookup
+          // failed) rather than silently letting a possibly-empty submission through.
+          if (
+            repoData.assignments.permit_empty_submissions === false &&
+            !isGraderOrInstructor &&
+            (isEmpty === null || isEmpty)
+          ) {
             if (submission_id === undefined) {
               throw new Error("submission_id is undefined during empty submission rejection");
             }
@@ -1536,8 +1555,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               Sentry.captureException(cleanupErr, scope);
             }
             throw new UserVisibleError(
-              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
-              400
+              isEmpty === null
+                ? "Could not verify whether this submission is empty. Please try submitting again."
+                : "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              isEmpty === null ? 503 : 400
             );
           }
           // Best-effort: build the code-symbol index that powers go-to-definition in the grading

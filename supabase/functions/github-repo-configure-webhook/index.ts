@@ -22,10 +22,11 @@ import * as Sentry from "npm:@sentry/deno";
  * `github-repo-webhook/index.ts`. When you add a handler there, add the event
  * here and update the GitHub App subscription to match.
  *
- * `deployment` / `deployment_status` (added for PR-submission-mode Phase 4) feed
- * the `github_deployments` ingestion in the webhook handler. `deployment_status`
- * is the one we actually persist; `deployment` is subscribed for completeness so
- * the App receives the full deployment lifecycle.
+ * `deployment_status` (added for PR-submission-mode Phase 4) feeds the
+ * `github_deployments` ingestion in the webhook handler. It carries the full
+ * deployment object in its payload, so we don't separately subscribe to the
+ * bare `deployment` event (there is no handler for it — keep this list in sync
+ * with the registered `eventHandler.on(...)` handlers to avoid drift).
  */
 export const GITHUB_APP_WEBHOOK_EVENTS = [
   "push",
@@ -34,7 +35,6 @@ export const GITHUB_APP_WEBHOOK_EVENTS = [
   "workflow_run",
   "membership",
   "organization",
-  "deployment",
   "deployment_status"
 ] as const;
 type RequestBody = {

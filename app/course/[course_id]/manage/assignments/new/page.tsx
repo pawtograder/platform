@@ -99,6 +99,15 @@ export default function NewAssignmentPage() {
         }
 
         const isFork = repoMode === "fork_from_prior_assignment";
+        // PR-mode identification: "branch_convention" is only meaningful with a non-empty
+        // regex. If the convention is blank, fall back to "base_branch" so we never persist an
+        // internally inconsistent config (branch_convention with no rule to match the PR).
+        const prBranchConvention = isPr ? (getValues("pr_branch_convention") || "").trim() || null : null;
+        const prIdentification = isPr
+          ? getValues("pr_identification") === "branch_convention" && !prBranchConvention
+            ? "base_branch"
+            : getValues("pr_identification") || "base_branch"
+          : "base_branch";
         const { data, error } = await supabase
           .from("assignments")
           .insert({
@@ -161,8 +170,8 @@ export default function NewAssignmentPage() {
             // for inherited/fork modes it may already be set, so carry it here.
             upstream_repo: isPr ? getValues("template_repo") || null : null,
             upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
-            pr_identification: isPr ? getValues("pr_identification") || "base_branch" : "base_branch",
-            pr_branch_convention: isPr ? getValues("pr_branch_convention") || null : null,
+            pr_identification: prIdentification,
+            pr_branch_convention: prBranchConvention,
             require_pr_open: isPr ? getValues("require_pr_open") === true : false
           })
           .select("id")
