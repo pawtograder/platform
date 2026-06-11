@@ -14,27 +14,119 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TermSelector } from "@/components/ui/term-selector";
 import { toaster } from "@/components/ui/toaster";
+import { enrollmentAdd, listGitHubOrgs } from "@/lib/edgeFunctions";
+import type { GitHubOrg } from "@/supabase/functions/_shared/FunctionTypes";
 import { createClient } from "@/utils/supabase/client";
-import { HStack, Text, Textarea, VStack } from "@chakra-ui/react";
-import { useState } from "react";
+import { Box, HStack, IconButton, Link, NativeSelect, Spinner, Text, Textarea, VStack } from "@chakra-ui/react";
+import { useCallback, useState } from "react";
+import { FaPlus, FaTrash } from "react-icons/fa";
 
 interface CreateClassModalProps {
   children: React.ReactNode;
 }
 
+type InstructorRow = {
+  email: string;
+  name: string;
+  // null = not yet looked up, true = matched existing user, false = no match
+  matched: boolean | null;
+  lookupLoading: boolean;
+};
+
+function emptyInstructor(): InstructorRow {
+  return { email: "", name: "", matched: null, lookupLoading: false };
+}
+
+const initialFormData = () => ({
+  name: "",
+  term: parseInt(`${new Date().getFullYear()}10`), // Default to current year + fall (10)
+  description: "",
+  canvas_course_id: "",
+  github_org_name: "",
+  github_template_prefix: ""
+});
+
 export default function CreateClassModal({ children }: CreateClassModalProps) {
   const [open, setOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    name: "",
-    term: parseInt(`${new Date().getFullYear()}10`), // Default to current year + fall (10)
-    description: "",
-    canvas_course_id: "",
-    github_org_name: "",
-    github_template_prefix: ""
-  });
+  const [formData, setFormData] = useState(initialFormData());
+
+  const [orgs, setOrgs] = useState<GitHubOrg[] | null>(null);
+  const [orgsLoading, setOrgsLoading] = useState(false);
+  const [orgsError, setOrgsError] = useState<string | null>(null);
+  const [installUrl, setInstallUrl] = useState<string>("https://github.com/settings/installations");
+
+  const [instructors, setInstructors] = useState<InstructorRow[]>([emptyInstructor()]);
 
   const supabase = createClient();
+
+  const loadOrgs = useCallback(async () => {
+    setOrgsLoading(true);
+    setOrgsError(null);
+    try {
+      const { orgs: fetched, installUrl: url } = await listGitHubOrgs(supabase);
+      setOrgs(fetched);
+      if (url) setInstallUrl(url);
+    } catch (error) {
+      setOrgs([]);
+      setOrgsError(error instanceof Error ? error.message : "Failed to load GitHub organizations");
+    } finally {
+      setOrgsLoading(false);
+    }
+    // supabase is stable across renders for our purposes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (nextOpen && orgs === null && !orgsLoading) {
+      loadOrgs();
+    }
+  };
+
+  const resetForm = () => {
+    setFormData(initialFormData());
+    setInstructors([emptyInstructor()]);
+  };
+
+  const handleInputChange = (field: string, value: string | number) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updateInstructor = (index: number, patch: Partial<InstructorRow>) => {
+    setInstructors((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const addInstructorRow = () => setInstructors((prev) => [...prev, emptyInstructor()]);
+
+  const removeInstructorRow = (index: number) =>
+    setInstructors((prev) => (prev.length === 1 ? [emptyInstructor()] : prev.filter((_, i) => i !== index)));
+
+  const lookupInstructor = async (index: number, email: string) => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      updateInstructor(index, { matched: null });
+      return;
+    }
+    updateInstructor(index, { lookupLoading: true });
+    try {
+      const { data, error } = await supabase.rpc("admin_lookup_user_by_email", { p_email: trimmed });
+      if (error) throw error;
+      const match = Array.isArray(data) && data.length > 0 ? data[0] : null;
+      if (match) {
+        updateInstructor(index, {
+          matched: true,
+          lookupLoading: false,
+          name: match.name ?? ""
+        });
+      } else {
+        updateInstructor(index, { matched: false, lookupLoading: false });
+      }
+    } catch {
+      // Treat lookup failures as "no match" so the admin can still type a name.
+      updateInstructor(index, { matched: false, lookupLoading: false });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,33 +137,70 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
       if (!formData.name.trim() || !formData.term) {
         throw new Error("Name and term are required");
       }
+      if (!formData.github_org_name) {
+        throw new Error("Please select a GitHub organization. Install the GitHub App if your org is not listed.");
+      }
+      if (!formData.github_template_prefix.trim()) {
+        // The slug (template prefix) is required for GitHub team/repo operations;
+        // without it, enrolling staff fails (sync_staff_github_team needs org+slug).
+        throw new Error("Template prefix is required (used for GitHub repository names, e.g., hw).");
+      }
 
-      const { error } = await supabase.rpc("admin_create_class", {
+      // Only rows where an email was entered count as instructors to add.
+      const instructorsToAdd = instructors.filter((row) => row.email.trim());
+      for (const row of instructorsToAdd) {
+        if (!row.name.trim()) {
+          throw new Error(`Enter a name for instructor ${row.email.trim()}`);
+        }
+      }
+
+      const { data: classId, error } = await supabase.rpc("admin_create_class", {
         p_name: formData.name.trim(),
         p_term: formData.term,
         p_description: formData.description.trim() || undefined,
-
-        p_github_org_name: formData.github_org_name.trim() || undefined,
+        p_github_org_name: formData.github_org_name,
         p_github_template_prefix: formData.github_template_prefix.trim() || undefined
       });
 
       if (error) throw error;
 
-      toaster.create({
-        title: "Class Created",
-        description: `${formData.name} has been created successfully.`,
-        type: "success"
-      });
+      // Enroll instructors via the existing enrollment edge function (handles
+      // existing-vs-new users, profile creation, and notifications).
+      const failures: string[] = [];
+      for (const row of instructorsToAdd) {
+        try {
+          await enrollmentAdd(
+            {
+              courseId: Number(classId),
+              email: row.email.trim(),
+              name: row.name.trim(),
+              role: "instructor",
+              notify: true
+            },
+            supabase
+          );
+        } catch (instructorError) {
+          failures.push(
+            `${row.email.trim()}: ${instructorError instanceof Error ? instructorError.message : "failed to add"}`
+          );
+        }
+      }
 
-      // Reset form and close modal
-      setFormData({
-        name: "",
-        term: parseInt(`${new Date().getFullYear()}10`), // Default to current year + fall (10)
-        description: "",
-        canvas_course_id: "",
-        github_org_name: "",
-        github_template_prefix: ""
-      });
+      if (failures.length > 0) {
+        toaster.create({
+          title: "Class created, but some instructors were not added",
+          description: failures.join("; "),
+          type: "warning"
+        });
+      } else {
+        toaster.create({
+          title: "Class Created",
+          description: `${formData.name} has been created successfully.`,
+          type: "success"
+        });
+      }
+
+      resetForm();
       setOpen(false);
 
       // Refresh the page to show new class
@@ -87,14 +216,10 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
     }
   };
 
-  const handleInputChange = (field: string, value: string | number) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
-
   return (
-    <DialogRoot open={open} onOpenChange={(e) => setOpen(e.open)}>
+    <DialogRoot open={open} onOpenChange={(e) => handleOpenChange(e.open)}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent maxW="500px">
+      <DialogContent maxW="600px">
         <DialogHeader>
           <DialogTitle>Create New Class</DialogTitle>
           <Text color="fg.muted">Add a new class to the system. Fill in the basic information below.</Text>
@@ -147,26 +272,107 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                 />
               </VStack>
 
-              <HStack gap={4} w="full">
+              <HStack gap={4} w="full" align="start">
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="github_org_name">GitHub Organization</Label>
-                  <Input
-                    id="github_org_name"
-                    value={formData.github_org_name}
-                    onChange={(e) => handleInputChange("github_org_name", e.target.value)}
-                    placeholder="e.g., cs2500-fall2024"
-                  />
+                  <Label htmlFor="github_org_name">GitHub Organization *</Label>
+                  {orgsLoading ? (
+                    <HStack color="fg.muted" fontSize="sm">
+                      <Spinner size="sm" /> <Text>Loading organizations…</Text>
+                    </HStack>
+                  ) : (
+                    <NativeSelect.Root>
+                      <NativeSelect.Field
+                        id="github_org_name"
+                        value={formData.github_org_name}
+                        onChange={(e) => handleInputChange("github_org_name", e.target.value)}
+                      >
+                        <option value="">Select an organization…</option>
+                        {(orgs ?? []).map((org) => (
+                          <option key={org.installationId} value={org.login}>
+                            {org.login}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator />
+                    </NativeSelect.Root>
+                  )}
+                  <Text fontSize="xs" color="fg.muted">
+                    {orgsError ? (
+                      <Text as="span" color="fg.error">
+                        {orgsError}.{" "}
+                      </Text>
+                    ) : null}
+                    Don&apos;t see your org?{" "}
+                    <Link href={installUrl} target="_blank" rel="noopener noreferrer" colorPalette="blue">
+                      Install the GitHub App
+                    </Link>{" "}
+                    then reopen this dialog.
+                  </Text>
                 </VStack>
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="github_template_prefix">Template Prefix</Label>
+                  <Label htmlFor="github_template_prefix">Template Prefix *</Label>
                   <Input
                     id="github_template_prefix"
                     value={formData.github_template_prefix}
                     onChange={(e) => handleInputChange("github_template_prefix", e.target.value)}
                     placeholder="e.g., hw"
+                    required
                   />
                 </VStack>
               </HStack>
+
+              <VStack align="start" w="full" gap={2}>
+                <Label>Instructors</Label>
+                <Text fontSize="xs" color="fg.muted">
+                  Add instructors by email. If the email matches an existing Pawtograder user, their name is filled in
+                  automatically; otherwise enter their name manually.
+                </Text>
+                {instructors.map((row, index) => (
+                  <Box key={index} w="full">
+                    <HStack gap={2} w="full" align="start">
+                      <VStack align="start" flex={1.2} gap={0.5}>
+                        <Input
+                          placeholder="instructor@northeastern.edu"
+                          type="email"
+                          value={row.email}
+                          onChange={(e) => updateInstructor(index, { email: e.target.value, matched: null })}
+                          onBlur={(e) => lookupInstructor(index, e.target.value)}
+                        />
+                        {row.lookupLoading ? (
+                          <Text fontSize="xs" color="fg.muted">
+                            Checking…
+                          </Text>
+                        ) : row.matched === true ? (
+                          <Text fontSize="xs" color="fg.success">
+                            Matched existing user
+                          </Text>
+                        ) : row.matched === false ? (
+                          <Text fontSize="xs" color="fg.muted">
+                            No match — enter name manually
+                          </Text>
+                        ) : null}
+                      </VStack>
+                      <Input
+                        placeholder="Full name"
+                        flex={1}
+                        value={row.name}
+                        onChange={(e) => updateInstructor(index, { name: e.target.value })}
+                      />
+                      <IconButton
+                        aria-label="Remove instructor"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeInstructorRow(index)}
+                      >
+                        <FaTrash />
+                      </IconButton>
+                    </HStack>
+                  </Box>
+                ))}
+                <Button variant="outline" size="sm" onClick={addInstructorRow} type="button">
+                  <FaPlus /> Add instructor
+                </Button>
+              </VStack>
             </VStack>
           </form>
         </DialogBody>

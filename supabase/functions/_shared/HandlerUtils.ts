@@ -158,6 +158,45 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   const result = await assertUserIsInstructor(courseId, authHeader);
   return { ...result, isServiceRole: false };
 }
+/**
+ * Assert that the caller is a platform admin (has an `admin` role in any class),
+ * or is the service role. Use for admin-only functions that are not scoped to a
+ * single course (e.g. listing GitHub App installations for the create-class form).
+ */
+export async function assertUserIsAdmin(authHeader: string | null) {
+  if (!authHeader) {
+    throw new SecurityError("Authorization header required");
+  }
+  if (isServiceRoleRequest(authHeader)) {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    return { supabase: adminSupabase, isServiceRole: true as const };
+  }
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: {
+      headers: { Authorization: authHeader }
+    }
+  });
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user }
+  } = await supabase.auth.getUser(token);
+  if (!user) {
+    throw new SecurityError("User not found");
+  }
+  const { data: adminEnrollment } = await supabase
+    .from("user_roles")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("role", "admin")
+    .limit(1);
+  if (!adminEnrollment || adminEnrollment.length === 0) {
+    throw new SecurityError("User is not an admin");
+  }
+  return { supabase, isServiceRole: false as const };
+}
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {

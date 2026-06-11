@@ -163,6 +163,18 @@ export type AddEnrollmentRequest = {
   notify?: boolean;
 };
 
+/** A GitHub org the App is currently installed on. */
+export type GitHubOrg = {
+  login: string;
+  installationId: number;
+};
+
+/** Orgs the GitHub App is installed on, plus the URL to install it on a new org. */
+export type ListGitHubOrgsResponse = {
+  orgs: GitHubOrg[];
+  installUrl: string;
+};
+
 /** Request to (re)build the code-symbol index for a submission's source files. */
 export type IndexSubmissionRequest = {
   submission_id: number;

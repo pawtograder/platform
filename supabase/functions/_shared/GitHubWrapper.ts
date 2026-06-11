@@ -370,6 +370,37 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   }
   return undefined;
 }
+/**
+ * List the GitHub orgs the App is currently installed on, plus the URL an admin
+ * can use to install it on a new org. Authenticated as the App itself (not an
+ * installation). Used by the create-class admin form to offer a dropdown of
+ * valid orgs instead of a free-text box.
+ */
+export async function listAppInstallations(scope?: Sentry.Scope): Promise<{
+  orgs: { login: string; installationId: number }[];
+  installUrl: string;
+}> {
+  scope?.setTag("github_operation", "list_app_installations");
+  const installationsResp = await app.octokit.request("GET /app/installations", { per_page: 100 });
+  const orgs = installationsResp.data
+    .map((i) => ({ login: i.account?.login ?? "", installationId: i.id }))
+    .filter((o) => o.login !== "")
+    .sort((a, b) => a.login.localeCompare(b.login));
+
+  let installUrl = "https://github.com/settings/installations";
+  try {
+    const appResp = await app.octokit.request("GET /app");
+    if (appResp.data?.slug) {
+      installUrl = `https://github.com/apps/${appResp.data.slug}/installations/new`;
+    }
+  } catch (e) {
+    scope?.addBreadcrumb({ message: "Failed to resolve GitHub App slug", category: "github", level: "warning" });
+    console.error("Failed to resolve GitHub App slug for install URL", e);
+  }
+
+  return { orgs, installUrl };
+}
+
 export async function resolveRef(action_repository: string, action_ref: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "resolve_ref");
   scope?.setTag("repository", action_repository);
