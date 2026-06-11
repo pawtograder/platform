@@ -287,25 +287,28 @@ Deno.test("ingestSubmissionFilesFromZip: empty detection flips when handout hash
   assertEquals(result.isEmpty, true);
 });
 
-Deno.test("ingestSubmissionFilesFromZip: empty detection ignores a hash recorded under a different assignment", async () => {
-  const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS });
-  const matchingHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+Deno.test(
+  "ingestSubmissionFilesFromZip: empty detection ignores a hash recorded under a different assignment",
+  async () => {
+    const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS });
+    const matchingHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
 
-  // The handout hash is recorded for assignment 999, but ingestion is scoped to assignment 123,
-  // so it must NOT be treated as empty — the lookup is assignment-scoped.
-  const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[999, new Set([matchingHash])]]) });
+    // The handout hash is recorded for assignment 999, but ingestion is scoped to assignment 123,
+    // so it must NOT be treated as empty — the lookup is assignment-scoped.
+    const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[999, new Set([matchingHash])]]) });
 
-  const result = await ingestSubmissionFilesFromZip({
-    // deno-lint-ignore no-explicit-any
-    adminSupabase: client as any,
-    zipBuffer,
-    submissionId: 1,
-    classId: 1,
-    profileId: "p",
-    groupId: null,
-    detectEmptyForAssignmentId: 123
-  });
+    const result = await ingestSubmissionFilesFromZip({
+      // deno-lint-ignore no-explicit-any
+      adminSupabase: client as any,
+      zipBuffer,
+      submissionId: 1,
+      classId: 1,
+      profileId: "p",
+      groupId: null,
+      detectEmptyForAssignmentId: 123
+    });
 
-  assertEquals(result.combinedHash, matchingHash);
-  assertEquals(result.isEmpty, false);
-});
+    assertEquals(result.combinedHash, matchingHash);
+    assertEquals(result.isEmpty, false);
+  }
+);
