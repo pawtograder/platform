@@ -466,7 +466,7 @@ function buildImports(math: MathJSInstance, gradebookController: GradebookContro
         return [];
       }
     })();
-const releasedFor = (slug: string) => assignments.some((a) => a.slug === slug);
+    const releasedFor = (slug: string) => assignments.some((a) => a.slug === slug);
     if (Array.isArray(slugInput)) return slugInput.map(releasedFor);
     return releasedFor(slugInput);
   }) as ImportFunction;
