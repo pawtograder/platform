@@ -2500,7 +2500,6 @@ function GradebookColumnHeader({
               ) : releaseStatus.kind === "mixed" ? (
                 <Box
                   as="button"
-                  type="button"
                   position="relative"
                   zIndex={100}
                   cursor="pointer"
@@ -2524,7 +2523,6 @@ function GradebookColumnHeader({
               ) : releaseStatus.kind === "released" ? (
                 <Box
                   as="button"
-                  type="button"
                   position="relative"
                   zIndex={100}
                   cursor={isNormalColumn ? "pointer" : undefined}
@@ -2550,7 +2548,6 @@ function GradebookColumnHeader({
               ) : (
                 <Box
                   as="button"
-                  type="button"
                   position="relative"
                   zIndex={100}
                   cursor={isNormalColumn ? "pointer" : undefined}
