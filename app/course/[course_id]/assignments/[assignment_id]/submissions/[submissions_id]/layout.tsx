@@ -2379,7 +2379,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             <HStack gap={1} flexWrap="wrap">
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
                 <Text color="fg.muted" data-visual-test="blackout">
-                  Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
+                  · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
                 </Text>
               </Tooltip>
             </HStack>
