@@ -369,15 +369,14 @@ export default function GraderResults() {
     );
   }
   if (!query.data.data.grader_results) {
-    // No autograder result for this submission. Decide whether to show a "manual
-    // grading" notice or "autograder hasn't finished". We key this on repo_mode —
-    // the no-repo modes ('none' = student upload, 'no_submission' = manual/oral)
-    // have no repository for GitHub Actions to run against, so the autograder will
-    // NEVER produce a result and "manual grading" is authoritative. We deliberately
-    // do NOT use has_autograder here: it defaults to false and isn't reliably set,
-    // so a still-running autograder submission would be misclassified as manual.
-    const repoMode = query.data.data.assignments?.repo_mode;
-    if (repoMode === "none" || repoMode === "no_submission") {
+    // No autograder result for this submission. For a manual / rubric-graded
+    // assignment (has_autograder = false) there will never be one, so show a
+    // "manual grading" notice instead of "autograder hasn't finished". NOTE:
+    // this is gated on the ABSENCE of a result, not on has_autograder alone —
+    // has_autograder defaults to false and isn't reliably set on every
+    // autograding assignment, so a submission that DOES have grader_results
+    // always renders them (below), regardless of the flag.
+    if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
       return (
         <Container>
           <Box p={4} margin={{ base: "2", lg: "4" }}>
