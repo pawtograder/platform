@@ -112,7 +112,10 @@ jobs:
           fi
           short_sha="${sha:0:7}"
           hostname="pr-${preview_id}.${PREVIEW_DOMAIN}"
-          api_hostname="api.pr-${preview_id}.${PREVIEW_DOMAIN}"
+          # Single-label api host so the *.preview.pawtograder.net wildcard cert
+          # covers it (matches the chart's pawtograder.api.hostname helper /
+          # global.apiHostnameFlatten). Was api.pr-${preview_id}.${PREVIEW_DOMAIN}.
+          api_hostname="pr-${preview_id}-api.${PREVIEW_DOMAIN}"
           tag="pr-${preview_id}-${short_sha}"
           release="pawtograder"
           namespace="pawtograder-preview-pr-${preview_id}"
@@ -443,7 +446,7 @@ jobs:
             --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
-            --wait --wait-for-jobs --timeout 10m
+            --wait --wait-for-jobs --timeout 20m
 
       - name: Status snapshot on failure
         if: failure()
@@ -484,11 +487,9 @@ jobs:
             | Grader     | `grader@pawtograder.net`           |
             | Student    | `student@pawtograder.net`          |
 
-            These accounts are real participants in the seeded demo class (with submissions, grading assignments, etc.) — not bolted on after the fact.
+            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). 
 
-            Shared password lives in OpenBao at `kv/apps/pawtograder/preview-shared` (key `seed_user_password`). Or request a magic-link from the app sign-in page.
-
-            Cert may take ~1 min to issue. The preview tears down automatically when this PR closes.
+            The preview tears down automatically when this PR closes.
 
   # --------------------------------------------------------------------------
   # destroy — helm uninstall + namespace delete on PR close (or manual)

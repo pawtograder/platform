@@ -73,8 +73,14 @@ spec:
             - name: GOTRUE_METRICS_PORT
               value: "9100"
             {{- end }}
+            # MUST include the `/auth/v1` gateway prefix: GoTrue builds email
+            # links (recovery/confirmation) and the OAuth callback as
+            # `{API_EXTERNAL_URL}/verify` / `/callback`, and Kong only routes
+            # `/auth/v1/*` to GoTrue. Without the prefix, password-reset links
+            # point at `…/verify` → 404. (The JWT `iss` is pinned separately by
+            # GOTRUE_JWT_ISSUER below, so this doesn't affect token validation.)
             - name: API_EXTERNAL_URL
-              value: {{ include "pawtograder.api.url" . }}
+              value: {{ include "pawtograder.api.url" . }}/auth/v1
             - name: GOTRUE_SITE_URL
               value: {{ include "pawtograder.web.url" . }}
             - name: GOTRUE_URI_ALLOW_LIST

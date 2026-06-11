@@ -1111,6 +1111,40 @@ export default class TableController<
   }
 
   /**
+   * Return an independent copy of the base query whose URL can be mutated
+   * safely.
+   *
+   * PostgREST builders are NOT immutable: `.order()`, `.gt()`, `.range()`,
+   * etc. mutate `this.url.searchParams` (appending in the case of `order`/
+   * `gt`) and return `this`. The copy constructor (`new PostgrestFilterBuilder(q)`)
+   * copies the `url` *reference* rather than cloning it, so a "derived" query
+   * still shares — and mutates — the original's URL. Deriving from `this._query`
+   * without cloning therefore leaks clauses back into `this._query`, and across
+   * repeated refetches (e.g. a realtime reconnect storm) this accumulates
+   * `order=id.asc,id.asc,…` and duplicate `updated_at=gt.…` filters until the
+   * request grows large enough that PostgREST rejects it with 400 Bad Request.
+   *
+   * Cloning the URL here keeps `this._query` pristine for every refetch.
+   */
+  private _freshQuery(): PostgrestFilterBuilder<
+    Database["public"],
+    Database["public"]["Tables"][RelationName]["Row"],
+    ResultOne[],
+    RelationName,
+    Database["public"]["Tables"][RelationName]["Relationships"]
+  > {
+    const fresh = new PostgrestFilterBuilder(this._query);
+    (fresh as unknown as { url: URL }).url = new URL((this._query as unknown as { url: URL }).url.toString());
+    return fresh as unknown as PostgrestFilterBuilder<
+      Database["public"],
+      Database["public"]["Tables"][RelationName]["Row"],
+      ResultOne[],
+      RelationName,
+      Database["public"]["Tables"][RelationName]["Relationships"]
+    >;
+  }
+
+  /**
    * Incremental refetch using updated_at watermark if available.
    * Falls back to no-op if watermark is not set or table lacks updated_at.
    */
@@ -1125,7 +1159,7 @@ export default class TableController<
 
     const sinceIso = new Date(this._maxUpdatedAtMs).toISOString();
 
-    const ourQuery = new PostgrestFilterBuilder(this._query)
+    const ourQuery = this._freshQuery()
       .gt("updated_at", sinceIso)
       .order("updated_at", { ascending: true, nullsFirst: false })
       .order("id", { ascending: true });
@@ -1223,9 +1257,11 @@ export default class TableController<
 
     // Always add ORDER BY id to ensure deterministic pagination
     // This prevents rows from being skipped or duplicated across page boundaries
-    // when PostgreSQL returns results in non-deterministic order
-    // PostgREST query builders are immutable, so this doesn't affect the original query
-    const orderedQuery = this._query.order("id", { ascending: true });
+    // when PostgreSQL returns results in non-deterministic order.
+    // NOTE: PostgREST builders are mutable and `.order()` appends to the shared
+    // URL, so we derive from a cloned query (`_freshQuery`) to avoid leaking
+    // `order=id.asc` into `this._query` on every refetch.
+    const orderedQuery = this._freshQuery().order("id", { ascending: true });
 
     if (loadEntireTable) {
       // Load initial data, do all of the pages.
@@ -1996,6 +2032,13 @@ export default class TableController<
           messagesWithData.push(message);
         } else if (message.row_id) {
           idsToRefetch.push(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
+          // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
+          // requires_refetch=false, so we must expand them ourselves or the update is dropped.
+          for (const rid of message.row_ids) {
+            idsToRefetch.push(rid as IDType);
+          }
         }
       }
     }
@@ -2055,6 +2098,14 @@ export default class TableController<
           messagesWithData.push(message);
         } else if (message.row_id) {
           idsToRefetch.push(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
+          // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
+          // requires_refetch=false, so we must expand them ourselves or the update is dropped —
+          // this is what left grading totals stale until a manual reload.
+          for (const rid of message.row_ids) {
+            idsToRefetch.push(rid as IDType);
+          }
         }
       }
     }
@@ -2105,6 +2156,12 @@ export default class TableController<
           idsToDelete.add(data.id as IDType);
         } else if (message.row_id) {
           idsToDelete.add(message.row_id as IDType);
+        } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
+          // Statement-level triggers send a `row_ids` array; small operations arrive here with
+          // requires_refetch=false and must be expanded or the delete is dropped.
+          for (const rid of message.row_ids) {
+            idsToDelete.add(rid as IDType);
+          }
         }
       }
     }

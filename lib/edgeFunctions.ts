@@ -47,6 +47,15 @@ export async function autograderCreateAssignmentRepos(
 ) {
   return await invokeEdgeFunction<{ message: string }>(supabase, "assignment-create-all-repos", { body: params });
 }
+/** (Re)build the code-symbol index for a submission's source files (used by reindex tooling). */
+export async function indexSubmission(
+  params: FunctionTypes.IndexSubmissionRequest,
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<FunctionTypes.IndexSubmissionResponse>(supabase, "index-submission", {
+    body: params
+  });
+}
 export async function liveMeetingForHelpRequest(
   params: FunctionTypes.LiveMeetingForHelpRequestRequest,
   supabase: SupabaseClient<Database>

@@ -18,6 +18,19 @@ dotenv.config({ path: ".env.local", quiet: true });
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 
+/**
+ * Set a user's grading code-viewer preference (`users.preferences.grading.useMonacoEditor`). The
+ * submission-file viewer defaults to the Monaco editor; specs that exercise the classic
+ * plain/starry-night annotation UI call this with `useMonaco=false` before loading the page.
+ */
+export async function setGradingEditorPreference(userId: string, useMonaco: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("users")
+    .update({ preferences: { grading: { useMonacoEditor: useMonaco } } })
+    .eq("user_id", userId);
+  if (error) throw new Error(`Failed to set grading editor preference: ${error.message}`);
+}
+
 /** True when `dual_active_invariants_version` RPC exists (migration 20260424200000_prevent_dual_active_submissions.sql). */
 export async function isDualActiveSubmissionGuardsMigrated(): Promise<boolean> {
   const { data, error } = await supabase.rpc("dual_active_invariants_version");
@@ -872,11 +885,37 @@ export async function createUserInClass({
   let publicProfileData: { id: string }, privateProfileData: { id: string };
 
   if (existingRole.length > 0 && !roleCheckError) {
-    // User already enrolled in class, get existing profile data
+    // User already enrolled in class, get existing profile data. This also
+    // covers the real demo class: the create_user_ensure_profiles_and_demo
+    // trigger provisions a profile + role for the is_demo class when the auth
+    // user is created, so the role already exists here and we just reuse it.
     publicProfileData = { id: existingRole[0].public_profile_id };
     privateProfileData = { id: existingRole[0].private_profile_id };
-  } else if (class_id !== 1) {
-    // User not enrolled or new class, create profiles and enrollment
+    // Apply any requested section assignment to the pre-existing role.
+    if (section_id || lab_section_id) {
+      await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+        supabase
+          .from("user_roles")
+          .update({
+            class_section_id: section_id,
+            lab_section_id: lab_section_id
+          })
+          .eq("user_id", userId)
+          .eq("class_id", class_id)
+          .select("id")
+      );
+    }
+  } else {
+    // Not enrolled (and the trigger didn't provision us — e.g. a normal,
+    // non-is_demo class). Create profiles + enrollment ourselves.
+    //
+    // NOTE: this used to be `else if (class_id !== 1)`, which assumed class 1
+    // is always the trigger-provisioned demo class and skipped provisioning
+    // for it. On a fresh database the seeder's own (non-demo) class gets id 1,
+    // so that skip left every seeded user with no profile/role and the
+    // read-back below failed with "Failed to get profile". The existingRole
+    // check above already handles the genuine demo-class case, so gating on
+    // class_id is both wrong and unnecessary.
     const { data: newPublicProfileDataList, error: publicProfileError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("profiles", () =>
@@ -920,7 +959,7 @@ export async function createUserInClass({
     publicProfileData = newPublicProfileData;
     privateProfileData = newPrivateProfileData;
 
-    await supabase.from("user_roles").insert({
+    const { error: roleInsertError } = await supabase.from("user_roles").insert({
       user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
@@ -929,18 +968,13 @@ export async function createUserInClass({
       class_section_id: section_id,
       lab_section_id: lab_section_id
     });
-  } else if (section_id || lab_section_id) {
-    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
-      supabase
-        .from("user_roles")
-        .update({
-          class_section_id: section_id,
-          lab_section_id: lab_section_id
-        })
-        .eq("user_id", userId)
-        .eq("class_id", class_id)
-        .select("id")
-    );
+    // Check the insert: an unchecked failure here (e.g. a cold PostgREST
+    // schema cache on a fresh stack) makes the .single() read-back below find
+    // 0 rows and throw the misleading "Failed to get profile" instead of the
+    // real cause. Fail loudly at the actual point of failure.
+    if (roleInsertError) {
+      throw new Error(`Failed to create ${role} user_role in class ${class_id}: ${roleInsertError.message}`);
+    }
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
@@ -1200,7 +1234,8 @@ export async function insertPreBakedSubmission({
   assignment_id,
   class_id,
   repositorySuffix,
-  rateLimitManager
+  rateLimitManager,
+  files
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -1208,6 +1243,8 @@ export async function insertPreBakedSubmission({
   class_id: number;
   repositorySuffix?: string;
   rateLimitManager?: RateLimitManager;
+  /** Override the default single sample.java with custom files (e.g. a multi-file class path). */
+  files?: { name: string; contents: string }[];
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -1288,14 +1325,10 @@ export async function insertPreBakedSubmission({
   }
   const submissionData = submissionDataList[0];
   const submission_id = submissionData?.id;
-  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
-    "submission_files",
-    () =>
-      supabase
-        .from("submission_files")
-        .insert({
-          name: "sample.java",
-          contents: `package com.pawtograder.example.java;
+  const defaultFiles = [
+    {
+      name: "sample.java",
+      contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
@@ -1304,7 +1337,7 @@ public class Entrypoint {
 
   /*
    * This method takes two integers and returns their sum.
-   * 
+   *
    * @param a the first integer
    * @param b the second integer
    * @return the sum of a and b
@@ -1318,15 +1351,28 @@ public class Entrypoint {
    * @return
    */
   public String getMessage() {
-      
+
       return "Hello, World!";
   }
-}`,
-          class_id: class_id,
-          submission_id: submission_id,
-          profile_id: student_profile_id,
-          assignment_group_id: assignment_group_id
-        })
+}`
+    }
+  ];
+  const filesToInsert = files ?? defaultFiles;
+  const { error: submissionFileError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
+    "submission_files",
+    () =>
+      supabase
+        .from("submission_files")
+        .insert(
+          filesToInsert.map((f) => ({
+            name: f.name,
+            contents: f.contents,
+            class_id: class_id,
+            submission_id: submission_id,
+            profile_id: student_profile_id,
+            assignment_group_id: assignment_group_id
+          }))
+        )
         .select("id")
   );
   if (submissionFileError) {

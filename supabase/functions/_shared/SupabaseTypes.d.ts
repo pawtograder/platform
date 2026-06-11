@@ -173,6 +173,30 @@ export type Database = {
         };
         Relationships: [];
       };
+      assignment_dashboard_views: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          config: Json;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id?: number;
+          config: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          config?: Json;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [];
+      };
       assignment_due_date_exceptions: {
         Row: {
           assignment_group_id: number | null;
@@ -7881,6 +7905,103 @@ export type Database = {
           }
         ];
       };
+      submission_file_symbol_index: {
+        Row: {
+          assignment_group_id: number | null;
+          class_id: number;
+          indexed_at: string;
+          language: string;
+          profile_id: string | null;
+          submission_file_id: number;
+          submission_id: number;
+          symbols: Json;
+        };
+        Insert: {
+          assignment_group_id?: number | null;
+          class_id: number;
+          indexed_at?: string;
+          language: string;
+          profile_id?: string | null;
+          submission_file_id: number;
+          submission_id: number;
+          symbols?: Json;
+        };
+        Update: {
+          assignment_group_id?: number | null;
+          class_id?: number;
+          indexed_at?: string;
+          language?: string;
+          profile_id?: string | null;
+          submission_file_id?: number;
+          submission_id?: number;
+          symbols?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "submission_file_symbol_index_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_file_fkey";
+            columns: ["submission_file_id"];
+            isOneToOne: true;
+            referencedRelation: "submission_files";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_group_fkey";
+            columns: ["assignment_group_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_groups";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_profile_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_profile_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_submission_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_submission_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_submission_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "submission_file_symbol_index_submission_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
       submission_files: {
         Row: {
           assignment_group_id: number | null;
@@ -9360,6 +9481,7 @@ export type Database = {
           github_username: string | null;
           last_github_user_sync: string | null;
           name: string | null;
+          preferences: Json;
           sis_user_id: number | null;
           user_id: string;
         };
@@ -9373,6 +9495,7 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
           user_id?: string;
         };
@@ -9386,6 +9509,7 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
           user_id?: string;
         };
@@ -11610,6 +11734,14 @@ export type Database = {
         }[];
       };
       get_llm_tags_breakdown: { Args: never; Returns: Json };
+      get_rubric_check_application_stats: {
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
+        Returns: Json;
+      };
+      get_rubric_report_cohort_members: {
+        Args: { p_assignment_id: number; p_filter?: Json; p_review_round?: string };
+        Returns: number[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
