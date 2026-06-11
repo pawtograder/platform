@@ -27,14 +27,16 @@ BEGIN
         RETURN; -- no match
     END IF;
 
-    -- Prefer the name on the user's most recent class private profile (most
-    -- recent = the class they were most recently enrolled in, i.e. the highest
-    -- user_roles.id), falling back to the public.users mirror name.
+    -- Prefer the name on the user's most recent ACTIVE class private profile
+    -- (most recent = the class they were most recently enrolled in, i.e. the
+    -- highest user_roles.id), falling back to the public.users mirror name.
+    -- Skip disabled enrollments so a dropped class doesn't supply the name.
     SELECT p.name INTO v_name
     FROM public.user_roles ur
     JOIN public.profiles p ON p.id = ur.private_profile_id
     WHERE ur.user_id = v_user_id
       AND p.is_private_profile = true
+      AND COALESCE(ur.disabled, false) = false
     ORDER BY ur.id DESC
     LIMIT 1;
 

@@ -26,6 +26,9 @@ interface CreateClassModalProps {
 }
 
 type InstructorRow = {
+  // Stable identity so async lookups and row removal target the right row even
+  // when the list is reordered/filtered (array index is not stable).
+  id: string;
   email: string;
   name: string;
   // null = not yet looked up, true = matched existing user, false = no match
@@ -34,7 +37,7 @@ type InstructorRow = {
 };
 
 function emptyInstructor(): InstructorRow {
-  return { email: "", name: "", matched: null, lookupLoading: false };
+  return { id: crypto.randomUUID(), email: "", name: "", matched: null, lookupLoading: false };
 }
 
 const initialFormData = () => ({
@@ -79,7 +82,9 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
-    if (nextOpen && orgs === null && !orgsLoading) {
+    // Refetch the org list every time the dialog opens so a just-installed org
+    // shows up (the in-form "install the app then reopen" recovery relies on this).
+    if (nextOpen && !orgsLoading) {
       loadOrgs();
     }
   };
@@ -93,38 +98,38 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const updateInstructor = (index: number, patch: Partial<InstructorRow>) => {
-    setInstructors((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  const updateInstructor = (id: string, patch: Partial<InstructorRow>) => {
+    setInstructors((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   };
 
   const addInstructorRow = () => setInstructors((prev) => [...prev, emptyInstructor()]);
 
-  const removeInstructorRow = (index: number) =>
-    setInstructors((prev) => (prev.length === 1 ? [emptyInstructor()] : prev.filter((_, i) => i !== index)));
+  const removeInstructorRow = (id: string) =>
+    setInstructors((prev) => (prev.length === 1 ? [emptyInstructor()] : prev.filter((row) => row.id !== id)));
 
-  const lookupInstructor = async (index: number, email: string) => {
+  const lookupInstructor = async (id: string, email: string) => {
     const trimmed = email.trim();
     if (!trimmed) {
-      updateInstructor(index, { matched: null });
+      updateInstructor(id, { matched: null });
       return;
     }
-    updateInstructor(index, { lookupLoading: true });
+    updateInstructor(id, { lookupLoading: true });
     try {
       const { data, error } = await supabase.rpc("admin_lookup_user_by_email", { p_email: trimmed });
       if (error) throw error;
       const match = Array.isArray(data) && data.length > 0 ? data[0] : null;
       if (match) {
-        updateInstructor(index, {
+        updateInstructor(id, {
           matched: true,
           lookupLoading: false,
           name: match.name ?? ""
         });
       } else {
-        updateInstructor(index, { matched: false, lookupLoading: false });
+        updateInstructor(id, { matched: false, lookupLoading: false });
       }
     } catch {
       // Treat lookup failures as "no match" so the admin can still type a name.
-      updateInstructor(index, { matched: false, lookupLoading: false });
+      updateInstructor(id, { matched: false, lookupLoading: false });
     }
   };
 
@@ -327,16 +332,16 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                   Add instructors by email. If the email matches an existing Pawtograder user, their name is filled in
                   automatically; otherwise enter their name manually.
                 </Text>
-                {instructors.map((row, index) => (
-                  <Box key={index} w="full">
+                {instructors.map((row) => (
+                  <Box key={row.id} w="full">
                     <HStack gap={2} w="full" align="start">
                       <VStack align="start" flex={1.2} gap={0.5}>
                         <Input
                           placeholder="instructor@northeastern.edu"
                           type="email"
                           value={row.email}
-                          onChange={(e) => updateInstructor(index, { email: e.target.value, matched: null })}
-                          onBlur={(e) => lookupInstructor(index, e.target.value)}
+                          onChange={(e) => updateInstructor(row.id, { email: e.target.value, matched: null })}
+                          onBlur={(e) => lookupInstructor(row.id, e.target.value)}
                         />
                         {row.lookupLoading ? (
                           <Text fontSize="xs" color="fg.muted">
@@ -356,13 +361,13 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                         placeholder="Full name"
                         flex={1}
                         value={row.name}
-                        onChange={(e) => updateInstructor(index, { name: e.target.value })}
+                        onChange={(e) => updateInstructor(row.id, { name: e.target.value })}
                       />
                       <IconButton
                         aria-label="Remove instructor"
                         variant="ghost"
                         size="sm"
-                        onClick={() => removeInstructorRow(index)}
+                        onClick={() => removeInstructorRow(row.id)}
                       >
                         <FaTrash />
                       </IconButton>
