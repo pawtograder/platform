@@ -10,13 +10,15 @@ import { ReactNode, useCallback, useEffect, useState } from "react";
 /** Provisions an instructor enrollment for the admin (idempotent), then opens the course. */
 async function enterCourse(classId: number, router: ReturnType<typeof useRouter>, onError: () => void) {
   const supabase = createClient();
-  const { error } = await supabase.rpc("admin_enter_course_as_instructor", { p_class_id: classId });
-  if (error) {
-    toaster.error({ title: "Failed to enter course", description: error.message });
+  try {
+    const { error } = await supabase.rpc("admin_enter_course_as_instructor", { p_class_id: classId });
+    if (error) throw error;
+    router.push(`/course/${classId}/manage/assignments`);
+  } catch (err) {
+    const description = err instanceof Error ? err.message : "Unknown error";
+    toaster.error({ title: "Failed to enter course", description });
     onError();
-    return;
   }
-  router.push(`/course/${classId}/manage/assignments`);
 }
 
 export function EnterCourseAsInstructorButton({

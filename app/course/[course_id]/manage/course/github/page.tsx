@@ -36,11 +36,7 @@ export default function CourseGitHubSettingsPage() {
     const supabase = createClient();
     try {
       const [{ data: classRow }, { data: resolved }] = await Promise.all([
-        supabase
-          .from("classes")
-          .select("handout_template_repo,solution_template_repo")
-          .eq("id", courseIdNum)
-          .single(),
+        supabase.from("classes").select("handout_template_repo,solution_template_repo").eq("id", courseIdNum).single(),
         supabase.rpc("resolve_class_template_repos", { p_class_id: courseIdNum })
       ]);
       setHandout(classRow?.handout_template_repo ?? "");

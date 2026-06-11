@@ -22,6 +22,13 @@ type OrgCourse = {
   effective_solution_template_repo: string;
 };
 
+/** Parse an exact "org/repo" string; returns null for anything else (extra segments, empty parts). */
+function parseRepo(value: string): { org: string; repo: string } | null {
+  const segments = value.split("/").map((s) => s.trim());
+  if (segments.length !== 2 || !segments[0] || !segments[1]) return null;
+  return { org: segments[0], repo: segments[1] };
+}
+
 /** Button that provisions an instructor enrollment for the admin, then opens the course. */
 function ManageAsInstructorButton({ classId }: { classId: number }) {
   const router = useRouter();
@@ -59,10 +66,11 @@ export default function GitHubOrgDetailPage() {
     setLoading(true);
     const supabase = createClient();
     try {
-      const [{ data: orgs }, { data: orgCourses, error: coursesError }] = await Promise.all([
+      const [{ data: orgs, error: orgsError }, { data: orgCourses, error: coursesError }] = await Promise.all([
         supabase.rpc("admin_get_github_orgs"),
         supabase.rpc("admin_get_org_courses", { p_org_name: orgName })
       ]);
+      if (orgsError) throw orgsError;
       if (coursesError) throw coursesError;
       const thisOrg = (orgs ?? []).find((o) => o.org_name === orgName);
       setHandout(thisOrg?.default_handout_template_repo ?? "");
@@ -99,13 +107,15 @@ export default function GitHubOrgDetailPage() {
   }, [orgName, handout, solution, load]);
 
   // A course in this org gives the edge function a valid auth/ownership context for
-  // editing the org's template repos. (pawtograder/* templates are always allowed.)
+  // editing the org's template repos. (Writes are restricted to the course's own org.)
   const authCourseId = useMemo(() => courses[0]?.id, [courses]);
 
-  const handoutRepo = useMemo(() => handout.split("/"), [handout]);
-  const solutionRepo = useMemo(() => solution.split("/"), [solution]);
-  const canEditHandout = authCourseId !== undefined && handoutRepo.length >= 2;
-  const canEditSolution = authCourseId !== undefined && solutionRepo.length >= 2;
+  // The edge function only allows writes to the course's own org, so editing requires the
+  // template repo to live in this org.
+  const handoutRepo = useMemo(() => parseRepo(handout), [handout]);
+  const solutionRepo = useMemo(() => parseRepo(solution), [solution]);
+  const canEditHandout = authCourseId !== undefined && handoutRepo !== null && handoutRepo.org === orgName;
+  const canEditSolution = authCourseId !== undefined && solutionRepo !== null && solutionRepo.org === orgName;
 
   if (loading) {
     return <Spinner />;
@@ -225,8 +235,8 @@ export default function GitHubOrgDetailPage() {
                   <Box pt={2}>
                     <RepoFileEditor
                       courseId={authCourseId}
-                      orgName={handoutRepo[0]}
-                      repoName={handoutRepo.slice(1).join("/")}
+                      orgName={handoutRepo.org}
+                      repoName={handoutRepo.repo}
                       path=".github/workflows/grade.yml"
                       paths={[
                         { label: ".github/workflows/grade.yml", path: ".github/workflows/grade.yml" },
@@ -236,7 +246,7 @@ export default function GitHubOrgDetailPage() {
                   </Box>
                 ) : (
                   <Text color="fg.muted" pt={2}>
-                    Set a valid &quot;org/repo&quot; handout template above to edit its files.
+                    Set a valid &quot;org/repo&quot; handout template in this org above to edit its files.
                   </Text>
                 )}
               </Tabs.Content>
@@ -245,8 +255,8 @@ export default function GitHubOrgDetailPage() {
                   <Box pt={2}>
                     <RepoFileEditor
                       courseId={authCourseId}
-                      orgName={solutionRepo[0]}
-                      repoName={solutionRepo.slice(1).join("/")}
+                      orgName={solutionRepo.org}
+                      repoName={solutionRepo.repo}
                       path="pawtograder.yml"
                       paths={[
                         { label: "pawtograder.yml", path: "pawtograder.yml" },
@@ -256,7 +266,7 @@ export default function GitHubOrgDetailPage() {
                   </Box>
                 ) : (
                   <Text color="fg.muted" pt={2}>
-                    Set a valid &quot;org/repo&quot; solution template above to edit its files.
+                    Set a valid &quot;org/repo&quot; solution template in this org above to edit its files.
                   </Text>
                 )}
               </Tabs.Content>

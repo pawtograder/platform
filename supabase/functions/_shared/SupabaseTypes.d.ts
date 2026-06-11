@@ -10820,12 +10820,12 @@ export type Database = {
         Args: never;
         Returns: {
           course_count: number;
-          created_at: string;
+          created_at: string | null;
           default_handout_template_repo: string;
           default_solution_template_repo: string;
           is_configured: boolean;
           org_name: string;
-          updated_at: string;
+          updated_at: string | null;
         }[];
       };
       admin_get_org_courses: {
@@ -10834,10 +10834,10 @@ export type Database = {
           archived: boolean;
           effective_handout_template_repo: string;
           effective_solution_template_repo: string;
-          handout_template_repo: string;
+          handout_template_repo: string | null;
           id: number;
           name: string;
-          solution_template_repo: string;
+          solution_template_repo: string | null;
           term: number;
         }[];
       };
@@ -12491,7 +12491,7 @@ export type Database = {
         }[];
       };
       admin_upsert_github_org: {
-        Args: { p_org_name: string; p_handout?: string; p_solution?: string };
+        Args: { p_org_name: string; p_handout?: string | null; p_solution?: string | null };
         Returns: undefined;
       };
       resolve_class_template_repos: {
@@ -12502,7 +12502,7 @@ export type Database = {
         }[];
       };
       set_class_template_overrides: {
-        Args: { p_class_id: number; p_handout?: string; p_solution?: string };
+        Args: { p_class_id: number; p_handout?: string | null; p_solution?: string | null };
         Returns: undefined;
       };
     };

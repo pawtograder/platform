@@ -49,11 +49,13 @@ test.describe("GitHub org template configuration", () => {
 
   test("resolves override > org default > hardcoded constant", async () => {
     // 1. Neither override nor org default configured -> hardcoded constants.
-    await supabase
+    const { error: clearClassError } = await supabase
       .from("classes")
       .update({ handout_template_repo: null, solution_template_repo: null })
       .eq("id", course.id);
-    await supabase.from("github_orgs").delete().eq("org_name", uniqueOrg);
+    expect(clearClassError).toBeNull();
+    const { error: deleteOrgError } = await supabase.from("github_orgs").delete().eq("org_name", uniqueOrg);
+    expect(deleteOrgError).toBeNull();
     let resolved = await resolve(course.id);
     expect(resolved.handout_template_repo).toBe(DEFAULT_HANDOUT);
     expect(resolved.solution_template_repo).toBe(DEFAULT_SOLUTION);
@@ -85,7 +87,10 @@ test.describe("GitHub org template configuration", () => {
     expect(resolved.solution_template_repo).toBe(overrideSolution);
 
     // Clear the override; org default should re-apply.
-    await supabase.rpc("set_class_template_overrides", { p_class_id: course.id });
+    const { error: clearOverrideError } = await supabase.rpc("set_class_template_overrides", {
+      p_class_id: course.id
+    });
+    expect(clearOverrideError).toBeNull();
     resolved = await resolve(course.id);
     expect(resolved.handout_template_repo).toBe(orgHandout);
   });
@@ -113,7 +118,8 @@ test.describe("GitHub org template configuration", () => {
       )
       .toBe(newHandout);
 
-    const { data } = await supabase.rpc("admin_get_github_orgs");
+    const { data, error } = await supabase.rpc("admin_get_github_orgs");
+    expect(error).toBeNull();
     const row = (data ?? []).find((o) => o.org_name === uniqueOrg);
     expect(row?.default_handout_template_repo).toBe(newHandout);
     expect(row?.default_solution_template_repo).toBe(newSolution);

@@ -48,11 +48,11 @@ test.describe("Admin acts as instructor", () => {
     await loginAsUser(page, admin);
     await page.goto("/admin");
 
-    // Use the quick course picker on the dashboard. The picker's "Manage as instructor"
-    // button is the one immediately following its course <select>.
-    const pickerSelect = page.getByLabel("Select a course to manage as instructor");
-    await pickerSelect.selectOption(String(targetCourse.id));
-    await pickerSelect.locator("xpath=following::button[1]").click();
+    // Use the quick course picker on the dashboard, scoping the button lookup to the
+    // picker's own container so unrelated buttons can't match.
+    const picker = page.getByTestId("admin-course-picker");
+    await picker.getByLabel("Select a course to manage as instructor").selectOption(String(targetCourse.id));
+    await picker.getByRole("button", { name: "Manage as instructor" }).click();
 
     await expect(page).toHaveURL(new RegExp(`/course/${targetCourse.id}/manage`), { timeout: 20_000 });
     // No "no access" screen.

@@ -133,7 +133,9 @@ export async function AdminDashboardContent() {
                         <TimeZoneAwareDate date={course.created_at} format="dateOnly" />
                       </Text>
                     </VStack>
-                    <EnterCourseAsInstructorButton classId={course.id}>Manage as instructor</EnterCourseAsInstructorButton>
+                    <EnterCourseAsInstructorButton classId={course.id}>
+                      Manage as instructor
+                    </EnterCourseAsInstructorButton>
                   </Flex>
                 ))
               ) : (

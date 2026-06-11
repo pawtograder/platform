@@ -86,10 +86,7 @@ export async function repositoryGetFile(params: FunctionTypes.GetFileRequest, su
     body: params
   });
 }
-export async function repositoryWriteFile(
-  params: FunctionTypes.WriteFileRequest,
-  supabase: SupabaseClient<Database>
-) {
+export async function repositoryWriteFile(params: FunctionTypes.WriteFileRequest, supabase: SupabaseClient<Database>) {
   return await invokeEdgeFunction<FunctionTypes.WriteFileResponse>(supabase, "repository-write-file", {
     body: params
   });

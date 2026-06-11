@@ -25,8 +25,9 @@ function checkRateLimit(orgName: string, repoName: string, path: string): void {
 
   // Check if rate limit is exceeded
   if (timestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new Error(
-      `Rate limit exceeded: File ${path} in ${orgName}/${repoName} has been written ${RATE_LIMIT_MAX_REQUESTS} times within the last minute. Please wait before trying again.`
+    throw new UserVisibleError(
+      `Rate limit exceeded: File ${path} in ${orgName}/${repoName} has been written ${RATE_LIMIT_MAX_REQUESTS} times within the last minute. Please wait before trying again.`,
+      429
     );
   }
 
@@ -59,9 +60,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
-  if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
-    throw new Error(
-      `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
+  if (courseOrgName.data?.github_org !== orgName) {
+    throw new UserVisibleError(
+      `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`,
+      403
     );
   }
 

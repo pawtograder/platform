@@ -74,7 +74,8 @@ async function setEditorValue(page: import("@playwright/test").Page, text: strin
       const monaco = (window as unknown as { monaco?: typeof import("monaco-editor") }).monaco;
       if (!monaco) throw new Error("monaco not available on window");
       const models = monaco.editor.getModels();
-      const model = models.find((m) => m.uri.toString().includes(pathHint)) ?? models[models.length - 1];
+      const model = models.find((m) => m.uri.toString().includes(pathHint));
+      if (!model) throw new Error(`No Monaco model found for path hint: ${pathHint}`);
       model.setValue(text);
     },
     { text, pathHint }
