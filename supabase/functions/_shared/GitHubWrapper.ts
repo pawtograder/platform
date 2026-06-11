@@ -317,6 +317,26 @@ export async function getAppSlug(scope?: Sentry.Scope): Promise<string | undefin
   }
 }
 
+// Resolve an org's numeric account id. GitHub App install deep-links take a
+// `target_id` query parameter that must be the numeric account id, not the org
+// login — so callers building an install URL need this. App-JWT auth; cached.
+const orgIdCache = new Map<string, number | undefined>();
+export async function getOrgId(org: string, scope?: Sentry.Scope): Promise<number | undefined> {
+  if (orgIdCache.has(org)) {
+    return orgIdCache.get(org);
+  }
+  try {
+    const { data } = await app.octokit.request("GET /orgs/{org}", { org });
+    const id = typeof data?.id === "number" ? data.id : undefined;
+    orgIdCache.set(org, id);
+    return id;
+  } catch (e) {
+    Sentry.captureException(e, scope);
+    orgIdCache.set(org, undefined);
+    return undefined;
+  }
+}
+
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   const octokit = await getOctoKit(repoOrOrgName, scope);

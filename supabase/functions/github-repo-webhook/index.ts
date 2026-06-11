@@ -398,7 +398,11 @@ async function createPushDirectSubmission(
   // Due-date gate (uses the same RPC the autograder uses).
   const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
     assignment_id_param: studentRepo.assignment_id,
-    student_profile_id_param: profileId || "0xd34db34f",
+    // No resolvable profile (e.g. a group repo with no matched member): pass null, not a
+    // bogus UUID — Postgres rejects a non-UUID string, whereas null already falls back to the
+    // assignment's due_date via calculate_effective_due_date. The generated RPC type marks
+    // this param required, but the underlying SQL `uuid` parameter is nullable, so narrow it.
+    student_profile_id_param: (profileId || null) as string,
     assignment_group_id_param: studentRepo.assignment_group_id || undefined
   });
   if (dueDateError) {

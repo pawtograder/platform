@@ -12,7 +12,7 @@
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { getOctoKit, getRepo, getAppSlug } from "../_shared/GitHubWrapper.ts";
+import { getOctoKit, getRepo, getAppSlug, getOrgId } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -69,11 +69,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckAp
 
   const [org, name] = repo.split("/");
   const slug = await getAppSlug(scope);
-  // Where to install if missing. With a known slug we can deep-link to the org;
-  // otherwise fall back to the generic apps page so the link still works.
-  const install_url = slug
-    ? `https://github.com/apps/${slug}/installations/new/permissions?target_id=${encodeURIComponent(org)}`
-    : "https://github.com/settings/installations";
+  // Where to install if missing. With a known slug we deep-link to the org's install
+  // flow; GitHub's `target_id` must be the org's NUMERIC account id (not its login),
+  // so resolve it and omit target_id (still a valid generic deep-link) if we can't.
+  let install_url = "https://github.com/settings/installations";
+  if (slug) {
+    const orgId = await getOrgId(org, scope);
+    install_url = orgId
+      ? `https://github.com/apps/${slug}/installations/new/permissions?target_id=${orgId}`
+      : `https://github.com/apps/${slug}/installations/new`;
+  }
 
   // The app is installed in `org` iff we can resolve an installation octokit.
   const octokit = await getOctoKit(org, scope);
