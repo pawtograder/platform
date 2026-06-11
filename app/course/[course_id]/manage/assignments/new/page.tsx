@@ -129,7 +129,11 @@ export default function NewAssignmentPage() {
             total_points: getValues("total_points"),
             template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
-            has_autograder: true,
+            // has_autograder must reflect reality (it gates the webhook's autograder run and the
+            // results-page empty state). The form provisions a grader/solution repo only for repo
+            // modes, so no-repo modes ('none'/'no_submission') have no autograder. Instructors can
+            // still toggle this on the autograder config page.
+            has_autograder: !isNoRepo,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
             group_config: getValues("group_config"),

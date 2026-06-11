@@ -2206,3 +2206,26 @@ end;
 $$;
 
 grant execute on function public.create_submission_for_student(bigint, uuid, bigint) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Backfill: make assignments.has_autograder a trustworthy signal.
+--
+-- has_autograder is an instructor-controlled flag (Enabled/Disabled on the
+-- autograder config page) that gates real behavior — the github-repo-webhook
+-- push "zero-runner" path skips the autograder when it is false, and the results
+-- page shows a "manual grading" empty state. It was previously hardcoded `true`
+-- for every form-created assignment (including manual / no-submission ones),
+-- leaving it unreliable. Going forward the create form sets it from whether a
+-- grader repo is provisioned; here we correct existing rows.
+--
+-- Conservative, one-directional fix: an assignment with NO configured grader
+-- repo cannot have an autograder, so force has_autograder=false. Rows that DO
+-- have a grader repo keep their current flag, so an intentional Enabled/Disabled
+-- choice (the toggle we are keeping) is never clobbered.
+update public.assignments a
+set has_autograder = false
+where a.has_autograder
+  and not exists (
+    select 1 from public.autograder ag
+    where ag.id = a.id and ag.grader_repo is not null
+  );
