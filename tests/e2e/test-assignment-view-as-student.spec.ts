@@ -177,12 +177,13 @@ print(add(2, 3))
 
 test.beforeAll(async ({}, testInfo) => {
   testInfo.setTimeout(120_000);
+  const emailSuffix = Math.random().toString(36).slice(2, 8);
   course = await createClass({ name: "Test Assignment View As Student" });
   [instructor, grader] = await createUsersInClass([
     {
       name: "Test Assignment View Instructor",
       public_profile_name: "Test Assignment View Instructor Public",
-      email: "test-assignment-view-instructor@pawtograder.net",
+      email: `test-assignment-view-instructor-${emailSuffix}@pawtograder.net`,
       role: "instructor",
       class_id: course.id,
       useMagicLink: true
@@ -190,7 +191,7 @@ test.beforeAll(async ({}, testInfo) => {
     {
       name: "Test Assignment View Grader",
       public_profile_name: "Test Assignment View Grader Public",
-      email: "test-assignment-view-grader@pawtograder.net",
+      email: `test-assignment-view-grader-${emailSuffix}@pawtograder.net`,
       role: "grader",
       class_id: course.id,
       useMagicLink: true
