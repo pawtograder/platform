@@ -252,7 +252,19 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       // (router.push + refresh) flips the client identity while the existing controllers
       // are still being torn down, which surfaces stale-reference crashes such as
       // "TableController for table 'discussion_threads' is closed. Cannot call getById(...)".
-      window.location.assign(redirectTo ?? `/course/${course_id}`);
+      const fallback = `/course/${course_id}`;
+      let destination = fallback;
+      if (redirectTo) {
+        try {
+          const nextUrl = new URL(redirectTo, window.location.origin);
+          if (nextUrl.origin === window.location.origin) {
+            destination = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+          }
+        } catch {
+          destination = fallback;
+        }
+      }
+      window.location.assign(destination);
     },
     [course_id]
   );

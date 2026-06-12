@@ -50,7 +50,7 @@ print(add(2, 3))
 
   await gradeSubmission(submission.grading_review_id, graderProfileId, true, {
     checkApplyChance: 1,
-    pointsRandomizer: () => 1,
+    pointsRandomizer: () => 0.5,
     totalScoreOverride: 88,
     totalAutogradeScoreOverride: 5
   });
