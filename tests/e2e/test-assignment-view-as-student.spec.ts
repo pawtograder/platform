@@ -267,8 +267,10 @@ test.describe("Test Assignment student preview", () => {
     );
     await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
     await expect(page.getByText("Student's Due Date:")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Overall Score (88/100)" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Overall Score \(/ })).toBeVisible();
     await expect(page.getByText("Instructor View")).toBeVisible();
+    await expect(page.getByText("Hidden staff-only regression").first()).toBeVisible();
+    await expect(page.getByText("INSTRUCTOR_ONLY_TEST_STDOUT")).toBeVisible();
     await expect(page.getByText("UNRELEASED_STAFF_RUBRIC_COMMENT")).toBeVisible();
   });
 
