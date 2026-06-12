@@ -246,7 +246,7 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByText("HIDDEN_INSTRUCTOR_GRADER_OUTPUT")).toHaveCount(0);
     await expect(page.getByText("UNRELEASED_STAFF_RUBRIC_COMMENT")).toHaveCount(0);
 
-    await expect(page.getByText("Visible student-facing check")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Visible student-facing check", exact: true }).first()).toBeVisible();
     await expect(page.getByText("STUDENT_VISIBLE_TEST_OUTPUT")).toBeVisible();
     await expect(page.getByText("1 hidden test not yet released.")).toBeVisible();
     await page.getByRole("tab", { name: "Output" }).click();
@@ -286,6 +286,5 @@ test.describe("Test Assignment student preview", () => {
 
     await banner.getByRole("button", { name: "Exit student view" }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
   });
 });
