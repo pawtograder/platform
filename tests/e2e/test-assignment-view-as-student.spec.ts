@@ -223,7 +223,7 @@ test.describe("Test Assignment student preview", () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
-    await expect(page.getByRole("heading", { name: "Test Assignment" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: String(submissionId), exact: true }).click();
     await expect(page).toHaveURL(
