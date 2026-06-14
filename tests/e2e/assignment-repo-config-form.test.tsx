@@ -181,6 +181,49 @@ test.describe("Assignment repo configuration form", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Scenario 1b — submission mode options are gated by repo_mode
+  //   - no repository (none / no_submission): the section is hidden
+  //   - template-only: push is the only option (no PR)
+  //   - fork modes: push OR PR
+  // ---------------------------------------------------------------------------
+  test("submission mode options depend on repo_mode (PR only for fork modes; hidden for no-repo)", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments/new`);
+    await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+    const modeSelect = page.locator('select[name="repo_mode"]');
+    const submissionMode = page.locator('select[name="submission_mode"]');
+    const PUSH = "Push to student repository";
+    const PR = "Pull request against an upstream repository";
+
+    // template_only_staff (default): the section shows, but push is the only
+    // option — non-fork repos can't PR.
+    await expect(modeSelect).toHaveValue("template_only_staff");
+    await expect(submissionMode).toBeVisible();
+    await expect(submissionMode.locator("option")).toHaveText([PUSH]);
+
+    // template_with_student_forks: PR becomes available.
+    await modeSelect.selectOption("template_with_student_forks");
+    await expect(submissionMode.locator("option")).toHaveText([PUSH, PR]);
+
+    // fork_from_prior_assignment: PR available too.
+    await modeSelect.selectOption("fork_from_prior_assignment");
+    await expect(submissionMode.locator("option")).toHaveText([PUSH, PR]);
+
+    // none — no repository, so the whole Submission mode section is hidden.
+    await modeSelect.selectOption("none");
+    await expect(submissionMode).toHaveCount(0);
+
+    // no_submission — also hidden.
+    await modeSelect.selectOption("no_submission");
+    await expect(submissionMode).toHaveCount(0);
+
+    // Back to a fork mode — the PR option returns.
+    await modeSelect.selectOption("template_with_student_forks");
+    await expect(submissionMode.locator("option")).toHaveText([PUSH, PR]);
+  });
+
+  // ---------------------------------------------------------------------------
   // Scenario 2 — reviewer count conditional + range validation
   // ---------------------------------------------------------------------------
   test("Required reviewers input appears only when Require PR is checked, and validates 0..5", async ({ page }) => {

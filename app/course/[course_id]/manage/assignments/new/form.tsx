@@ -803,15 +803,26 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
  * How a submission is produced (push vs PR). For PR mode the upstream repo PRs
  * target IS the assignment's handout repo (template_repo) — kept equal so the
  * two can't drift — so it is shown read-only rather than typed/installation-checked.
+ *
+ * The available choices depend on the repo mode (Student Repositories):
+ *   - no repository (none / no_submission): there is nothing to push to or PR
+ *     against, so this whole section is hidden.
+ *   - template-only (template_only_staff): students get fresh copies of the
+ *     handout, so a push to their repo is the only kind of submission.
+ *   - fork modes (template_with_student_forks / fork_from_prior_assignment):
+ *     students have a fork, so they can push to it OR open a PR against the
+ *     upstream — PR is offered only here.
  */
 function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   const {
     register,
     control,
     watch,
+    setValue,
     formState: { errors }
   } = form;
 
+  const repoMode = watch("repo_mode") ?? "template_only_staff";
   const submissionMode = watch("submission_mode") ?? "push";
   const prIdentification = watch("pr_identification") ?? "base_branch";
   // Option A: for pr-mode the upstream repo IS the handout repo (template_repo) —
@@ -819,14 +830,35 @@ function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }
   // handout-creation edge function points upstream_repo at the handout), shown
   // read-only here, so there is no separate upstream to type or install-check.
   const templateRepo = watch("template_repo");
-  const isPr = submissionMode === "pr";
+
+  // Only fork-based repo modes give students a fork to PR from; no-repo modes
+  // have no submission at all.
+  const noRepo = repoMode === "none" || repoMode === "no_submission";
+  const canPr = repoMode === "template_with_student_forks" || repoMode === "fork_from_prior_assignment";
+  const isPr = canPr && submissionMode === "pr";
+
+  // Keep submission_mode consistent with the repo mode: if the repo mode can't
+  // support PR (template-only or no repo), force 'push' so a stale 'pr' value —
+  // and its upstream/PR config — isn't persisted after switching repo modes.
+  useEffect(() => {
+    if (!canPr && submissionMode !== "push") {
+      setValue("submission_mode", "push", { shouldDirty: true });
+    }
+  }, [canPr, submissionMode, setValue]);
+
+  // No repository → no push and no PR; nothing to configure here.
+  if (noRepo) {
+    return null;
+  }
 
   return (
     <CardRoot>
       <CardHeader>
         <CardTitle>Submission mode</CardTitle>
         <Text fontSize="sm" color="fg.muted">
-          Whether a submission is a push to the student repository or a pull request against an upstream repository.
+          {canPr
+            ? "Whether a submission is a push to the student repository or a pull request against an upstream repository."
+            : "Students get a fresh copy of the handout, so a push to their repository is the submission."}
         </Text>
       </CardHeader>
       <CardBody gap="5px">
@@ -834,12 +866,16 @@ function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }
           <Field
             orientation="horizontal"
             label="Submission mode"
-            helperText="Push: a push to the student repo is the submission (today's default). Pull request: a PR against an upstream/class repo is the submission."
+            helperText={
+              canPr
+                ? "Push: a push to the student repo is the submission (today's default). Pull request: a PR against an upstream/class repo is the submission."
+                : "A push to the student repo is the submission. Pull-request mode requires a fork-based repository configuration."
+            }
           >
             <NativeSelectRoot>
               <NativeSelectField {...register("submission_mode")}>
                 <option value="push">Push to student repository</option>
-                <option value="pr">Pull request against an upstream repository</option>
+                {canPr && <option value="pr">Pull request against an upstream repository</option>}
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
