@@ -227,7 +227,13 @@ export async function wrapRequestHandler(
       if (recordSecurityErrors) {
         Sentry.captureException(e, scope);
       }
-    } else {
+    } else if (!(e instanceof NotFoundError) && !(e instanceof IllegalArgumentError)) {
+      // Generic/unexpected server fault — capture it. Expected client-facing
+      // conditions (NotFoundError → 404, IllegalArgumentError → 400) have their own
+      // clean responses below and must NOT page us via Sentry. Previously they fell
+      // into this branch and were captured — e.g. every read of a repo whose org
+      // hasn't installed the GitHub App (common in e2e against synthetic orgs)
+      // produced a noisy error event.
       Sentry.captureException(e, scope);
     }
     const genericErrorHeaders = {
