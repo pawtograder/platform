@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "35c19daa3125",
+  "session_id": "768dd1f0-0c85-4c4b-b528-35b4ea111a03",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T17:56:04.41254911Z",
+  "branch": "feature/github-org-config",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e7f48d2c5b9e",
+  "token_usage": {
+    "input_tokens": 44717,
+    "cache_creation_tokens": 1688004,
+    "cache_read_tokens": 132415760,
+    "output_tokens": 320538,
+    "api_call_count": 453
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 6118,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 6118,
+      "user_lines_removed": 0,
+      "agent_lines_added": 26,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118
+      }
+    }
+  ]
+}

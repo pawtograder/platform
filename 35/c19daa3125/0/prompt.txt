@@ -1,0 +1,287 @@
+The remote ultraplan session produced a plan and is waiting for approval. Tell the user to open https://claude.ai/code/session_01CSjCuQLDR1S8kFPNmTCn4k?from=cli to review it.
+
+---
+
+Plan is approved. Please implement it completely here.
+
+---
+
+# Org template config, admin dashboard & in-app config editor
+
+## Context
+
+Pawtograder creates per-assignment **handout** and **solution (grader)** repos by
+generating from two **hardcoded** GitHub template repos:
+
+- `assignment-create-handout-repo/index.ts` → `TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout"`
+- `assignment-create-solution-repo/index.ts` → `TEMPLATE_SOLUTION_REPO_NAME = "pawtograder/template-assignment-grader"`
+
+Institutions that run their own GitHub org need their own templates. Today `github_org`
+is just a `text` column on `classes`; there is **no `github_orgs` table** and no way to
+configure templates per org or per class. Separately, the admin portal (`app/admin/*`)
+can create/list/archive classes but gives admins no way to *operate inside* a course or
+inspect per-org GitHub config, and there is no in-app way to edit the GitHub Actions
+workflow files / `pawtograder.yml` that live in those repos (only a read-only
+`repository-get-file` function exists).
+
+This delivers four phases in one effort:
+
+- **A.** Org-level handout/solution template defaults, overridable per class.
+- **B.** Admin per-org dashboard showing each course's effective config.
+- **C.** A Monaco-based editor for workflow & `pawtograder.yml` files with live
+  validation that **commits back** to the repo.
+- **D.** An admin dashboard course-context switcher to "act as an instructor".
+
+Plus a rich set of Playwright e2e tests across all four.
+
+```mermaid
+flowchart TD
+    subgraph DB["Phase A — data + resolution"]
+      GO["new table github_orgs<br/>(default handout/solution template)"]
+      CL["classes +handout_template_repo<br/>+solution_template_repo (override)"]
+      RPC["resolve_class_template_repos(class_id)<br/>override → org default → constant"]
+      GO --> RPC
+      CL --> RPC
+    end
+    subgraph EF["edge functions"]
+      EH["assignment-create-handout-repo"]
+      ES["assignment-create-solution-repo"]
+      WF["new: repository-write-file<br/>(GitHubWrapper.writeFileToRepo)"]
+    end
+    RPC --> EH
+    RPC --> ES
+    subgraph FE["frontend"]
+      B["Phase B<br/>/admin/github-orgs[/[org]]"]
+      C["Phase C<br/>RepoFileEditor (monaco-yaml)"]
+      D["Phase D<br/>/admin course switcher<br/>+ admin-viewing banner"]
+    end
+    GO --> B
+    RPC --> B
+    WF --> C
+    EH -.template editing.-> C
+    D --> CTX["ClassProfileProvider:<br/>admin → provisioned instructor role"]
+```
+
+---
+
+## Phase A — Org & class template configuration
+
+### Migration (`supabase/migrations/<ts>_github_org_templates.sql`)
+
+1. **`github_orgs` table** keyed by org name (matches `classes.github_org`):
+   - `org_name text primary key`
+   - `default_handout_template_repo text not null default 'pawtograder/template-assignment-handout'`
+   - `default_solution_template_repo text not null default 'pawtograder/template-assignment-grader'`
+   - `created_at`, `updated_at` timestamptz, `created_by`, `updated_by` uuid → `auth.users`.
+   - RLS: admins (global `user_roles.role='admin'`) full CRUD; instructors of any class
+     in that org may `SELECT` (use the existing `authorizeforclassinstructor` pattern /
+     an `EXISTS` against `classes` + `user_roles`). Follow the RLS style in
+     `20250820185937_admin_portal_system.sql`.
+
+2. **Class override columns** on `classes`:
+   - `handout_template_repo text null`, `solution_template_repo text null`
+   (NULL = inherit org default). No backfill needed.
+
+3. **Resolution RPC** `resolve_class_template_repos(p_class_id bigint)` returning
+   `(handout_template_repo text, solution_template_repo text)`:
+   `COALESCE(class override, github_orgs default, hardcoded constant)`.
+   `SECURITY DEFINER`, guarded by `authorizeforclassinstructor(p_class_id)`.
+
+4. **Admin RPCs** (mirror `admin_get_classes` / `admin_create_class` in the admin-portal
+   migration; all guard on global admin role):
+   - `admin_get_github_orgs()` → one row per distinct org (union of `github_orgs` and
+     orgs referenced by `classes.github_org`), with defaults and a `course_count`.
+   - `admin_upsert_github_org(p_org_name text, p_handout text, p_solution text)`.
+   - `admin_get_org_courses(p_org_name text)` → courses in the org with their override
+     columns + resolved effective templates (call the resolution logic).
+
+After writing the migration, run `npm run client-local` to regenerate
+`utils/supabase/SupabaseTypes.d.ts` (auto-copied to `_shared/`). **Do not hand-edit it.**
+
+### Edge functions — use resolved templates instead of constants
+
+In `assignment-create-handout-repo/index.ts` and `assignment-create-solution-repo/index.ts`,
+replace the hardcoded `TEMPLATE_*_REPO_NAME` passed to `createRepo(org, name, template, …)`
+with a value resolved via the new RPC. Add a shared helper, e.g.
+`resolveTemplateRepos(supabase, classId)` in `supabase/functions/_shared/GitHubSyncHelpers.ts`,
+that calls `supabase.rpc("resolve_class_template_repos", { p_class_id })` and returns
+`{ handout, solution }`, falling back to the existing constants if the row is missing.
+Keep the constants as the documented fallback default.
+
+---
+
+## Phase B — Admin per-org dashboard
+
+- **Nav:** add a "GitHub Orgs" `Link` in `app/admin/layout.tsx` (alongside Classes/Import/…).
+- **List page** `app/admin/github-orgs/page.tsx` (+ `layout.tsx` metadata): server component
+  calling `admin_get_github_orgs()`; renders a Chakra `Table` (mirror
+  `app/admin/classes/ClassManagementTable.tsx`) of orgs with course counts and the two
+  default template repos, each row linking to the detail page.
+- **Detail page** `app/admin/github-orgs/[org]/page.tsx`: an editor for the org's default
+  handout/solution template repos (client component using `supabase.rpc("admin_upsert_github_org", …)`,
+  `toaster` for feedback — same pattern as `app/admin/signup-welcome/page.tsx`), plus a
+  table from `admin_get_org_courses(org)` listing each course, whether it overrides or
+  inherits each template, the effective value, and a "Manage as instructor" link
+  (Phase D). Embed the Phase C `RepoFileEditor` here so admins can edit the org's template
+  repo files directly.
+
+---
+
+## Phase C — Monaco config-file editor with commit-back
+
+### Write path (edge function + wrapper)
+
+1. **`GitHubWrapper.writeFileToRepo(repoName, path, content, message, sha?, scope?)`**
+   in `supabase/functions/_shared/GitHubWrapper.ts`: `PUT /repos/{owner}/{repo}/contents/{path}`
+   with base64-encoded content and `sha` for updates (omit for create). Mirror the
+   octokit + error handling style of `getFileFromRepo` (lines ~640–667).
+2. **New edge function `supabase/functions/repository-write-file/index.ts`**: copy
+   `repository-get-file/index.ts` structure exactly — `assertUserIsInstructor(courseId, …)`,
+   the same `github_org` ownership check (request org must equal the course's `github_org`,
+   or be `pawtograder`), and rate limiting. Body: `{ courseId, orgName, repoName, path,
+   content, message, sha }`. Add `WriteFileRequest` to `_shared/FunctionTypes.d.ts`
+   (mirror `GetFileRequest`) and a `repositoryWriteFile(...)` wrapper in `lib/edgeFunctions.ts`
+   (mirror `repositoryGetFile`, line ~62).
+
+### Editor component `components/github/RepoFileEditor.tsx`
+
+- Reuse `@monaco-editor/react` + `monaco-yaml` (already deps) following the setup in
+  `lib/gradebookExpressionMonaco.ts`.
+- Props: `{ courseId, orgName, repoName, path }`. Load via `repositoryGetFile`
+  (returns `{ content, sha }`), edit in Monaco, save via `repositoryWriteFile` passing the
+  loaded `sha` (optimistic concurrency; on 409 re-fetch and warn).
+- **Live validation/autocomplete via monaco-yaml `schemas`**, matched by file path:
+  - `pawtograder.yml` → a JSON Schema derived from `PawtograderConfig`
+    (`supabase/functions/_shared/PawtograderYml.d.ts` / `utils/PawtograderYml`). Reuse the
+    existing structural checks in `components/ui/autograder-configuration.tsx`
+    (`validatePawtograderConfig`) for a save-time guard.
+  - `.github/workflows/*.{yml,yaml}` → the public GitHub Actions workflow JSON Schema
+    (bundle a local copy under `lib/schemas/` to avoid a network fetch at runtime; cite
+    SchemaStore in a comment).
+- Optional file picker: list candidate files with the existing `repositoryListFiles`
+  wrapper, filtered to `pawtograder.yml` and `.github/workflows/*`.
+
+### Where it's surfaced
+
+- **Instructor:** a new course-settings page (below) and the assignment **autograder**
+  page (`app/course/[course_id]/manage/assignments/[assignment_id]/autograder/page.tsx`),
+  which already reads `pawtograder.yml` — add an "Edit config files" panel mounting
+  `RepoFileEditor` against the solution `grader_repo`.
+- **Course-level GitHub settings page** `app/course/[course_id]/manage/course/github/page.tsx`:
+  lets instructors set the class-level `handout_template_repo` / `solution_template_repo`
+  overrides (plain `useUpdate` on `classes`, refine pattern as in the autograder page) and
+  shows the effective resolved templates. Add a "GitHub Templates" entry under "Course
+  Settings" in `app/course/[course_id]/dynamicCourseNav.tsx` (instructors_only).
+- **Admin:** mounted in the Phase B org detail page for the org's template repos.
+
+---
+
+## Phase D — Admin "act as instructor" course switcher
+
+Admins already pass DB instructor authorization (`authorizeforclassinstructor` and
+`assertUserIsInstructor` return true for `role='admin'`), but `ClassProfileProvider`
+(`hooks/useClassProfiles.tsx`) shows "You don't have access to this course" when the admin
+has no `user_roles` row for that class, and instructor UI gates on `role.role==='instructor'`.
+
+**Approach (reliable, reuses the entire instructor surface):** idempotently provision the
+admin a real instructor enrollment in the target class on entry.
+
+1. **RPC `admin_enter_course_as_instructor(p_class_id bigint)`** (`SECURITY DEFINER`, guard
+   global admin role): if the admin has no active `user_roles` row for `p_class_id`, create
+   the required `profiles` (private + public) and an `instructor` `user_roles` row for them
+   (follow profile/role creation already done in `admin_create_class` and the enrollment
+   helpers). Idempotent. Audit-log via the existing audit mechanism used by other admin RPCs.
+2. **Admin dashboard:** in `app/admin/AdminDashboardContent.tsx` (and the Phase B org-course
+   table), add a **"Manage as instructor"** action per course that calls the RPC then
+   navigates to `/course/[id]/manage`. Surface a course picker on `/admin` for quick access.
+3. **Admin-viewing banner:** add a small client banner shown in the course manage area when
+   the current user holds a global admin role (detect via `allOfMyRoles` from
+   `useClassProfiles` / a lightweight `useIsAdmin` check). Mount it in
+   `app/course/[course_id]/manage/loading.tsx`'s sibling — i.e. add it to the manage tree;
+   if no manage `layout.tsx` exists, create
+   `app/course/[course_id]/manage/layout.tsx` that renders the banner above `children`.
+
+> Decision note for the implementer: provisioning a real instructor row is chosen over
+> synthesizing a fake role because profile-dependent instructor actions (posting,
+> assignments, audit author) would otherwise break. If polluting staff rosters is a
+> concern, gate these rows out of staff listings with an `EXISTS` admin check rather than
+> changing this approach.
+
+---
+
+## End-to-end tests (Playwright, `tests/e2e/`)
+
+Use `tests/e2e/TestingUtils.ts` helpers (`createClass`, `loginAsUser`, `role: "admin"`
+support, magic-link login). Follow the structure of existing specs such as
+`course-feature-dashboard.test.tsx` and `enrollments.test.tsx`.
+
+- **`github-org-templates.test.tsx`** — Phase A/B:
+  - Admin sets org default handout/solution templates via `/admin/github-orgs/[org]`;
+    `admin_get_github_orgs` reflects them.
+  - Class override on the course GitHub settings page takes precedence; assert
+    `resolve_class_template_repos` returns override > org default > constant for three
+    seeded states (override set / org default only / neither).
+  - Instructor without admin cannot see `/admin/github-orgs` (redirect), confirming RLS.
+- **`repo-file-editor.test.tsx`** — Phase C:
+  - Load `pawtograder.yml` into `RepoFileEditor`, introduce invalid YAML/schema → live
+    error shown and save blocked; fix → save calls `repositoryWriteFile`.
+  - Mock/stub GitHub at the edge-function boundary (the e2e GitHub mock used elsewhere —
+    check `pawtograder-playground`/`END_TO_END_REPO_PREFIX` handling) so writes don't hit
+    real GitHub; assert the write request payload (path, message, sha) is well-formed.
+  - Workflow-file path loads the Actions schema and reports a known invalid key.
+- **`admin-act-as-instructor.test.tsx`** — Phase D:
+  - Admin (not enrolled) clicks "Manage as instructor", lands on `/course/[id]/manage`
+    successfully (no "no access" screen), sees the admin-viewing banner, and can load an
+    instructor-only page (e.g. gradebook). Assert `admin_enter_course_as_instructor` is
+    idempotent on repeat entry.
+  - Non-admin hitting `/admin/*` is redirected (existing admin layout guard).
+
+---
+
+## Verification
+
+1. `npx supabase db reset` (apply migration + seed), then `npm run client-local` and
+   `npx tsc --noEmit` / `npm run typecheck:functions` clean.
+2. `npm run lint` clean on changed files.
+3. Run the new specs: `npx playwright test tests/e2e/github-org-templates.test.tsx
+   tests/e2e/repo-file-editor.test.tsx tests/e2e/admin-act-as-instructor.test.tsx`, plus
+   the existing admin/enrollment specs to catch regressions.
+4. Manual smoke (local Supabase, instructor email contains "instructor"; admin seeded via
+   `role:"admin"`): set an org default, override on a class, confirm a newly created
+   handout/solution repo uses the resolved template; edit a `pawtograder.yml` in the editor
+   and confirm the commit; enter a course from `/admin` as instructor and back out.
+
+## Files (representative)
+
+- New: migration `…_github_org_templates.sql`; `supabase/functions/repository-write-file/index.ts`;
+  `app/admin/github-orgs/{page,layout}.tsx`, `app/admin/github-orgs/[org]/page.tsx`;
+  `app/course/[course_id]/manage/course/github/page.tsx`;
+  `app/course/[course_id]/manage/layout.tsx`; `components/github/RepoFileEditor.tsx`;
+  `lib/schemas/github-workflow.schema.json`; three e2e specs.
+- Edit: `supabase/functions/_shared/GitHubWrapper.ts` (`writeFileToRepo`),
+  `_shared/GitHubSyncHelpers.ts` (`resolveTemplateRepos`), `_shared/FunctionTypes.d.ts`;
+  `assignment-create-handout-repo/index.ts`, `assignment-create-solution-repo/index.ts`;
+  `lib/edgeFunctions.ts`; `app/admin/layout.tsx`; `app/admin/AdminDashboardContent.tsx`;
+  `app/course/[course_id]/dynamicCourseNav.tsx`; the assignment `autograder/page.tsx`.
+
+---
+
+Ultraplan terminated: no approval after 90 minutes
+
+Session: https://claude.ai/code/session_01CSjCuQLDR1S8kFPNmTCn4k?from=cli
+
+---
+
+Remote Ultraplan session failed. Wait for the user's next instructions.
+
+---
+
+noen of our changes landed on a branch, some got deleted, please review and finalize into a commit on a branch
+
+---
+
+ok great please commit nad psuh it hten hopefullyw ew ont lose it agian :)
+
+---
+
+uh what hapepend? we should have branched our work off of origin/staging but it was off of lti?
