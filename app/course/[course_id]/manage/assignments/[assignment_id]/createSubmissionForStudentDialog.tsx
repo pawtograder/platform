@@ -18,10 +18,18 @@ type Option = { label: string; value: string };
  */
 export default function CreateSubmissionForStudentDialog({
   assignmentId,
-  groupConfig
+  groupConfig,
+  onSubmissionCreated
 }: {
   assignmentId: number;
   groupConfig: "individual" | "groups" | "both";
+  /**
+   * Called after a submission is successfully created, so the parent can refresh
+   * its submissions table. A manual submission for a student who previously had
+   * none isn't an update to an existing row, so it doesn't arrive via realtime —
+   * the parent must refetch or the table only reflects it after a page reload.
+   */
+  onSubmissionCreated?: () => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
@@ -132,7 +140,10 @@ export default function CreateSubmissionForStudentDialog({
                     target={target}
                     helperText="Upload the file(s) this student submitted. They will become the student's active submission."
                     buttonLabel="Create submission"
-                    onUploaded={() => {
+                    onUploaded={async () => {
+                      // Refresh the parent table before closing so the new
+                      // submission is visible without a manual page reload.
+                      await onSubmissionCreated?.();
                       setOpen(false);
                       reset();
                     }}

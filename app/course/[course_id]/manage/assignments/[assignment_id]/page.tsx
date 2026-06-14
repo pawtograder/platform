@@ -160,6 +160,15 @@ export default function AssignmentHome() {
               <CreateSubmissionForStudentDialog
                 assignmentId={assignment.id}
                 groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
+                onSubmissionCreated={async () => {
+                  // Pull the just-created submission into the table cache; without
+                  // this the new row only appears after a full page reload.
+                  try {
+                    await tableController?.refetchAll();
+                  } catch (e) {
+                    Sentry.captureException(e);
+                  }
+                }}
               />
             )}
             {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
