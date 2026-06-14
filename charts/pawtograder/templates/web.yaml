@@ -24,6 +24,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
 spec:
   replicas: {{ .Values.web.replicas }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.web) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
@@ -34,10 +35,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.web.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: web
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.web.image) }}
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" .Values.web) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.web.service.port }}
@@ -160,8 +166,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.web)) }}
-      affinity:
-        {{- . | nindent 8 }}
-      {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.web "name" "web") | nindent 6 }}
 {{- end }}

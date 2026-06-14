@@ -1,0 +1,95 @@
+{{- /*
+Restore verification — the half of a backup strategy most installs skip.
+Downloads the NEWEST backup object and runs `pg_restore --list` over it,
+validating download integrity + archive structure (TOC) end-to-end. A
+corrupt, truncated, or empty backup fails this job; without it, a backup
+that has been silently broken for weeks looks identical to a good one
+until the day you actually need it.
+
+This is a structural check, not a full data-restore rehearsal — it needs
+no scratch database and finishes in seconds. Periodically restoring into
+a throwaway namespace is still worth doing by hand before term starts.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.backup.enabled .Values.backup.verify.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "backup-verify") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-verify") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.verify.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.backup.verify.startingDeadlineSeconds | default 1800 }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ .Values.backup.verify.activeDeadlineSeconds | default 1800 }}
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-verify") | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: verify
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              # bash, not sh — see backup.yaml (dash rejects pipefail).
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  # Same runtime mc install as backup.yaml (SHA-pinned).
+                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+                  curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
+                  echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
+                  chmod +x /usr/local/bin/mc
+                  mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+                  # Timestamped names sort lexicographically == chronologically.
+                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1)
+                  if [ -z "$LATEST" ]; then
+                    echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET} — backups are not landing"
+                    exit 1
+                  fi
+                  echo "[verify] newest backup: $LATEST"
+                  mc cp "s3/${S3_BUCKET}/${LATEST}" /tmp/latest.dump
+                  # TOC must parse and contain a sane number of entries.
+                  ENTRIES=$(pg_restore --list /tmp/latest.dump | grep -c '^[0-9]' || true)
+                  echo "[verify] pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /tmp/latest.dump) bytes"
+                  if [ "${ENTRIES}" -lt 10 ]; then
+                    echo "[verify] FATAL: suspiciously small TOC (${ENTRIES} entries) — dump is likely empty/corrupt"
+                    exit 1
+                  fi
+                  # Backup freshness: the newest object must be younger than
+                  # 2x the backup cadence (~daily ⇒ 48h) or backups have
+                  # quietly stopped running/uploading.
+                  TS_PART=$(echo "$LATEST" | sed -E 's/^pawtograder-([0-9TZ]+)\.dump$/\1/')
+                  BACKUP_EPOCH=$(date -u -d "${TS_PART:0:8} ${TS_PART:9:2}:${TS_PART:11:2}:${TS_PART:13:2}" +%s)
+                  AGE_H=$(( ( $(date -u +%s) - BACKUP_EPOCH ) / 3600 ))
+                  echo "[verify] newest backup is ${AGE_H}h old"
+                  if [ "$AGE_H" -gt 48 ]; then
+                    echo "[verify] FATAL: newest backup is older than 48h — the backup CronJob is not producing output"
+                    exit 1
+                  fi
+              env:
+                - name: S3_ENDPOINT
+                  value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ required "backup.s3.bucket is required when backup.enabled=true" .Values.backup.s3.bucket | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_SECRET_ACCESS_KEY
+{{- end }}

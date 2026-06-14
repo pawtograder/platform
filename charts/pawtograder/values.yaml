@@ -17,6 +17,14 @@
 # deployer's own repo). Keep this file generic.
 
 global:
+  # Deployment environment: dev | preview | staging | production.
+  # templates/validations.yaml keys guard rails off this — a `production`
+  # render refuses e2e bypasses, secrets.create/autogenerate, seeding,
+  # resetOnDrift, floating image tags, and unauthenticated Studio ingress;
+  # staging additionally refuses secrets.create and resetOnDrift. Every
+  # real overlay should declare this explicitly.
+  environment: dev
+
   # Public hostname users hit. Used to construct site URLs, OAuth redirects,
   # and the JWT issuer claim. MUST match an ingress entry below.
   hostname: pawtograder.example.com
@@ -36,11 +44,64 @@ global:
   tolerations: []
   affinity: {}
 
+  # Default priorityClassName for every pod; per-component
+  # `<component>.priorityClassName` wins. The chart does not create
+  # PriorityClass resources — reference one your cluster defines.
+  priorityClassName: ""
+
+  # Baseline pod/container security contexts applied to every workload.
+  # A component that defines its own `podSecurityContext` /
+  # `containerSecurityContext` key overrides the global wholesale (set {}
+  # to opt out — see postgres, whose entrypoint must chown + su).
+  # Deliberately conservative: no runAsNonRoot/readOnlyRootFilesystem at
+  # the global level because the upstream images differ in what user they
+  # run as; tighten per component in your overlay where you've verified.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
   # Pull secrets attached to every pod's ServiceAccount.
   imagePullSecrets: []
 
   # Common labels stamped onto every resource.
   commonLabels: {}
+
+# -----------------------------------------------------------------------------
+# PodDisruptionBudgets — one per multi-replica component (minAvailable: 1) so
+# drains / autoscaler events can't evict an entire tier at once. Single-replica
+# components are skipped (a PDB there blocks drains outright). Postgres gets
+# its own opt-in below (postgres.pdb) for the same reason.
+# -----------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# NetworkPolicies. When enabled:
+#   - default-deny ingress to every pod in the release
+#   - allow all traffic between pods of this release (incl. hook Jobs)
+#   - allow the ingress-controller namespace to reach web / kong / studio
+#   - allow the monitoring namespace to scrape any pod (when monitoring.enabled)
+# Egress is left unrestricted (edge functions + web talk to GitHub, Discord,
+# SMTP, LLM APIs, …). Requires a CNI that enforces NetworkPolicy (cilium,
+# calico, …) — with one that doesn't, the objects are inert.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  # Selects the namespace your ingress controller runs in.
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  # Selects the namespace Prometheus scrapes from.
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
+  # policy (e.g. another namespace that consumes the API in-cluster).
+  extraIngressRules: []
 
 # -----------------------------------------------------------------------------
 # Secrets
@@ -167,6 +228,28 @@ postgres:
   # `pawtograder` database name and application role.
   database: postgres
   appRole: pawtograder
+
+  # Give postgres time to checkpoint + flush WAL on shutdown instead of the
+  # 30s default → SIGKILL mid-checkpoint and a long recovery replay on the
+  # next boot.
+  terminationGracePeriodSeconds: 600
+
+  # Voluntary-eviction protection for the single postgres pod. OFF by
+  # default because minAvailable:1 over 1 replica makes `kubectl drain`
+  # hang until you delete the pod manually — enable it in production where
+  # that is exactly the speed bump you want before a DB outage.
+  pdb:
+    enabled: false
+
+  # The supabase/postgres entrypoint starts as root, chowns PGDATA, and
+  # su's to postgres — it needs the default capability set, so the global
+  # drop-ALL containerSecurityContext is opted out here. fsGroup keeps the
+  # PVC group-writable for uid 999.
+  podSecurityContext:
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext: {}
 
   # Resources sized for ~600 concurrent realtime users on a single node.
   # Tune in overlay.
@@ -334,6 +417,13 @@ supavisor:
     limits: { cpu: "1", memory: "1Gi" }
   service:
     port: 6543 # transaction-mode pool
+  terminationGracePeriodSeconds: 45
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -408,6 +498,14 @@ auth:
     limits: { cpu: "500m", memory: "512Mi" }
   service:
     port: 9999
+  terminationGracePeriodSeconds: 30
+  preStopSleepSeconds: 5
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -438,6 +536,15 @@ rest:
     limits: { cpu: "1", memory: "512Mi" }
   service:
     port: 3000
+  terminationGracePeriodSeconds: 30
+  # PostgREST's image is a bare static binary (no /bin/sh) — keep 0.
+  preStopSleepSeconds: 0
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -464,6 +571,9 @@ realtime:
     limits: { cpu: "2", memory: "2Gi" }
   service:
     port: 4000
+  # WebSocket draining: give the BEAM time to close channels cleanly on
+  # SIGTERM instead of the 30s default cutting clients off mid-frame.
+  terminationGracePeriodSeconds: 60
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -505,6 +615,14 @@ storage:
     limits: { cpu: "1", memory: "512Mi" }
   service:
     port: 5000
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 5
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -560,6 +678,10 @@ studio:
     secretName: pawtograder-studio-auth
     realm: "Pawtograder Studio"
     tlsSecretName: ""   # default: same as ingress.tls.secretName
+  # The chart refuses to render studio.ingressEnabled=true without basicAuth
+  # unless you flip this — an explicit "I have another auth layer (VPN,
+  # oauth2-proxy, IP allowlist) in front" acknowledgement.
+  allowUnauthenticatedIngress: false
 
 # -----------------------------------------------------------------------------
 # Edge Functions (Deno)
@@ -722,6 +844,17 @@ edgeFunctions:
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
+  # Long grace: an in-flight autograder request can legitimately run for
+  # tens of seconds; the preStop sleep lets kong/endpoints drop the pod
+  # before SIGTERM reaches the runtime.
+  terminationGracePeriodSeconds: 75
+  preStopSleepSeconds: 10
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -751,6 +884,16 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 10
+  spreadAcrossNodes: true
+  # maxSurge 1 means one extra kong during rollout — budget node memory for
+  # replicas+1 pods (the limit above is deliberately generous).
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -786,6 +929,15 @@ web:
     limits: { cpu: "2", memory: "2Gi" }
   service:
     port: 3000
+
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 10
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
 
   # Extra env vars passed to the Next.js pod. Use this for integration creds
   # that aren't part of the standard secret bundle (e.g. additional LLM keys).
@@ -825,6 +977,11 @@ ingress:
 auditPartitions:
   enabled: true
   schedule: "0 3 * * *" # nightly
+  # Kill the job if the maintenance function wedges on a lock instead of
+  # letting it run forever; skip the run entirely if it couldn't start
+  # within startingDeadlineSeconds of its slot.
+  activeDeadlineSeconds: 900
+  startingDeadlineSeconds: 1800
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
@@ -832,6 +989,10 @@ auditPartitions:
 backup:
   enabled: false
   schedule: "0 4 * * *"
+  # Hard ceiling on a single backup run (dump + upload). Size for your DB —
+  # a run that exceeds this fails LOUDLY rather than hanging forever.
+  activeDeadlineSeconds: 3600
+  startingDeadlineSeconds: 1800
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
@@ -840,6 +1001,16 @@ backup:
     region: "us-east-1"
     bucket: "pawtograder-backups"
   retentionDays: 14
+  # Restore verification: a second CronJob that downloads the NEWEST backup
+  # object and runs `pg_restore --list` over it — validating the archive's
+  # TOC end-to-end (download integrity + dump structure) without needing a
+  # scratch database. A corrupt or truncated backup fails this job, which
+  # otherwise looks identical to a good one until the day you restore.
+  verify:
+    enabled: true
+    schedule: "0 6 * * 1" # weekly, after Monday's backup
+    activeDeadlineSeconds: 1800
+    startingDeadlineSeconds: 1800
   # `mc` (MinIO client) is downloaded at runtime because the
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
@@ -855,6 +1026,10 @@ serviceAccount:
   create: true
   annotations: {}
   name: ""
+  # No pawtograder workload talks to the Kubernetes API, so the shared SA's
+  # token is not mounted into pods. The secrets-bootstrap hook Job uses its
+  # own dedicated SA and opts back in explicitly.
+  automountToken: false
 
 # -----------------------------------------------------------------------------
 # Monitoring (Prometheus scraping + Grafana dashboards + Loki logs)

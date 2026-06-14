@@ -17,6 +17,8 @@
 #   kubectl delete namespace pawtograder-preview-pr${PR_NUMBER}
 
 global:
+  # Activates preview-tier guard rails (see templates/validations.yaml).
+  environment: preview
   # Set per-preview from CI: e.g. pr-123.preview.pawtograder.net
   hostname: REPLACE_PER_PREVIEW.preview.pawtograder.net
   # Keep the API on its own host (prod-like topology), but FLATTEN it to a

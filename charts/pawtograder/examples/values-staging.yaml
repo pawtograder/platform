@@ -20,6 +20,9 @@
 #     on s3.talos.ripley.cloud, with creds in pawtograder-s3.
 
 global:
+  # Activates staging-tier guard rails: refuses secrets.create and
+  # migrations.resetOnDrift at render time (see templates/validations.yaml).
+  environment: staging
   hostname: staging.pawtograder.net
   apiOnSeparateHost: true
   imageRegistry: ""

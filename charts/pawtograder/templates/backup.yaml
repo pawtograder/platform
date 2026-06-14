@@ -9,11 +9,17 @@ metadata:
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
   concurrencyPolicy: Forbid
+  # Skip (and mark missed) a run that couldn't start within this window of
+  # its slot, instead of piling up stale runs after controller downtime.
+  startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 2
+      # Hard ceiling so a wedged dump/upload fails loudly rather than
+      # running forever (Forbid would then silently skip every later run).
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds | default 3600 }}
       template:
         metadata:
           labels:
@@ -35,8 +41,17 @@ spec:
                 - |
                   set -euo pipefail
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
-                  FILE="/tmp/pawtograder-${TS}.sql.gz"
-                  pg_dump --no-owner --no-acl --clean --if-exists | gzip > "$FILE"
+                  # Custom format (-Fc): compressed, and — unlike plain SQL —
+                  # structurally verifiable offline via `pg_restore --list`
+                  # (which the backup-verify CronJob runs weekly against the
+                  # newest object). Restore with:
+                  #   pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>
+                  FILE="/tmp/pawtograder-${TS}.dump"
+                  pg_dump -Fc > "$FILE"
+                  # Verify the archive's TOC parses BEFORE uploading — a
+                  # truncated/corrupt dump must fail here, not on restore day.
+                  pg_restore --list "$FILE" > /dev/null
+                  echo "[backup] dump OK: $(stat -c%s "$FILE") bytes"
                   # Install mc into the supabase/postgres image at runtime.
                   # Ideally mc would be baked into the image (no network
                   # dependency, no MITM surface), but the chart can't
@@ -49,8 +64,25 @@ spec:
                   echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
                   chmod +x /usr/local/bin/mc
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-                  mc cp "$FILE" "s3/${S3_BUCKET}/$(basename $FILE)"
-                  mc ilm rule add --expiry-days {{ .Values.backup.retentionDays }} "s3/${S3_BUCKET}" || true
+                  REMOTE="s3/${S3_BUCKET}/$(basename "$FILE")"
+                  mc cp "$FILE" "$REMOTE"
+                  # Post-upload integrity: the object must exist remotely at
+                  # exactly the local size (catches truncated multipart uploads).
+                  LOCAL_SIZE=$(stat -c%s "$FILE")
+                  REMOTE_SIZE=$(mc stat --json "$REMOTE" | grep -o '"size":[0-9]*' | head -1 | cut -d: -f2)
+                  if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
+                    echo "[backup] FATAL: size mismatch after upload (local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing})"
+                    exit 1
+                  fi
+                  echo "[backup] uploaded + size-verified $REMOTE"
+                  # Retention is enforced via a bucket ILM expiry rule. Adding
+                  # a duplicate errors, so add only when absent — but a bucket
+                  # with NO expiry rule and a failing add is a hard error
+                  # (silent retention loss otherwise).
+                  if ! mc ilm rule ls "s3/${S3_BUCKET}" 2>/dev/null | grep -qi expir; then
+                    mc ilm rule add --expiry-days {{ .Values.backup.retentionDays }} "s3/${S3_BUCKET}"
+                    echo "[backup] created ILM expiry rule ({{ .Values.backup.retentionDays }}d)"
+                  fi
               env:
                 - name: PGHOST
                   value: {{ include "pawtograder.postgres.host" . }}
