@@ -45,6 +45,7 @@ export class DiscussionThreadRealTimeController implements PawtograderRealTimeCo
     this._client = client;
     this._threadRootId = threadRootId;
     this._channelManager = RealtimeChannelManager.getInstance();
+    this._channelManager.bindRealtimeAuth(client);
 
     // Start async initialization immediately
     this._initializationPromise = this._initializeThreadChannel();
