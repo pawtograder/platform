@@ -285,3 +285,11 @@ ok great please commit nad psuh it hten hopefullyw ew ont lose it agian :)
 ---
 
 uh what hapepend? we should have branched our work off of origin/staging but it was off of lti?
+
+---
+
+ok fetch upstream origin/staging make sure to resolve all conflicts pzl
+
+---
+
+@supabase/functions/repository-write-file/ needs to be locked down a LOT more only allow editing of the workflow/config files
