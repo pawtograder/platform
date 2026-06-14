@@ -11,6 +11,11 @@ import type { TestingUser } from "@/tests/e2e/TestingUtils";
 // ingestPrSubmissionFiles takes its E2E_MOCK_GITHUB canned-file path instead of
 // cloning GitHub.
 //
+// Attribution: the handler resolves WHO/WHICH-assignment by looking the PR's
+// HEAD repo (the fork) up in `repositories` — the same authoritative path
+// autograder-create-submission uses — so each fork is registered there in
+// beforeAll. pr.user (the PR opener login) plays no part.
+//
 // Requires (see AGENTS.md): `npx supabase functions serve --env-file .env.local`
 // with E2E_ENABLE=true, E2E_MOCK_GITHUB=true, and EVENTBRIDGE_SECRET set (the
 // webhook authenticates on `Authorization === EVENTBRIDGE_SECRET`). Without
@@ -56,22 +61,27 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
   const RUN_PREFIX = getTestRunPrefix();
   const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const UPSTREAM = `pawtograder-playground/pr-upstream-${SAFE_ID}`;
+  // The PR's HEAD repo is the student/group fork. Attribution is resolved by
+  // looking this up in `repositories` (registered in beforeAll), so each
+  // assignment needs its OWN fork — a fork belongs to exactly one assignment.
   const FORK = `${END_TO_END_REPO_PREFIX}--fork-${SAFE_ID}`;
-  const GH_LOGIN = `e2e-pr-author-${SAFE_ID}`;
+  // pr.user.login is the PR opener; it is irrelevant to attribution now (we key
+  // off the head repo), but the payload always carries it.
+  const PR_OPENER_LOGIN = `e2e-pr-opener-${SAFE_ID}`;
   const PR_NUMBER = 42;
-  // Author-spoofing fixtures: a login that maps to NO user, and a login that
-  // maps to a user who is NOT a student in this assignment's class.
-  const UNKNOWN_LOGIN = `e2e-pr-nobody-${SAFE_ID}`;
-  const OUT_OF_CLASS_LOGIN = `e2e-pr-outsider-${SAFE_ID}`;
-  // branch_convention fixtures: a separate upstream repo + assignment so its
+  // A fork full_name that is intentionally NOT registered in `repositories` —
+  // used to prove a PR from an unknown head repo is ignored.
+  const UNKNOWN_FORK = `${END_TO_END_REPO_PREFIX}--unknown-fork-${SAFE_ID}`;
+  // branch_convention fixtures: a separate upstream repo + assignment + fork so its
   // deliveries can't cross-contaminate the base_branch assignment above.
   const BC_UPSTREAM = `pawtograder-playground/pr-bc-upstream-${SAFE_ID}`;
+  const BC_FORK = `${END_TO_END_REPO_PREFIX}--bc-fork-${SAFE_ID}`;
 
-  // A dedicated upstream + student for the unmerged-closed case. Auto-confirm
+  // A dedicated upstream + student + fork for the unmerged-closed case. Auto-confirm
   // only fires for a submitter's SOLE candidate link, so this case can't reuse
   // `student` (who already has a confirmed PR on `assignmentId`).
   const CLOSED_UPSTREAM = `pawtograder-playground/pr-closed-upstream-${SAFE_ID}`;
-  const CLOSED_LOGIN = `e2e-pr-closed-${SAFE_ID}`;
+  const CLOSED_FORK = `${END_TO_END_REPO_PREFIX}--closed-fork-${SAFE_ID}`;
 
   let classId: number;
   let student: TestingUser;
@@ -92,29 +102,6 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
       name: `PR Webhook Student ${RUN_PREFIX}`,
       email: `e2e-pr-wh-${SAFE_ID}@pawtograder.net`
     });
-    // The PR handler maps pull_request.user.login -> users.github_username.
-    const { error: ghErr } = await supabase
-      .from("users")
-      .update({ github_username: GH_LOGIN })
-      .eq("user_id", student.user_id);
-    expect(ghErr).toBeNull();
-
-    // An out-of-class user: has a github_username (so author->user mapping
-    // succeeds) but is enrolled in a DIFFERENT class, so they are NOT a student
-    // in this assignment's class. The handler must reject their PR at the
-    // user_roles gate, not ingest it. We create them in their own class.
-    const otherCls = await createClass({ name: `E2E PR Webhook Other ${RUN_PREFIX}` });
-    const outsider = await createUserInClass({
-      role: "student",
-      class_id: otherCls.id,
-      name: `PR Webhook Outsider ${RUN_PREFIX}`,
-      email: `e2e-pr-out-${SAFE_ID}@pawtograder.net`
-    });
-    const { error: outErr } = await supabase
-      .from("users")
-      .update({ github_username: OUT_OF_CLASS_LOGIN })
-      .eq("user_id", outsider.user_id);
-    expect(outErr).toBeNull();
 
     const a = await insertAssignment({
       class_id: classId,
@@ -165,11 +152,6 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
       name: `PR Webhook Closed Student ${RUN_PREFIX}`,
       email: `e2e-pr-closed-${SAFE_ID}@pawtograder.net`
     });
-    const { error: closedGhErr } = await supabase
-      .from("users")
-      .update({ github_username: CLOSED_LOGIN })
-      .eq("user_id", closedStudent.user_id);
-    expect(closedGhErr).toBeNull();
 
     const closedA = await insertAssignment({
       class_id: classId,
@@ -189,6 +171,35 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
       })
       .eq("id", closedAssignmentId);
     expect(closedCfgErr).toBeNull();
+
+    // Register each fork in `repositories` — this is what handlePrSubmission
+    // looks up to attribute a PR (by the head repo's full_name) to a
+    // profile/group + assignment. One fork per assignment; UNKNOWN_FORK is left
+    // unregistered on purpose so the "unknown head repo" test can rely on it.
+    const { error: reposErr } = await supabase.from("repositories").insert([
+      {
+        assignment_id: assignmentId,
+        repository: FORK,
+        class_id: classId,
+        profile_id: student.private_profile_id,
+        synced_handout_sha: "none"
+      },
+      {
+        assignment_id: bcAssignmentId,
+        repository: BC_FORK,
+        class_id: classId,
+        profile_id: student.private_profile_id,
+        synced_handout_sha: "none"
+      },
+      {
+        assignment_id: closedAssignmentId,
+        repository: CLOSED_FORK,
+        class_id: classId,
+        profile_id: closedStudent.private_profile_id,
+        synced_handout_sha: "none"
+      }
+    ]);
+    expect(reposErr).toBeNull();
   });
 
   function makePrDetail(action: string, headSha: string, overrides?: Partial<PrDetail["pull_request"]>): PrDetail {
@@ -200,8 +211,9 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
         state: "open",
         draft: false,
         base: { ref: "main", sha: "base-sha-1", repo: { full_name: UPSTREAM } },
+        // Attribution keys off the HEAD repo (the registered fork), not pr.user.
         head: { ref: "feature", sha: headSha, repo: { full_name: FORK } },
-        user: { login: GH_LOGIN },
+        user: { login: PR_OPENER_LOGIN },
         ...overrides
       }
     };
@@ -218,14 +230,14 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
         state: "open",
         draft: false,
         base: { ref: "main", sha: "bc-base-sha", repo: { full_name: BC_UPSTREAM } },
-        head: { ref: headRef, sha: headSha, repo: { full_name: FORK } },
-        user: { login: GH_LOGIN }
+        head: { ref: headRef, sha: headSha, repo: { full_name: BC_FORK } },
+        user: { login: PR_OPENER_LOGIN }
       }
     };
   }
 
   // A PR targeting the dedicated unmerged-closed assignment's upstream repo,
-  // authored by the dedicated student so its link auto-confirms (sole candidate).
+  // from the dedicated student's fork so its link auto-confirms (sole candidate).
   function makeClosedPrDetail(
     action: string,
     headSha: string,
@@ -239,8 +251,8 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
         state: "open",
         draft: false,
         base: { ref: "main", sha: "closed-base-sha", repo: { full_name: CLOSED_UPSTREAM } },
-        head: { ref: "feature", sha: headSha, repo: { full_name: FORK } },
-        user: { login: CLOSED_LOGIN },
+        head: { ref: "feature", sha: headSha, repo: { full_name: CLOSED_FORK } },
+        user: { login: PR_OPENER_LOGIN },
         ...overrides
       }
     };
@@ -349,8 +361,7 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
       makePrDetail("closed", "head-sha-2", {
         state: "closed",
         merged: true,
-        merged_at: new Date().toISOString(),
-        head: { ref: "feature", sha: "head-sha-2", repo: { full_name: FORK } }
+        merged_at: new Date().toISOString()
       }),
       `pr-closed-${SAFE_ID}`
     );
@@ -379,13 +390,17 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
     expect(after.count).toBe(before.count);
   });
 
-  test("author spoofing: a PR whose author maps to NO Pawtograder user is not ingested", async () => {
+  test("attribution: a PR whose HEAD repo is not a registered repository is not ingested", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set.");
     const spoofPr = 8401;
+    // The PR opener (pr.user) is the legit student login, but the head repo is a
+    // fork we never registered in `repositories`. Attribution keys off the head
+    // repo, so with no matching repositories row this must NOT be ingested.
     const res = await deliverPullRequest(
       makePrDetail("opened", "spoof-unknown-sha", {
         number: spoofPr,
-        user: { login: UNKNOWN_LOGIN }
+        head: { ref: "feature", sha: "spoof-unknown-sha", repo: { full_name: UNKNOWN_FORK } },
+        user: { login: PR_OPENER_LOGIN }
       }),
       `pr-spoof-unknown-${SAFE_ID}`
     );
@@ -409,17 +424,21 @@ test.describe("PR-mode webhook ingestion (webhook → submission + files)", () =
     expect(links ?? []).toHaveLength(0);
   });
 
-  test("author spoofing: a PR whose author is NOT a student in this class is not ingested", async () => {
+  test("attribution: a PR whose HEAD repo belongs to a different assignment is not ingested", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set.");
     const spoofPr = 8402;
-    // OUT_OF_CLASS_LOGIN maps to a real user, but that user is a student in a
-    // DIFFERENT class -> the user_roles gate rejects them for this assignment.
+    // BC_FORK is a registered fork, but for the branch_convention assignment
+    // (BC_UPSTREAM), not this base_branch assignment (UPSTREAM). Delivering it
+    // against UPSTREAM, the fork's assignment isn't among UPSTREAM's pr-mode
+    // assignments, so the handler must reject it rather than ingest under the
+    // wrong assignment.
     const res = await deliverPullRequest(
-      makePrDetail("opened", "spoof-outsider-sha", {
+      makePrDetail("opened", "spoof-wrong-assignment-sha", {
         number: spoofPr,
-        user: { login: OUT_OF_CLASS_LOGIN }
+        head: { ref: "feature", sha: "spoof-wrong-assignment-sha", repo: { full_name: BC_FORK } },
+        user: { login: PR_OPENER_LOGIN }
       }),
-      `pr-spoof-outsider-${SAFE_ID}`
+      `pr-spoof-wrong-assignment-${SAFE_ID}`
     );
     expect(res.ok).toBe(true);
 

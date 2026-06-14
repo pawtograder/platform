@@ -1923,12 +1923,20 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const prNumber = pr.number;
   const headSha = pr.head.sha;
   const baseSha = pr.base.sha;
-  const authorLogin = pr.user?.login;
+  // The code being submitted lives in the PR's HEAD repo — the student/group
+  // fork. We attribute the submission by looking that fork up in our
+  // `repositories` table (the same authoritative path autograder-create-submission
+  // uses), NOT by mapping the GitHub login of whoever opened the PR. The
+  // repositories row already carries profile_id / assignment_group_id /
+  // assignment_id, so a group fork's row has assignment_group_id set and the
+  // submission is correctly attributed to the GROUP regardless of which member
+  // opened the PR — no users / user_roles / assignment_groups_members lookups.
+  const headRepo = pr.head.repo?.full_name;
   const prState = prStateFromPullRequest(pr);
 
   // One grep-able prefix (`[PR_INGEST]`) for the whole ingestion path; every
   // skip/return below logs why, so a silent no-op is diagnosable from logs alone.
-  const ctx = `repo=${upstreamRepo} pr=#${prNumber} action=${action} base=${baseRef} head=${headRef} author=${authorLogin ?? "?"}`;
+  const ctx = `repo=${upstreamRepo} pr=#${prNumber} action=${action} base=${baseRef} head=${headRef} headRepo=${headRepo ?? "?"}`;
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -1958,157 +1966,153 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   scope.setTag("pr_submission_repo", upstreamRepo);
   scope.setTag("pr_number", prNumber.toString());
 
-  if (!authorLogin) {
-    console.log(`[PR_INGEST] skip: PR has no author login ${ctx}`);
+  if (!headRepo) {
+    // No head repo (fork deleted, or a same-repo PR with no fork) — there is no
+    // registered student/group repository to attribute to.
+    console.log(`[PR_INGEST] skip: PR has no head repo to attribute (fork deleted?) ${ctx}`);
     return;
   }
-  // PR author -> Pawtograder user.
-  const { data: userRow } = await adminSupabase
-    .from("users")
-    .select("user_id")
-    .ilike("github_username", authorLogin)
+
+  // Resolve the submitter via the head fork's repositories row. A fork belongs
+  // to exactly one assignment, so this row pins both WHO (profile/group) and
+  // WHICH assignment the PR submits to.
+  const { data: repoRow, error: repoRowError } = await adminSupabase
+    .from("repositories")
+    .select("id, profile_id, assignment_group_id, assignment_id, class_id")
+    .eq("repository", headRepo)
     .maybeSingle();
-  if (!userRow) {
-    console.log(`[PR_INGEST] skip: no Pawtograder user with github_username ILIKE '${authorLogin}' ${ctx}`);
-    scope.setTag("github_username", authorLogin);
-    Sentry.captureMessage("PR author has no Pawtograder user", scope);
+  if (repoRowError) {
+    console.log(`[PR_INGEST] error: repositories lookup failed: ${repoRowError.message} ${ctx}`);
+    Sentry.captureException(repoRowError, scope);
     return;
   }
-  const userId = userRow.user_id;
+  if (!repoRow) {
+    console.log(`[PR_INGEST] skip: head repo '${headRepo}' is not a registered student/group repository ${ctx}`);
+    scope.setTag("pr_head_repo", headRepo);
+    Sentry.captureMessage("PR head repo not found in repositories table", scope);
+    return;
+  }
 
-  for (const a of assignments) {
-    // Identification gate: which PRs count as a submission for this assignment.
-    if (a.pr_identification === "branch_convention") {
-      if (!a.pr_branch_convention) {
-        console.log(
-          `[PR_INGEST] skip assignment=${a.id}: branch_convention mode but pr_branch_convention unset ${ctx}`
-        );
-        continue;
-      }
-      let re: RegExp;
-      try {
-        re = new RegExp(a.pr_branch_convention);
-      } catch {
-        console.log(
-          `[PR_INGEST] skip assignment=${a.id}: invalid pr_branch_convention /${a.pr_branch_convention}/ ${ctx}`
-        );
-        continue; // Misconfigured convention — skip rather than crash the webhook.
-      }
-      if (!re.test(headRef)) {
-        console.log(
-          `[PR_INGEST] skip assignment=${a.id}: head '${headRef}' fails convention /${a.pr_branch_convention}/ ${ctx}`
-        );
-        continue;
-      }
-    } else {
-      // base_branch + manual both require targeting the configured base branch.
-      const expectedBase = a.upstream_base_branch ?? "main";
-      if (baseRef !== expectedBase) {
-        console.log(`[PR_INGEST] skip assignment=${a.id}: base '${baseRef}' != expected '${expectedBase}' ${ctx}`);
-        continue;
-      }
+  // The fork's assignment must be one of the pr-mode assignments targeting this
+  // upstream. (Guards against a fork from a different assignment opening a PR
+  // against this upstream.)
+  const a = assignments.find((x) => x.id === repoRow.assignment_id);
+  if (!a) {
+    console.log(
+      `[PR_INGEST] skip: head repo '${headRepo}' belongs to assignment=${repoRow.assignment_id}, not a pr-mode assignment for upstream '${upstreamRepo}' ${ctx}`
+    );
+    return;
+  }
+
+  // Identification gate: does this PR count as a submission for this assignment?
+  if (a.pr_identification === "branch_convention") {
+    if (!a.pr_branch_convention) {
+      console.log(`[PR_INGEST] skip assignment=${a.id}: branch_convention mode but pr_branch_convention unset ${ctx}`);
+      return;
     }
-
-    // Resolve the submitter's private profile in this assignment's class. Any
-    // enrolled member (student, or instructor/grader for testing) can author a
-    // PR submission — staff need to exercise the pr-mode flow on a class without
-    // a separate student account. The submission is attributed to whoever opened
-    // the PR, via their private profile in this class.
-    const { data: role } = await adminSupabase
-      .from("user_roles")
-      .select("private_profile_id")
-      .eq("user_id", userId)
-      .eq("class_id", a.class_id)
-      .in("role", ["student", "instructor", "grader"])
-      .order("role", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (!role?.private_profile_id) {
+    let re: RegExp;
+    try {
+      re = new RegExp(a.pr_branch_convention);
+    } catch {
       console.log(
-        `[PR_INGEST] skip assignment=${a.id}: author '${authorLogin}' has no student/instructor/grader role in class ${a.class_id} ${ctx}`
+        `[PR_INGEST] skip assignment=${a.id}: invalid pr_branch_convention /${a.pr_branch_convention}/ ${ctx}`
       );
-      continue; // Author isn't enrolled in this class.
+      return; // Misconfigured convention — skip rather than crash the webhook.
     }
-    const profileId = role.private_profile_id;
-
-    // If the student is in a group for this assignment, attribute to the group.
-    const { data: groupMember } = await adminSupabase
-      .from("assignment_groups_members")
-      .select("assignment_group_id, assignment_groups!inner(assignment_id)")
-      .eq("profile_id", profileId)
-      .eq("assignment_groups.assignment_id", a.id)
-      .maybeSingle();
-    const groupId = groupMember?.assignment_group_id ?? null;
-
-    // Closing/merging never creates a new version — just reflect the state.
-    if (action === "closed") {
-      console.log(`[PR_INGEST] assignment=${a.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`);
-      const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
-        p_assignment_id: a.id,
-        p_pr_repo: upstreamRepo,
-        p_pr_number: prNumber,
-        p_pr_state: prState
-      });
-      if (stateError) {
-        console.log(`[PR_INGEST] error assignment=${a.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
-        Sentry.captureException(stateError, scope);
-      }
-      continue;
+    if (!re.test(headRef)) {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: head '${headRef}' fails convention /${a.pr_branch_convention}/ ${ctx}`
+      );
+      return;
     }
+  } else {
+    // base_branch + manual both require targeting the configured base branch.
+    const expectedBase = a.upstream_base_branch ?? "main";
+    if (baseRef !== expectedBase) {
+      console.log(`[PR_INGEST] skip assignment=${a.id}: base '${baseRef}' != expected '${expectedBase}' ${ctx}`);
+      return;
+    }
+  }
 
-    const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
+  // Attribution comes straight from the fork's repositories row: a group fork
+  // has assignment_group_id set (profile_id null); an individual fork has
+  // profile_id set.
+  const groupId = repoRow.assignment_group_id ?? null;
+  const profileId = repoRow.profile_id ?? null;
+  if (!groupId && !profileId) {
+    console.log(
+      `[PR_INGEST] skip assignment=${a.id}: head repo '${headRepo}' has neither profile_id nor assignment_group_id ${ctx}`
+    );
+    Sentry.captureMessage("PR head repo has no owner profile or group", scope);
+    return;
+  }
+
+  // Closing/merging never creates a new version — just reflect the state.
+  if (action === "closed") {
+    console.log(`[PR_INGEST] assignment=${a.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`);
+    const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
       p_assignment_id: a.id,
-      p_profile_id: groupId ? undefined : profileId,
-      p_assignment_group_id: groupId ?? undefined,
       p_pr_repo: upstreamRepo,
       p_pr_number: prNumber,
-      p_base_sha: baseSha,
-      p_head_sha: headSha,
-      p_pr_state: prState,
-      p_auto_confirm: a.pr_identification !== "manual"
+      p_pr_state: prState
     });
-    if (ingestError) {
-      console.log(`[PR_INGEST] error assignment=${a.id}: ingest_pr_submission failed: ${ingestError.message} ${ctx}`);
-      Sentry.captureException(ingestError, scope);
-      continue;
+    if (stateError) {
+      console.log(`[PR_INGEST] error assignment=${a.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
+      Sentry.captureException(stateError, scope);
     }
-    console.log(
-      `[PR_INGEST] ingested assignment=${a.id} submission_id=${submissionId ?? "null"} group=${groupId ?? "none"} ${ctx}`
-    );
+    console.log(`[PR_INGEST] done ${ctx}`);
+    return;
+  }
 
-    // ingest_pr_submission only creates the submission row; fetch the PR head
-    // fork's files into submission_files so graders have something to view/diff.
-    // The code lives in the *head fork*, not the upstream repo. Null id => the
-    // link isn't confirmed yet (nothing to ingest).
-    const headRepo = pr.head.repo?.full_name;
-    if (submissionId && headRepo) {
-      try {
-        await ingestPrSubmissionFiles({
-          adminSupabase,
-          submissionId: submissionId as number,
-          classId: a.class_id,
-          profileId: groupId ? null : profileId,
-          groupId: groupId ?? null,
-          headRepo,
-          headSha,
-          scope
-        });
-        console.log(
-          `[PR_INGEST] files ingested assignment=${a.id} submission_id=${submissionId} headRepo=${headRepo} ${ctx}`
-        );
-      } catch (filesError) {
-        // Don't fail the webhook delivery over a file-ingest hiccup; the row
-        // exists and a re-delivery (or confirm) will retry idempotently.
-        console.log(
-          `[PR_INGEST] warn assignment=${a.id}: file ingest failed (row still created): ${filesError instanceof Error ? filesError.message : String(filesError)} ${ctx}`
-        );
-        Sentry.captureException(filesError, scope);
-      }
-    } else {
+  const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
+    p_assignment_id: a.id,
+    p_profile_id: groupId ? undefined : (profileId ?? undefined),
+    p_assignment_group_id: groupId ?? undefined,
+    p_pr_repo: upstreamRepo,
+    p_pr_number: prNumber,
+    p_base_sha: baseSha,
+    p_head_sha: headSha,
+    p_pr_state: prState,
+    p_auto_confirm: a.pr_identification !== "manual"
+  });
+  if (ingestError) {
+    console.log(`[PR_INGEST] error assignment=${a.id}: ingest_pr_submission failed: ${ingestError.message} ${ctx}`);
+    Sentry.captureException(ingestError, scope);
+    return;
+  }
+  console.log(
+    `[PR_INGEST] ingested assignment=${a.id} submission_id=${submissionId ?? "null"} group=${groupId ?? "none"} ${ctx}`
+  );
+
+  // ingest_pr_submission only creates the submission row; fetch the PR head
+  // fork's files into submission_files so graders have something to view/diff.
+  // The code lives in the *head fork*, not the upstream repo. Null id => the
+  // link isn't confirmed yet (nothing to ingest).
+  if (submissionId) {
+    try {
+      await ingestPrSubmissionFiles({
+        adminSupabase,
+        submissionId: submissionId as number,
+        classId: a.class_id,
+        profileId: groupId ? null : profileId,
+        groupId: groupId ?? null,
+        headRepo,
+        headSha,
+        scope
+      });
       console.log(
-        `[PR_INGEST] assignment=${a.id}: skipped file ingest (submission_id=${submissionId ?? "null"} headRepo=${headRepo ?? "null"} — unconfirmed link or no head repo) ${ctx}`
+        `[PR_INGEST] files ingested assignment=${a.id} submission_id=${submissionId} headRepo=${headRepo} ${ctx}`
       );
+    } catch (filesError) {
+      // Don't fail the webhook delivery over a file-ingest hiccup; the row
+      // exists and a re-delivery (or confirm) will retry idempotently.
+      console.log(
+        `[PR_INGEST] warn assignment=${a.id}: file ingest failed (row still created): ${filesError instanceof Error ? filesError.message : String(filesError)} ${ctx}`
+      );
+      Sentry.captureException(filesError, scope);
     }
+  } else {
+    console.log(`[PR_INGEST] assignment=${a.id}: skipped file ingest (submission_id=null — unconfirmed link) ${ctx}`);
   }
   console.log(`[PR_INGEST] done ${ctx}`);
 }
