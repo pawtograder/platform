@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "7d6c3c01cc45",
+  "session_id": "852e25ce-af5a-40ac-af18-884b375cb3a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T18:44:49.966574586Z",
+  "branch": "fix/course-landing-no-role-500",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/course-landing-no-role.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "6189c48ced25",
+  "token_usage": {
+    "input_tokens": 5699,
+    "cache_creation_tokens": 134575,
+    "cache_read_tokens": 4481053,
+    "output_tokens": 39635,
+    "api_call_count": 65
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T18:44:49.95094909Z",
+    "agent_lines": 14,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 14,
+    "total_lines_changed": 19,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}

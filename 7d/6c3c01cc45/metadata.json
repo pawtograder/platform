@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "7d6c3c01cc45",
+  "strategy": "manual-commit",
+  "branch": "fix/course-landing-no-role-500",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/course-landing-no-role.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/6c3c01cc45/0/metadata.json",
+      "transcript": "/7d/6c3c01cc45/0/full.jsonl",
+      "content_hash": "/7d/6c3c01cc45/0/content_hash.txt",
+      "prompt": "/7d/6c3c01cc45/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5699,
+    "cache_creation_tokens": 134575,
+    "cache_read_tokens": 4481053,
+    "output_tokens": 39635,
+    "api_call_count": 65
+  }
+}
