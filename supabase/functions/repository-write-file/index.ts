@@ -4,6 +4,27 @@ import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "..
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
+/**
+ * Allowlist of file paths that instructors may edit via this function.
+ * Only pawtograder.yml and GitHub Actions workflow files are permitted —
+ * this function must never be a general-purpose repo write endpoint.
+ *
+ * Rules are matched against the normalised path (no leading slash, no ".." segments).
+ */
+function isAllowedPath(path: string): boolean {
+  // Normalise: strip leading slash, reject traversal sequences.
+  const normalised = path.replace(/^\/+/, "");
+  if (normalised.includes("..") || normalised.includes("\0")) return false;
+
+  // pawtograder.yml at repo root only.
+  if (normalised === "pawtograder.yml" || normalised === "pawtograder.yaml") return true;
+
+  // GitHub Actions workflow files: .github/workflows/<name>.yml|yaml
+  if (/^\.github\/workflows\/[^/]+\.ya?ml$/.test(normalised)) return true;
+
+  return false;
+}
+
 // Rate limiting storage: Map<fileKey, timestamp[]>
 const rateLimitStore = new Map<string, number[]>();
 const RATE_LIMIT_MAX_REQUESTS = 3;
@@ -69,6 +90,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   if (!message || message.trim() === "") {
     throw new UserVisibleError("A commit message is required", 400);
+  }
+
+  // Enforce path allowlist — only pawtograder.yml and .github/workflows/*.yml are editable.
+  if (!isAllowedPath(path)) {
+    throw new UserVisibleError(
+      `Writing to '${path}' is not permitted. Only pawtograder.yml and .github/workflows/*.yml files may be edited.`,
+      403
+    );
   }
 
   // Check rate limit before making the GitHub API call
