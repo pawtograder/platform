@@ -588,22 +588,18 @@ test.describe("Assignment repo configuration form", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Scenario 8 — Submission mode = PR + the live install-check gate
-  // (form.tsx SubmissionModeSubform, lines ~815-1048).
+  // Scenario 8 — Submission mode = PR (form.tsx SubmissionModeSubform).
   //
-  // The PR subform runs a LIVE checkAppInstallation() against the upstream repo
-  // (the form's `runCheck`, on input blur / "Re-check installation"). Save is
-  // gated on the result via the upstream_repo `validate` closure: it returns an
-  // error string until the check status is "ok". The real edge function calls
-  // GitHub, which isn't deterministic on the local stack (dummy creds), so we
-  // stub the `github-check-app-installation` HTTP call with page.route — the same
-  // edge-fn stubbing seam instructor-commit-history.test.tsx uses — to drive the
-  // two outcomes that matter: an org WITHOUT the app installed blocks Save, and a
-  // reachable repo allows it and round-trips the PR columns.
+  // PR submission mode is only offered for fork-based repo configs (the student
+  // has a fork to open a PR from), so these tests select
+  // `template_with_student_forks` before switching submission_mode to 'pr'. The
+  // upstream repo IS the handout (template_repo), shown read-only — there is no
+  // free-text upstream and no live install-check anymore.
   //
-  // We pair PR mode with repo_mode='none' so Save never creates a handout/solution
-  // repo (no other GitHub call), isolating the install gate + the PR-field
-  // persistence — same no-GitHub-on-save tactic as Scenario 4.
+  // Save with a fork mode triggers assignment-create-handout-repo, which calls
+  // GitHub and isn't deterministic on the local stack, so (as in the repo_mode
+  // persistence scenario) we verify the saved row directly via the admin client
+  // rather than waiting for the post-save redirect.
   // ---------------------------------------------------------------------------
 
   test("PR submission mode shows the upstream is the (read-only) handout repo", async ({ page }) => {
@@ -620,6 +616,10 @@ test.describe("Assignment repo configuration form", () => {
     // Push mode: the PR-only fields are hidden.
     await expect(baseBranchInput).toHaveCount(0);
     await expect(page.getByText("Upstream repository (= handout)")).toHaveCount(0);
+
+    // PR mode is only offered for fork-based repo configs; switch to one so the
+    // 'pr' option becomes available.
+    await page.locator('select[name="repo_mode"]').selectOption("template_with_student_forks");
 
     // Switch to PR mode: base branch, PR-identification, and the "Require an open
     // pull request" toggle appear.
@@ -644,10 +644,10 @@ test.describe("Assignment repo configuration form", () => {
     const title = `PR Round Trip ${RUN_PREFIX}`;
     await page.getByLabel("Title", { exact: false }).fill(title);
     await fillBaselineAssignmentFields(page, `prr-${RUN_PREFIX.slice(-6)}`);
-    // repo_mode 'none' => no handout is created, so template_repo (and thus the
-    // derived upstream_repo) stay null. There is no install gate to clear now —
-    // the upstream is the handout, not a free-text repo.
-    await page.locator('select[name="repo_mode"]').selectOption("none");
+    // PR mode requires a fork-based repo config (the student PRs from their fork).
+    // The upstream is the handout, not a free-text repo, so there is nothing to
+    // type or install-check here.
+    await page.locator('select[name="repo_mode"]').selectOption("template_with_student_forks");
 
     await page.locator('select[name="submission_mode"]').selectOption("pr");
     // The PR-config fields the form still owns:
@@ -682,11 +682,10 @@ test.describe("Assignment repo configuration form", () => {
       data = r.data as unknown as Row;
     }).toPass({ timeout: 30_000 });
     expect(data!.submission_mode).toBe("pr");
-    // Option A: the upstream repo IS the handout (template_repo). none-mode has no
-    // handout, so both are null — and the form no longer writes a free upstream.
-    expect(data!.template_repo).toBeNull();
-    expect(data!.upstream_repo).toBeNull();
-    expect(data!.upstream_repo).toBe(data!.template_repo);
+    // Option A: the upstream repo IS the handout (template_repo), set when the
+    // handout is created — not written directly by the form. We don't assert their
+    // values here: handout creation calls GitHub, which is non-deterministic on the
+    // local stack, so this test scopes itself to the PR-config columns the form owns.
     // The PR-config columns the form still owns round-trip.
     expect(data!.upstream_base_branch).toBe("develop");
     expect(data!.pr_identification).toBe("branch_convention");
