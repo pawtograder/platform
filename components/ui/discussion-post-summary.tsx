@@ -5,6 +5,7 @@ import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import {
   DiscussionThread as DiscussionThreadType,
   DiscussionTopic,
@@ -134,7 +135,7 @@ export function DiscussionPostSummary({
               <HStack>
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={userProfile?.name} />
-                  <Avatar.Image src={userProfile?.avatar_url} alt="" />
+                  <Avatar.Image src={sanitizeImageSrc(userProfile?.avatar_url)} alt="" />
                 </Avatar.Root>
                 <Text textStyle="sm" hideBelow="sm">
                   {userProfile?.name}

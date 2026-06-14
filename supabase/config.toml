@@ -755,3 +755,8 @@ entrypoint = "./functions/mcp-tokens/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/cli/index.ts"
+
+[functions.index-submission]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/index-submission/index.ts"

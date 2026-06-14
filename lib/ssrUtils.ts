@@ -125,23 +125,24 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
 }
 
 export type EffectiveCourseIdentity = UserRoleData & {
-  /** True when a real instructor is viewing the course as a student. */
+  /** True when real staff are viewing the course as a student. */
   isViewingAs: boolean;
   /** The viewer's actual role in the course (unchanged by view-as). */
   realRole: Database["public"]["Enums"]["app_role"];
-  /** The target student's private profile id when viewing as, otherwise null. */
+  /** The target private profile id when viewing as, otherwise null. */
   viewAsProfileId: string | null;
 };
 
 /**
- * Resolve the "effective" identity for a course, accounting for the instructor
+ * Resolve the "effective" identity for a course, accounting for the staff
  * "view as student" cookie. When the real user is an instructor for the course and the
  * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
  * role/profile ids are the student's (so server-branching pages render the student view
- * scoped to that student). Otherwise the viewer's real identity is returned unchanged.
+ * scoped to that student). Staff can also view their own test-assignment submissions as
+ * a synthetic student. Otherwise the viewer's real identity is returned unchanged.
  *
- * Auth/RLS identity is unaffected — the override is purely presentation/scoping. RLS is
- * the backstop that prevents the instructor from writing as the student.
+ * Auth/RLS identity is unaffected — the override is purely presentation/scoping. UI read-only
+ * gates prevent writes while RLS remains the backstop for cross-profile data access.
  */
 export async function getEffectiveCourseIdentity(
   course_id: number,
@@ -159,13 +160,30 @@ export async function getEffectiveCourseIdentity(
     viewAsProfileId: null
   };
 
-  if (realRole.role !== "instructor") {
+  const isStaff = realRole.role === "instructor" || realRole.role === "grader";
+  if (!isStaff) {
     return base;
   }
 
   const cookieStore = await cookies();
   const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
   if (!targetProfileId) {
+    return base;
+  }
+
+  if (targetProfileId === realRole.private_profile_id) {
+    return {
+      role: "student",
+      class_id: realRole.class_id,
+      public_profile_id: realRole.public_profile_id,
+      private_profile_id: realRole.private_profile_id,
+      isViewingAs: true,
+      realRole: realRole.role,
+      viewAsProfileId: realRole.private_profile_id
+    };
+  }
+
+  if (realRole.role !== "instructor") {
     return base;
   }
 
@@ -192,7 +210,7 @@ export async function getEffectiveCourseIdentity(
     public_profile_id: targetRole.public_profile_id,
     private_profile_id: targetRole.private_profile_id,
     isViewingAs: true,
-    realRole: "instructor",
+    realRole: realRole.role,
     viewAsProfileId: targetRole.private_profile_id
   };
 }

@@ -21,6 +21,7 @@ import { useForm } from "react-hook-form";
 import { useCallback, useEffect } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { useInvalidate } from "@refinedev/core";
 
 type ProfileUpdate = Database["public"]["Tables"]["profiles"]["Update"];
@@ -162,7 +163,9 @@ export default function EditUserProfileModal({ userId, onClose }: EditUserProfil
         <HStack gap={4} align="center">
           <Avatar.Root size="lg">
             <Avatar.Fallback name={watchedName || "Username"} />
-            {watchedAvatarUrl && <Avatar.Image src={watchedAvatarUrl} alt={watchedName || "User Avatar"} />}
+            {watchedAvatarUrl && (
+              <Avatar.Image src={sanitizeImageSrc(watchedAvatarUrl)} alt={watchedName || "User Avatar"} />
+            )}
           </Avatar.Root>
           <VStack align="start" gap={1}>
             <Text fontWeight="bold" fontSize="xl">

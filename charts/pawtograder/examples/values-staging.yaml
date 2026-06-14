@@ -174,22 +174,13 @@ edgeFunctions:
     targetCPUUtilizationPercentage: 200
   image:
     repository: ghcr.io/pawtograder/edge-functions
-    # STOPGAP: helm-branch build carrying the self-hosted edge fixes that
-    # `main-latest` lacks: (a) REDIS_URL/ioredis in _shared/Redis.ts; (b)
-    # GitHubWrapper.toPublicSupabaseUrl() (grader signed-URL host rebase, else
-    # the runner hits "ENOTFOUND pawtograder-kong"); (c) the main.ts worker
-    # lifecycle — retry retired workers, 2s CPU soft limit, and lowMemoryMultiplier
-    # early-drop; (d) **eszip bundling** — every function is pre-compiled into a
-    # vendored .eszip at image build, so each isolate loads a ready-to-run module
-    # graph instead of fetching remote deps + running the Deno transpiler per
-    # isolate. Measured: heavy autograder-create-submission dropped from ~150–250MB
-    # to ~16–20MB marginal per isolate (4 isolates: 243MB→100MB), which is what
-    # lets the 256MB cap actually hold under burst — matching supabase.com.
-    # (e) create-submission size guard — reject repos whose zipball/unzipped
-    # size exceeds MAX_SUBMISSION_ZIP_MB/UNZIPPED_MB before the in-isolate unzip,
-    # so a repo with committed build artifacts can't OOM the worker.
-    # Track helm until #741 merges, then main-latest.
-    tag: helm-d3828e1f-eszip-redisfix
+    # Tracks the latest image built from the `staging` branch by
+    # release-images.yml (the deploy-staging job pins the exact staging-<sha>
+    # at deploy time; this default is what manual `redeploy-staging.sh` runs
+    # pick up). All the self-hosted edge fixes that used to require a hand-built
+    # helm-branch image (REDIS_URL/ioredis, signed-URL host rebase, worker
+    # lifecycle limits, eszip bundling, submission size guard) are on staging.
+    tag: staging-latest
   # Worker limits inherit the chart defaults (256 MB isolate, 400s lifetime,
   # 2s/5s CPU), matching supabase.com. With eszip bundling the per-isolate
   # baseline sits ~10x below the 256MB cap, so per_request isolation is cheap
@@ -203,6 +194,10 @@ edgeFunctions:
     - pawtograder-canvas
     - pawtograder-llm
     - pawtograder-e2e
+    # Edge functions read SENTRY_DSN for server-side error reporting
+    # (_shared/HandlerUtils.ts). The secret also carries the frontend
+    # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
+    - pawtograder-sentry
   e2e:
     enabled: true
     mockGitHub: true
@@ -210,14 +205,13 @@ edgeFunctions:
 web:
   image:
     repository: ghcr.io/pawtograder/web
-    # STOPGAP: locally-built image that (a) bakes the CURRENT cluster anon key
-    # (`main-latest` ships a stale baked NEXT_PUBLIC_SUPABASE_ANON_KEY and 401s
-    # browser login, since NEXT_PUBLIC_* is build-time inlined) and (b) ships the
-    # shared Redis-backed Next.js cache handler (cache-handler.cjs) so
-    # revalidateTag() invalidates across all web replicas. Once release-images.yml
-    # (now reads the anon key from the cluster) produces a fresh main-latest with
-    # the cache-handler change merged, switch this back to `main-latest`.
-    tag: staging-manual-95aeb6c3-ssrcache
+    # Tracks the latest image built from the `staging` branch. release-images.yml
+    # reads the CURRENT cluster anon key at build time (so the build-time-inlined
+    # NEXT_PUBLIC_SUPABASE_ANON_KEY can't drift and 401 browser login), and the
+    # shared Redis-backed Next.js cache handler (cache-handler.cjs, so
+    # revalidateTag() invalidates across all web replicas) is on staging. The
+    # deploy-staging job pins the exact staging-<sha> at deploy time.
+    tag: staging-latest
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
@@ -232,10 +226,10 @@ web:
 migrations:
   image:
     repository: ghcr.io/pawtograder/migrations
-    # STOPGAP: helm-branch build — `main-latest` is missing the helm-branch
-    # migrations (workflow_metrics_rpcs, dashboard RPCs, assessment_export_pepper,
-    # rubric visibility, etc.). Track helm until #741 merges, then main-latest.
-    tag: helm-2fe9ca9
+    # Tracks the latest image built from the `staging` branch (the deploy-staging
+    # job pins the exact staging-<sha> at deploy time). Carries all migrations
+    # through staging HEAD.
+    tag: staging-latest
   # Never set resetOnDrift here — staging data is durable, drift means
   # something's wrong and we want the deploy to fail loudly.
 

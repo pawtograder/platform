@@ -15,6 +15,7 @@ import {
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -604,7 +605,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
   return (
     <HStack>
       <Avatar.Root size="xs">
-        <Avatar.Image src={profile?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(profile?.avatar_url)} alt="" />
         <Avatar.Fallback>{profile?.name?.slice(0, 2)}</Avatar.Fallback>
       </Avatar.Root>
       <Text fontSize="sm" color="fg.muted">

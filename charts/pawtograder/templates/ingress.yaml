@@ -28,7 +28,7 @@ spec:
     - hosts:
         - {{ .Values.global.hostname | quote }}
         {{- if .Values.global.apiOnSeparateHost }}
-        - "api.{{ .Values.global.hostname }}"
+        - {{ include "pawtograder.api.hostname" . | quote }}
         {{- end }}
         {{- range .Values.ingress.extraHosts }}
         - {{ . | quote }}
@@ -84,7 +84,7 @@ spec:
                 port:
                   number: {{ .Values.web.service.port }}
     {{- if .Values.global.apiOnSeparateHost }}
-    - host: "api.{{ .Values.global.hostname }}"
+    - host: {{ include "pawtograder.api.hostname" . | quote }}
       http:
         paths:
           - path: /

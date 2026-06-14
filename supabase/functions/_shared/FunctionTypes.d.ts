@@ -163,6 +163,17 @@ export type AddEnrollmentRequest = {
   notify?: boolean;
 };
 
+/** Request to (re)build the code-symbol index for a submission's source files. */
+export type IndexSubmissionRequest = {
+  submission_id: number;
+};
+
+/** Result of indexing: counts of files written to the index and files skipped (binary/unsupported). */
+export type IndexSubmissionResponse = {
+  indexed: number;
+  skipped: number;
+};
+
 export type LiveMeetingForHelpRequestRequest = {
   courseId: number;
   helpRequestId: number;

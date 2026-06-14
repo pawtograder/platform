@@ -9,6 +9,8 @@ import "@uiw/react-md-editor/markdown-editor.css";
 import { ColorModeWatcher } from "@/components/ui/color-mode";
 import { LiveAnnouncer } from "@/components/ui/live-announcer";
 import SkipNav from "@/components/ui/skip-nav";
+import StaleBundleRecovery from "@/components/StaleBundleRecovery";
+import CorruptSessionRecovery from "@/components/CorruptSessionRecovery";
 import { Toaster } from "@/components/ui/toaster";
 const defaultUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
 
@@ -37,6 +39,8 @@ export default async function RootLayout({
             <ClientOnly>
               <Toaster />
               <ColorModeWatcher />
+              <StaleBundleRecovery />
+              <CorruptSessionRecovery />
             </ClientOnly>
             <LiveAnnouncer>{children}</LiveAnnouncer>
           </Theme>

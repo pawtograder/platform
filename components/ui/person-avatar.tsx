@@ -1,4 +1,5 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { Avatar, Box } from "@chakra-ui/react";
 import { Tooltip } from "./tooltip";
 
@@ -8,7 +9,7 @@ export default function PersonName({ uid, size = "sm" }: { uid: string; size?: "
     <Tooltip content={userProfile?.name} portalled={false}>
       <Box display="inline-block">
         <Avatar.Root size={size}>
-          <Avatar.Image src={userProfile?.avatar_url} alt="" />
+          <Avatar.Image src={sanitizeImageSrc(userProfile?.avatar_url)} alt="" />
           <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       </Box>
