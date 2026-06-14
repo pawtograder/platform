@@ -35,7 +35,7 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 });
 
 test.describe("Course landing with no role in the course", () => {
-  test("redirects home instead of crashing with a 500", async ({ page }) => {
+  test("handles a no-role user gracefully instead of crashing with a 500", async ({ page }) => {
     // Surface a server-rendered crash if it reappears: a 500 status on the document, or the
     // distinctive error string leaking into the page.
     const serverErrors: number[] = [];
@@ -50,11 +50,20 @@ test.describe("Course landing with no role in the course", () => {
     await page.goto(`/course/${foreignCourse.id}`);
     await page.waitForLoadState("networkidle");
 
-    // Redirected away from the broken course route (the root may redirect onward, so we only
-    // assert we did not stay on /course/<foreignCourse.id>).
-    expect(page.url()).not.toContain(`/course/${foreignCourse.id}`);
+    // The route must handle a no-role user gracefully. Two outcomes are acceptable and which
+    // one occurs depends on render timing: a server-side redirect can only emit a 3xx before
+    // the streamed response commits, so once streaming has started the layout/page redirect
+    // degrades to a client transition and the client `ClassProfileProvider` renders an in-place
+    // "You don't have access to this course" card instead of navigating home. Either is fine;
+    // a crash is not. If we stayed on the course route, require that graceful card.
+    if (page.url().includes(`/course/${foreignCourse.id}`)) {
+      await expect(
+        page.getByRole("heading", { name: /have access to this course/i }),
+        "a no-role user kept on the course route must see the graceful access-denied card, not a crash"
+      ).toBeVisible();
+    }
 
-    // No 500 document response and no leaked error text.
+    // No 500 document response and no leaked error text — the core regression guard.
     expect(serverErrors, "course landing should not 500 for a user with no role").toEqual([]);
     await expect(page.getByText("No private profile id found")).toHaveCount(0);
   });
