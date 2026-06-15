@@ -1,0 +1,474 @@
+name: Coverage
+
+# Root permissions are read-only. Each job opts into pull-requests:write
+# only as needed (codecov-action posts the comment from the action's own
+# upload; the token does the write, not the workflow GITHUB_TOKEN — but
+# leaving the principle of least privilege at the workflow root).
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+# Cancel in-flight runs when a PR is pushed again.
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jest:
+    name: Jest coverage
+    # Never run for PRs opened from a fork: this job executes on the
+    # self-hosted `pawtograder-ci` runner, and a fork PR would otherwise
+    # run arbitrary attacker-controlled code (npm ci, build) on internal
+    # infrastructure. Pushes to staging/main and same-repo PRs are fine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: pawtograder-ci
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # tests/e2e/TestingUtils.ts calls createAdminClient() at module
+      # load time. Several unit tests import it transitively, so without
+      # these dummies the suite fails to *load*, not just fail
+      # individual tests. Use throwaway values — none of the unit tests
+      # actually talk to Supabase (they mock it).
+      SUPABASE_URL: http://localhost:54321
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+      SUPABASE_ANON_KEY: dummy-anon-key
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: dummy-service-role-key
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # codecov needs base commit for diff
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+      - run: npm ci
+      - name: Run jest with coverage
+        # The pre-existing `tests/unit/llm-hint.test.ts` fails with
+        # `Request is not defined` on jsdom (documented as a known
+        # issue in AGENTS.md). Skip it explicitly so the rest of the
+        # suite + lcov upload runs cleanly. Other genuine failures will
+        # still surface and turn this step yellow.
+        run: |
+          npx jest --coverage \
+            --testPathIgnorePatterns='tests/unit/llm-hint\.test\.ts'
+        continue-on-error: true
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/jest/lcov.info
+          flags: jest
+          fail_ci_if_error: false # v1: informational
+          disable_search: true
+
+  e2e:
+    name: E2E coverage (Next server + client + edge + postgres)
+    # See the `jest` job: skip fork PRs so untrusted code never runs on the
+    # self-hosted runner (this job also does `deno run` with broad
+    # --allow-* and `docker exec`, so the exposure is even larger).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: pawtograder-ci
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # Coverage activation flags read by Next, Playwright, edge bootstrap.
+      COVERAGE: "1"
+      # Browser-visible twin of COVERAGE. The functions-URL override in
+      # utils/supabase/client.ts is gated on this (process.env.COVERAGE is
+      # NOT inlined into the client bundle); without it the browser client
+      # would never reroute to the edge coverage host.
+      NEXT_PUBLIC_COVERAGE: "1"
+      # NODE_V8_COVERAGE is intentionally NOT set: we capture server
+      # coverage via the Inspector path in instrumentation.ts, which
+      # sees vm-loaded scripts. The legacy NODE_V8_COVERAGE dump would
+      # add ~1-2 GB of per-process JSON to /home/runner/_work and the
+      # runner ran out of disk during artifact upload last attempt.
+      COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
+      NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
+      COVERAGE_FUNCTIONS_PORT: "9998"
+      # Match the prod-E2E-mode pattern from AGENTS.md.
+      NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
+      BASE_URL: http://localhost:3001
+      PORT: "3001"
+      # E2E test bypass for edge functions.
+      E2E_ENABLE: "true"
+      END_TO_END_SECRET: not-a-secret
+      EDGE_FUNCTION_SECRET: some-secret-value
+      GITHUB_APP_ID: "1"
+      ENABLE_SIGNUPS: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x # stock Deno 2.x; matches local dev
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # AGENTS.md: must NOT restore from backup — start fresh, then deal
+      # with the binary-submission-files migration that can't run via
+      # supabase start, then create today's audit partition.
+      - name: Start Supabase (fresh)
+        run: |
+          set -euo pipefail
+          # Move the storage-owner-blocked migration aside.
+          mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/binmig.sql
+          npx supabase start --ignore-health-check
+          # Apply as superuser.
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/binmig.sql
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
+            -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
+          mv /tmp/binmig.sql supabase/migrations/20260217000000_binary_submission_files.sql
+          # Create today's audit partition.
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
+            -c "SELECT public.audit_maintain_partitions();"
+
+      - name: Set up plpgsql_check + profiler
+        run: npm run coverage:setup-pg
+
+      - name: Resolve Supabase env (status → SUPABASE_* / NEXT_PUBLIC_*)
+        run: |
+          set -euo pipefail
+          # `supabase status -o env` emits API_URL=, ANON_KEY=,
+          # SERVICE_ROLE_KEY=, DB_URL= etc. Translate to the names
+          # Next.js + our code expect (SUPABASE_URL,
+          # NEXT_PUBLIC_SUPABASE_URL, SUPABASE_ANON_KEY,
+          # NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+          # SUPABASE_DB_URL).
+          npx supabase status -o env 2>/dev/null > /tmp/supabase.env
+          # shellcheck disable=SC1091
+          set -a; . /tmp/supabase.env; set +a
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+            echo "SUPABASE_DB_URL=$DB_URL"
+          } >> "$GITHUB_ENV"
+
+      - name: Write .env.local
+        env:
+          # These are needed inside the heredoc below; they are already
+          # in $GITHUB_ENV from the previous step.
+          SUPABASE_URL: ${{ env.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          # .env.local is read by Next.js (during build + at runtime)
+          # and by Deno --env-file= for the edge bootstrap. Keep it
+          # in sync with $GITHUB_ENV.
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+            echo "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001"
+            echo "E2E_ENABLE=true"
+            echo "END_TO_END_SECRET=not-a-secret"
+            echo "EDGE_FUNCTION_SECRET=some-secret-value"
+            echo "GITHUB_APP_ID=1"
+            echo "ENABLE_SIGNUPS=true"
+            echo "NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL=http://127.0.0.1:9998"
+            echo "COVERAGE=1"
+            echo "NEXT_PUBLIC_COVERAGE=1"
+          } > .env.local
+          # GitHub App private key: GitHubWrapper.ts initializes octokit
+          # at module load time, which requires a valid-shaped RSA PEM
+          # (E2E_ENABLE bypasses the actual GitHub calls). Multi-line
+          # quoted form: Deno's --env-file and Next.js dotenv both
+          # support it; the \n-escaped single-line form is passed to
+          # octokit literally and rejected as malformed PEM.
+          PRIVKEY=$(openssl genrsa 2048 2>/dev/null)
+          {
+            echo "GITHUB_PRIVATE_KEY_STRING=\"$PRIVKEY\""
+          } >> .env.local
+
+      - name: Build Next.js (with sourcemaps for client coverage)
+        env:
+          # We don't disable Sentry sourcemaps — V8 client coverage needs
+          # them to resolve compiled chunks back to .ts/.tsx files.
+          NEXT_DISABLE_SENTRY: "1"
+        # build:coverage bakes the build-cdp Profiler hook into NODE_OPTIONS
+        # *inside* the npm script. (Setting NODE_OPTIONS as step env here does
+        # NOT work: `npm run build` runs `cross-env NODE_OPTIONS=...`, which
+        # overwrites the inherited value and drops the --require.) The hook
+        # captures genuinely-static routes that Next prerenders at build time
+        # and serves from cache at runtime — those never execute under the
+        # runtime Inspector. Dynamic routes (most of the app) render at request
+        # time and are covered by the runtime path instead.
+        run: npm run build:coverage
+
+      - name: Start Next.js
+        run: |
+          set -euo pipefail
+          mkdir -p coverage/edge coverage/client
+          # setsid puts the process in its own process group so we can
+          # SIGINT the whole group (npm → next → workers) cleanly.
+          setsid npm run start > /tmp/next.log 2>&1 < /dev/null &
+          echo $! > /tmp/next.pid
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:3001/ >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Next.js failed to become ready on :3001" >&2
+            tail -c 50000 /tmp/next.log || true
+            exit 1
+          fi
+
+      - name: Pre-cache edge function deps (Deno)
+        # Download every function's deps up front, OUTSIDE the readiness
+        # window below. On a cold runner the bootstrap was still downloading
+        # 47 functions' deps when the 60s health-check window expired, so the
+        # step failed before Playwright ever ran. `deno cache` is not under a
+        # timer, so it can take as long as it needs; the bootstrap then starts
+        # from a warm cache and becomes ready in seconds.
+        run: |
+          deno cache --no-check --import-map=supabase/functions/_coverage/deno.json \
+            supabase/functions/*/index.ts || true
+
+      - name: Start edge function coverage bootstrap
+        run: |
+          set -euo pipefail
+          # setsid → own process group so SIGINT propagates to deno
+          # (which needs to flush V8 coverage on exit).
+          setsid npm run coverage:edge > /tmp/edge.log 2>&1 < /dev/null &
+          echo $! > /tmp/edge.pid
+          ready=0
+          # 120s: deps are pre-cached above, so startup is normally seconds,
+          # but a cold runner importing 47 modules can still be slow.
+          for _ in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:9998/__health__ >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Edge function bootstrap failed to become ready on :9998" >&2
+            tail -c 50000 /tmp/edge.log || true
+            exit 1
+          fi
+          echo "Registered functions:"
+          curl -fsS http://127.0.0.1:9998/__functions__ | head -c 2000
+          echo
+
+      - name: Run Playwright
+        # Chromium only: we only install --with-deps chromium, and V8
+        # client coverage is Chromium-only anyway. Without --project
+        # the webkit project's tests get scheduled and all fail with
+        # "did not run" because the webkit binary is missing.
+        #
+        # continue-on-error: this coverage workflow is v1 informational
+        # only and is upstream of the actual E2E gate
+        # (Standalone E2E Tests workflow). We don't want pre-existing
+        # E2E flakes to block coverage uploads — the failures still
+        # show in the step output (yellow ⚠️). Once the E2E suite is
+        # de-flaked we can flip this back on.
+        #
+        # ARGOS_TOKEN is intentionally NOT passed here. The Argos reporter
+        # in playwright.config.ts uploads screenshots whenever the token is
+        # set. This coverage run is COVERAGE=1 (minification disabled,
+        # different rendering), chromium-only, and a subset of the suite —
+        # uploading it to Argos under the same commit SHA clobbers the real
+        # visual baseline produced by the deploy.yml E2E run (shows up as
+        # mass "removed"/"changed" screenshots). Visual diffing is owned by
+        # deploy.yml; this workflow only collects coverage.
+        run: npx playwright test --project=chromium
+        continue-on-error: true
+
+      - name: Free disk space (pre-stop)
+        if: always()
+        # Multi-GB of test-results/, traces, html-report. Once
+        # Playwright has exited (or errored) we no longer need any
+        # of it for coverage — the lcov files all live under
+        # coverage/. Running this BEFORE the Stop step matters
+        # because Stop's signal-handling shell can't even start if
+        # the disk is already full.
+        run: |
+          du -sh test-results/ playwright-report/ .next/cache/ coverage/ /tmp/ 2>/dev/null || true
+          rm -rf test-results playwright-report .next/cache /tmp/playwright* 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE" || true
+
+      - name: Sanity check source-tree integrity
+        if: always()
+        # One specific file (results/page.tsx) gets enriched to only
+        # ~half its expected line count in CI but not locally. Print
+        # `git status` + a directed wc on that file to figure out if
+        # anything in the workflow corrupted it between checkout and
+        # collect.
+        run: |
+          echo "=== git status --short ==="
+          git status --short | head -50 || true
+          echo
+          for f in "app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results/page.tsx"; do
+            if [[ -f "$f" ]]; then
+              echo "=== $f ==="
+              wc -l "$f"
+              echo "  size bytes:"; wc -c "$f"
+              echo "  md5 disk:   $(md5sum "$f" | cut -d' ' -f1)"
+              echo "  md5 HEAD:   $(git show HEAD:"$f" | md5sum | cut -d' ' -f1)"
+            fi
+          done
+
+      - name: Stop Next.js so V8 coverage flushes
+        if: always()
+        run: |
+          # Step 1: SIGUSR2 to the Next.js process group — that
+          # tells our instrumentation.ts to take precise V8 coverage
+          # (which CAN see Server Component vm-loaded bundles) and
+          # write coverage/server-cdp.json. Unlike SIGINT, this does
+          # not terminate the process.
+          if [[ -f /tmp/next.pid ]]; then
+            pid=$(cat /tmp/next.pid)
+            pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+            if [[ -n "$pgid" ]]; then
+              kill -USR2 -- "-$pgid" 2>/dev/null || true
+            fi
+            # Also signal the Next worker children directly in case
+            # SIGUSR2 didn't propagate via the group.
+            pkill -USR2 -f "next-server" || true
+            # Wait for the dump file to appear, up to 30s. instrumentation.ts
+            # writes a PID-suffixed file (server-cdp-<pid>.json), so glob for
+            # the family rather than the bare name (which never appears).
+            for _ in $(seq 1 30); do
+              if compgen -G 'coverage/server-cdp*.json' >/dev/null; then break; fi
+              sleep 1
+            done
+          fi
+          # Step 2: SIGINT for clean exit so coverage/edge/* (the
+          # deno --coverage output) gets flushed.
+          for pidfile in /tmp/next.pid /tmp/edge.pid; do
+            if [[ -f "$pidfile" ]]; then
+              pid=$(cat "$pidfile")
+              pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+              if [[ -n "$pgid" ]]; then
+                kill -INT -- "-$pgid" 2>/dev/null || true
+              fi
+            fi
+          done
+          # Give Deno time to flush coverage/edge.
+          sleep 5
+          # Belt-and-suspenders: pkill any stragglers that didn't see
+          # the group signal.
+          pkill -INT -f "supabase/functions/_coverage/serve.ts" || true
+          pkill -INT -f "next-server" || true
+          sleep 3
+          echo "Coverage artifacts after stop:"
+          ls -la coverage/server-cdp*.json 2>/dev/null || true
+          # Free disk before artifact upload — Playwright leaves
+          # multi-GB of test-results/ and playwright-report/ that we
+          # don't need once Playwright has exited.
+          du -sh test-results/ playwright-report/ .next/cache/ 2>/dev/null || true
+          rm -rf test-results playwright-report .next/cache 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE" || true
+
+      - name: Collect per-layer coverage
+        if: always()
+        env:
+          # The client converter loads 261 V8 dumps + their source +
+          # source maps; default 4 GB heap OOMs near the end. Bump
+          # to 8 GB to give monocart room.
+          NODE_OPTIONS: --max-old-space-size=8000
+        run: npm run coverage:collect
+
+      - name: Upload coverage artifact (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: |
+            coverage/*.lcov
+            coverage/jest/lcov.info
+            coverage/postgres.log
+            coverage/server-cdp*.json
+            coverage/build-cdp*.json
+            coverage/enrich-*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload to Codecov (next-server)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/server.lcov
+          flags: next-server
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (next-client)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/client.lcov
+          flags: next-client
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (edge-functions)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/edge.lcov
+          flags: edge-functions
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (postgres)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/postgres.lcov
+          flags: postgres
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Capture logs on failure
+        if: failure()
+        run: |
+          echo "===== next.log ====="; tail -c 50000 /tmp/next.log || true
+          echo "===== edge.log ====="; tail -c 50000 /tmp/edge.log || true
+          docker logs --tail 200 supabase_db_pawtograder-platform 2>&1 || true

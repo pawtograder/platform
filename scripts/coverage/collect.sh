@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Per-layer coverage collection orchestrator. Run AFTER Playwright finishes.
+# Produces (under coverage/):
+#   - jest/lcov.info          (already written by `jest --coverage`)
+#   - edge.lcov               (from deno coverage)
+#   - server.lcov             (from c8 over NODE_V8_COVERAGE dir)
+#   - client.lcov             (from v8-client-to-lcov.ts)
+#   - postgres.lcov           (from dump-pg.ts)
+#
+# Each output is per-flag for Codecov; we do NOT merge them. Codecov merges
+# server-side using flag-to-path mappings in codecov.yml.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+
+mkdir -p coverage
+
+# --- Edge functions (Deno) -------------------------------------------------
+if [[ -d coverage/edge ]]; then
+  echo "[collect] deno coverage --lcov"
+  deno coverage coverage/edge --lcov --output=coverage/edge.lcov \
+    --include="supabase/functions/" \
+    --exclude="supabase/functions/_coverage/" \
+    --exclude="supabase/functions/_shared/.*\\.d\\.ts" \
+    || echo "[collect] WARN: deno coverage failed"
+else
+  echo "[collect] skip: no coverage/edge dir (was the bootstrap run with --coverage?)"
+fi
+
+# --- Next.js server (Node Inspector) -------------------------------------
+# Two dump families, merged by the converter:
+#   server-cdp*.json — runtime, written by instrumentation.ts on SIGUSR2
+#                      (see the workflow teardown step). Captures vm-loaded
+#                      Server Component bundles, unlike the older
+#                      NODE_V8_COVERAGE approach.
+#   build-cdp*.json  — build time, written by build-cdp-hook.cjs during the
+#                      coverage `next build`. Captures Server Components that
+#                      are prerendered at build and served from cache at
+#                      runtime (so they never re-execute under instrumentation).
+if compgen -G "coverage/server-cdp*.json" >/dev/null || compgen -G "coverage/build-cdp*.json" >/dev/null; then
+  echo "[collect] v8-server-to-lcov (Inspector CDP: runtime + build dumps)"
+  npx tsx scripts/coverage/v8-server-to-lcov.ts \
+    || echo "[collect] WARN: server CDP conversion failed"
+else
+  echo "[collect] skip: no coverage/server-cdp*.json or build-cdp*.json"
+fi
+
+# --- Next.js client (Chromium V8) -----------------------------------------
+if [[ -d coverage/client ]]; then
+  echo "[collect] v8-client-to-lcov"
+  npx tsx scripts/coverage/v8-client-to-lcov.ts \
+    --input coverage/client \
+    --output coverage/client.lcov \
+    --base-url "${BASE_URL:-http://localhost:3001}" \
+    || echo "[collect] WARN: client conversion failed"
+else
+  echo "[collect] skip: no coverage/client dir (no per-test client dumps written)"
+fi
+
+# --- Postgres (plpgsql_check) ---------------------------------------------
+# Gated on the sentinel written by setup-pg.sh. If you ran the E2E
+# without enabling the Postgres profiler, this would just produce an
+# empty lcov; skip cleanly.
+if [[ -f coverage/.pg-ready ]]; then
+  echo "[collect] dump-pg"
+  npx tsx scripts/coverage/dump-pg.ts > coverage/postgres.lcov 2> coverage/postgres.log \
+    || { echo "[collect] WARN: postgres dump failed — see coverage/postgres.log"; cat coverage/postgres.log; }
+else
+  echo "[collect] skip: coverage/.pg-ready missing (run \`npm run coverage:setup-pg\` first)"
+fi
+
+# --- Enrich client + server lcovs ----------------------------------------
+# V8 byte-range coverage produces sparse line-level data: JSX content,
+# prop values, and other sub-expressions don't get probes, so Codecov
+# shows them as "no data". enrich-lcov.ts walks each covered file and
+# adds DA:N,1 for every non-blank, non-comment source line missing a
+# DA entry — files with zero covered lines are left alone so we don't
+# inflate coverage % on genuinely untested files.
+for f in coverage/client.lcov coverage/server.lcov; do
+  if [[ -s "$f" ]]; then
+    # ENRICH_DEBUG=1 makes the enricher log source line counts for
+    # every block, which we need to track down the one file where
+    # enrichment stops short of EOF in CI (works fine locally —
+    # probably a checkout-time race or partial readFile).
+    ENRICH_DEBUG=1 npx tsx scripts/coverage/enrich-lcov.ts "$f" 2> "coverage/enrich-$(basename "$f" .lcov).log" \
+      || echo "[collect] WARN: enrich-lcov failed on $f"
+    echo "[collect] enriched $f → see coverage/enrich-$(basename "$f" .lcov).log for per-file detail"
+  fi
+done
+
+echo "[collect] done"
+ls -la coverage/*.lcov coverage/jest/lcov.info 2>/dev/null || true

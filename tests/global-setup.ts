@@ -1,8 +1,36 @@
-import { test as base, Page } from "@playwright/test";
+import { test as base, Page, type BrowserContext } from "@playwright/test";
 import { logMagicLink, supabase, TestingUser } from "@/tests/e2e/TestingUtils";
 import { writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+
+// Coverage instrumentation. Active only when COVERAGE=1 is exported in the
+// process running Playwright. In that mode:
+//   - We start V8 JS coverage on the page before each test (Chromium only).
+//   - After each test we stop coverage and dump the V8 inspector blob to
+//     `coverage/client/<testId>.json` for later conversion to lcov.
+//   - We POST /api/__coverage__ on the Next server to ask it to flush its
+//     own NODE_V8_COVERAGE dump (so we get per-test attribution there too).
+// When COVERAGE !== "1" all of this is a no-op so the default test path is
+// untouched.
+const COVERAGE_ENABLED = process.env.COVERAGE === "1";
+const COVERAGE_CLIENT_DIR = path.resolve(process.cwd(), "coverage", "client");
+
+async function flushServerCoverage(baseURL: string | undefined, context: BrowserContext) {
+  if (!baseURL) return;
+  try {
+    const r = await context.request.post(`${baseURL}/api/__coverage__`, { failOnStatusCode: false });
+    if (!r.ok() && r.status() !== 404) {
+      console.warn(`[coverage] server flush ${baseURL}/api/__coverage__ returned ${r.status()}`);
+    }
+  } catch (err) {
+    console.warn(`[coverage] server flush failed:`, err);
+  }
+}
+
+function sanitizeForFs(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
 
 // On failure, dump DB state relevant to the failing test so CI artifacts
 // carry enough context to root-cause data-state flakes that don't reproduce
@@ -318,10 +346,17 @@ const injectVisualTestSetup = async (page: Page) => {
 type E2EFixtures = {
   logMagicLinksOnFailure: (users: (TestingUser | undefined)[]) => Promise<void>;
   _autoFailureDiagnostics: void;
+  _autoCoverage: void;
 };
 
-// Extend the base test to include visual test setup
-export const test = base.extend<E2EFixtures>({
+// Shared fixtures that do NOT touch page rendering: failure diagnostics +
+// (coverage-gated) client-coverage capture. Kept separate from the visual
+// `page` fixture below so functional specs can opt into coverage without
+// inheriting the visual-test CSS — that CSS sets `data-visual-tests`, which
+// `display:none`s transient UI marked `data-visual-test="removed"`
+// (e.g. the toaster in components/ui/toaster.tsx). Functional specs that
+// assert toast visibility would otherwise time out on a hidden element.
+const baseWithCoverage = base.extend<E2EFixtures>({
   logMagicLinksOnFailure: async ({}, use, testInfo) => {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(async (users) => {
@@ -365,6 +400,55 @@ export const test = base.extend<E2EFixtures>({
     },
     { auto: true }
   ],
+  _autoCoverage: [
+    async ({ page, context, baseURL, browserName }, use, testInfo) => {
+      if (!COVERAGE_ENABLED || browserName !== "chromium") {
+        await use();
+        return;
+      }
+      // `resetOnNavigation: false` accumulates across navigations within a
+      // single test so client coverage covers the whole test, not just the
+      // last page.
+      await page.coverage.startJSCoverage({ resetOnNavigation: false }).catch((err) => {
+        console.warn(`[coverage] startJSCoverage failed:`, err);
+      });
+      await use();
+      try {
+        const entries = await page.coverage.stopJSCoverage();
+        mkdirSync(COVERAGE_CLIENT_DIR, { recursive: true });
+        // CRITICAL: strip `source` (and the css-only `text`) before
+        // writing the dump. Each chunk's source text is 1-5 MB for
+        // big Next bundles (Monaco, Chakra, charts). With ~175
+        // entries × 260 tests we'd land 5-13 GB on disk; the runner
+        // ran out of space last time. The converter loads source
+        // from .next/ on demand instead — same pattern as the
+        // server-CDP path.
+        const slim = entries.map((e: { url: string; scriptId?: string; functions?: unknown[] }) => ({
+          url: e.url,
+          scriptId: e.scriptId,
+          functions: e.functions
+        }));
+        writeFileSync(
+          path.join(COVERAGE_CLIENT_DIR, `${sanitizeForFs(testInfo.testId)}.json`),
+          JSON.stringify({ result: slim })
+        );
+      } catch (err) {
+        console.warn(`[coverage] stopJSCoverage failed for ${testInfo.title}:`, err);
+      }
+      await flushServerCoverage(baseURL, context);
+    },
+    { auto: true }
+  ]
+});
+
+// Coverage-flavored test for functional specs (RPC flows, realtime, error
+// paths) that need client-coverage instrumentation but must run WITHOUT the
+// visual-test CSS — they assert live UI like toasts that the CSS hides.
+export const testFunctional = baseWithCoverage;
+
+// Default export: the coverage fixtures PLUS the visual-test page setup.
+// Use this for specs that take visualScreenshot()s.
+export const test = baseWithCoverage.extend({
   page: async ({ page }, use) => {
     await page.route(DICEBEAR_AVATAR_ROUTE, async (route) => {
       await route.fulfill({
