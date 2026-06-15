@@ -35,10 +35,12 @@ export default function CourseGitHubSettingsPage() {
     setLoading(true);
     const supabase = createClient();
     try {
-      const [{ data: classRow }, { data: resolved }] = await Promise.all([
+      const [{ data: classRow, error: classError }, { data: resolved, error: resolvedError }] = await Promise.all([
         supabase.from("classes").select("handout_template_repo,solution_template_repo").eq("id", courseIdNum).single(),
         supabase.rpc("resolve_class_template_repos", { p_class_id: courseIdNum })
       ]);
+      if (classError) throw classError;
+      if (resolvedError) throw resolvedError;
       setHandout(classRow?.handout_template_repo ?? "");
       setSolution(classRow?.solution_template_repo ?? "");
       const row = Array.isArray(resolved) ? resolved[0] : resolved;

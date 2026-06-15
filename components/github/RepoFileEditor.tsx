@@ -55,6 +55,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
   const { colorMode } = useColorMode();
   const monacoRef = useRef<Monaco | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
+  const disposablesRef = useRef<import("monaco-editor").IDisposable[]>([]);
 
   const [currentPath, setCurrentPath] = useState(path);
   const [content, setContent] = useState<string>("");
@@ -186,15 +187,28 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       (window as unknown as { monaco?: Monaco }).monaco = monaco;
       applySchema(monaco);
       refreshMarkers(monaco);
-      monaco.editor.onDidChangeMarkers(() => refreshMarkers(monaco));
-      // The model is swapped when the edited file changes; re-bind schema + markers.
-      editor.onDidChangeModel(() => {
-        applySchema(monaco);
-        refreshMarkers(monaco);
-      });
+      // Track listeners so they can be disposed on unmount/remount (avoids leaking
+      // listeners and duplicate marker-refresh work).
+      disposablesRef.current.forEach((d) => d.dispose());
+      disposablesRef.current = [
+        monaco.editor.onDidChangeMarkers(() => refreshMarkers(monaco)),
+        // The model is swapped when the edited file changes; re-bind schema + markers.
+        editor.onDidChangeModel(() => {
+          applySchema(monaco);
+          refreshMarkers(monaco);
+        })
+      ];
     },
     [applySchema, refreshMarkers]
   );
+
+  // Dispose Monaco listeners on unmount.
+  useEffect(() => {
+    return () => {
+      disposablesRef.current.forEach((d) => d.dispose());
+      disposablesRef.current = [];
+    };
+  }, []);
 
   // Re-apply schema when the selected file changes (a fallback alongside onDidChangeModel,
   // and after the new model's content settles). Deferred so the model swap has committed.

@@ -274,23 +274,37 @@ BEGIN
         RAISE EXCEPTION 'No authenticated user';
     END IF;
 
-    -- Idempotent: if the admin already has an active role in this class, do nothing.
+    -- Idempotent: if the admin already has an active instructor role in this class, nothing
+    -- to do. (A non-instructor active role is upgraded below rather than treated as a no-op.)
     IF EXISTS (
         SELECT 1 FROM public.user_roles ur
-        WHERE ur.user_id = v_user_id AND ur.class_id = p_class_id AND ur.disabled = false
+        WHERE ur.user_id = v_user_id AND ur.class_id = p_class_id
+          AND ur.disabled = false AND ur.role = 'instructor'
     ) THEN
+        RETURN;
+    END IF;
+
+    -- The user_roles INSERT/UPDATE below fires team-sync triggers (sync_staff_github_team)
+    -- that reject when auth.uid() is a non-instructor of the class. Bulk/system enrollment
+    -- avoids this by running as service role (auth.uid() null). We've already verified the
+    -- caller is a global admin, so present a service-role auth context for these writes;
+    -- this also matches how the team sync is enqueued for system-driven enrollment.
+    PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
+    -- If the admin already has an active non-instructor role (student/grader), promote it in
+    -- place. The DB enforces at most one active (user_id, class_id) enrollment
+    -- (idx_user_roles_one_active_per_class), so we must upgrade the existing row rather than
+    -- insert a second active row. The role-change trigger re-syncs the GitHub teams.
+    UPDATE public.user_roles
+    SET role = 'instructor'
+    WHERE user_id = v_user_id AND class_id = p_class_id AND disabled = false;
+    IF FOUND THEN
         RETURN;
     END IF;
 
     SELECT u.name INTO v_name FROM public.users u WHERE u.user_id = v_user_id;
 
-    -- The user_roles INSERT below fires team-sync triggers (sync_staff_github_team) that
-    -- reject when auth.uid() is a non-instructor of the class. Bulk/system enrollment
-    -- avoids this by running as service role (auth.uid() null). We've already verified the
-    -- caller is a global admin, so present a service-role auth context for the inserts;
-    -- this also matches how the team sync is enqueued for system-driven enrollment.
-    PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', true);
-
+    -- No active enrollment: create profiles + a fresh instructor row.
     -- Public + private profiles, mirroring admin_create_class / enrollment helpers.
     INSERT INTO public.profiles (name, class_id, is_private_profile)
     VALUES (v_name, p_class_id, false)
@@ -308,6 +322,15 @@ $$;
 ----------------------------------------------------------------------------------------
 -- 6. Grants
 ----------------------------------------------------------------------------------------
+
+-- Revoke the default PUBLIC execute grant first so these (SECURITY DEFINER) RPCs are not
+-- accidentally exposed to anon/public roles, then grant explicitly.
+REVOKE EXECUTE ON FUNCTION public.resolve_class_template_repos(bigint) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.set_class_template_overrides(bigint, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.admin_get_github_orgs() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.admin_upsert_github_org(text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.admin_get_org_courses(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.admin_enter_course_as_instructor(bigint) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.resolve_class_template_repos(bigint) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.set_class_template_overrides(bigint, text, text) TO authenticated, service_role;
