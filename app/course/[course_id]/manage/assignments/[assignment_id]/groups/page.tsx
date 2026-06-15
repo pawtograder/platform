@@ -198,12 +198,10 @@ function CopyGroupsFromAssignmentDialog({
                   This immediately overwrites the current group assignments for <strong>{assignment.title}</strong> with
                   the groups and memberships from a prior assignment.
                 </Text>
-                <Box border="1px solid" borderColor="border.warning" bg="bg.warning" borderRadius="md" p={3}>
-                  <Text fontWeight="semibold">This action is not staged.</Text>
-                  <Text fontSize="sm">
-                    It runs as soon as you click overwrite and does not wait for the page&apos;s Publish Changes button.
-                  </Text>
-                </Box>
+                <Text fontWeight="semibold">
+                  This action is not staged. It runs as soon as you click overwrite and does not wait for the
+                  page&apos;s Publish Changes button.
+                </Text>
                 <Text fontSize="sm" color="text.muted">
                   Existing groups that become empty are removed when they have no submission history. Groups with
                   submission history are preserved so graded work stays intact.
@@ -415,10 +413,17 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
 
   return (
     <Box>
-      <Text fontSize="sm" color="text.muted">
-        Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
-        <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
-      </Text>
+      <Flex justifyContent="space-between" alignItems="center" gap={3} wrap="wrap">
+        <Text fontSize="sm" color="text.muted">
+          Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
+          <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
+        </Text>
+        <CopyGroupsFromAssignmentDialog
+          assignment={assignment}
+          course_id={course_id}
+          sourceAssignments={sourceAssignments}
+        />
+      </Flex>
       {loading && (
         <Box
           position="fixed"
@@ -618,20 +623,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           Changes will be staged and must be published to take effect
         </Text>
       </Text>
-      <Box mt={4} p={3} border="1px solid" borderColor="border.warning" bg="bg.warning" borderRadius="md">
-        <Heading size="sm">Immediate action</Heading>
-        <Text fontSize="sm" mb={3}>
-          Copying groups from a prior assignment overwrites current group assignments immediately. It is not staged and
-          does not use Publish Changes.
-        </Text>
-        <CopyGroupsFromAssignmentDialog
-          assignment={assignment}
-          course_id={course_id}
-          sourceAssignments={sourceAssignments}
-        />
-      </Box>
       <Heading size="md" pt="10px">
-        Staged options
+        Options
       </Heading>
       <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
         <CreateNewGroup groups={groupsData} assignment={assignment} />
