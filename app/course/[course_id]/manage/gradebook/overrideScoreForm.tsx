@@ -147,7 +147,9 @@ export function OverrideScoreForm({
               >
                 {studentGradebookColumn.released
                   ? "Student visibility: this override is visible to the student now."
-                  : "Student visibility: this override is hidden from the student until this column's dependencies are released."}
+                  : column?.instructor_only
+                    ? "Student visibility: this override is hidden from the student until this staff-only column is released."
+                    : "Student visibility: this override is hidden from the student until this column's dependencies are released."}
               </Text>
             )}
             <HStack gap={0}>

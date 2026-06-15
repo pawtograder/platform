@@ -1771,6 +1771,29 @@ function useSetColumnStudentsReleased(columnId: number) {
 }
 
 /**
+ * One authoritative released flag per enrolled student for a column. Grades carry at most one row
+ * per student here (pickGradebookEntryForCaller already prefers the private row), but we still key
+ * by student and seed the whole roster so a student without a gradebook_column_students row counts
+ * as not-released rather than being invisible. Shared by the header badge and the release modal so
+ * their "N of M" totals agree.
+ */
+function useColumnReleasedByStudent(columnId: number): Map<string, boolean> {
+  const grades = useGradebookColumnGrades(columnId);
+  const students = useAllStudentRoles();
+  return useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const g of grades) {
+      if (!g.student_id) continue;
+      if (!m.has(g.student_id) || g.is_private) m.set(g.student_id, Boolean(g.released));
+    }
+    for (const role of students) {
+      if (role.role === "student" && !m.has(role.private_profile_id)) m.set(role.private_profile_id, false);
+    }
+    return m;
+  }, [grades, students]);
+}
+
+/**
  * Detailed release breakdown for a single (normal) gradebook column: overall released/not totals
  * plus a per class-section and per lab-section breakdown, with inline release/unrelease actions.
  * Surfaces exactly which students can see their grade so instructors can reconcile a "mixed" column.
@@ -1785,26 +1808,9 @@ function ReleaseStatsModal({
   onClose: () => void;
 }) {
   const column = useGradebookColumn(columnId);
-  const grades = useGradebookColumnGrades(columnId);
-  const students = useAllStudentRoles();
   const profileIdToSectionData = useProfileIdToSectionData();
   const { setReleased: apply, isBusy } = useSetColumnStudentsReleased(columnId);
-
-  // One released flag per student. Seed every enrolled student (not just those who already have a
-  // gradebook_column_students row) so the "N of M" denominator and the bulk actions cover the whole
-  // roster; a missing row means the student cannot see the grade yet (not released). Grades may
-  // carry both private and public rows; the private row holds the authoritative release state.
-  const releasedByStudent = useMemo(() => {
-    const m = new Map<string, boolean>();
-    for (const g of grades) {
-      if (!g.student_id) continue;
-      if (!m.has(g.student_id) || g.is_private) m.set(g.student_id, !!g.released);
-    }
-    for (const role of students) {
-      if (role.role === "student" && !m.has(role.private_profile_id)) m.set(role.private_profile_id, false);
-    }
-    return m;
-  }, [grades, students]);
+  const releasedByStudent = useColumnReleasedByStudent(columnId);
 
   const buildGroups = useCallback(
     (kind: "class" | "lab"): ReleaseSectionGroup[] => {
@@ -2024,16 +2030,19 @@ function GradebookColumnHeader({
   // per-student rows (so a per-section release reads as "mixed"); calculated columns follow their
   // dependencies; staff-only columns are hidden until released.
   const isRefetching = useGradebookRefetchStatus();
+  // One authoritative released flag per enrolled student (roster-seeded), shared with the release
+  // modal so the badge's "N of M" matches the modal's breakdown.
+  const releasedByStudent = useColumnReleasedByStudent(column_id);
   const liveReleaseStatus = useMemo((): ReleaseStatus => {
     if (column.instructor_only) return { kind: "staff_only" };
     if (column.score_expression) return { kind: "calculated", allReleased: areAllDependenciesReleased };
-    const total = allGrades.length;
-    const releasedCount = allGrades.filter((g) => g.released).length;
+    const total = releasedByStudent.size;
+    const releasedCount = Array.from(releasedByStudent.values()).filter(Boolean).length;
     if (total === 0) return { kind: column.released ? "released" : "not_released" };
     if (releasedCount === 0) return { kind: "not_released" };
     if (releasedCount === total) return { kind: "released" };
     return { kind: "mixed", released: releasedCount, total };
-  }, [column.instructor_only, column.score_expression, column.released, areAllDependenciesReleased, allGrades]);
+  }, [column.instructor_only, column.score_expression, column.released, areAllDependenciesReleased, releasedByStudent]);
   // During a refetch, useGradebookColumnGrades blanks to [] to avoid showing partial data. For a
   // normal column that would make `total === 0` momentarily fall back to column.released and flip a
   // mixed/released badge to "Not released". Retain the last computed status across that transient

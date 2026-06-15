@@ -1406,7 +1406,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
           .eq("student_id", student.private_profile_id)
           .eq("gradebook_column_id", participationColumn.id);
         if (error) throw new Error(`Failed to read rows: ${error.message}`);
-        expect(rows?.length).toBeGreaterThanOrEqual(2);
+        // Prove both the private and public copies exist (this test verifies private→public
+        // propagation), not just that some row count was reached.
+        const privacyVariants = new Set((rows ?? []).map((r) => r.is_private));
+        expect(privacyVariants).toEqual(new Set([true, false]));
         for (const row of rows ?? []) {
           expect(row.released).toBe(true);
         }
@@ -1433,7 +1436,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
           .eq("student_id", student.private_profile_id)
           .eq("gradebook_column_id", participationColumn.id);
         if (error) throw new Error(`Failed to read rows: ${error.message}`);
-        expect(rows?.length).toBeGreaterThanOrEqual(2);
+        const privacyVariants = new Set((rows ?? []).map((r) => r.is_private));
+        expect(privacyVariants).toEqual(new Set([true, false]));
         for (const row of rows ?? []) {
           expect(row.released).toBe(false);
         }

@@ -228,12 +228,19 @@ class AssignmentsDependencySource extends DependencySourceBase {
     return matchingAssignments.map((assignment) => assignment.slug ?? "ERROR");
   }
   private assignmentMap: Map<number, Assignment> = new Map();
-  // student_id → slug → round → released. Populated alongside value retrieval so
+  // `${class_id}:${student_id}` → slug → round → released. Populated alongside value retrieval so
   // assignment_released() can report student-visibility independent of the private/public calc.
+  // Scoped by class so a multi-class batch can't return one class's release state for another
+  // (private_profile_ids are class-scoped today, but keying a per-class lookup by class is correct
+  // regardless and robust to future changes).
   private releaseMap: Map<string, Map<string, Record<string, boolean>>> = new Map();
 
-  private lookupReleased(student_id: string, slug: string, round: string): boolean {
-    const byRound = this.releaseMap.get(student_id)?.get(slug);
+  private releaseScopeKey(class_id: number, student_id: string): string {
+    return `${class_id}:${student_id}`;
+  }
+
+  private lookupReleased(class_id: number, student_id: string, slug: string, round: string): boolean {
+    const byRound = this.releaseMap.get(this.releaseScopeKey(class_id, student_id))?.get(slug);
     return byRound ? !!byRound[round] : false;
   }
 
@@ -257,7 +264,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
     // student can see the assignment's grade. Literal slugs only (no glob expansion).
     if (function_name === "assignment_released") {
       const checkOne = (k: unknown) =>
-        typeof k === "string" ? this.lookupReleased(context.student_id, k, requestedRound) : false;
+        typeof k === "string" ? this.lookupReleased(class_id, context.student_id, k, requestedRound) : false;
       if (Array.isArray(key)) return key.map(checkOne);
       if (isDenseMatrix(key)) return (key as unknown as Matrix<unknown>).toArray().map(checkOne);
       return checkOne(key);
@@ -389,13 +396,14 @@ class AssignmentsDependencySource extends DependencySourceBase {
         }
       }
       // Record per-round release (public score present ⇒ released) for assignment_released().
-      const studentRelease = this.releaseMap.get(row.student_private_profile_id) ?? new Map();
+      const scopeKey = this.releaseScopeKey(row.class_id, row.student_private_profile_id);
+      const studentRelease = this.releaseMap.get(scopeKey) ?? new Map();
       const roundsReleased: Record<string, boolean> = {};
       for (const round of Object.keys(publicByRound)) {
         roundsReleased[round] = assignmentRoundReleased(publicByRound, round);
       }
       studentRelease.set(slug, roundsReleased);
-      this.releaseMap.set(row.student_private_profile_id, studentRelease);
+      this.releaseMap.set(scopeKey, studentRelease);
 
       results.push({
         key: slug,

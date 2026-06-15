@@ -123,10 +123,13 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     }
     // Clarify student visibility, especially for overrides on calculated columns (issue #499).
     if (column.score_expression && hasOverride) {
+      // A staff-only calculated column stays hidden until the column itself is released, regardless
+      // of dependency release; a normal calculated column becomes visible once its dependencies are.
+      const hiddenReason = column.instructor_only
+        ? "This override is hidden from students until this staff-only column is released."
+        : "This override is hidden from students until this column's dependencies are released.";
       scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}${
-        releasedToStudent
-          ? "This override is visible to students now."
-          : "This override is hidden from students until this column's dependencies are released."
+        releasedToStudent ? "This override is visible to students now." : hiddenReason
       }`;
     } else if (!releasedToStudent && instructorHasScore) {
       scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}Students currently see: In Progress (not yet released).`;
