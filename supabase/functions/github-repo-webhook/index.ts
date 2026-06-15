@@ -2124,11 +2124,17 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     if (octokit) {
       const [upOwner, upName] = upstreamRepo.split("/");
       const headOwner = headRepo.split("/")[0];
-      // Cross-fork compare on the upstream repo: base...headOwner:headRef.
+      // Cross-fork compare on the upstream repo, keyed by IMMUTABLE commit SHAs
+      // (pr.base.sha / pr.head.sha) rather than branch refs. Webhook delivery is
+      // async via EventBridge, so by the time this runs baseRef/headRef may have
+      // advanced or been deleted -- a branch-keyed compare would resolve the
+      // merge-base against a different head than the one we're ingesting. The
+      // compare endpoint accepts SHAs in basehead (head side prefixed with the
+      // fork owner so it resolves within the network).
       const { data: cmp } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
         owner: upOwner,
         repo: upName,
-        basehead: `${baseRef}...${headOwner}:${headRef}`
+        basehead: `${pr.base.sha}...${headOwner}:${headSha}`
       });
       if (cmp?.merge_base_commit?.sha) {
         baseSha = cmp.merge_base_commit.sha;

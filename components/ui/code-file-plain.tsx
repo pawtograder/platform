@@ -4,7 +4,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview, useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Text } from "@chakra-ui/react";
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
@@ -50,7 +50,11 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
     );
 
     const submissionController = useSubmissionController();
-    const review = useActiveSubmissionReview();
+    // Alias to the writable review (matches code-file-monaco): EVERY annotation save
+    // path -- immediate-apply and both dialog flows -- must target the writable
+    // review and read its `released`, never the active (possibly read-only) review,
+    // or comment-required saves go to the wrong review / fail.
+    const review = submissionReview;
     const { private_profile_id, public_profile_id } = useClassProfiles();
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const graderPseudonymousMode = useGraderPseudonymousMode();

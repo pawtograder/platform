@@ -33,7 +33,7 @@ create or replace function public.publish_assignment_group_changes(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
     v_caller_profile_id uuid;
