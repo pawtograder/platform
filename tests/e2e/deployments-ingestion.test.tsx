@@ -124,6 +124,21 @@ test.describe("github_deployments ingestion + RLS", () => {
       .update({ repository: FORK_REPO, head_sha: FORK_SHA, sha: FORK_SHA, submitted_via: "pr" })
       .eq("id", studentASubmissionId);
     expect(subUpdErr).toBeNull();
+
+    // Register the fork in `repositories` as studentA's repo. In production a PR
+    // fork is always registered there (that's how PR submissions are attributed),
+    // and the deployment-read policy Path 3 is scoped to a repository the caller
+    // OWNS (so a fork deployment with a NULL repository_id can't leak to another
+    // student who merely shares the head sha). The deployment row itself keeps
+    // repository_id NULL (set below), so this still exercises the Path 3 fallback.
+    const { error: forkRepoErr } = await supabase.from("repositories").insert({
+      assignment_id: assignmentId,
+      repository: FORK_REPO,
+      class_id: classAId,
+      profile_id: studentA.private_profile_id,
+      synced_handout_sha: "none"
+    });
+    expect(forkRepoErr).toBeNull();
   });
 
   test("ingestion records a deployment for a tracked repo (Path 2 fixture)", async () => {
@@ -235,7 +250,8 @@ test.describe("github_deployments ingestion + RLS", () => {
 
     // Path 2: deployment for studentA's tracked repository.
     expect(ghIds).toContain(trackedDeploymentGhId);
-    // Path 3: fork deployment matched to studentA's submission by head_sha.
+    // Path 3: fork deployment (NULL repository_id) on a repo studentA owns, matched
+    // to studentA's submission by head_sha.
     expect(ghIds).toContain(forkDeploymentGhId);
     // The unrelated deployment is NOT tied to the student -> not visible.
     expect(ghIds).not.toContain(unrelatedDeploymentGhId);

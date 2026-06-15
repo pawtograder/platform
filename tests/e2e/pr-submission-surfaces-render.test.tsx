@@ -44,8 +44,9 @@ import {
 const RUN_PREFIX = getTestRunPrefix();
 const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-// PR submissions can run CI/deploy on the contributor's fork — a repo NOT in
-// `repositories`. The surfaces resolve purely by (repository_name, sha).
+// PR submissions run CI/deploy on the student's fork, which is registered in
+// `repositories` (as in production). The deployments surface resolves by sha and
+// the read policy scopes Path 3 to a repository the caller owns.
 const FORK_REPO = `some-fork/pr-render-${SAFE_ID}`;
 const HEAD_SHA = `head${SAFE_ID}`;
 const BASE_SHA = `base${SAFE_ID}`;
@@ -133,6 +134,19 @@ test.describe("PR submission surfaces (render smoke)", () => {
       })
       .eq("id", prSubmissionId!);
     expect(subUpdErr).toBeNull();
+
+    // Register the fork in `repositories` as the student's repo. In production a PR
+    // fork is always registered there, and the deployment-read policy Path 3 is
+    // scoped to a repository the caller OWNS, so the student can read their fork's
+    // deployment (with a NULL repository_id) on the Deployments page.
+    const { error: forkRepoErr } = await supabase.from("repositories").insert({
+      assignment_id: prAssignment!.id,
+      repository: FORK_REPO,
+      class_id: course.id,
+      profile_id: student!.private_profile_id,
+      synced_handout_sha: "none"
+    });
+    expect(forkRepoErr).toBeNull();
 
     // The push-mode control submission (plain snapshot — no PR fields).
     const pushPrebaked = await insertPreBakedSubmission({

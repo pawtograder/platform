@@ -22,9 +22,11 @@ import type { Database } from "@/utils/supabase/SupabaseTypes";
 //     runs on a fork repo not in `repositories`). The submission owner and class
 //     staff can read them; a student in another class cannot read the submission
 //     at all, so the SECURITY INVOKER RPC yields nothing for them.
-//   * Deployments subpage -> github_deployments filtered by
-//     (repository_name = submission.repository AND sha = coalesce(head_sha, sha)):
-//     the owner + staff read their deployment; an unrelated student does not.
+//   * Deployments subpage -> github_deployments matched by the submission's
+//     commit sha (the page joins by sha alone, since a PR deployment runs on the
+//     fork while submission.repository is the upstream). The read policy scopes a
+//     student to deployments on a repository they own (Path 2/3), so the owner +
+//     staff read their deployment; an unrelated student does not.
 //
 // The UI-render layer is thin (a Chakra table + empty state) over these queries,
 // so we assert at the data/RLS layer here — the same approach as
@@ -48,8 +50,9 @@ test.describe("PR submission surfaces (checks + deployments data/RLS)", () => {
 
   const RUN_PREFIX = getTestRunPrefix();
   const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  // PR submissions can run CI/deploy on the contributor's fork — a repo NOT in
-  // `repositories`. Match purely by (repository_name, sha).
+  // PR submissions run CI/deploy on the student's fork. The fork is registered in
+  // `repositories` (as in production); deployments are matched by sha and gated by
+  // the read policy, which scopes Path 3 to a repository the caller owns.
   const FORK_REPO = `some-fork/pr-surfaces-${SAFE_ID}`;
   const HEAD_SHA = `head${SAFE_ID}`;
   const BASE_SHA = `base${SAFE_ID}`;
@@ -132,6 +135,20 @@ test.describe("PR submission surfaces (checks + deployments data/RLS)", () => {
       })
       .eq("id", submissionId);
     expect(subUpdErr).toBeNull();
+
+    // Register the fork in `repositories` as studentA's repo. In production a PR
+    // fork is always registered there, and the deployment-read policy Path 3 is
+    // scoped to a repository the caller OWNS, so a fork deployment with a NULL
+    // repository_id is visible to its owner but not to another student who merely
+    // shares the head sha.
+    const { error: forkRepoErr } = await supabase.from("repositories").insert({
+      assignment_id: assignmentId,
+      repository: FORK_REPO,
+      class_id: classAId,
+      profile_id: studentA.private_profile_id,
+      synced_handout_sha: "none"
+    });
+    expect(forkRepoErr).toBeNull();
 
     // CI run (workflow_event) on the fork, matching the submission head_sha.
     const { error: weErr } = await supabase.from("workflow_events").insert({
