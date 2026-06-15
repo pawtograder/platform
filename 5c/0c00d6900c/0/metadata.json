@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "5c0c00d6900c",
+  "session_id": "ad197a82-7a28-47cd-bb3a-38db561ad6a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T01:36:37.533611198Z",
+  "branch": "fix-group-timeout",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "supabase/migrations/20260605120000_fix_group_publish_timeout.sql"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "51f60926e0b8",
+  "token_usage": {
+    "input_tokens": 3044,
+    "cache_creation_tokens": 44740,
+    "cache_read_tokens": 727115,
+    "output_tokens": 14909,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T01:36:37.515013471Z",
+    "agent_lines": 37,
+    "agent_removed": 18,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 37,
+    "total_lines_changed": 55,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}
