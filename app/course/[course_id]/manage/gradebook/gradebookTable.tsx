@@ -2001,7 +2001,6 @@ function GradebookColumnHeader({
     if (releasedCount === total) return { kind: "released" };
     return { kind: "mixed", released: releasedCount, total };
   }, [column.instructor_only, column.score_expression, column.released, areAllDependenciesReleased, allGrades]);
-  const isNormalColumn = !column.instructor_only && !column.score_expression;
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
@@ -2525,21 +2524,17 @@ function GradebookColumnHeader({
                   as="button"
                   position="relative"
                   zIndex={100}
-                  cursor={isNormalColumn ? "pointer" : undefined}
+                  cursor="pointer"
                   bg="transparent"
                   border="none"
-                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
-                  onKeyDown={
-                    isNormalColumn
-                      ? (e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setShowReleaseStats(true);
-                          }
-                        }
-                      : undefined
-                  }
-                  aria-label={isNormalColumn ? "View release details" : undefined}
+                  onClick={() => setShowReleaseStats(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setShowReleaseStats(true);
+                    }
+                  }}
+                  aria-label="View release details"
                 >
                   <WrappedTooltip content="Released to all students">
                     <Icon as={FaLockOpen} size="sm" color="green.500" />
@@ -2550,21 +2545,17 @@ function GradebookColumnHeader({
                   as="button"
                   position="relative"
                   zIndex={100}
-                  cursor={isNormalColumn ? "pointer" : undefined}
+                  cursor="pointer"
                   bg="transparent"
                   border="none"
-                  onClick={isNormalColumn ? () => setShowReleaseStats(true) : undefined}
-                  onKeyDown={
-                    isNormalColumn
-                      ? (e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setShowReleaseStats(true);
-                          }
-                        }
-                      : undefined
-                  }
-                  aria-label={isNormalColumn ? "View release details" : undefined}
+                  onClick={() => setShowReleaseStats(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setShowReleaseStats(true);
+                    }
+                  }}
+                  aria-label="View release details"
                 >
                   <WrappedTooltip content="Not released to students">
                     <Icon as={FaLock} size="sm" color="orange.500" />

@@ -95,11 +95,11 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const releasedToStudent = Boolean(studentGradebookColumn?.released);
   const instructorHasScore = studentGradebookColumn?.score != null || studentGradebookColumn?.score_override != null;
   const hasOverride = studentGradebookColumn?.score_override != null;
-  // Student view differs from what staff see: either an unreleased grade staff can see, or an
-  // override on a calculated column that is already visible to the student (issue #499).
-  const studentViewDiffers =
-    canShowGradeFor &&
-    ((!releasedToStudent && instructorHasScore) || (Boolean(column.score_expression) && hasOverride));
+  // Student view differs from what staff see: a (non-staff-only) grade the instructor can see but
+  // the student cannot yet, because it is not released to them. A *released* override is NOT a
+  // difference — the student sees the same overridden value (see the scoreAdvice below; issue #499) —
+  // and instructor-only columns are hidden from students entirely (flagged by their own header badge).
+  const studentViewDiffers = canShowGradeFor && !column.instructor_only && !releasedToStudent && instructorHasScore;
 
   let scoreAdvice: string | undefined = undefined;
   if (canShowGradeFor) {
