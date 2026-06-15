@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "9473f827b460",
+  "session_id": "3f155377-4ec5-4a0e-9985-f3d0aa8f86ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T01:55:09.555306379Z",
+  "branch": "test-coverage",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/coverage.yml",
+    "scripts/coverage/v8-server-to-lcov.ts",
+    "supabase/functions/_coverage/serve.ts",
+    "utils/supabase/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9ce055328bfb",
+  "token_usage": {
+    "input_tokens": 3225,
+    "cache_creation_tokens": 116469,
+    "cache_read_tokens": 1166678,
+    "output_tokens": 54442,
+    "api_call_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T01:55:09.526789022Z",
+    "agent_lines": 17,
+    "agent_removed": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 24,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}
