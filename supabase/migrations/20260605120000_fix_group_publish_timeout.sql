@@ -35,15 +35,8 @@ DECLARE
   v_release timestamptz;
   v_template text;
 BEGIN
-  -- Batch callers (publish_assignment_group_changes) suppress the per-row
-  -- reconciliation and run it once at the end instead. Skip entirely here.
-  IF current_setting('pawtograder.suppress_repo_sync', true) = 'on' THEN
-    IF TG_OP = 'DELETE' THEN
-      RETURN OLD;
-    END IF;
-    RETURN NEW;
-  END IF;
-
+  -- Determine the affected assignment + class up front: needed both for the
+  -- suppression authorization check below and the reconciliation logic.
   IF TG_TABLE_NAME = 'assignment_groups' THEN
     IF TG_OP = 'DELETE' THEN
       v_assignment_id := OLD.assignment_id;
@@ -62,6 +55,21 @@ BEGIN
     END IF;
   ELSE
     RAISE WARNING 'sync_repos_after_assignment_group_change: unexpected table %', TG_TABLE_NAME;
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  -- Batch callers (publish_assignment_group_changes) suppress the per-row
+  -- reconciliation and run it once at the end instead. Only honor the flag for
+  -- instructor-authorized callers: students can mutate assignment_groups_members
+  -- via RLS, so without this check a student could set the GUC to disable repo
+  -- reconciliation / permission sync (e.g. retaining GitHub access after leaving
+  -- a group). Non-instructor callers fall through to normal reconciliation. The
+  -- authorize check is short-circuited so it only runs when the flag is set.
+  IF current_setting('pawtograder.suppress_repo_sync', true) = 'on'
+     AND public.authorizeforclassinstructor(v_class_id) THEN
     IF TG_OP = 'DELETE' THEN
       RETURN OLD;
     END IF;
@@ -212,11 +220,19 @@ BEGIN
     -- ══════════════════════════════════════════════════════════════════════
     FOR v_move IN SELECT * FROM jsonb_array_elements(p_moves_to_fulfill)
     LOOP
-        v_profile_id := (v_move->>'profile_id')::uuid;
-        v_old_gid    := (v_move->>'old_group_id')::bigint;   -- nullable
-        v_new_gid    := (v_move->>'new_group_id')::bigint;   -- nullable
+        -- reset per-iteration so a failed cast below doesn't report a stale id
+        v_profile_id := NULL;
+        v_old_gid    := NULL;
+        v_new_gid    := NULL;
 
         BEGIN
+            -- Cast inside the handler: a malformed UUID/bigint in the payload is
+            -- recorded as a per-move error (v_errors) and the loop continues,
+            -- rather than aborting the whole RPC.
+            v_profile_id := (v_move->>'profile_id')::uuid;
+            v_old_gid    := (v_move->>'old_group_id')::bigint;   -- nullable
+            v_new_gid    := (v_move->>'new_group_id')::bigint;   -- nullable
+
             -- validate group IDs belong to assignment before any mutations
             IF v_old_gid IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM public.assignment_groups
@@ -441,18 +457,21 @@ BEGIN
     FOR v_repo_record IN
         SELECT DISTINCT r.id           AS repo_id,
                r.repository,
-               r.assignment_group_id,
-               r.is_github_ready
+               r.assignment_group_id
         FROM   unnest(v_affected_groups) AS gid(g)
         JOIN   public.repositories r ON r.assignment_group_id = gid.g
         WHERE  NOT (gid.g = ANY(v_deleted_groups))
           AND  NOT (gid.g = ANY(v_preserved_groups))
     LOOP
         BEGIN
-            IF NOT v_repo_record.is_github_ready THEN
-                CONTINUE;  -- will be synced when create_repo finishes
-            END IF;
-
+            -- Enqueue the permission sync even for repos that aren't GitHub-ready
+            -- yet. Newly-created group repos are enqueued via
+            -- enqueue_github_create_repo with an EMPTY collaborator list, so the
+            -- create_repo worker grants no member access — this sync is the only
+            -- path that does. The async worker requeues sync_repo_permissions
+            -- until is_github_ready=true (so it can't race create_repo), then
+            -- applies the real member list. Skipping not-ready repos here would
+            -- strand those members without GitHub access permanently.
             DECLARE
                 v_usernames text[];
             BEGIN
