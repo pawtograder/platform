@@ -26,6 +26,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import UploadSubmissionDialog from "@/components/submissions/upload-submission-dialog";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
@@ -95,6 +96,8 @@ import {
   FaInfo,
   FaQuestionCircle,
   FaRobot,
+  FaRocket,
+  FaTasks,
   FaTimesCircle
 } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -778,9 +781,15 @@ function generateSubmissionMarkdown(
     lines.push(
       `- **Submitted:** ${sub.created_at ? format(new Date(sub.created_at), "MMMM d, yyyy 'at' h:mm:ss a") : "Unknown"}`
     );
-    lines.push(`- **Commit:** \`${sub.sha}\``);
-    lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
-    lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    // No-repo (upload / manual) submissions have null sha/repository — emit the
+    // submission origin instead of bogus `null` commit/link fields.
+    if (sub.sha && sub.repository) {
+      lines.push(`- **Commit:** \`${sub.sha}\``);
+      lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
+      lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    } else {
+      lines.push(`- **Submitted via:** ${sub.submitted_via === "manual" ? "Manual (instructor)" : "File upload"}`);
+    }
     lines.push(
       `- **Status:** ${sub.is_active ? "Active (will be graded)" : sub.is_not_graded ? "Not for grading" : "Historical"}`
     );
@@ -1263,11 +1272,13 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {!historical_submission.grader_results
-                        ? "In Progress"
-                        : historical_submission.grader_results && historical_submission.grader_results.errors
-                          ? "Error"
-                          : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                      {assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission"
+                        ? "N/A"
+                        : !historical_submission.grader_results
+                          ? "In Progress"
+                          : historical_submission.grader_results && historical_submission.grader_results.errors
+                            ? "Error"
+                            : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -1348,8 +1359,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
   const [isStaffDialogOpen, setIsStaffDialogOpen] = useState(false);
   const courseController = useCourseController();
   const isStaff = useIsGraderOrInstructor();
+  const { assignment } = useAssignmentController();
   const { course_id } = useParams();
   const courseId = Number(course_id);
+  // No-repo assignments have no git history; staff get the submission list
+  // (with a "make active" affordance) instead, same as students.
+  const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
 
   // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
@@ -1420,7 +1435,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             colorPalette={hasNewSubmission ? "yellow" : "default"}
           >
             <Icon as={FaHistory} />
-            Commit History
+            {noRepo ? "Submission History" : "Commit History"}
             {hasNewSubmission && <Icon as={FaBell} />}
           </Button>
         </Dialog.Trigger>
@@ -1430,10 +1445,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             <Dialog.Header p={0}>
               <Flex justify="space-between" align="center" gap={4}>
                 <Box>
-                  <Dialog.Title>Commit History</Dialog.Title>
-                  <Text fontSize="sm" color="fg.muted">
-                    {submission.repository}
-                  </Text>
+                  <Dialog.Title>{noRepo ? "Submission History" : "Commit History"}</Dialog.Title>
+                  {!noRepo && (
+                    <Text fontSize="sm" color="fg.muted">
+                      {submission.repository}
+                    </Text>
+                  )}
                 </Box>
                 <Dialog.CloseTrigger asChild>
                   <CloseButton bg="bg" size="sm" />
@@ -1441,7 +1458,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
               </Flex>
             </Dialog.Header>
             <Dialog.Body p={0} pt={3}>
-              {submission.repository_id !== null && (
+              {noRepo ? (
+                <SubmissionHistoryContents submission={submission} />
+              ) : submission.repository_id !== null && submission.repository !== null ? (
                 <StaffCommitHistory
                   courseId={courseId}
                   assignmentId={submission.assignment_id}
@@ -1451,6 +1470,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                   assignmentGroupId={submission.assignment_group_id}
                   currentSubmissionId={submission.id}
                 />
+              ) : (
+                <Text fontSize="sm" color="fg.muted">
+                  {submission.submitted_via === "manual"
+                    ? "No commit history available for manually-graded submissions."
+                    : "No commit history available for upload submissions."}
+                </Text>
               )}
             </Dialog.Body>
           </Dialog.Content>
@@ -2193,8 +2218,25 @@ function Comments() {
   );
 }
 
+/**
+ * Read-only "Required PR open" indicator for the grading view. Shown only when the assignment
+ * has `require_pr_open` enabled (a configured-but-otherwise-unconsumed signal): a PR is considered
+ * open when its `pr_state` is `open` or `reopened`. Purely informational — it does not affect the
+ * computed grade.
+ */
+function RequiredPrOpenIndicator({ prState }: { prState: string | null }) {
+  const isOpen = prState === "open" || prState === "reopened";
+  return (
+    <HStack gap={1} fontSize="sm" color={isOpen ? "fg.success" : "fg.error"}>
+      <Icon as={isOpen ? FaCheckCircle : FaTimesCircle} />
+      <Text>Required PR open: {isOpen ? "Yes" : "No"}</Text>
+    </HStack>
+  );
+}
+
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
@@ -2207,7 +2249,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // else files.
   const defaultSubPage =
     !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
-  const activeSubPage = explicitSubPage ?? defaultSubPage;
+  // repo-analytics / checks / deployments aren't returned by
+  // getSubmissionFilesOrResultsTab; on those pages don't fall back to the default
+  // core tab, or it would render a second highlighted tab alongside the real one.
+  const isNonCoreSubPage = /\/(repo-analytics|checks|deployments)(?:\/|$|\?|#)/.test(pathname);
+  const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2220,6 +2266,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   });
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
+  // Checks/Deployments are PR-mode surfaces — only relevant when this submission
+  // came from a PR (has a pr_number/pr_state) or the assignment is configured in
+  // PR submission mode. Keeps these tabs off the (majority) push-mode submissions
+  // rather than cluttering every submission. Mirrors how repo-analytics is gated.
+  const isPrSubmission =
+    submission.pr_number != null || submission.pr_state != null || assignment?.submission_mode === "pr";
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2309,20 +2361,34 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </Text>
               )}
             </HStack>
+            {submission.sha && submission.repository && (
+              <HStack gap={1} flexWrap="wrap">
+                <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
+                  Commit {submission.sha.substring(0, 7)}
+                </Link>
+                <Link
+                  href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
+                  target="_blank"
+                >
+                  (Download)
+                </Link>
+              </HStack>
+            )}
+            {/* Most recent Pawtograder submission time, visible without opening Submission History
+                (#103b). Not sha-dependent, so it shows for PR / no-repo submissions too. */}
             <HStack gap={1} flexWrap="wrap">
-              <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
-                Commit {submission.sha.substring(0, 7)}
-              </Link>
-              <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">
-                (Download)
-              </Link>
-              {/* Most recent Pawtograder submission time, visible without opening Submission History (#103b). */}
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
                 <Text color="fg.muted" data-visual-test="blackout">
                   · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
                 </Text>
               </Tooltip>
             </HStack>
+            {/* Read-only grading signal: when the assignment requires an open PR, surface whether
+                this submission's PR is currently open. Derived entirely from already-loaded fields
+                (submission.pr_state + assignment.require_pr_open) — does NOT change grade computation. */}
+            {isGraderOrInstructor && assignment?.submission_mode === "pr" && assignment?.require_pr_open && (
+              <RequiredPrOpenIndicator prState={submission.pr_state} />
+            )}
           </VStack>
         </Box>
         {submission.is_not_graded && (
@@ -2365,6 +2431,30 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {assignment.repo_mode === "none" && (
+            <UploadSubmissionDialog
+              assignmentId={assignment.id}
+              // Staff submit on behalf of the submission's owner/group; the
+              // student (viewing their own submission) submits for themselves.
+              target={
+                isGraderOrInstructor
+                  ? submission.assignment_group_id
+                    ? { assignment_group_id: submission.assignment_group_id }
+                    : submission.profile_id
+                      ? { profile_id: submission.profile_id }
+                      : undefined
+                  : undefined
+              }
+              triggerLabel={isGraderOrInstructor ? "Upload submission for student" : "Upload new submission"}
+              helperText={
+                isGraderOrInstructor
+                  ? "Upload the file(s) this student submitted. They will become the student's active submission."
+                  : "Upload file(s) for a new submission. This will become your active submission."
+              }
+              buttonLabel={isGraderOrInstructor ? "Create submission" : "Upload submission"}
+              onUploaded={(id) => router.push(`/course/${course_id}/assignments/${assignment.id}/submissions/${id}`)}
+            />
+          )}
           {/* ExportSubmissionMetadataButton is instructor-only: UI gate + RLS policies enforce instructor-only access */}
           {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
@@ -2399,6 +2489,22 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Files
           </Button>
         </NextLink>
+        {isPrSubmission && (
+          <>
+            <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
+              <Button variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+                <Icon as={FaTasks} />
+                Checks
+              </Button>
+            </NextLink>
+            <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
+              <Button variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+                <Icon as={FaRocket} />
+                Deployments
+              </Button>
+            </NextLink>
+          </>
+        )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
           <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
             <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>

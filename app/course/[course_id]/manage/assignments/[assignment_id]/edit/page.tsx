@@ -92,6 +92,40 @@ export default function EditAssignment() {
         values.allow_early = undefined;
         values.deadline_offset = undefined;
         values.self_review_release_at = undefined;
+        // Coerce repo-config fields to satisfy the assignments_no_protection_when_no_repo
+        // and assignments_source_assignment_iff_fork constraints when the user flips
+        // between modes. The form only DISABLES the branch-protection inputs for
+        // no-repo modes, it doesn't reset their stored values — so without this
+        // the constraint will reject the update.
+        const isNoRepo = values.repo_mode === "none" || values.repo_mode === "no_submission";
+        if (isNoRepo) {
+          values.protect_block_force_push = false;
+          values.protect_require_pull_request = false;
+          values.protect_required_reviewers = 0;
+          values.template_repo = null;
+        }
+        if (values.repo_mode !== "fork_from_prior_assignment") {
+          values.source_assignment_id = null;
+        }
+        // Submission-mode / upstream coupling (Option A): for PR mode the
+        // upstream repo IS the handout (template_repo), so keep them equal.
+        // When not PR, clear PR/upstream config so toggling back to push doesn't
+        // leave stale upstream values behind.
+        if (values.submission_mode === "pr") {
+          values.upstream_repo = values.template_repo ?? null;
+          // "branch_convention" identification is only meaningful with a non-empty regex; if it's
+          // blank, fall back to "base_branch" so we never persist an inconsistent PR config
+          // (branch_convention with no rule to match the submission PR).
+          const convention = (values.pr_branch_convention ?? "").trim();
+          values.pr_branch_convention = convention || null;
+          if (values.pr_identification === "branch_convention" && !convention) {
+            values.pr_identification = "base_branch";
+          }
+        } else {
+          values.upstream_repo = null;
+          values.pr_branch_convention = null;
+          values.require_pr_open = false;
+        }
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

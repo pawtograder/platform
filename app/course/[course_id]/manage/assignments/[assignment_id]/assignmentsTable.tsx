@@ -565,6 +565,10 @@ export default function AssignmentsTable({
         header: "Autograder Score",
         enableColumnFilter: true,
         cell: (props) => {
+          // No-repo / no-submission assignments have no autograder by convention.
+          if (assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission") {
+            return <Text color="fg.muted">N/A</Text>;
+          }
           return (
             <ScoreLink
               score={props.getValue() as number | null | undefined}

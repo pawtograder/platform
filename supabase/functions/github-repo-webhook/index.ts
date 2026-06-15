@@ -5,7 +5,8 @@ import type {
   MembershipEvent,
   OrganizationEvent,
   WorkflowRunEvent,
-  PullRequestEvent
+  PullRequestEvent,
+  DeploymentStatusEvent
 } from "https://esm.sh/@octokit/webhooks-types";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
@@ -13,6 +14,7 @@ import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createHash } from "node:crypto";
 import micromatch from "npm:micromatch";
+import safeRegex from "npm:safe-regex@2";
 import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
@@ -20,9 +22,17 @@ import {
   getOctoKit,
   triggerWorkflow,
   SecondaryRateLimitError,
-  PrimaryRateLimitError
+  PrimaryRateLimitError,
+  END_TO_END_REPO_PREFIX
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
+import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
+import { prStateFromPullRequest } from "../_shared/PrState.ts";
+import {
+  ingestSubmissionFilesFromRepo,
+  SubmissionFileTooLargeError,
+  SubmissionTooLargeError
+} from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
@@ -315,6 +325,225 @@ async function checkCircuitBreakerOpen(
   }
 }
 
+/**
+ * Push-mode zero-runner submission creation.
+ *
+ * For a push-mode assignment with no autograder, a `#submit` push is a complete
+ * submission on its own — there is no grade.yml workflow to run. This creates
+ * the submissions row directly (mirroring the column set the autograder uses, so
+ * the existing BEFORE/AFTER-INSERT triggers assign ordinal/is_active and
+ * provision the grading review) and ingests the repo's files via the shared
+ * ingestion core. No repository_check_run and no triggerWorkflow dispatch.
+ *
+ * `submitted_via` is set to 'git' (the submissions_submitted_via_valid CHECK
+ * allows 'git' | 'upload' | 'manual' | 'pr'; this is a git-push submission, the
+ * same channel as the autograder path, which leaves it null). run_number /
+ * run_attempt are 0 since there is no GitHub Actions run backing this.
+ *
+ * Due-date handling mirrors the autograder's core gate: compute the final due
+ * date via calculate_final_due_date and, if the push is after it, skip creating
+ * a submission — unless the commit is #NOT-GRADED and the assignment allows it.
+ * (The autograder's late-token auto-apply / staff-bypass nuances rely on OIDC
+ * actor + check-run context that the webhook doesn't have, and are intentionally
+ * not replicated here.)
+ *
+ * Idempotent: re-delivery of the same push is a no-op if a submission already
+ * exists for this (repository, sha).
+ */
+async function createPushDirectSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  payload: PushEvent,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  opts: { allowNotGradedSubmissions: boolean; scope: Sentry.Scope }
+): Promise<void> {
+  const { allowNotGradedSubmissions, scope } = opts;
+  const headCommit = payload.head_commit;
+  if (!headCommit) return; // guarded by caller, narrows the type
+  const repoName = payload.repository.full_name;
+  const sha = headCommit.id;
+  const isNotGraded = headCommit.message.toUpperCase().includes("#NOT-GRADED");
+
+  // Idempotency: a re-delivered webhook must not create a duplicate submission
+  // for the same commit. (run_number/run_attempt are always 0 here, so
+  // repository+sha uniquely identifies this push-direct submission.)
+  const { data: existing, error: existingErr } = await adminSupabase
+    .from("submissions")
+    .select("id")
+    .eq("repository", repoName)
+    .eq("sha", sha)
+    .limit(1)
+    .maybeSingle();
+  if (existingErr) {
+    Sentry.captureException(existingErr, scope);
+    throw existingErr;
+  }
+  if (existing) {
+    scope.setTag("push_direct_submission_skipped", "already_exists");
+    console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
+    return;
+  }
+
+  // Resolve a profile id for the due-date calculation. For group repos use any
+  // member's profile (mirrors the autograder fallback).
+  let profileId = studentRepo.profile_id;
+  if (!profileId && studentRepo.assignment_group_id) {
+    const { data: member } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("profile_id")
+      .eq("assignment_group_id", studentRepo.assignment_group_id)
+      .limit(1)
+      .maybeSingle();
+    if (member) profileId = member.profile_id;
+  }
+
+  // Due-date gate (uses the same RPC the autograder uses).
+  const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
+    assignment_id_param: studentRepo.assignment_id,
+    // No resolvable profile (e.g. a group repo with no matched member): pass null, not a
+    // bogus UUID — Postgres rejects a non-UUID string, whereas null already falls back to the
+    // assignment's due_date via calculate_effective_due_date. The generated RPC type marks
+    // this param required, but the underlying SQL `uuid` parameter is nullable, so narrow it.
+    student_profile_id_param: (profileId || null) as string,
+    assignment_group_id_param: studentRepo.assignment_group_id || undefined
+  });
+  if (dueDateError) {
+    Sentry.captureException(dueDateError, scope);
+    throw dueDateError;
+  }
+  // Gate on the webhook *receive* time, NOT head_commit.timestamp: the commit
+  // timestamp is student-controllable (`git commit --date=...`), so a backdated
+  // commit pushed after the deadline must not slip through. This matches the
+  // autograder path, which gates on the check-run created_at (server time).
+  const pushTime = new Date();
+  const finalDueDate = new Date(finalDueDateResult);
+  if (pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions)) {
+    scope.setTag("push_direct_submission_skipped", "after_due_date");
+    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
+    return;
+  }
+
+  // Create the submission row. Column set mirrors the autograder insert so the
+  // BEFORE-INSERT trigger (ordinal/is_active) and AFTER-INSERT hook (grading
+  // review) run identically. Do NOT set ordinal/is_active/grading_review_id.
+  const { data: inserted, error: insertError } = await adminSupabase
+    .from("submissions")
+    .insert({
+      profile_id: studentRepo.profile_id,
+      assignment_group_id: studentRepo.assignment_group_id,
+      assignment_id: studentRepo.assignment_id,
+      repository: repoName,
+      repository_id: studentRepo.id,
+      sha,
+      run_number: 0,
+      run_attempt: 0,
+      class_id: studentRepo.class_id,
+      submitted_via: "git",
+      is_not_graded: isNotGraded
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
+    // a no-op so we don't force GitHub to retry the whole delivery.
+    if (insertError.code === "23505") {
+      scope.setTag("push_direct_submission_insert_race", "true");
+      return;
+    }
+    // 23514 = check_violation: the submissions insert trigger rejects an
+    // individual submission when the student has since joined a group for this
+    // assignment. Skip gracefully (the group repo's push handles submissions)
+    // rather than throw + force endless webhook retries.
+    if (insertError.code === "23514") {
+      scope.setTag("push_direct_submission_skipped", "group_transition");
+      console.log(`Push-direct submission for ${repoName}@${sha} rejected by group-transition check; skipping`);
+      return;
+    }
+    Sentry.captureException(insertError, scope);
+    throw insertError;
+  }
+  const submissionId = inserted.id;
+  scope.setTag("submission_id", submissionId.toString());
+  console.log(`Created push-direct submission ${submissionId} for ${repoName}@${sha}`);
+
+  // E2E fast path: under E2E_MOCK_GITHUB an E2E student repo isn't a real GitHub
+  // repo, so bypass the clone and write a single canned file (parallels the
+  // PrSubmissionFiles / autograder-create-submission E2E mocks) so this push
+  // path is end-to-end testable without GitHub.
+  const e2eMock = Deno.env.get("E2E_MOCK_GITHUB") === "true" && repoName.startsWith(END_TO_END_REPO_PREFIX);
+  if (e2eMock) {
+    const mockContents = `// push-direct submission mock for ${repoName}@${sha}\n`;
+    const { error: mockErr } = await adminSupabase.from("submission_files").insert({
+      submission_id: submissionId,
+      name: "Main.java",
+      profile_id: studentRepo.profile_id,
+      assignment_group_id: studentRepo.assignment_group_id,
+      contents: mockContents,
+      class_id: studentRepo.class_id,
+      is_binary: false,
+      file_size: mockContents.length
+    });
+    if (mockErr) {
+      Sentry.captureException(mockErr, scope);
+      throw mockErr;
+    }
+    return;
+  }
+
+  // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
+  // The insert above and this ingest are NOT in one transaction, so if ingest
+  // fails we must clean up the just-created row — otherwise the idempotency
+  // pre-check would return early on re-delivery and leave a permanent fileless
+  // submission. Mirrors the autograder's reject-and-cleanup behavior.
+  try {
+    await ingestSubmissionFilesFromRepo({
+      adminSupabase,
+      submissionId,
+      classId: studentRepo.class_id,
+      profileId: studentRepo.profile_id,
+      groupId: studentRepo.assignment_group_id,
+      repo: repoName,
+      sha,
+      scope
+    });
+  } catch (ingestErr) {
+    await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
+      // Permanent (repo/file too big): record and stop — don't make GitHub retry
+      // a delivery that can never succeed.
+      scope.setTag("push_direct_submission_rejected", "too_large");
+      Sentry.captureException(ingestErr, scope);
+      return;
+    }
+    // Transient (clone/storage/db): rethrow so GitHub redelivers. Cleanup above
+    // means the retry starts fresh rather than short-circuiting on a stub row.
+    throw ingestErr;
+  }
+}
+
+// Best-effort cleanup of a push-direct submission whose file ingest failed:
+// remove any uploaded binary objects, then the file rows, then the submission.
+async function cleanupPushDirectSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  submissionId: number,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const { data: bins } = await adminSupabase
+      .from("submission_files")
+      .select("storage_key")
+      .eq("submission_id", submissionId)
+      .eq("is_binary", true);
+    const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
+    if (keys.length > 0) {
+      await adminSupabase.storage.from("submission-files").remove(keys);
+    }
+    await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+    await adminSupabase.from("submissions").delete().eq("id", submissionId);
+  } catch (cleanupErr) {
+    Sentry.captureException(cleanupErr, scope);
+  }
+}
+
 type GitHubCommit = PushEvent["commits"][number];
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
@@ -329,6 +558,29 @@ async function handlePushToStudentRepo(
   scope.setTag("commits_count", payload.commits.length.toString());
 
   console.log(`Handling push to student repo ${payload.repository.full_name}, ref: ${payload.ref}`);
+
+  // pr-mode guard: when this repo's assignment takes submissions as pull requests
+  // (submission_mode='pr'), a push to the fork's main is NOT a submission and
+  // must not create a check run or dispatch grade.yml — the PR webhook handles
+  // submissions. Skip rather than spin up a grading workflow.
+  // Also load has_autograder + due-date inputs for the push-mode zero-runner
+  // path below (a push-mode assignment with no autograder creates the
+  // submission directly here instead of dispatching grade.yml).
+  const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
+    .from("assignments")
+    .select("submission_mode, has_autograder, allow_not_graded_submissions")
+    .eq("id", studentRepo.assignment_id)
+    .maybeSingle();
+  if (pushAssignmentErr) {
+    Sentry.captureException(pushAssignmentErr, scope);
+    throw pushAssignmentErr;
+  }
+  if (pushAssignment?.submission_mode === "pr") {
+    scope.setTag("skipped_reason", "pr_mode_assignment");
+    console.log(`Skipping push handling for ${payload.repository.full_name}: assignment is pr-mode`);
+    return;
+  }
+
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
   if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
@@ -343,6 +595,27 @@ async function handlePushToStudentRepo(
     return;
   }
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
+
+  // Push-mode zero-runner path: when an assignment is push-mode AND has no
+  // autograder, a `#submit` push needs no GitHub Actions run to package the
+  // code — we already have access to the repo. Instead of creating a
+  // repository_check_run and dispatching grade.yml (which would consume runner
+  // minutes for nothing), create the submission row directly and ingest the
+  // repo's files via the shared ingestion core. The has_autograder=true path is
+  // untouched and falls through to the existing check-run + triggerWorkflow
+  // logic below.
+  if (
+    pushAssignment?.submission_mode === "push" &&
+    pushAssignment?.has_autograder === false &&
+    payload.head_commit.message.includes("#submit")
+  ) {
+    scope.setTag("push_direct_submission", "true");
+    await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
+      allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
+      scope
+    });
+    return;
+  }
 
   // Extract org for circuit breaker check
   const org = repoName.split("/")[0];
@@ -803,7 +1076,8 @@ type KnownEventPayload =
   | MembershipEvent
   | OrganizationEvent
   | WorkflowRunEvent
-  | PullRequestEvent;
+  | PullRequestEvent
+  | DeploymentStatusEvent;
 function tagScopeWithGenericPayload(scope: Sentry.Scope, name: string, payload: KnownEventPayload) {
   scope.setTag("webhook_handler", name);
   if ("action" in payload) {
@@ -1511,10 +1785,384 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
   }
 });
 
-// Handle pull_request events (to track when sync PRs are merged)
+// Handle deployment_status events. Records one github_deployments row per
+// delivery (read-only data layer for the Phase 4 Deployments UI). No GitHub API
+// calls are made -- the webhook payload carries everything we store, so there
+// is no rate-limiter / circuit-breaker interaction here.
+//
+// Resolving class_id (NOT NULL on the table):
+//   1. If the deploy repo is tracked in `repositories`, take its class_id +
+//      repository_id (the student-repo / autograder case).
+//   2. Otherwise (fork or shared-project repo whose CI/deploy runs off a repo we
+//      don't track) resolve class_id from a submission whose (repository,
+//      head_sha) matches the deployment's (repo, sha) -- exactly the join the UI
+//      uses. repository_id stays NULL.
+//   3. If neither resolves a class, skip: the row would be unattributable and we
+//      cannot satisfy the NOT NULL class_id. (Deployments on handout/solution or
+//      unrelated repos legitimately fall here.)
+// Idempotent on re-delivery via upsert_github_deployment's unique-key upsert.
+eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentStatusEvent }) => {
+  const scope = new Sentry.Scope();
+  tagScopeWithGenericPayload(scope, "deployment_status", payload);
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  try {
+    const repoFullName = payload.repository.full_name;
+    const deployment = payload.deployment;
+    const deploymentStatus = payload.deployment_status;
+    const sha = deployment?.sha ?? null;
+    // deployment_status.environment is the most specific; fall back to the
+    // deployment's environment.
+    const environment = deploymentStatus?.environment ?? deployment?.environment ?? null;
+
+    scope.setTag("deployment_repo", repoFullName);
+    if (sha) {
+      scope.setTag("deployment_sha", sha);
+    }
+
+    // Step 1: tracked repo?
+    const { data: matchedRepo, error: repoError } = await adminSupabase
+      .from("repositories")
+      .select("id, class_id")
+      .eq("repository", repoFullName)
+      .maybeSingle();
+    if (repoError) {
+      Sentry.captureException(repoError, scope);
+    }
+
+    let repositoryId: number | null = null;
+    let classId: number | null = null;
+
+    if (matchedRepo) {
+      repositoryId = matchedRepo.id;
+      classId = matchedRepo.class_id;
+    } else if (sha) {
+      // Step 2: fork/shared-project -- resolve class via a matching submission.
+      // Match either column: pr-mode submissions store the commit in `head_sha`,
+      // push-mode submissions store it in `sha` (head_sha NULL). Matching only
+      // head_sha silently drops deployments for push-mode submissions.
+      const { data: matchedSubmission, error: submissionError } = await adminSupabase
+        .from("submissions")
+        .select("class_id")
+        .eq("repository", repoFullName)
+        .or(`head_sha.eq.${sha},sha.eq.${sha}`)
+        .limit(1)
+        .maybeSingle();
+      if (submissionError) {
+        Sentry.captureException(submissionError, scope);
+      }
+      if (matchedSubmission) {
+        classId = matchedSubmission.class_id;
+      }
+    }
+
+    // Step 3: can't attribute to a class -> nothing to record.
+    if (classId === null) {
+      scope.setTag("deployment_unresolved_class", "true");
+      return;
+    }
+
+    scope.setTag("class_id", classId.toString());
+    if (repositoryId !== null) {
+      scope.setTag("repository_id", repositoryId.toString());
+    }
+
+    maybeCrash("deployment_status.before_upsert");
+    // Optional params are omitted (not null) so the SQL DEFAULT NULL applies.
+    const { error: upsertError } = await adminSupabase.rpc("upsert_github_deployment", {
+      p_class_id: classId,
+      p_repository_name: repoFullName,
+      p_repository_id: repositoryId ?? undefined,
+      p_sha: sha ?? undefined,
+      p_environment: environment ?? undefined,
+      p_state: deploymentStatus?.state ?? undefined,
+      p_target_url: deploymentStatus?.target_url ?? deploymentStatus?.log_url ?? undefined,
+      p_github_deployment_id: deployment?.id ?? undefined,
+      p_github_deployment_status_id: deploymentStatus?.id ?? undefined,
+      p_creator_login: deployment?.creator?.login ?? undefined,
+      p_payload: payload as unknown as Json
+    });
+
+    if (upsertError) {
+      scope.setTag("error_source", "github_deployments_upsert_failed");
+      Sentry.captureException(upsertError, scope);
+      return;
+    }
+
+    scope.setTag("deployment_recorded", "true");
+    console.log(
+      `[DEPLOYMENT_STATUS] Recorded ${deploymentStatus?.state} for ${repoFullName}@${sha ?? "?"} (class=${classId})`
+    );
+  } catch (error) {
+    Sentry.captureException(error, scope);
+    // Don't throw -- a failed deployment record must not break webhook delivery.
+  }
+});
+
+// Ingest a pull request as a submission for any pr-mode assignment whose
+// upstream repo is the repo this PR targets. This is the "webhook-direct"
+// path: no autograder workflow is involved — we resolve the PR to a
+// (student/group, assignment) and call ingest_pr_submission, which creates the
+// submission version and (via the after-insert trigger) its grading review.
+async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope): Promise<void> {
+  const action = payload.action;
+  console.log(
+    `[PR_INGEST] start repo=${payload.repository.full_name} pr=#${payload.pull_request.number} action=${action}`
+  );
+  // Lifecycle actions that can change a PR's head sha or its open/closed state.
+  const RELEVANT = ["opened", "reopened", "synchronize", "edited", "ready_for_review", "converted_to_draft", "closed"];
+  if (!RELEVANT.includes(action)) {
+    console.log(`[PR_INGEST] skip: action '${action}' not in relevant set`);
+    return;
+  }
+
+  const upstreamRepo = payload.repository.full_name; // owner/name PRs target
+  const pr = payload.pull_request;
+  const baseRef = pr.base.ref;
+  const headRef = pr.head.ref;
+  const prNumber = pr.number;
+  const headSha = pr.head.sha;
+  const baseSha = pr.base.sha;
+  // The code being submitted lives in the PR's HEAD repo — the student/group
+  // fork. We attribute the submission by looking that fork up in our
+  // `repositories` table (the same authoritative path autograder-create-submission
+  // uses), NOT by mapping the GitHub login of whoever opened the PR. The
+  // repositories row already carries profile_id / assignment_group_id /
+  // assignment_id, so a group fork's row has assignment_group_id set and the
+  // submission is correctly attributed to the GROUP regardless of which member
+  // opened the PR — no users / user_roles / assignment_groups_members lookups.
+  const headRepo = pr.head.repo?.full_name;
+  const prState = prStateFromPullRequest(pr);
+
+  // One grep-able prefix (`[PR_INGEST]`) for the whole ingestion path; every
+  // skip/return below logs why, so a silent no-op is diagnosable from logs alone.
+  const ctx = `repo=${upstreamRepo} pr=#${prNumber} action=${action} base=${baseRef} head=${headRef} headRepo=${headRepo ?? "?"}`;
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  // Which assignments treat this repo as their upstream/class repo? (Could be
+  // several — the same handout repo can back assignments in multiple classes.)
+  // `upstream_repo` is matched case-insensitively (GitHub names are case-insensitive),
+  // but `.ilike()` treats the value as a LIKE pattern, so a literal `_` or `%` in a repo
+  // name would act as a wildcard and over-match a *different* assignment's upstream_repo.
+  // Escape LIKE metacharacters so this stays an exact (case-insensitive) match.
+  const upstreamRepoPattern = upstreamRepo.replace(/[\\%_]/g, "\\$&");
+  const { data: assignments, error: assignmentsError } = await adminSupabase
+    .from("assignments")
+    .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
+    .eq("submission_mode", "pr")
+    .ilike("upstream_repo", upstreamRepoPattern);
+  if (assignmentsError) {
+    console.log(`[PR_INGEST] error: assignments lookup failed: ${assignmentsError.message} ${ctx}`);
+    Sentry.captureException(assignmentsError, scope);
+    return;
+  }
+  if (!assignments || assignments.length === 0) {
+    console.log(
+      `[PR_INGEST] skip: no submission_mode='pr' assignment with upstream_repo ILIKE '${upstreamRepo}' ${ctx}`
+    );
+    return; // Not an upstream repo for any pr-mode assignment.
+  }
+  console.log(`[PR_INGEST] matched assignment(s) [${assignments.map((a) => a.id).join(", ")}] ${ctx}`);
+
+  scope.setTag("pr_submission_repo", upstreamRepo);
+  scope.setTag("pr_number", prNumber.toString());
+
+  // Closing/merging/reopening never carries new code, so it needs no fork, no
+  // attributable repository row, and none of the identification gates below —
+  // all of which can change *after* a submission was first ingested (fork
+  // deleted, repo row cleaned up, staff edited pr_branch_convention or
+  // upstream_base_branch). Reflect the state on every matching pr-mode
+  // assignment up front so a stale config or a missing fork can't strand the
+  // stored PR state. set_pr_state is keyed by (assignment, repo, pr_number) and
+  // no-ops where no submission exists, so the broadcast is safe.
+  if (action === "closed") {
+    for (const target of assignments) {
+      console.log(
+        `[PR_INGEST] assignment=${target.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`
+      );
+      const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
+        p_assignment_id: target.id,
+        p_pr_repo: upstreamRepo,
+        p_pr_number: prNumber,
+        p_pr_state: prState
+      });
+      if (stateError) {
+        console.log(`[PR_INGEST] error assignment=${target.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
+        Sentry.captureException(stateError, scope);
+      }
+    }
+    console.log(`[PR_INGEST] done ${ctx}`);
+    return;
+  }
+
+  if (!headRepo) {
+    // No head repo (fork deleted, or a same-repo PR with no fork) — there is no
+    // registered student/group repository to attribute to.
+    console.log(`[PR_INGEST] skip: PR has no head repo to attribute (fork deleted?) ${ctx}`);
+    return;
+  }
+
+  // Resolve the submitter via the head fork's repositories row. A fork belongs
+  // to exactly one assignment, so this row pins both WHO (profile/group) and
+  // WHICH assignment the PR submits to.
+  const { data: repoRow, error: repoRowError } = await adminSupabase
+    .from("repositories")
+    .select("id, profile_id, assignment_group_id, assignment_id, class_id")
+    .eq("repository", headRepo)
+    .maybeSingle();
+  if (repoRowError) {
+    console.log(`[PR_INGEST] error: repositories lookup failed: ${repoRowError.message} ${ctx}`);
+    Sentry.captureException(repoRowError, scope);
+    return;
+  }
+  if (!repoRow) {
+    console.log(`[PR_INGEST] skip: head repo '${headRepo}' is not a registered student/group repository ${ctx}`);
+    scope.setTag("pr_head_repo", headRepo);
+    Sentry.captureMessage("PR head repo not found in repositories table", scope);
+    return;
+  }
+
+  // The fork's assignment must be one of the pr-mode assignments targeting this
+  // upstream. (Guards against a fork from a different assignment opening a PR
+  // against this upstream.)
+  const a = assignments.find((x) => x.id === repoRow.assignment_id);
+  if (!a) {
+    console.log(
+      `[PR_INGEST] skip: head repo '${headRepo}' belongs to assignment=${repoRow.assignment_id}, not a pr-mode assignment for upstream '${upstreamRepo}' ${ctx}`
+    );
+    return;
+  }
+
+  // Identification gate: does this PR count as a submission for this assignment?
+  if (a.pr_identification === "branch_convention") {
+    if (!a.pr_branch_convention) {
+      console.log(`[PR_INGEST] skip assignment=${a.id}: branch_convention mode but pr_branch_convention unset ${ctx}`);
+      return;
+    }
+    let re: RegExp;
+    try {
+      re = new RegExp(a.pr_branch_convention);
+    } catch {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: invalid pr_branch_convention /${a.pr_branch_convention}/ ${ctx}`
+      );
+      return; // Misconfigured convention — skip rather than crash the webhook.
+    }
+    // pr_branch_convention is instructor-authored, but it's matched against a
+    // student-controlled branch name (headRef). Reject patterns that aren't
+    // provably ReDoS-safe so a catastrophic-backtracking convention can't hang
+    // the webhook on a crafted branch name. Run this on the compiled regex (so a
+    // syntactically invalid pattern is already handled above — safeRegex throws
+    // on unparseable input). Treated like a misconfiguration: skip and log.
+    if (!safeRegex(re)) {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: unsafe pr_branch_convention /${a.pr_branch_convention}/ (ReDoS guard) ${ctx}`
+      );
+      return;
+    }
+    if (!re.test(headRef)) {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: head '${headRef}' fails convention /${a.pr_branch_convention}/ ${ctx}`
+      );
+      return;
+    }
+  } else {
+    // base_branch + manual both require targeting the configured base branch.
+    const expectedBase = a.upstream_base_branch ?? "main";
+    if (baseRef !== expectedBase) {
+      console.log(`[PR_INGEST] skip assignment=${a.id}: base '${baseRef}' != expected '${expectedBase}' ${ctx}`);
+      return;
+    }
+  }
+
+  // Attribution comes straight from the fork's repositories row: a group fork
+  // has assignment_group_id set (profile_id null); an individual fork has
+  // profile_id set.
+  const groupId = repoRow.assignment_group_id ?? null;
+  const profileId = repoRow.profile_id ?? null;
+  if (!groupId && !profileId) {
+    console.log(
+      `[PR_INGEST] skip assignment=${a.id}: head repo '${headRepo}' has neither profile_id nor assignment_group_id ${ctx}`
+    );
+    Sentry.captureMessage("PR head repo has no owner profile or group", scope);
+    return;
+  }
+
+  // Closing/merging is handled up front (before the attribution gates); by here
+  // the action is an open/sync/reopen event that may create a new version.
+  const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
+    p_assignment_id: a.id,
+    p_profile_id: groupId ? undefined : (profileId ?? undefined),
+    p_assignment_group_id: groupId ?? undefined,
+    p_pr_repo: upstreamRepo,
+    p_pr_number: prNumber,
+    p_base_sha: baseSha,
+    p_head_sha: headSha,
+    p_pr_state: prState,
+    p_auto_confirm: a.pr_identification !== "manual"
+  });
+  if (ingestError) {
+    console.log(`[PR_INGEST] error assignment=${a.id}: ingest_pr_submission failed: ${ingestError.message} ${ctx}`);
+    Sentry.captureException(ingestError, scope);
+    return;
+  }
+  console.log(
+    `[PR_INGEST] ingested assignment=${a.id} submission_id=${submissionId ?? "null"} group=${groupId ?? "none"} ${ctx}`
+  );
+
+  // ingest_pr_submission only creates the submission row; fetch the PR head
+  // fork's files into submission_files so graders have something to view/diff.
+  // The code lives in the *head fork*, not the upstream repo. Null id => the
+  // link isn't confirmed yet (nothing to ingest).
+  if (submissionId) {
+    try {
+      await ingestPrSubmissionFiles({
+        adminSupabase,
+        submissionId: submissionId as number,
+        classId: a.class_id,
+        profileId: groupId ? null : profileId,
+        groupId: groupId ?? null,
+        headRepo,
+        headSha,
+        scope
+      });
+      console.log(
+        `[PR_INGEST] files ingested assignment=${a.id} submission_id=${submissionId} headRepo=${headRepo} ${ctx}`
+      );
+    } catch (filesError) {
+      // Don't fail the webhook delivery over a file-ingest hiccup; the row
+      // exists and a re-delivery (or confirm) will retry idempotently.
+      console.log(
+        `[PR_INGEST] warn assignment=${a.id}: file ingest failed (row still created): ${filesError instanceof Error ? filesError.message : String(filesError)} ${ctx}`
+      );
+      Sentry.captureException(filesError, scope);
+    }
+  } else {
+    console.log(`[PR_INGEST] assignment=${a.id}: skipped file ingest (submission_id=null — unconfirmed link) ${ctx}`);
+  }
+  console.log(`[PR_INGEST] done ${ctx}`);
+}
+
+// Handle pull_request events (PR-mode submissions + tracking sync PR merges)
 eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent }) => {
   const scope = new Sentry.Scope();
   tagScopeWithGenericPayload(scope, "pull_request", payload);
+
+  // PR-mode submission ingestion runs first and independently of the sync-PR
+  // bookkeeping below; a failure here must not block that.
+  try {
+    await handlePrSubmission(payload, scope);
+  } catch (error) {
+    Sentry.captureException(error, scope);
+  }
 
   // Only handle "closed" events where the PR was merged
   if (payload.action !== "closed" || !payload.pull_request.merged) {

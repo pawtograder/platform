@@ -369,6 +369,24 @@ export default function GraderResults() {
     );
   }
   if (!query.data.data.grader_results) {
+    // No autograder result for this submission. has_autograder is maintained as a
+    // reliable signal — set from grader-repo provisioning at create time and
+    // backfilled for existing rows — so when it's false the autograder will never
+    // produce a result: show a "manual grading" notice instead of "autograder
+    // hasn't finished". This only picks the empty-state copy; a submission that DOES
+    // have grader_results always renders them (below), regardless of the flag.
+    if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
+      return (
+        <Container>
+          <Box p={4} margin={{ base: "2", lg: "4" }}>
+            <Alert title="Manual / rubric grading" status="info">
+              This assignment is graded manually — there is no autograder feedback for this submission. See the Grade
+              tab for rubric scores and comments.
+            </Alert>
+          </Box>
+        </Container>
+      );
+    }
     return (
       <Container>
         <Box p={4} margin={{ base: "2", lg: "4" }}>

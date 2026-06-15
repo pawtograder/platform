@@ -16,6 +16,15 @@ test.describe("assignment_dashboard_views (shared report view)", () => {
   let instructorClient: SupabaseClient<Database>;
   let graderClient: SupabaseClient<Database>;
 
+  // class_id is filled by a BEFORE INSERT trigger from assignment_id, so it's
+  // omitted here; the generated Insert type requires it (NOT NULL, no default)
+  // and can't model the trigger, so cast the trigger-filled row to the Insert type.
+  const dvRow = (config: unknown) =>
+    ({
+      assignment_id: assignmentId,
+      config
+    }) as unknown as Database["public"]["Tables"]["assignment_dashboard_views"]["Insert"];
+
   test.beforeAll(async () => {
     const cls = await createClass({ name: "Dashboard View E2E" });
     instructor = await createUserInClass({ role: "instructor", class_id: cls.id });
@@ -35,7 +44,7 @@ test.describe("assignment_dashboard_views (shared report view)", () => {
     const config = { viz: "options", filter: { op: "and", args: [{ scoreAtLeast: 50 }] } };
     const { error: saveErr } = await instructorClient
       .from("assignment_dashboard_views")
-      .upsert({ assignment_id: assignmentId, config }, { onConflict: "assignment_id" });
+      .upsert(dvRow(config), { onConflict: "assignment_id" });
     expect(saveErr).toBeNull();
 
     const { data, error } = await instructorClient
@@ -54,7 +63,7 @@ test.describe("assignment_dashboard_views (shared report view)", () => {
     // Self-contained: ensure a shared view exists regardless of test ordering.
     const { error: seedErr } = await instructorClient
       .from("assignment_dashboard_views")
-      .upsert({ assignment_id: assignmentId, config: { viz: "bars" } }, { onConflict: "assignment_id" });
+      .upsert(dvRow({ viz: "bars" }), { onConflict: "assignment_id" });
     expect(seedErr).toBeNull();
 
     const { data, error } = await graderClient
@@ -67,24 +76,21 @@ test.describe("assignment_dashboard_views (shared report view)", () => {
 
     const { error: writeErr } = await graderClient
       .from("assignment_dashboard_views")
-      .upsert({ assignment_id: assignmentId, config: { viz: "bars" } }, { onConflict: "assignment_id" });
+      .upsert(dvRow({ viz: "bars" }), { onConflict: "assignment_id" });
     expect(writeErr).not.toBeNull();
   });
 
   test("the trigger rejects an invalid viz", async () => {
     const { error } = await instructorClient
       .from("assignment_dashboard_views")
-      .upsert({ assignment_id: assignmentId, config: { viz: "nope" } }, { onConflict: "assignment_id" });
+      .upsert(dvRow({ viz: "nope" }), { onConflict: "assignment_id" });
     expect(error).not.toBeNull();
   });
 
   test("the trigger rejects a filter outside the closed predicate set", async () => {
     const { error } = await instructorClient
       .from("assignment_dashboard_views")
-      .upsert(
-        { assignment_id: assignmentId, config: { viz: "bars", filter: { bogusPredicate: 1 } } },
-        { onConflict: "assignment_id" }
-      );
+      .upsert(dvRow({ viz: "bars", filter: { bogusPredicate: 1 } }), { onConflict: "assignment_id" });
     expect(error).not.toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useActiveSubmissionReview, useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Text } from "@chakra-ui/react";
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
@@ -29,7 +29,9 @@ export type { CodeFileHandle, CodeFileProps };
 const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
   ({ file: singleFile, files, activeFileId, onFileSelect, openFileIds, onFileClose }, ref) => {
     const submission = useSubmission();
-    const submissionReview = useActiveSubmissionReview();
+    // Annotations must be written to a WRITABLE review (matches code-file-monaco). Using the
+    // active review here can target a read-only review, so saves go to the wrong review or fail.
+    const submissionReview = useDefaultWritableSubmissionReview();
     const showCommentsFeature = true;
 
     const allFiles = useMemo(() => files || (singleFile ? [singleFile] : []), [files, singleFile]);
@@ -215,6 +217,11 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
     );
 
     const [expanded, setExpanded] = useState<number[]>([]);
+    // Reset which comment overlays are open when the active file changes, so a line number expanded
+    // in one tab doesn't open the same line in the next file (matches the Monaco renderer).
+    useEffect(() => {
+      setExpanded([]);
+    }, [currentFile?.id]);
 
     // Keyboard quick-apply palette (productivity layer), scoped to this editor by a hover flag so the
     // Cmd/Ctrl+K chord only fires while the pointer is over the plain code area. (The global file-tree

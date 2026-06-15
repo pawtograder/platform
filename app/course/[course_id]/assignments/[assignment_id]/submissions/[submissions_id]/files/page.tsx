@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import CodeFile, {
   formatPoints,
@@ -60,6 +61,7 @@ import {
 import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getPrBaseFiles } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useFindTableControllerValue } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -101,6 +103,78 @@ import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panel
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
 const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
+
+// MIME types that aren't text/* but should still render as readable source.
+const INLINE_TEXT_MIME = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/x-yaml"
+]);
+
+/** Whether a file should render as text/markdown source rather than a binary download. */
+function isTextLikeFile(file: SubmissionFile): boolean {
+  if (!file.is_binary) return true;
+  if (isMarkdownFile(file.name)) return true;
+  const mime = file.mime_type ?? "";
+  return mime.startsWith("text/") || INLINE_TEXT_MIME.has(mime);
+}
+
+/**
+ * Render a submission file as markdown (source + preview) or source code.
+ * Uploaded text files can be stored as binary storage objects (contents null,
+ * storage_key set); fetch their text and render it the same way as inline
+ * git text files so markdown gets a real preview instead of a download link.
+ */
+function TextFileView({
+  file,
+  allFiles,
+  onNavigateToFile
+}: {
+  file: SubmissionFile;
+  allFiles: SubmissionFile[];
+  onNavigateToFile?: (fileId: number) => void;
+}) {
+  const needsFetch = file.is_binary && file.contents == null && !!file.storage_key;
+  const [hydrated, setHydrated] = useState<SubmissionFile | null>(needsFetch ? null : file);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!needsFetch) {
+      setHydrated(file);
+      return;
+    }
+    let mounted = true;
+    setHydrated(null);
+    setError(null);
+    (async () => {
+      const client = createClient();
+      const { data, error: dlError } = await client.storage
+        .from("submission-files")
+        .download(file.storage_key as string);
+      if (!mounted) return;
+      if (dlError || !data) {
+        setError(dlError?.message ?? "Could not load file contents");
+        return;
+      }
+      const text = await data.text();
+      if (!mounted) return;
+      setHydrated({ ...file, contents: text, is_binary: false });
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [file, needsFetch]);
+
+  // If the text can't be fetched, fall back to the binary download view.
+  if (error) return <BinaryFilePreview file={file} />;
+  if (!hydrated) return <Skeleton height="200px" />;
+  return isMarkdownFile(hydrated.name) ? (
+    <MarkdownFilePreview file={hydrated} allFiles={allFiles} onNavigateToFile={onNavigateToFile} />
+  ) : (
+    <CodeFile file={hydrated} />
+  );
+}
 
 // Parse a URL hash fragment id like `L56` into its line number, or null if it isn't a line anchor.
 // Line anchors are emitted by deep links (help-request-chat) and comment-jump links (rubric-sidebar).
@@ -1032,6 +1106,222 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   }
 }
 
+// Per-file line diff used for the inline PR base→head view. Mirrors the
+// `generateSimpleDiff` helper in the submission layout (which is module-local
+// there): same compact `+`/`-` line format and 100-line truncation, so the
+// export and the inline diff read identically.
+function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
+  if (oldContent == null && newContent == null) return "(both empty)";
+  if (oldContent == null) return "(new file)";
+  if (newContent == null) return "(file deleted)";
+
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+  const diffLines: string[] = [];
+  const maxLines = Math.max(oldLines.length, newLines.length);
+
+  let addedCount = 0;
+  let removedCount = 0;
+  for (let i = 0; i < maxLines; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+    if (oldLine === undefined && newLine !== undefined) {
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+    } else if (oldLine !== undefined && newLine === undefined) {
+      diffLines.push(`- ${oldLine}`);
+      removedCount++;
+    } else if (oldLine !== newLine) {
+      diffLines.push(`- ${oldLine}`);
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+      removedCount++;
+    }
+  }
+
+  if (diffLines.length === 0) return "(no changes)";
+
+  const maxDiffLines = 100;
+  if (diffLines.length > maxDiffLines) {
+    return (
+      diffLines.slice(0, maxDiffLines).join("\n") +
+      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
+    );
+  }
+  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
+}
+
+type FileDiffStatus = "added" | "removed" | "changed";
+type FileDiff = { path: string; status: FileDiffStatus; diff: string };
+
+/**
+ * Compute per-file base→head diffs from the base tree (text files keyed by path)
+ * and the head snapshot (the submission's text `submission_files`). Only files
+ * that differ are returned; binary files are skipped on both sides (the cache
+ * omits them and the head side filters `is_binary`).
+ */
+function computeFileDiffs(
+  baseFiles: Record<string, string>,
+  headFiles: { name: string; contents: string | null; is_binary: boolean }[]
+): FileDiff[] {
+  const headByPath = new Map<string, string | null>();
+  for (const f of headFiles) {
+    if (f.is_binary) continue;
+    headByPath.set(f.name, f.contents);
+  }
+
+  const paths = new Set<string>([...Object.keys(baseFiles), ...headByPath.keys()]);
+  const diffs: FileDiff[] = [];
+  for (const path of paths) {
+    const inBase = Object.prototype.hasOwnProperty.call(baseFiles, path);
+    const inHead = headByPath.has(path);
+    const baseContent = inBase ? baseFiles[path] : null;
+    const headContent = inHead ? (headByPath.get(path) ?? null) : null;
+    if (inBase && inHead && baseContent === headContent) continue; // unchanged
+    const status: FileDiffStatus = !inBase ? "added" : !inHead ? "removed" : "changed";
+    diffs.push({ path, status, diff: generateSimpleDiff(baseContent, headContent) });
+  }
+  return diffs.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const DIFF_STATUS_META: Record<FileDiffStatus, { label: string; palette: string }> = {
+  added: { label: "added", palette: "green" },
+  removed: { label: "removed", palette: "red" },
+  changed: { label: "changed", palette: "yellow" }
+};
+
+/** Render one file's `+`/`-` diff text with line-level coloring. */
+function DiffBlock({ fileDiff }: { fileDiff: FileDiff }) {
+  const meta = DIFF_STATUS_META[fileDiff.status];
+  return (
+    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" overflow="hidden">
+      <HStack bg="bg.muted" px={2} py={1} gap={2}>
+        <Tag.Root colorPalette={meta.palette} size="sm">
+          <Tag.Label>{meta.label}</Tag.Label>
+        </Tag.Root>
+        <Text fontSize="sm" fontFamily="mono" wordBreak="break-all">
+          {fileDiff.path}
+        </Text>
+      </HStack>
+      <Box as="pre" m={0} p={2} fontSize="xs" fontFamily="mono" overflowX="auto" whiteSpace="pre" css={{ tabSize: 2 }}>
+        {fileDiff.diff.split("\n").map((line, idx) => {
+          const isAdd = line.startsWith("+");
+          const isRemove = line.startsWith("-");
+          return (
+            <Box
+              as="span"
+              key={idx}
+              display="block"
+              color={isAdd ? "green.fg" : isRemove ? "red.fg" : "fg.muted"}
+              bg={isAdd ? "green.subtle" : isRemove ? "red.subtle" : undefined}
+            >
+              {line === "" ? " " : line}
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * For PR submissions (base_sha + head_sha present) the Files view represents a
+ * base→head diff rather than a plain snapshot. We render the per-file diff
+ * inline: head comes from the already-loaded `submission_files`, the base tree
+ * is fetched once via `get-pr-base-files` (served from an immutable cache). The
+ * GitHub compare link stays as the header and as the fallback when the base
+ * fetch is empty or errors (e.g. the upstream clone failed).
+ */
+function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const base = submission.base_sha;
+  const head = submission.head_sha;
+  const submissionId = submission.id;
+  const headFiles = submission.submission_files;
+
+  const [baseFiles, setBaseFiles] = useState<Record<string, string> | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Only fetch for PR submissions that have both endpoints of the diff.
+  const isPrSubmission = !!base && !!head;
+
+  useEffect(() => {
+    if (!isPrSubmission) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setFetchError(null);
+    const supabase = createClient();
+    getPrBaseFiles(submissionId, supabase)
+      .then((res) => {
+        if (cancelled) return;
+        setBaseFiles(res.files ?? {});
+        if (res.error) setFetchError(res.error);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setBaseFiles({});
+        setFetchError(e instanceof Error ? e.message : "Failed to load the base tree");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPrSubmission, submissionId]);
+
+  const fileDiffs = useMemo(() => (baseFiles ? computeFileDiffs(baseFiles, headFiles) : []), [baseFiles, headFiles]);
+
+  if (!isPrSubmission) {
+    return null;
+  }
+  const baseShort = base!.substring(0, 7);
+  const headShort = head!.substring(0, 7);
+  const compareUrl = submission.repository
+    ? `https://github.com/${submission.repository}/compare/${base}...${head}`
+    : null;
+  // No diff to show inline: either the base fetch failed, returned nothing
+  // (e.g. the upstream isn't fetchable / E2E mock), or there are simply no text
+  // changes. Fall back to the compare-link notice.
+  const hasInlineDiff = !fetchError && baseFiles !== null && Object.keys(baseFiles).length > 0 && fileDiffs.length > 0;
+
+  return (
+    <Box mb={3}>
+      <Alert status="info" title="Pull request submission">
+        <VStack align="start" gap={1}>
+          <Text fontSize="sm">
+            This submission is a pull request: the diff below is the base ({baseShort}) → head ({headShort}) change.
+          </Text>
+          {compareUrl && (
+            <Link href={compareUrl} target="_blank">
+              View the {baseShort}…{headShort} diff on GitHub
+            </Link>
+          )}
+        </VStack>
+      </Alert>
+      {isLoading ? (
+        <HStack mt={2} gap={2} color="fg.muted">
+          <Spinner size="sm" />
+          <Text fontSize="sm">Loading base→head diff…</Text>
+        </HStack>
+      ) : hasInlineDiff ? (
+        <VStack align="stretch" gap={2} mt={2}>
+          <Heading size="sm">Changed files ({fileDiffs.length})</Heading>
+          {fileDiffs.map((fd) => (
+            <DiffBlock key={fd.path} fileDiff={fd} />
+          ))}
+        </VStack>
+      ) : baseFiles !== null ? (
+        <Text fontSize="sm" color="fg.muted" mt={2}>
+          {fetchError
+            ? "Could not load the base tree for an inline diff; use the GitHub compare link above for the authoritative diff."
+            : "No text changes to display inline; use the GitHub compare link above for the full diff."}
+        </Text>
+      ) : null}
+    </Box>
+  );
+}
+
 export default function FilesView() {
   const searchParams = useSearchParams();
   const submissionData = useSubmissionMaybe();
@@ -1586,6 +1876,20 @@ export default function FilesView() {
         />
       );
     }
+    // Uploaded text files are stored as binary storage objects (is_binary +
+    // storage_key, contents null) but are really text — render them as
+    // source/markdown via TextFileView (which fetches the bytes) rather than a
+    // binary download.
+    if (file.is_binary && isTextLikeFile(file)) {
+      return (
+        <TextFileView
+          key={file.id}
+          file={file}
+          allFiles={submission.submission_files}
+          onNavigateToFile={handleSelectFile}
+        />
+      );
+    }
     if (file.is_binary) {
       return <BinaryFilePreview key={file.id} file={file} />;
     }
@@ -1757,6 +2061,7 @@ export default function FilesView() {
   if (!isDesktop) {
     return (
       <Flex direction="column" gap={2}>
+        <PrDiffNotice submission={submission} />
         <Box maxH="40vh" overflow="auto" border="1px solid" borderColor="border.emphasized" borderRadius="md">
           {fileNavigator}
         </Box>
@@ -1767,20 +2072,23 @@ export default function FilesView() {
   }
 
   return (
-    <Box h="100%" minH={0}>
-      <Group orientation="horizontal" style={{ height: "100%" }}>
-        <Panel defaultSize="20" minSize="12" maxSize="40">
-          {fileNavigator}
-        </Panel>
-        <PanelSeparator>
-          <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
-        </PanelSeparator>
-        <Panel minSize="30">
-          <Box h="100%" minW={0} minH={0}>
-            {editorArea}
-          </Box>
-        </Panel>
-      </Group>
-    </Box>
+    <Flex direction="column" h="100%" minH={0} gap={2}>
+      <PrDiffNotice submission={submission} />
+      <Box flex="1" minH={0}>
+        <Group orientation="horizontal" style={{ height: "100%" }}>
+          <Panel defaultSize="20" minSize="12" maxSize="40">
+            {fileNavigator}
+          </Panel>
+          <PanelSeparator>
+            <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+          </PanelSeparator>
+          <Panel minSize="30">
+            <Box h="100%" minW={0} minH={0}>
+              {editorArea}
+            </Box>
+          </Panel>
+        </Group>
+      </Box>
+    </Flex>
   );
 }

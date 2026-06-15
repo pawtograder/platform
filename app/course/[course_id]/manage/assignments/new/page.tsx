@@ -23,7 +23,17 @@ export default function NewAssignmentPage() {
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
       allow_not_graded_submissions: true,
-      require_tokens_before_due_date: true
+      permit_empty_submissions: false,
+      require_tokens_before_due_date: true,
+      // Default the group-formation method so the Groups subform's <select>
+      // reflects a real selection instead of an empty (apparently unselected)
+      // value. `false` = instructor-formed groups, matching how the rest of the
+      // app treats an unset value (`allow_student_formed_groups !== true`).
+      allow_student_formed_groups: false,
+      repo_mode: "template_only_staff",
+      protect_block_force_push: true,
+      protect_require_pull_request: false,
+      protect_required_reviewers: 0
     }
   });
   const router = useRouter();
@@ -34,10 +44,17 @@ export default function NewAssignmentPage() {
   const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
     async function create() {
+      const repoMode = getValues("repo_mode") || "template_only_staff";
+      const isNoRepo = repoMode === "none" || repoMode === "no_submission";
+      const isPr = getValues("submission_mode") === "pr";
+      const willCreateRepos = !isNoRepo;
+
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
         title: "Creating Assignment",
-        description: "Creating GitHub repositories for handout and grader... This may take a few moments.",
+        description: willCreateRepos
+          ? "Creating GitHub repositories for handout and grader... This may take a few moments."
+          : "Setting up assignment...",
         type: "loading"
       });
 
@@ -81,6 +98,16 @@ export default function NewAssignmentPage() {
           return;
         }
 
+        const isFork = repoMode === "fork_from_prior_assignment";
+        // PR-mode identification: "branch_convention" is only meaningful with a non-empty
+        // regex. If the convention is blank, fall back to "base_branch" so we never persist an
+        // internally inconsistent config (branch_convention with no rule to match the PR).
+        const prBranchConvention = isPr ? (getValues("pr_branch_convention") || "").trim() || null : null;
+        const prIdentification = isPr
+          ? getValues("pr_identification") === "branch_convention" && !prBranchConvention
+            ? "base_branch"
+            : getValues("pr_identification") || "base_branch"
+          : "base_branch";
         const { data, error } = await supabase
           .from("assignments")
           .insert({
@@ -100,9 +127,13 @@ export default function NewAssignmentPage() {
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
             permit_empty_submissions: false,
             total_points: getValues("total_points"),
-            template_repo: getValues("template_repo"),
+            template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
-            has_autograder: true,
+            // has_autograder must reflect reality (it gates the webhook's autograder run and the
+            // results-page empty state). The form provisions a grader/solution repo only for repo
+            // modes, so no-repo modes ('none'/'no_submission') have no autograder. Instructors can
+            // still toggle this on the autograder config page.
+            has_autograder: !isNoRepo,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
             group_config: getValues("group_config"),
@@ -124,7 +155,28 @@ export default function NewAssignmentPage() {
             self_review_setting_id: settings.data.id as number,
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
-              : null
+              : null,
+            repo_mode: repoMode,
+            source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
+            // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
+            // protect_* when repo_mode is none/no_submission, so coerce here rather than
+            // surfacing a constraint error from the disabled-but-still-set checkboxes.
+            protect_block_force_push: isNoRepo ? false : getValues("protect_block_force_push") !== false,
+            protect_require_pull_request: isNoRepo ? false : getValues("protect_require_pull_request") === true,
+            protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0),
+            // Submission-mode axis. Only persist the upstream/PR config when the
+            // instructor actually selected PR mode; otherwise leave the columns at
+            // their push-mode defaults.
+            submission_mode: isPr ? "pr" : "push",
+            // Option A: the upstream repo IS the handout (template_repo). At
+            // create time template_repo is usually null (the handout is created
+            // afterwards, where the edge function points upstream_repo at it);
+            // for inherited/fork modes it may already be set, so carry it here.
+            upstream_repo: isPr ? getValues("template_repo") || null : null,
+            upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
+            pr_identification: prIdentification,
+            pr_branch_convention: prBranchConvention,
+            require_pr_open: isPr ? getValues("require_pr_open") === true : false
           })
           .select("id")
           .single();
@@ -134,14 +186,16 @@ export default function NewAssignmentPage() {
             description: error.message
           });
         } else {
-          await assignmentCreateHandoutRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
-          await assignmentCreateSolutionRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
+          if (!isNoRepo) {
+            await assignmentCreateHandoutRepo(
+              { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+              supabase
+            );
+            await assignmentCreateSolutionRepo(
+              { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+              supabase
+            );
+          }
           //Potentially copy groups from another assignment
           if (getValues("copy_groups_from_assignment")) {
             await assignmentGroupCopyGroupsFromAssignment(
@@ -159,7 +213,9 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.create({
             title: "Assignment Created Successfully",
-            description: "GitHub repositories have been created and the assignment is ready.",
+            description: willCreateRepos
+              ? "GitHub repositories have been created and the assignment is ready."
+              : "The assignment is ready.",
             type: "success"
           });
 

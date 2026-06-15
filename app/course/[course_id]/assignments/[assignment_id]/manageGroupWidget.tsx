@@ -916,10 +916,14 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
 
 export default function ManageGroupWidget({
   assignment,
-  repositories
+  repositories,
+  showRepositories = true
 }: {
   assignment: Assignment;
   repositories: Repository[];
+  // Hidden for repo-less modes (none / no_submission), where group management
+  // still applies but there are no Git repositories to link.
+  showRepositories?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
   const { time_zone } = useCourse();
@@ -941,7 +945,7 @@ export default function ManageGroupWidget({
         <Text fontSize="sm" color="fg.muted">
           You will not be able to join a group for this assignment.
         </Text>
-        <RepositoriesInfo repositories={repositories} />
+        {showRepositories && <RepositoriesInfo repositories={repositories} />}
       </Box>
     );
   }
@@ -1016,7 +1020,7 @@ export default function ManageGroupWidget({
         {description}
       </Text>
       {actions}
-      <RepositoriesInfo repositories={repositories} />
+      {showRepositories && <RepositoriesInfo repositories={repositories} />}
     </Box>
   );
 }

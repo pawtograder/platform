@@ -14,6 +14,12 @@ export type SyncTeamArgs = {
   userId?: string; // affected user to ensure org invitation
 };
 
+export type BranchProtectionConfig = {
+  blockForcePush: boolean;
+  requirePullRequest: boolean;
+  requiredReviewers: number;
+};
+
 export type CreateRepoArgs = {
   org: string;
   repoName: string;
@@ -21,6 +27,14 @@ export type CreateRepoArgs = {
   isTemplateRepo?: boolean;
   courseSlug: string;
   githubUsernames: string[]; // direct inputs to sync permissions post-create
+  /** Defaults to "template" — kept optional so existing queue messages still work. */
+  creationMethod?: "template" | "fork";
+  /** Required when creationMethod === "fork"; defaults to templateRepo otherwise. */
+  sourceRepo?: string;
+  /** Per-assignment branch protection ruleset. Defaults to blockForcePush=true. */
+  branchProtection?: BranchProtectionConfig;
+  /** Mode 2 handout: grant the `<slug>-students` team read access. */
+  studentTeamPermission?: "pull" | null;
 };
 
 export type SyncRepoPermissionsArgs = {
@@ -90,6 +104,19 @@ export type SyncRepoToHandoutArgs = {
   from_sha: string | null; // synced_handout_sha
   to_sha: string; // desired_handout_sha
   assignment_title: string;
+  /**
+   * Defaults to "template_pr" (existing behavior). When the student repo is a
+   * GitHub fork (repo_mode = template_with_student_forks or
+   * fork_from_prior_assignment) we prefer "fork_merge_upstream" — one API call
+   * to GitHub's native fork-sync endpoint.
+   */
+  sync_strategy?: "template_pr" | "fork_merge_upstream";
+  /**
+   * For mode 3 (fork_from_prior_assignment) the upstream the student forked
+   * isn't the assignment's template_repo (which is a borrowed copy). It's the
+   * student's own prior-assignment repo. Provide it here when known.
+   */
+  upstream_repo_full_name?: string;
 };
 
 export type FetchRepoAnalyticsArgs = {
