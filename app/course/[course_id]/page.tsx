@@ -28,7 +28,13 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   }
 
   const role = await getEffectiveCourseIdentity(course_id, user_id);
-  if (role?.role === "instructor" || role?.role === "grader") {
+  // No active role in this course (not enrolled / dropped / disabled). Mirror the layout's
+  // behavior and send the user home rather than throwing — the page renders concurrently with
+  // the layout, so a hard throw here surfaces as a 500 even though the layout would redirect.
+  if (!role) {
+    redirect("/");
+  }
+  if (role.role === "instructor" || role.role === "grader") {
     return (
       <Box>
         <Suspense fallback={<CourseHomeDashboardFallback />}>
@@ -37,7 +43,7 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
       </Box>
     );
   }
-  if (!role?.private_profile_id) {
+  if (!role.private_profile_id) {
     throw new Error("No private profile id found");
   }
   const private_profile_id = role.private_profile_id;

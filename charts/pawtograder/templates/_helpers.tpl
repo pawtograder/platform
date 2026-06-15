@@ -162,6 +162,26 @@ label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 {{- end -}}
 
 {{/*
+Per-deployment-channel public host. Each channel (.Values.channels[]) is served
+on its own single-label host so a *.<zone> wildcard TLS cert covers it; the
+channel runs web + edge-functions code against the shared data plane, and the app
+redirects each course to its channel's host (classes.deployment_channel). Defaults
+to "<name>.<global.hostname>"; an entry may set `host` to override.
+Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
+*/}}
+{{- define "pawtograder.channel.host" -}}
+{{- $name := required "channels[].name is required" .channel.name -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
+{{- end -}}
+{{- $host := default (printf "%s.%s" $name .ctx.Values.global.hostname) .channel.host -}}
+{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $host) -}}
+{{- fail (printf "invalid channel host %q for channel %q: must be a DNS hostname" $host $name) -}}
+{{- end -}}
+{{- $host -}}
+{{- end -}}
+
+{{/*
 Internal service hostnames.
 */}}
 {{- define "pawtograder.postgres.host" -}}
