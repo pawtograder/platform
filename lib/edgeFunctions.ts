@@ -310,6 +310,9 @@ export async function unlinkInstructorGitHubAccount(
     body: { ...params, action: "unlink" }
   });
 }
+export async function listGitHubOrgs(supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.ListGitHubOrgsResponse>(supabase, "list-github-orgs", { body: {} });
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;
