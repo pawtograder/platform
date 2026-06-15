@@ -5,7 +5,19 @@
   "branch": "chore/deployment-channels-review-followups",
   "checkpoints_count": 2,
   "files_touched": [
-    "charts/pawtograder/templates/ingress-channels.yaml"
+    ".github/workflows/release-images.yml",
+    "Dockerfile",
+    "charts/pawtograder/templates/_helpers.tpl",
+    "charts/pawtograder/templates/edge-functions-channels.yaml",
+    "charts/pawtograder/templates/ingress-channels.yaml",
+    "charts/pawtograder/templates/ingress.yaml",
+    "charts/pawtograder/templates/web-channels.yaml",
+    "charts/pawtograder/values.yaml",
+    "tests/unit/channels.test.ts",
+    "utils/channels.ts",
+    "utils/supabase/client.ts",
+    "utils/supabase/middleware.ts",
+    "utils/supabase/server.ts"
   ],
   "sessions": [
     {
@@ -13,13 +25,19 @@
       "transcript": "/94/0bb0bb968e/0/full.jsonl",
       "content_hash": "/94/0bb0bb968e/0/content_hash.txt",
       "prompt": "/94/0bb0bb968e/0/prompt.txt"
+    },
+    {
+      "metadata": "/94/0bb0bb968e/1/metadata.json",
+      "transcript": "/94/0bb0bb968e/1/full.jsonl",
+      "content_hash": "/94/0bb0bb968e/1/content_hash.txt",
+      "prompt": "/94/0bb0bb968e/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4849,
-    "cache_creation_tokens": 163277,
-    "cache_read_tokens": 1835341,
-    "output_tokens": 73925,
-    "api_call_count": 27
+    "input_tokens": 10646,
+    "cache_creation_tokens": 338025,
+    "cache_read_tokens": 8099813,
+    "output_tokens": 140712,
+    "api_call_count": 95
   }
 }
