@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "879c13186cf2",
+  "session_id": "6a115428-f349-46ef-8ed8-361643b975ff",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T02:35:22.077924568Z",
+  "branch": "test-coverage",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "utils/supabase/client.ts",
+    "utils/supabase/server.ts",
+    ".github/workflows/coverage.yml",
+    "supabase/functions/_coverage/serve.ts",
+    "scripts/coverage/setup-pg.sh",
+    "scripts/coverage/dump-pg.ts",
+    "scripts/coverage/enrich-lcov.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4dba8b9aaa8a",
+  "token_usage": {
+    "input_tokens": 3142,
+    "cache_creation_tokens": 166929,
+    "cache_read_tokens": 5333985,
+    "output_tokens": 34281,
+    "api_call_count": 69
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T02:35:22.059068421Z",
+    "agent_lines": 190,
+    "agent_removed": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 190,
+    "total_lines_changed": 225,
+    "agent_percentage": 91.11111111111111,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}
