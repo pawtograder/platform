@@ -224,6 +224,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       if (cancelled) return;
       if (error) {
         console.error("Error fetching admin status:", error);
+        // Fail closed: don't leave a stale `true` enabling admin UI after a failed re-check.
+        setIsAdmin(false);
         return;
       }
       setIsAdmin((data?.length ?? 0) > 0);

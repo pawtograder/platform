@@ -9,20 +9,23 @@ import * as Sentry from "npm:@sentry/deno";
  * Only pawtograder.yml and GitHub Actions workflow files are permitted —
  * this function must never be a general-purpose repo write endpoint.
  *
- * Rules are matched against the normalised path (no leading slash, no ".." segments).
+ * Returns the canonical (normalised) path when allowed, or null when not. Callers must use the
+ * returned value for rate-limiting and the GitHub write so validation, throttling, and the
+ * actual write all operate on the same path (e.g. `///pawtograder.yml` can't validate as one
+ * path but write/throttle as another).
  */
-function isAllowedPath(path: string): boolean {
+function normaliseAllowedPath(path: string): string | null {
   // Normalise: strip leading slash, reject traversal sequences.
   const normalised = path.replace(/^\/+/, "");
-  if (normalised.includes("..") || normalised.includes("\0")) return false;
+  if (normalised.includes("..") || normalised.includes("\0")) return null;
 
   // pawtograder.yml at repo root only.
-  if (normalised === "pawtograder.yml" || normalised === "pawtograder.yaml") return true;
+  if (normalised === "pawtograder.yml" || normalised === "pawtograder.yaml") return normalised;
 
   // GitHub Actions workflow files: .github/workflows/<name>.yml|yaml
-  if (/^\.github\/workflows\/[^/]+\.ya?ml$/.test(normalised)) return true;
+  if (/^\.github\/workflows\/[^/]+\.ya?ml$/.test(normalised)) return normalised;
 
-  return false;
+  return null;
 }
 
 // Rate limiting storage: Map<fileKey, timestamp[]>
@@ -105,7 +108,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   // Enforce path allowlist — only pawtograder.yml and .github/workflows/*.yml are editable.
-  if (!isAllowedPath(path)) {
+  // Use the canonical path returned here for everything downstream.
+  const normalisedPath = normaliseAllowedPath(path);
+  if (!normalisedPath) {
     throw new UserVisibleError(
       `Writing to '${path}' is not permitted. Only pawtograder.yml and .github/workflows/*.yml files may be edited.`,
       403
@@ -113,10 +118,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   // Check rate limit before making the GitHub API call
-  checkRateLimit(orgName, repoName, path);
+  checkRateLimit(orgName, repoName, normalisedPath);
 
   try {
-    return await github.writeFileToRepo(orgName + "/" + repoName, path, content, message, sha, scope);
+    return await github.writeFileToRepo(orgName + "/" + repoName, normalisedPath, content, message, sha, scope);
   } catch (error) {
     scope?.setTag("write_file_error", JSON.stringify(error));
     const status =
@@ -126,7 +131,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // client's view is out of date; RepoFileEditor.handleSave reloads on this exact message.
     if (status === 409 || status === 422) {
       throw new UserVisibleError(
-        `The file ${path} changed since you loaded it. Please re-open the editor to get the latest version.`,
+        `The file ${normalisedPath} changed since you loaded it. Please re-open the editor to get the latest version.`,
         409
       );
     }
