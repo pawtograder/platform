@@ -15,6 +15,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
 import BinaryFilePreview from "@/components/ui/binary-file-preview";
+import ExamSubmissionRenderer from "@/components/ui/exam-submission-renderer";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -977,6 +978,8 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
       );
     }
     return <Spinner />;
+  } else if (artifact.data.format === "exam_v1") {
+    return <ExamSubmissionRenderer artifact={artifact} />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }

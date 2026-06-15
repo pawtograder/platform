@@ -164,6 +164,20 @@ export default function AssignmentPage() {
           {enrollment?.role === "student" && (
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
+          {enrollment?.role === "student" && assignment?.assignment_type === "quiz" && (
+            <Box w="100%" maxW="4xl">
+              <Alert.Root status="info" flexDirection="column">
+                <Alert.Title>This is an in-app quiz</Alert.Title>
+                <Alert.Description>
+                  Answer the questions and submit. Objective questions are graded automatically.
+                  <br />
+                  <Link href={`/course/${course_id}/assignments/${assignment_id}/quiz`} fontWeight="bold">
+                    Take the quiz →
+                  </Link>
+                </Alert.Description>
+              </Alert.Root>
+            </Box>
+          )}
           {submissionsPeriod && maxSubmissions ? (
             <Box w="100%" maxW="4xl" data-visual-test="removed">
               <Alert.Root

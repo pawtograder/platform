@@ -34,10 +34,20 @@ export default function NewAssignmentPage() {
   const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
     async function create() {
+      // 'code' = the GitHub/autograder flow; quiz/exam/survey skip repo creation.
+      const assignmentType = ((getValues("assignment_type") as string) || "code") as
+        | "code"
+        | "quiz"
+        | "exam"
+        | "survey";
+      const isCode = assignmentType === "code";
+
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
         title: "Creating Assignment",
-        description: "Creating GitHub repositories for handout and grader... This may take a few moments.",
+        description: isCode
+          ? "Creating GitHub repositories for handout and grader... This may take a few moments."
+          : "Setting up the assignment...",
         type: "loading"
       });
 
@@ -100,9 +110,12 @@ export default function NewAssignmentPage() {
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
             permit_empty_submissions: false,
             total_points: getValues("total_points"),
-            template_repo: getValues("template_repo"),
+            template_repo: isCode ? getValues("template_repo") : null,
             submission_files: getValues("submission_files"),
-            has_autograder: true,
+            assignment_type: assignmentType,
+            // non-code types have no autograder; keep handgrader so a grading rubric +
+            // review exist (the gradebook target for auto/manual scores).
+            has_autograder: isCode,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
             group_config: getValues("group_config"),
@@ -134,24 +147,21 @@ export default function NewAssignmentPage() {
             description: error.message
           });
         } else {
-          await assignmentCreateHandoutRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
-          await assignmentCreateSolutionRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
-          //Potentially copy groups from another assignment
-          if (getValues("copy_groups_from_assignment")) {
-            await assignmentGroupCopyGroupsFromAssignment(
-              {
-                source_assignment_id: getValues("copy_groups_from_assignment"),
-                target_assignment_id: data.id,
-                class_id: Number.parseInt(course_id as string)
-              },
-              supabase
-            );
+          const courseIdNum = Number.parseInt(course_id as string);
+          if (isCode) {
+            await assignmentCreateHandoutRepo({ assignment_id: data.id, class_id: courseIdNum }, supabase);
+            await assignmentCreateSolutionRepo({ assignment_id: data.id, class_id: courseIdNum }, supabase);
+            //Potentially copy groups from another assignment
+            if (getValues("copy_groups_from_assignment")) {
+              await assignmentGroupCopyGroupsFromAssignment(
+                {
+                  source_assignment_id: getValues("copy_groups_from_assignment"),
+                  target_assignment_id: data.id,
+                  class_id: courseIdNum
+                },
+                supabase
+              );
+            }
           }
 
           // Clear the timer and dismiss the loading toast
@@ -159,12 +169,24 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.create({
             title: "Assignment Created Successfully",
-            description: "GitHub repositories have been created and the assignment is ready.",
+            description: isCode
+              ? "GitHub repositories have been created and the assignment is ready."
+              : "The assignment is ready to configure.",
             type: "success"
           });
 
-          void revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
-          router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
+          void revalidateCourseDerivedCachesClient(courseIdNum);
+          const base = `/course/${course_id}/manage/assignments/${data.id}`;
+          // Send the instructor to the right next step for the chosen type.
+          const next =
+            assignmentType === "code"
+              ? `${base}/autograder`
+              : assignmentType === "quiz"
+                ? `${base}/quiz`
+                : assignmentType === "exam"
+                  ? `${base}/exam`
+                  : `/course/${course_id}/manage/surveys/new`; // survey: create + link a survey
+          router.push(next);
         }
       } catch (error) {
         // Clear the timer and dismiss the loading toast
