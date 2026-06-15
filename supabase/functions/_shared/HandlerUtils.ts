@@ -306,7 +306,10 @@ export async function wrapRequestHandler(
           error: {
             recoverable: false,
             message: "Not Found",
-            details: "The requested resource was not found"
+            // Surface the thrower's actionable detail when present (e.g. the
+            // "install the GitHub App on <org>" guidance) instead of swallowing
+            // it; fall back to the generic message otherwise.
+            details: e.details || "The requested resource was not found"
           }
         }),
         {

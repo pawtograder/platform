@@ -14,6 +14,7 @@ import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createHash } from "node:crypto";
 import micromatch from "npm:micromatch";
+import safeRegex from "npm:safe-regex@2";
 import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
@@ -1841,11 +1842,14 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
       classId = matchedRepo.class_id;
     } else if (sha) {
       // Step 2: fork/shared-project -- resolve class via a matching submission.
+      // Match either column: pr-mode submissions store the commit in `head_sha`,
+      // push-mode submissions store it in `sha` (head_sha NULL). Matching only
+      // head_sha silently drops deployments for push-mode submissions.
       const { data: matchedSubmission, error: submissionError } = await adminSupabase
         .from("submissions")
         .select("class_id")
         .eq("repository", repoFullName)
-        .eq("head_sha", sha)
+        .or(`head_sha.eq.${sha},sha.eq.${sha}`)
         .limit(1)
         .maybeSingle();
       if (submissionError) {
@@ -1945,11 +1949,16 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   // Which assignments treat this repo as their upstream/class repo? (Could be
   // several — the same handout repo can back assignments in multiple classes.)
+  // `upstream_repo` is matched case-insensitively (GitHub names are case-insensitive),
+  // but `.ilike()` treats the value as a LIKE pattern, so a literal `_` or `%` in a repo
+  // name would act as a wildcard and over-match a *different* assignment's upstream_repo.
+  // Escape LIKE metacharacters so this stays an exact (case-insensitive) match.
+  const upstreamRepoPattern = upstreamRepo.replace(/[\\%_]/g, "\\$&");
   const { data: assignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
     .eq("submission_mode", "pr")
-    .ilike("upstream_repo", upstreamRepo);
+    .ilike("upstream_repo", upstreamRepoPattern);
   if (assignmentsError) {
     console.log(`[PR_INGEST] error: assignments lookup failed: ${assignmentsError.message} ${ctx}`);
     Sentry.captureException(assignmentsError, scope);
@@ -1965,6 +1974,34 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   scope.setTag("pr_submission_repo", upstreamRepo);
   scope.setTag("pr_number", prNumber.toString());
+
+  // Closing/merging/reopening never carries new code, so it needs no fork, no
+  // attributable repository row, and none of the identification gates below —
+  // all of which can change *after* a submission was first ingested (fork
+  // deleted, repo row cleaned up, staff edited pr_branch_convention or
+  // upstream_base_branch). Reflect the state on every matching pr-mode
+  // assignment up front so a stale config or a missing fork can't strand the
+  // stored PR state. set_pr_state is keyed by (assignment, repo, pr_number) and
+  // no-ops where no submission exists, so the broadcast is safe.
+  if (action === "closed") {
+    for (const target of assignments) {
+      console.log(
+        `[PR_INGEST] assignment=${target.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`
+      );
+      const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
+        p_assignment_id: target.id,
+        p_pr_repo: upstreamRepo,
+        p_pr_number: prNumber,
+        p_pr_state: prState
+      });
+      if (stateError) {
+        console.log(`[PR_INGEST] error assignment=${target.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
+        Sentry.captureException(stateError, scope);
+      }
+    }
+    console.log(`[PR_INGEST] done ${ctx}`);
+    return;
+  }
 
   if (!headRepo) {
     // No head repo (fork deleted, or a same-repo PR with no fork) — there is no
@@ -2019,6 +2056,18 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
       );
       return; // Misconfigured convention — skip rather than crash the webhook.
     }
+    // pr_branch_convention is instructor-authored, but it's matched against a
+    // student-controlled branch name (headRef). Reject patterns that aren't
+    // provably ReDoS-safe so a catastrophic-backtracking convention can't hang
+    // the webhook on a crafted branch name. Run this on the compiled regex (so a
+    // syntactically invalid pattern is already handled above — safeRegex throws
+    // on unparseable input). Treated like a misconfiguration: skip and log.
+    if (!safeRegex(re)) {
+      console.log(
+        `[PR_INGEST] skip assignment=${a.id}: unsafe pr_branch_convention /${a.pr_branch_convention}/ (ReDoS guard) ${ctx}`
+      );
+      return;
+    }
     if (!re.test(headRef)) {
       console.log(
         `[PR_INGEST] skip assignment=${a.id}: head '${headRef}' fails convention /${a.pr_branch_convention}/ ${ctx}`
@@ -2047,23 +2096,8 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     return;
   }
 
-  // Closing/merging never creates a new version — just reflect the state.
-  if (action === "closed") {
-    console.log(`[PR_INGEST] assignment=${a.id}: action=closed -> set_pr_state '${prState}' (no new version) ${ctx}`);
-    const { error: stateError } = await adminSupabase.rpc("set_pr_state", {
-      p_assignment_id: a.id,
-      p_pr_repo: upstreamRepo,
-      p_pr_number: prNumber,
-      p_pr_state: prState
-    });
-    if (stateError) {
-      console.log(`[PR_INGEST] error assignment=${a.id}: set_pr_state failed: ${stateError.message} ${ctx}`);
-      Sentry.captureException(stateError, scope);
-    }
-    console.log(`[PR_INGEST] done ${ctx}`);
-    return;
-  }
-
+  // Closing/merging is handled up front (before the attribution gates); by here
+  // the action is an open/sync/reopen event that may create a new version.
   const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
     p_assignment_id: a.id,
     p_profile_id: groupId ? undefined : (profileId ?? undefined),
