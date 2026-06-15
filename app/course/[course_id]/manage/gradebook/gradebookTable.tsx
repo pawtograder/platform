@@ -1682,6 +1682,94 @@ function GenericGradebookColumnHeader({
 
 type ReleaseSectionGroup = { id: number | null; name: string; studentIds: string[]; released: number };
 
+// Unified header release-badge status for a single gradebook column (see GradebookColumnHeader).
+type ReleaseStatus =
+  | { kind: "staff_only" }
+  | { kind: "calculated"; allReleased: boolean }
+  | { kind: "released" }
+  | { kind: "not_released" }
+  | { kind: "mixed"; released: number; total: number };
+
+type ProfileSectionData = {
+  classSection: { id: number | null; name: string };
+  labSection: { id: number | null; name: string };
+};
+
+/**
+ * Maps each enrolled student's private_profile_id to their class- and lab-section id+name.
+ * Shared by GradebookTable (the section grouping columns) and ReleaseStatsModal (the per-section
+ * release breakdown) so the class/lab-section fetch and role iteration live in exactly one place.
+ */
+function useProfileIdToSectionData(): Record<string, ProfileSectionData> {
+  const { course_id } = useParams();
+  const students = useAllStudentRoles();
+  const courseController = useCourseController();
+  const { data: classSections } = useList<ClassSection>({
+    resource: "class_sections",
+    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
+    queryOptions: { staleTime: Infinity, cacheTime: Infinity },
+    pagination: { pageSize: 1000 }
+  });
+  const { data: labSections } = courseController.listLabSections();
+  return useMemo(() => {
+    const map: Record<string, ProfileSectionData> = {};
+    students.forEach((role) => {
+      if (role.role !== "student") return;
+      const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
+      const labSection = labSections?.find((s) => s.id === role.lab_section_id);
+      map[role.private_profile_id] = {
+        classSection: { id: role.class_section_id ?? null, name: classSection?.name ?? "No Section" },
+        labSection: { id: role.lab_section_id ?? null, name: labSection?.name ?? "No Lab Section" }
+      };
+    });
+    return map;
+  }, [students, classSections?.data, labSections]);
+}
+
+/**
+ * Single entry point for the per-student release RPC (set_gradebook_column_students_released),
+ * shared by the column header's "Release visible" action and the release-details modal so the
+ * RPC contract, busy state, and toast/error handling live in one place. Pass custom toast copy via
+ * `opts` where the call site needs more specific wording.
+ */
+function useSetColumnStudentsReleased(columnId: number) {
+  const supabase = useMemo(() => createClient(), []);
+  const [isBusy, setIsBusy] = useState(false);
+  const setReleased = useCallback(
+    async (studentIds: string[], released: boolean, opts?: { successTitle?: string; successDescription?: string }) => {
+      if (studentIds.length === 0) return;
+      setIsBusy(true);
+      try {
+        const { error } = await supabase.rpc("set_gradebook_column_students_released", {
+          p_column_id: columnId,
+          p_student_ids: studentIds,
+          p_released: released
+        });
+        if (error) throw error;
+        toaster.create({
+          title: opts?.successTitle ?? (released ? "Released" : "Unreleased"),
+          description:
+            opts?.successDescription ??
+            `${released ? "Released" : "Unreleased"} for ${studentIds.length} student${
+              studentIds.length === 1 ? "" : "s"
+            }.`,
+          type: "success"
+        });
+      } catch (error) {
+        toaster.create({
+          title: released ? "Failed to release" : "Failed to unrelease",
+          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          type: "error"
+        });
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [columnId, supabase]
+  );
+  return { setReleased, isBusy };
+}
+
 /**
  * Detailed release breakdown for a single (normal) gradebook column: overall released/not totals
  * plus a per class-section and per lab-section breakdown, with inline release/unrelease actions.
@@ -1696,56 +1784,36 @@ function ReleaseStatsModal({
   visibleStudentIds: string[];
   onClose: () => void;
 }) {
-  const { course_id } = useParams();
   const column = useGradebookColumn(columnId);
   const grades = useGradebookColumnGrades(columnId);
   const students = useAllStudentRoles();
-  const courseController = useCourseController();
-  const supabase = useMemo(() => createClient(), []);
-  const [isBusy, setIsBusy] = useState(false);
+  const profileIdToSectionData = useProfileIdToSectionData();
+  const { setReleased: apply, isBusy } = useSetColumnStudentsReleased(columnId);
 
-  const { data: classSections } = useList<ClassSection>({
-    resource: "class_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
-    queryOptions: { staleTime: Infinity, cacheTime: Infinity },
-    pagination: { pageSize: 1000 }
-  });
-  const { data: labSections } = courseController.listLabSections();
-
-  // One released flag per student (grades may carry both private and public rows; the private row
-  // holds the authoritative instructor-set release state).
+  // One released flag per student. Seed every enrolled student (not just those who already have a
+  // gradebook_column_students row) so the "N of M" denominator and the bulk actions cover the whole
+  // roster; a missing row means the student cannot see the grade yet (not released). Grades may
+  // carry both private and public rows; the private row holds the authoritative release state.
   const releasedByStudent = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const g of grades) {
       if (!g.student_id) continue;
       if (!m.has(g.student_id) || g.is_private) m.set(g.student_id, !!g.released);
     }
+    for (const role of students) {
+      if (role.role === "student" && !m.has(role.private_profile_id)) m.set(role.private_profile_id, false);
+    }
     return m;
-  }, [grades]);
-
-  const sectionByStudent = useMemo(() => {
-    const m = new Map<string, { classId: number | null; className: string; labId: number | null; labName: string }>();
-    students.forEach((role) => {
-      if (role.role !== "student") return;
-      const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
-      const labSection = labSections?.find((s) => s.id === role.lab_section_id);
-      m.set(role.private_profile_id, {
-        classId: role.class_section_id ?? null,
-        className: classSection?.name ?? "No Section",
-        labId: role.lab_section_id ?? null,
-        labName: labSection?.name ?? "No Lab Section"
-      });
-    });
-    return m;
-  }, [students, classSections?.data, labSections]);
+  }, [grades, students]);
 
   const buildGroups = useCallback(
     (kind: "class" | "lab"): ReleaseSectionGroup[] => {
       const byKey = new Map<string, ReleaseSectionGroup>();
       for (const [studentId, released] of releasedByStudent) {
-        const sec = sectionByStudent.get(studentId);
-        const id = kind === "class" ? (sec?.classId ?? null) : (sec?.labId ?? null);
-        const name = kind === "class" ? (sec?.className ?? "No Section") : (sec?.labName ?? "No Lab Section");
+        const sec = profileIdToSectionData[studentId];
+        const section = kind === "class" ? sec?.classSection : sec?.labSection;
+        const id = section?.id ?? null;
+        const name = section?.name ?? (kind === "class" ? "No Section" : "No Lab Section");
         const key = String(id ?? `none:${name}`);
         const group = byKey.get(key) ?? { id, name, studentIds: [], released: 0 };
         group.studentIds.push(studentId);
@@ -1754,7 +1822,7 @@ function ReleaseStatsModal({
       }
       return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
     },
-    [releasedByStudent, sectionByStudent]
+    [releasedByStudent, profileIdToSectionData]
   );
 
   const totalStudents = releasedByStudent.size;
@@ -1764,37 +1832,6 @@ function ReleaseStatsModal({
   );
   const classGroups = useMemo(() => buildGroups("class"), [buildGroups]);
   const labGroups = useMemo(() => buildGroups("lab"), [buildGroups]);
-
-  const apply = useCallback(
-    async (studentIds: string[], released: boolean) => {
-      if (studentIds.length === 0) return;
-      setIsBusy(true);
-      try {
-        const { error } = await supabase.rpc("set_gradebook_column_students_released", {
-          p_column_id: columnId,
-          p_student_ids: studentIds,
-          p_released: released
-        });
-        if (error) throw error;
-        toaster.create({
-          title: released ? "Released" : "Unreleased",
-          description: `${released ? "Released" : "Unreleased"} for ${studentIds.length} student${
-            studentIds.length === 1 ? "" : "s"
-          }.`,
-          type: "success"
-        });
-      } catch (error) {
-        toaster.create({
-          title: "Update failed",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
-          type: "error"
-        });
-      } finally {
-        setIsBusy(false);
-      }
-    },
-    [columnId, supabase]
-  );
 
   const renderSectionTable = (label: string, groups: ReleaseSectionGroup[]) => (
     <Box>
@@ -1986,12 +2023,8 @@ function GradebookColumnHeader({
   // can tell at a glance what students see (issue #524). For normal columns it is derived from the
   // per-student rows (so a per-section release reads as "mixed"); calculated columns follow their
   // dependencies; staff-only columns are hidden until released.
-  const releaseStatus = useMemo(():
-    | { kind: "staff_only" }
-    | { kind: "calculated"; allReleased: boolean }
-    | { kind: "released" }
-    | { kind: "not_released" }
-    | { kind: "mixed"; released: number; total: number } => {
+  const isRefetching = useGradebookRefetchStatus();
+  const liveReleaseStatus = useMemo((): ReleaseStatus => {
     if (column.instructor_only) return { kind: "staff_only" };
     if (column.score_expression) return { kind: "calculated", allReleased: areAllDependenciesReleased };
     const total = allGrades.length;
@@ -2001,6 +2034,17 @@ function GradebookColumnHeader({
     if (releasedCount === total) return { kind: "released" };
     return { kind: "mixed", released: releasedCount, total };
   }, [column.instructor_only, column.score_expression, column.released, areAllDependenciesReleased, allGrades]);
+  // During a refetch, useGradebookColumnGrades blanks to [] to avoid showing partial data. For a
+  // normal column that would make `total === 0` momentarily fall back to column.released and flip a
+  // mixed/released badge to "Not released". Retain the last computed status across that transient
+  // blank instead of downgrading it.
+  const lastStableStatusRef = useRef<ReleaseStatus>(liveReleaseStatus);
+  const isBlankingRefetch =
+    isRefetching && !column.instructor_only && !column.score_expression && allGrades.length === 0;
+  if (!isBlankingRefetch) {
+    lastStableStatusRef.current = liveReleaseStatus;
+  }
+  const releaseStatus = isBlankingRefetch ? lastStableStatusRef.current : liveReleaseStatus;
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
@@ -2009,8 +2053,9 @@ function GradebookColumnHeader({
   const [isMovingRight, setIsMovingRight] = useState(false);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isUnreleasing, setIsUnreleasing] = useState(false);
-  const [isReleasingVisible, setIsReleasingVisible] = useState(false);
   const [showReleaseStats, setShowReleaseStats] = useState(false);
+  const { setReleased: setColumnStudentsReleased, isBusy: isReleasingVisible } =
+    useSetColumnStudentsReleased(column_id);
   const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
   const isMovingRef = useRef(false);
@@ -2156,7 +2201,7 @@ function GradebookColumnHeader({
   // release from dependencies, and instructor-only columns use the permanent atomic release path.
   const canReleasePerStudent = !column.score_expression && !column.instructor_only;
   const releaseVisible = useCallback(
-    async (released: boolean) => {
+    (released: boolean) => {
       const studentIds = visibleStudentIds ?? [];
       if (studentIds.length === 0) {
         toaster.create({
@@ -2166,32 +2211,14 @@ function GradebookColumnHeader({
         });
         return;
       }
-      setIsReleasingVisible(true);
-      try {
-        const { error } = await supabase.rpc("set_gradebook_column_students_released", {
-          p_column_id: column_id,
-          p_student_ids: studentIds,
-          p_released: released
-        });
-        if (error) throw error;
-        toaster.create({
-          title: released ? "Released to visible students" : "Unreleased for visible students",
-          description: `${released ? "Released" : "Unreleased"} "${column.name}" for ${studentIds.length} student${
-            studentIds.length === 1 ? "" : "s"
-          }.`,
-          type: "success"
-        });
-      } catch (error) {
-        toaster.create({
-          title: released ? "Failed to release" : "Failed to unrelease",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
-          type: "error"
-        });
-      } finally {
-        setIsReleasingVisible(false);
-      }
+      return setColumnStudentsReleased(studentIds, released, {
+        successTitle: released ? "Released to visible students" : "Unreleased for visible students",
+        successDescription: `${released ? "Released" : "Unreleased"} "${column.name}" for ${studentIds.length} student${
+          studentIds.length === 1 ? "" : "s"
+        }.`
+      });
     },
-    [column_id, column.name, supabase, visibleStudentIds]
+    [setColumnStudentsReleased, column.name, visibleStudentIds]
   );
 
   const toolTipText = useMemo(() => {
@@ -2941,35 +2968,8 @@ export default function GradebookTable() {
   // Get lab sections from course controller
   const { data: labSections } = courseController.listLabSections();
 
-  // Map profile id to section ids and names
-  const profileIdToSectionData = useMemo(() => {
-    const map: Record<
-      string,
-      {
-        classSection: { id: number | null; name: string };
-        labSection: { id: number | null; name: string };
-      }
-    > = {};
-
-    students.forEach((role) => {
-      if (role.role === "student") {
-        const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
-        const labSection = labSections?.find((s) => s.id === role.lab_section_id);
-
-        map[role.private_profile_id] = {
-          classSection: {
-            id: role.class_section_id ?? null,
-            name: classSection?.name ?? "No Section"
-          },
-          labSection: {
-            id: role.lab_section_id ?? null,
-            name: labSection?.name ?? "No Lab Section"
-          }
-        };
-      }
-    });
-    return map;
-  }, [students, classSections?.data, labSections]);
+  // Map profile id to section ids and names (shared with ReleaseStatsModal).
+  const profileIdToSectionData = useProfileIdToSectionData();
 
   const columnsForGrouping = gradebookColumns.map((col) => ({
     id: col.id,

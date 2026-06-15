@@ -364,7 +364,14 @@ export function useAreAllDependenciesReleased(columnId: number): boolean {
     const allReleased = allDependencyColumnIds.every((depId) => {
       const depColumn = gradebookController.getGradebookColumn(depId);
       if (!depColumn) return false;
-      return depColumn.released;
+      // The column-level flag means the column was released atomically to all students.
+      if (depColumn.released) return true;
+      // Otherwise it may still be released to every student via per-section release, which
+      // deliberately never sets the column-level flag (see set_gradebook_column_students_released).
+      // Derive "released for all" from the per-student rows so the calculated-column badge does
+      // not falsely report "partially visible" when every student can in fact see the value.
+      const rows = gradebookController.getStudentsForColumn(depId);
+      return rows.length > 0 && rows.every((r) => r.released);
     });
 
     setDependenciesReleased(allReleased);

@@ -407,7 +407,11 @@ function buildImports(math: MathJSInstance, gradebookController: GradebookContro
           is_private: columnStudent?.is_private ?? false,
           incomplete_values: columnStudent?.incomplete_values ?? null,
           released,
-          is_released: released
+          // is_released reflects the *actual* per-student release flag, not the override-inflated
+          // `released` above (which is forced true for any score_override). This keeps the static
+          // preview's is_released(...) in agreement with the live what-if and server recalc, which
+          // both key on the real public-row release rather than the presence of an override.
+          is_released: columnStudent?.released ?? false
         };
         // Propagate not_released / missing for report_only policy so the
         // caller can see which slugs caused undefined intermediates.

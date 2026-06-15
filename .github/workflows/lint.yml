@@ -44,3 +44,21 @@ jobs:
           deno-version: v2.x
       - name: Run Deno unit tests
         run: npm run test:functions
+      # test:functions runs with --no-check (the generated _shared/SupabaseTypes.d.ts carries a
+      # long-standing illegal ambient `export const Constants`, which cannot be hand-edited and is
+      # regenerated from the schema). Without this step, type errors in the release-aware expression
+      # code (is_released / assignment_released / DependencySource) would be caught nowhere in CI.
+      # Run a real type-check and fail on any error whose location is NOT that one generated file.
+      - name: Type-check Deno expression functions
+        working-directory: supabase/functions/gradebook-column-recalculate
+        run: |
+          output="$(deno check **/*.ts 2>&1 || true)"
+          echo "$output"
+          # Every Deno type error prints an "at <file>:line:col" location line. Keep only those that
+          # point somewhere other than the known-bad generated SupabaseTypes.d.ts.
+          real_errors="$(printf '%s\n' "$output" | grep -E '^\s*at .+:[0-9]+:[0-9]+' | grep -v 'SupabaseTypes.d.ts' || true)"
+          if [ -n "$real_errors" ]; then
+            echo "::error::Deno type errors found in expression functions (excluding the known generated-file issue):"
+            printf '%s\n' "$real_errors"
+            exit 1
+          fi

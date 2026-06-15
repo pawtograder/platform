@@ -1,4 +1,5 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
+import { matrix } from "mathjs";
 import { addCommonExpressionFunctions } from "./commonMathFunctions.ts";
 import { pickPreferredGradebookValue } from "./shared.ts";
 
@@ -121,6 +122,22 @@ Deno.test("is_released: non-gradebook operands (bare numbers) are not released",
   const f = fns();
   assertEquals(f["is_released"](42), false);
   assertEquals(f["is_released"](undefined), false);
+});
+
+Deno.test("is_released: array operand (e.g. gradebook_columns glob) is released iff all elements are", () => {
+  const f = fns();
+  // All released → true.
+  assertEquals(f["is_released"]([gv(80, 100, { released: true }), gv(90, 100, { released: true })]), true);
+  // Any unreleased element → false (no longer silently false for the whole array).
+  assertEquals(f["is_released"]([gv(80, 100, { released: true }), gv(90, 100, { released: false })]), false);
+  // Empty array is vacuously released.
+  assertEquals(f["is_released"]([]), true);
+});
+
+Deno.test("is_released: dense-matrix operand maps element-wise", () => {
+  const f = fns();
+  assertEquals(f["is_released"](matrix([gv(80, 100, { released: true }), gv(90, 100, { released: true })])), true);
+  assertEquals(f["is_released"](matrix([gv(80, 100, { released: true }), gv(90, 100, { released: false })])), false);
 });
 
 Deno.test("is_released: usable as a case_when condition", () => {
