@@ -112,7 +112,10 @@ jobs:
           fi
           short_sha="${sha:0:7}"
           hostname="pr-${preview_id}.${PREVIEW_DOMAIN}"
-          api_hostname="api.pr-${preview_id}.${PREVIEW_DOMAIN}"
+          # Single-label api host so the *.preview.pawtograder.net wildcard cert
+          # covers it (matches the chart's pawtograder.api.hostname helper /
+          # global.apiHostnameFlatten). Was api.pr-${preview_id}.${PREVIEW_DOMAIN}.
+          api_hostname="pr-${preview_id}-api.${PREVIEW_DOMAIN}"
           tag="pr-${preview_id}-${short_sha}"
           release="pawtograder"
           namespace="pawtograder-preview-pr-${preview_id}"

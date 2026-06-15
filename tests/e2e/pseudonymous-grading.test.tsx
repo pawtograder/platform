@@ -278,6 +278,25 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
+    // "Completed by" appears from the optimistic TableController update (it marks the row
+    // __db_pending and renders immediately, before the awaited PATCH to submission_reviews
+    // resolves). Navigating to the manage page in the very next step aborts that in-flight
+    // write, so completed_at intermittently never persists (observed ~25% on WebKit) while
+    // `released` — set later by a separate RPC — does. A later page load (e.g. the
+    // "real name in parentheses" view) then shows the "Complete Review" button again, and the
+    // review-completion block's differing height shifts the whole sidebar → a visual-snapshot
+    // flake. Wait for completed_at to actually land before navigating away, exactly as the
+    // `released` poll below does.
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("completed_at")
+        .eq("submission_id", submission_id!)
+        .eq("rubric_id", assignment!.grading_rubric_id!)
+        .not("completed_at", "is", null);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
+
     // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
 

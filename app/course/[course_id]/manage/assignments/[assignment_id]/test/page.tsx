@@ -10,6 +10,7 @@ import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
+import type { MouseEvent } from "react";
 
 export default function TestAssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -17,7 +18,7 @@ export default function TestAssignmentPage() {
     resource: "assignments",
     id: Number.parseInt(assignment_id as string)
   });
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, enterViewAs } = useClassProfiles();
   const { data: submissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -48,13 +49,30 @@ export default function TestAssignmentPage() {
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }
+  const submissionLinkProps = (href: string) => ({
+    href,
+    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      enterViewAs(private_profile_id, href);
+    }
+  });
   return (
     <Box>
       <Heading size="sm">Test Assignment</Heading>
       <Text fontSize="sm" color="fg.muted">
-        You can create your own repository to test the assignment. The view below is similar to what students will see.
-        However, when you view the details of your submission, you will see the autograder results and the rubric
-        (students may not see the rubric or hidden autograder results).
+        You can create your own repository to test the assignment. Submission details open in student view with the same
+        read-only banner, grade-release rules, rubric visibility, and hidden autograder-output behavior students see.
+        Use the banner to exit student view and compare the instructor or grader view.
       </Text>
       {/* {repository?.data.length ? (
         <CreateStudentReposButton syncAllPermissions />
@@ -89,46 +107,53 @@ export default function TestAssignmentPage() {
           <Table.Body>
             {submissions.data.map((submission) => (
               <Table.Row key={submission.id}>
-                <Table.Cell>
-                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {submission.is_active ? <ActiveSubmissionIcon /> : ""}
-                    {submission.id}
-                  </Link>
-                </Table.Cell>
-                <Table.Cell>
-                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    <TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />
-                  </Link>
-                </Table.Cell>
-                <Table.Cell>
-                  {submission.sha && submission.repository ? (
-                    <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
-                      {submission.sha.slice(0, 7)}
-                    </Link>
-                  ) : submission.submitted_via === "manual" ? (
-                    <span>Manual</span>
-                  ) : (
-                    <span>Upload</span>
-                  )}
-                </Table.Cell>
-                <Table.Cell>
-                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {!submission.grader_results
-                      ? "In Progress"
-                      : submission.grader_results && submission.grader_results.errors
-                        ? "Error"
-                        : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
-                  </Link>
-                </Table.Cell>
-                <Table.Cell>
-                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {submission.submission_reviews?.completed_at
-                      ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
-                      : submission.is_active
-                        ? "Pending"
-                        : ""}
-                  </Link>
-                </Table.Cell>
+                {(() => {
+                  const submissionHref = `/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`;
+                  return (
+                    <>
+                      <Table.Cell>
+                        <Link {...submissionLinkProps(submissionHref)}>
+                          {submission.is_active ? <ActiveSubmissionIcon /> : ""}
+                          {submission.id}
+                        </Link>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Link {...submissionLinkProps(submissionHref)}>
+                          <TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />
+                        </Link>
+                      </Table.Cell>
+                      <Table.Cell>
+                        {submission.sha && submission.repository ? (
+                          <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                            {submission.sha.slice(0, 7)}
+                          </Link>
+                        ) : submission.submitted_via === "manual" ? (
+                          <span>Manual</span>
+                        ) : (
+                          <span>Upload</span>
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Link {...submissionLinkProps(submissionHref)}>
+                          {!submission.grader_results
+                            ? "In Progress"
+                            : submission.grader_results && submission.grader_results.errors
+                              ? "Error"
+                              : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                        </Link>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Link {...submissionLinkProps(submissionHref)}>
+                          {submission.submission_reviews?.completed_at
+                            ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
+                            : submission.is_active
+                              ? "Pending"
+                              : ""}
+                        </Link>
+                      </Table.Cell>
+                    </>
+                  );
+                })()}
               </Table.Row>
             ))}
           </Table.Body>

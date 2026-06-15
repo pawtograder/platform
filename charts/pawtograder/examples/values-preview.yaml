@@ -19,7 +19,14 @@
 global:
   # Set per-preview from CI: e.g. pr-123.preview.pawtograder.net
   hostname: REPLACE_PER_PREVIEW.preview.pawtograder.net
+  # Keep the API on its own host (prod-like topology), but FLATTEN it to a
+  # single label — pr-123-api.preview.pawtograder.net instead of
+  # api.pr-123.preview.pawtograder.net — so the shared *.preview.pawtograder.net
+  # wildcard cert covers it (a TLS wildcard spans only one label). REQUIRES the
+  # matching preview.yml change (see deploy/preview-tls/README.md):
+  # api_hostname must use the same pr-<N>-api.<domain> scheme.
   apiOnSeparateHost: true
+  apiHostnameFlatten: true
   # Previews run on the general worker pool, NOT the prod-staging tier.
   # Keep node selectors / tolerations empty.
   nodeSelector: {}
@@ -31,20 +38,23 @@ global:
 secrets:
   autogenerate: true
 
-# Single Ingress for the chart's main hosts. The cert-manager annotation
-# auto-provisions a Certificate per preview from the *.pawtograder.net
-# wildcard issuer.
+# Single Ingress for the chart's main host. No cert-manager.io/cluster-issuer
+# annotation on purpose: previews do NOT mint their own cert. They consume the
+# shared *.preview.pawtograder.net wildcard cert, which is reflected into every
+# pawtograder-preview-* namespace as Secret `pawtograder-preview-wildcard-tls`.
+# This avoids Let's Encrypt's per-identifier (5/wk) and per-domain (50/wk) rate
+# limits that per-PR issuance hits under churn. See deploy/preview-tls/.
 ingress:
   enabled: true
   className: nginx
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-body-size: "55m"
   tls:
     enabled: true
-    secretName: pawtograder-preview-tls
+    # The reflected wildcard Secret (NOT a per-preview cert-manager secret).
+    secretName: pawtograder-preview-wildcard-tls
 
 # ----- Postgres on shared ceph-rbd (no local SSD) ----------------------------
 postgres:

@@ -18,6 +18,18 @@
         "current": { "selected": false, "text": "All", "value": "$__all" },
         "includeAll": true,
         "multi": true
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace (logs)",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values(namespace)",
+        "regex": "/pawtograder-.*/",
+        "refresh": 1,
+        "current": { "selected": true, "text": "pawtograder-staging", "value": "pawtograder-staging" },
+        "includeAll": false,
+        "multi": false
       }
     ]
   },
@@ -156,6 +168,31 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 40,
+      "type": "logs",
+      "title": "Logs — $namespace / $fn",
+      "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function.",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 38 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "editorMode": "code",
+          "queryType": "range",
+          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
     }
   ]
 }
