@@ -3,6 +3,7 @@
 import { examExtractTemplate } from "@/lib/edgeFunctions";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
+import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, Flex, Heading, HStack, Input, NativeSelect, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,6 +11,9 @@ type NormRect = { x: number; y: number; width: number; height: number };
 type TemplatePage = { page_number: number; image_path: string; width: number; height: number };
 
 type EditorQuestion = {
+  // Persisted exam_questions.id (null = new). Sent back on save so exam_upsert_questions_and_regions
+  // UPDATEs in place and ids stay stable (keeps the rubric back-references matching).
+  id: number | null;
   client_id: string;
   parent_client_id: string | null;
   level: 1 | 2 | 3;
@@ -17,6 +21,13 @@ type EditorQuestion = {
   label: string;
   answer_type: string;
   points: number;
+  // Carried through (not edited in this region UI) so "Save structure" doesn't wipe the
+  // prompt/choices/answer-key authored in the Quiz Builder: the upsert writes every column
+  // from this payload, NULLing any field we omit.
+  prompt: string;
+  choices: string[];
+  correct_answer: Json;
+  grading_tolerance: number | null;
 };
 type EditorRegion = {
   client_id: string;
@@ -64,7 +75,9 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
 
       const { data: qRows, error: qErr } = await supabase
         .from("exam_questions")
-        .select("id, parent_id, level, ordinal, label, answer_type, points")
+        .select(
+          "id, parent_id, level, ordinal, label, prompt, answer_type, choices, points, correct_answer, grading_tolerance"
+        )
         .eq("exam_id", examId)
         .order("level")
         .order("ordinal");
@@ -73,14 +86,20 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       const qs: EditorQuestion[] = (qRows ?? []).map((q) => {
         const cid = uid();
         idToClient.set(q.id, cid);
+        const rawChoices = q.choices as unknown;
         return {
+          id: q.id,
           client_id: cid,
           parent_client_id: null,
           level: (q.level as 1 | 2 | 3) ?? 1,
           ordinal: Number(q.ordinal ?? 0),
           label: q.label ?? "",
           answer_type: q.answer_type ?? "free_text",
-          points: Number(q.points ?? 0)
+          points: Number(q.points ?? 0),
+          prompt: q.prompt ?? "",
+          choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
+          correct_answer: q.correct_answer ?? null,
+          grading_tolerance: q.grading_tolerance == null ? null : Number(q.grading_tolerance)
         };
       });
       // resolve parents
@@ -122,13 +141,18 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     setQuestions((qs) => [
       ...qs,
       {
+        id: null,
         client_id: uid(),
         parent_client_id: parent,
         level,
         ordinal: qs.filter((q) => q.level === level).length,
         label: `${level === 1 ? "Part" : level === 2 ? "Question" : "Item"} ${qs.filter((q) => q.level === level).length + 1}`,
         answer_type: "free_text",
-        points: level === 3 ? 1 : 0
+        points: level === 3 ? 1 : 0,
+        prompt: "",
+        choices: [],
+        correct_answer: null,
+        grading_tolerance: null
       }
     ]);
   }, []);
@@ -213,13 +237,18 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
         p_exam_id: examId,
         p_questions: questions.map((q) => ({
+          id: q.id ?? null,
           client_id: q.client_id,
           parent_client_id: q.parent_client_id,
           level: q.level,
           ordinal: q.ordinal,
           label: q.label,
+          prompt: q.prompt,
           answer_type: q.answer_type,
-          points: q.points
+          choices: q.choices,
+          points: q.points,
+          correct_answer: q.correct_answer,
+          grading_tolerance: q.grading_tolerance
         })),
         p_regions: regions.map((r) => ({
           question_client_id: r.question_client_id,
@@ -249,15 +278,23 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
         return;
       }
       setQuestions(
-        proposal.questions.map((q) => ({
-          client_id: q.client_id,
-          parent_client_id: q.parent_client_id ?? null,
-          level: q.level,
-          ordinal: q.ordinal,
-          label: q.label ?? "",
-          answer_type: q.answer_type ?? "free_text",
-          points: q.points ?? 0
-        }))
+        proposal.questions.map((q) => {
+          const rawChoices = q.choices as unknown;
+          return {
+            id: null,
+            client_id: q.client_id,
+            parent_client_id: q.parent_client_id ?? null,
+            level: q.level,
+            ordinal: q.ordinal,
+            label: q.label ?? "",
+            answer_type: q.answer_type ?? "free_text",
+            points: q.points ?? 0,
+            prompt: q.prompt ?? "",
+            choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
+            correct_answer: null,
+            grading_tolerance: null
+          };
+        })
       );
       setRegions(
         proposal.regions.map((r) => ({

@@ -54,7 +54,7 @@ export default async function ManageAssignmentLayout({
   const client = await createClientWithCaching({ tags: ["assignment_metadata"] });
   const { data: assignment } = await client
     .from("assignments")
-    .select("title")
+    .select("title, assignment_type")
     .eq("id", assignmentId)
     .eq("class_id", courseId)
     .single();
@@ -65,7 +65,9 @@ export default async function ManageAssignmentLayout({
 
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
+      <ManageAssignmentNav assignmentTitle={assignment.title} assignmentType={assignment.assignment_type ?? "code"}>
+        {children}
+      </ManageAssignmentNav>
     </AssignmentProvider>
   );
 }

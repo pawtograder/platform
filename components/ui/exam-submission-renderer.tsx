@@ -29,7 +29,7 @@ function RegionCrop({ url, region, height = 120 }: { url: string; region: NormRe
         height: `${height}px`,
         backgroundImage: `url("${url}")`,
         backgroundRepeat: "no-repeat",
-        backgroundSize: `${100 / region.width}% ${100 / region.height}%`,
+        backgroundSize: `${region.width > 0 ? 100 / region.width : 100}% ${region.height > 0 ? 100 / region.height : 100}%`,
         backgroundPosition: `${posX}% ${posY}%`,
         borderRadius: "4px"
       }}

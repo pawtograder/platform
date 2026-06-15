@@ -64,7 +64,13 @@ export function wordsInRegion(words: WordBox[], region: NormRect): string {
     const cy = w.y + w.height / 2;
     return cx >= region.x && cx <= region.x + region.width && cy >= region.y && cy <= region.y + region.height;
   });
-  inside.sort((a, b) => (Math.abs(a.y - b.y) > 0.02 ? a.y - b.y : a.x - b.x));
+  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
+  // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
+  // engine-defined ordering for words clustered within a row. Keep in sync with lib/exam/regionMath.ts.
+  inside.sort((a, b) => {
+    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
+    return band !== 0 ? band : a.x - b.x;
+  });
   return inside
     .map((w) => w.text)
     .join(" ")
@@ -159,7 +165,10 @@ class GoogleVisionOcr {
     const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${this.apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      // Bound the call so a stalled connection can't hang the worker indefinitely (it has no
+      // other timeout); a timeout surfaces as a transient error and the message requeues.
+      signal: AbortSignal.timeout(30000)
     });
     if (res.status === 429) throw new ProviderRateLimitError("Vision OCR rate limited", 60);
     if (!res.ok) throw new Error(`Vision OCR failed: ${res.status} ${await res.text()}`);
@@ -216,7 +225,9 @@ class GeminiVision {
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
-      })
+      }),
+      // Bound the call so a stalled connection can't hang the worker indefinitely.
+      signal: AbortSignal.timeout(60000)
     });
     if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
     if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);

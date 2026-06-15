@@ -18,6 +18,10 @@ declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 const QUEUE = "exam_processing";
 const DLQ = "exam_processing_dlq";
 const PGMQ_MAX_READ_CT = 8;
+// Cap rate-limit requeues. requeue() sends a FRESH pgmq message (read_ct resets to 0), so the
+// PGMQ_MAX_READ_CT poison-pill guard never trips on the requeue path; without this bound a
+// message behind a permanently-exhausted provider quota would requeue forever.
+const MAX_RATE_LIMIT_RETRIES = 20;
 
 type QueueMessage = {
   msg_id: number;
@@ -384,13 +388,6 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    const { data: batch } = await admin
-      .from("exam_scan_batches")
-      .select("pages_per_exam")
-      .eq("id", scanned.batch_id)
-      .single();
-    const perExam = Math.max(1, batch?.pages_per_exam ?? 1);
-
     const { data: pages } = await admin
       .from("exam_scan_pages")
       .select("id, page_index, image_path, width, height, ocr_data")
@@ -447,7 +444,11 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
 
     const questions: unknown[] = [];
     for (const r of regions ?? []) {
-      const examPageNo = Math.min(Math.max(1, r.page_number), perExam);
+      // Answer-region page_number is a TEMPLATE page index; map it directly onto this
+      // student's scan pages (already ordered + filtered to this submission). Do NOT clamp to
+      // pages_per_exam — that silently pulled OCR from the wrong page for a region sitting on a
+      // page beyond pages_per_exam. A region past this submission's scanned page count is skipped.
+      const examPageNo = Math.max(1, r.page_number);
       const page = groupPages[examPageNo - 1];
       if (!page) continue;
       const words = ((page.ocr_data as { words?: WordBox[] } | null)?.words ?? []) as WordBox[];
@@ -534,6 +535,16 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     await archive(admin, msg.msg_id);
   } catch (error) {
     if (error instanceof ProviderRateLimitError) {
+      // Rate limits are transient, but bound the retries (see MAX_RATE_LIMIT_RETRIES) so a
+      // permanently-exhausted quota can't requeue forever.
+      if ((env.retry_count ?? 0) >= MAX_RATE_LIMIT_RETRIES) {
+        Sentry.captureException(error, scope);
+        await deadLetter(admin, env, msg.msg_id, error);
+        if (env.batch_id)
+          await setBatchError(admin, env.batch_id, error instanceof Error ? error.message : String(error));
+        await archive(admin, msg.msg_id);
+        return;
+      }
       // requeue this message with the provider's backoff; archive the current copy
       await requeue(admin, env, error.retryAfterSeconds);
       await archive(admin, msg.msg_id);

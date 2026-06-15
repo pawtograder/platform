@@ -61,6 +61,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           created_by: string | null;
+          delivery_mode: string;
           id: number;
           num_pages: number;
           status: string;
@@ -73,6 +74,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           created_by?: string | null;
+          delivery_mode?: string;
           id?: number;
           num_pages?: number;
           status?: string;
@@ -85,6 +87,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           created_by?: string | null;
+          delivery_mode?: string;
           id?: number;
           num_pages?: number;
           status?: string;
@@ -132,8 +135,10 @@ export type Database = {
           answer_type: string | null;
           choices: Json | null;
           class_id: number;
+          correct_answer: Json | null;
           created_at: string;
           exam_id: number;
+          grading_tolerance: number | null;
           id: number;
           label: string | null;
           level: number;
@@ -146,8 +151,10 @@ export type Database = {
           answer_type?: string | null;
           choices?: Json | null;
           class_id: number;
+          correct_answer?: Json | null;
           created_at?: string;
           exam_id: number;
+          grading_tolerance?: number | null;
           id?: number;
           label?: string | null;
           level: number;
@@ -160,8 +167,10 @@ export type Database = {
           answer_type?: string | null;
           choices?: Json | null;
           class_id?: number;
+          correct_answer?: Json | null;
           created_at?: string;
           exam_id?: number;
+          grading_tolerance?: number | null;
           id?: number;
           label?: string | null;
           level?: number;
@@ -1340,6 +1349,7 @@ export type Database = {
           allow_not_graded_submissions: boolean;
           allow_student_formed_groups: boolean | null;
           archived_at: string | null;
+          assignment_type: Database["public"]["Enums"]["assignment_type"];
           autograder_points: number | null;
           class_id: number;
           created_at: string;
@@ -1380,6 +1390,7 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id: number;
           created_at?: string;
@@ -1420,6 +1431,7 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id?: number;
           created_at?: string;
@@ -10987,12 +10999,25 @@ export type Database = {
       exam_create: {
         Args: {
           p_assignment_id: number;
+          p_delivery_mode?: string;
           p_num_pages?: number;
           p_source_type?: string;
           p_template_markdown?: string;
           p_template_pdf_path?: string;
         };
         Returns: number;
+      };
+      quiz_submit: {
+        Args: { p_answers: Json; p_assignment_id: number };
+        Returns: number;
+      };
+      quiz_autograde: {
+        Args: { p_submission_id: number };
+        Returns: undefined;
+      };
+      quiz_get_for_student: {
+        Args: { p_assignment_id: number };
+        Returns: Json;
       };
       exam_upsert_questions_and_regions: {
         Args: { p_exam_id: number; p_questions: Json; p_regions: Json };
@@ -12806,6 +12831,7 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      assignment_type: "code" | "quiz" | "exam" | "survey";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
