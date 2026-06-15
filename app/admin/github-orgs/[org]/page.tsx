@@ -38,6 +38,11 @@ export default function GitHubOrgDetailPage() {
   const [saving, setSaving] = useState(false);
   const [handout, setHandout] = useState("");
   const [solution, setSolution] = useState("");
+  // The persisted org defaults (distinct from the live inputs above). The file editor is gated
+  // on these so that typing into the inputs doesn't mount RepoFileEditor and fire GitHub fetches
+  // for half-typed or not-yet-saved repos.
+  const [savedHandout, setSavedHandout] = useState("");
+  const [savedSolution, setSavedSolution] = useState("");
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
@@ -51,8 +56,12 @@ export default function GitHubOrgDetailPage() {
       if (orgsError) throw orgsError;
       if (coursesError) throw coursesError;
       const thisOrg = (orgs ?? []).find((o) => o.org_name === orgName);
-      setHandout(thisOrg?.default_handout_template_repo ?? "");
-      setSolution(thisOrg?.default_solution_template_repo ?? "");
+      const loadedHandout = thisOrg?.default_handout_template_repo ?? "";
+      const loadedSolution = thisOrg?.default_solution_template_repo ?? "";
+      setHandout(loadedHandout);
+      setSolution(loadedSolution);
+      setSavedHandout(loadedHandout);
+      setSavedSolution(loadedSolution);
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
       toaster.error({ title: "Failed to load org", description: (err as Error).message });
@@ -84,14 +93,16 @@ export default function GitHubOrgDetailPage() {
     }
   }, [orgName, handout, solution, load]);
 
-  // A course in this org gives the edge function a valid auth/ownership context for
-  // editing the org's template repos. (Writes are restricted to the course's own org.)
-  const authCourseId = useMemo(() => courses[0]?.id, [courses]);
+  // A course in this org gives the edge function a valid auth/ownership context for editing the
+  // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
+  // course so the auth context isn't an arbitrary archived one.
+  const authCourseId = useMemo(() => (courses.find((c) => !c.archived) ?? courses[0])?.id, [courses]);
 
-  // The edge function only allows writes to the course's own org, so editing requires the
-  // template repo to live in this org.
-  const handoutRepo = useMemo(() => parseRepo(handout), [handout]);
-  const solutionRepo = useMemo(() => parseRepo(solution), [solution]);
+  // Gate on the *saved* defaults, not the live inputs: the edge function only allows writes to
+  // the course's own org, and we don't want RepoFileEditor mounting (and fetching from GitHub)
+  // for whatever is currently typed.
+  const handoutRepo = useMemo(() => parseRepo(savedHandout), [savedHandout]);
+  const solutionRepo = useMemo(() => parseRepo(savedSolution), [savedSolution]);
   const canEditHandout = authCourseId !== undefined && handoutRepo !== null && handoutRepo.org === orgName;
   const canEditSolution = authCourseId !== undefined && solutionRepo !== null && solutionRepo.org === orgName;
 
@@ -226,7 +237,7 @@ export default function GitHubOrgDetailPage() {
                   </Box>
                 ) : (
                   <Text color="fg.muted" pt={2}>
-                    Set a valid &quot;org/repo&quot; handout template in this org above to edit its files.
+                    Save a valid &quot;org/repo&quot; handout template in this org above to edit its files.
                   </Text>
                 )}
               </Tabs.Content>
@@ -246,7 +257,7 @@ export default function GitHubOrgDetailPage() {
                   </Box>
                 ) : (
                   <Text color="fg.muted" pt={2}>
-                    Set a valid &quot;org/repo&quot; solution template in this org above to edit its files.
+                    Save a valid &quot;org/repo&quot; solution template in this org above to edit its files.
                   </Text>
                 )}
               </Tabs.Content>

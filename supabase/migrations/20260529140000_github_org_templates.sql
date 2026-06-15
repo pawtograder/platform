@@ -119,9 +119,22 @@ BEGIN
         RAISE EXCEPTION 'Access denied: instructor role required for class %', p_class_id;
     END IF;
 
+    -- Reject malformed values early: a non-empty override must be exactly "owner/repo".
+    -- (An invalid value would otherwise fail opaquely in createRepo at assignment-creation time.)
+    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/]+/[^/]+$' THEN
+        RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
+    END IF;
+    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/]+/[^/]+$' THEN
+        RAISE EXCEPTION 'Invalid solution template repo "%": expected "owner/repo"', p_solution;
+    END IF;
+
+    -- Partial update: a NULL param leaves that column untouched, so passing only one override
+    -- no longer silently clears the other. Pass an empty string to explicitly clear an override.
     UPDATE public.classes
-    SET handout_template_repo = NULLIF(trim(p_handout), ''),
-        solution_template_repo = NULLIF(trim(p_solution), '')
+    SET handout_template_repo =
+            CASE WHEN p_handout IS NULL THEN handout_template_repo ELSE NULLIF(trim(p_handout), '') END,
+        solution_template_repo =
+            CASE WHEN p_solution IS NULL THEN solution_template_repo ELSE NULLIF(trim(p_solution), '') END
     WHERE id = p_class_id;
 END;
 $$;
@@ -188,6 +201,14 @@ BEGIN
 
     IF p_org_name IS NULL OR trim(p_org_name) = '' THEN
         RAISE EXCEPTION 'Org name is required';
+    END IF;
+
+    -- A non-empty default must be exactly "owner/repo" (NULL/empty falls back to the constant).
+    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/]+/[^/]+$' THEN
+        RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
+    END IF;
+    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/]+/[^/]+$' THEN
+        RAISE EXCEPTION 'Invalid solution template repo "%": expected "owner/repo"', p_solution;
     END IF;
 
     INSERT INTO public.github_orgs (

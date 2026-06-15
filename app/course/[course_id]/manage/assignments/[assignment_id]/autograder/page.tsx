@@ -84,6 +84,13 @@ export default function AutograderPage() {
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");
 
+  // grader_repo is "owner/repo". Parse into exactly two segments so a malformed value
+  // (extra slashes) is rejected here rather than silently producing a slash-containing
+  // repoName the Contents API can't address.
+  const [graderOrg, graderRepoName, ...graderRepoExtra] =
+    typeof currentGraderRepo === "string" ? currentGraderRepo.split("/") : [];
+  const graderRepoIsValid = !!graderOrg && !!graderRepoName && graderRepoExtra.length === 0;
+
   if (query?.isLoading || formLoading) {
     return <div>Loading...</div>;
   }
@@ -173,7 +180,7 @@ export default function AutograderPage() {
       {currentAssignment && typeof currentGraderRepo === "string" && (
         <AutograderConfiguration graderRepo={currentGraderRepo} />
       )}
-      {typeof currentGraderRepo === "string" && currentGraderRepo.includes("/") && (
+      {graderRepoIsValid && (
         <Fieldset.Root size="lg" mt={6}>
           <Fieldset.Legend>
             <Heading size="md">Edit config files</Heading>
@@ -184,8 +191,8 @@ export default function AutograderPage() {
           </Fieldset.HelperText>
           <RepoFileEditor
             courseId={Number(course_id)}
-            orgName={currentGraderRepo.split("/")[0]}
-            repoName={currentGraderRepo.split("/").slice(1).join("/")}
+            orgName={graderOrg}
+            repoName={graderRepoName}
             path="pawtograder.yml"
             paths={[
               { label: "pawtograder.yml", path: "pawtograder.yml" },

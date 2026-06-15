@@ -103,7 +103,12 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     setLoadError(undefined);
     const supabase = createClient();
     try {
-      const res = await repositoryGetFile({ courseId, orgName, repoName, path: currentPath }, supabase);
+      // skipRetryOnNotFound: a not-yet-created file is a valid "create new file" starting point
+      // here, so fail fast instead of letting the function sleep 15s + retry before returning 404.
+      const res = await repositoryGetFile(
+        { courseId, orgName, repoName, path: currentPath, skipRetryOnNotFound: true },
+        supabase
+      );
       setContent(res.content ?? "");
       setSha(res.sha);
       setDirty(false);

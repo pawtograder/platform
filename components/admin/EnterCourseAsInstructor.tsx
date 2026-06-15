@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
+import { setActingAsAdminCookie } from "@/lib/adminActingAs";
 import { createClient } from "@/utils/supabase/client";
 import { HStack, NativeSelect, Spinner } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
@@ -13,6 +14,9 @@ async function enterCourse(classId: number, router: ReturnType<typeof useRouter>
   try {
     const { error } = await supabase.rpc("admin_enter_course_as_instructor", { p_class_id: classId });
     if (error) throw error;
+    // Mark this as an acting-as entry so the manage-area banner shows for impersonation only,
+    // not for an admin who is a genuine instructor of the course.
+    setActingAsAdminCookie(classId);
     router.push(`/course/${classId}/manage/assignments`);
   } catch (err) {
     const description = err instanceof Error ? err.message : "Unknown error";
