@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "144ee3cc8349",
+  "session_id": "cfe9c606-f354-4ed1-a284-2f182aa9d5a0",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T16:22:21.852656339Z",
+  "branch": "feature/github-org-config",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "hooks/useClassProfiles.tsx",
+    "supabase/functions/repository-write-file/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "1de3d4d8980c",
+  "checkpoint_transcript_start": 588,
+  "transcript_lines_at_start": 588,
+  "token_usage": {
+    "input_tokens": 147,
+    "cache_creation_tokens": 6934,
+    "cache_read_tokens": 1176393,
+    "output_tokens": 3963,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T16:22:21.827883491Z",
+    "agent_lines": 17,
+    "agent_removed": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 27,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}
