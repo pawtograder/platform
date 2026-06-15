@@ -1885,3 +1885,39 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
     });
   });
 }
+
+/**
+ * Documented fallback template repos, kept in sync with the github_orgs table defaults
+ * and the resolve_class_template_repos RPC.
+ */
+export const DEFAULT_HANDOUT_TEMPLATE_REPO = "pawtograder/template-assignment-handout";
+export const DEFAULT_SOLUTION_TEMPLATE_REPO = "pawtograder/template-assignment-grader";
+
+/**
+ * Resolve the handout and solution (grader) template repos for a class.
+ *
+ * Resolution order (handled by the resolve_class_template_repos RPC):
+ *   class override -> github_orgs default -> hardcoded constant.
+ *
+ * Falls back to the hardcoded constants if the RPC fails or returns no row, so repo
+ * creation never breaks on a missing github_orgs row.
+ */
+export async function resolveTemplateRepos(
+  supabase: SupabaseClient<Database>,
+  classId: number
+): Promise<{ handout: string; solution: string }> {
+  try {
+    const { data, error } = await supabase.rpc("resolve_class_template_repos", { p_class_id: classId });
+    if (error) {
+      throw error;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      handout: row?.handout_template_repo ?? DEFAULT_HANDOUT_TEMPLATE_REPO,
+      solution: row?.solution_template_repo ?? DEFAULT_SOLUTION_TEMPLATE_REPO
+    };
+  } catch (error) {
+    console.error("resolveTemplateRepos: falling back to default templates", error);
+    return { handout: DEFAULT_HANDOUT_TEMPLATE_REPO, solution: DEFAULT_SOLUTION_TEMPLATE_REPO };
+  }
+}

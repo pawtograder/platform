@@ -1,6 +1,7 @@
 "use client";
 
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
+import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster, Toaster } from "@/components/ui/toaster";
@@ -24,7 +25,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Controller, FieldValues } from "react-hook-form";
 
 export default function AutograderPage() {
-  const { assignment_id } = useParams();
+  const { assignment_id, course_id } = useParams();
   const [loading, setLoading] = useState(false);
   const { mutateAsync: mutateAssignment } = useUpdate<Assignment>({
     resource: "assignments",
@@ -171,6 +172,27 @@ export default function AutograderPage() {
       </form>
       {currentAssignment && typeof currentGraderRepo === "string" && (
         <AutograderConfiguration graderRepo={currentGraderRepo} />
+      )}
+      {typeof currentGraderRepo === "string" && currentGraderRepo.includes("/") && (
+        <Fieldset.Root size="lg" mt={6}>
+          <Fieldset.Legend>
+            <Heading size="md">Edit config files</Heading>
+          </Fieldset.Legend>
+          <Fieldset.HelperText mb={2}>
+            Edit the autograder config and GitHub Actions workflow files in the solution repository directly, with live
+            validation. Changes are committed back to GitHub.
+          </Fieldset.HelperText>
+          <RepoFileEditor
+            courseId={Number(course_id)}
+            orgName={currentGraderRepo.split("/")[0]}
+            repoName={currentGraderRepo.split("/").slice(1).join("/")}
+            path="pawtograder.yml"
+            paths={[
+              { label: "pawtograder.yml", path: "pawtograder.yml" },
+              { label: ".github/workflows/grade.yml", path: ".github/workflows/grade.yml" }
+            ]}
+          />
+        </Fieldset.Root>
       )}
     </div>
   );

@@ -698,6 +698,42 @@ export async function getFileFromRepo(repoName: string, path: string, scope?: Se
   }
 }
 
+/**
+ * Create or update a file in a repo via the GitHub contents API.
+ * Pass `sha` (the blob sha of the file being replaced) to update an existing file;
+ * omit it to create a new file. Returns the new commit sha and the file's new blob sha.
+ */
+export async function writeFileToRepo(
+  repoName: string,
+  path: string,
+  content: string,
+  message: string,
+  sha?: string,
+  scope?: Sentry.Scope
+) {
+  scope?.setTag("github_operation", "write_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+
+  console.log("writing file to repo", repoName, path);
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Write file to repo failed: No octokit found for ${repoName}`);
+  }
+  const response = await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
+    owner: repoName.split("/")[0],
+    repo: repoName.split("/")[1],
+    path,
+    message,
+    content: Buffer.from(content, "utf-8").toString("base64"),
+    ...(sha ? { sha } : {})
+  });
+  return {
+    commit_sha: response.data.commit?.sha,
+    content_sha: response.data.content?.sha
+  };
+}
+
 async function getJwks() {
   const jwks = await fetch("https://token.actions.githubusercontent.com/.well-known/jwks");
   const jwksData = await jwks.json();

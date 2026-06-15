@@ -86,6 +86,18 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   Classes
                 </Link>
                 <Link
+                  href="/admin/github-orgs"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  GitHub Orgs
+                </Link>
+                <Link
                   href="/admin/import"
                   color="blue.600"
                   _hover={{ color: "blue.800" }}
