@@ -295,11 +295,16 @@ test.describe("Instructor group management", () => {
       "Configure Groups"
     );
 
+    await expect(page.getByRole("heading", { name: "Immediate action" })).toBeVisible();
+    await expect(page.getByText("It is not staged and does not use Publish Changes.")).toBeVisible();
     await page.getByRole("button", { name: "Copy Groups from Prior Assignment" }).click();
     const copyDialog = page.getByRole("alertdialog");
-    await expect(copyDialog.getByRole("heading", { name: "Copy groups from prior assignment" })).toBeVisible();
+    await expect(
+      copyDialog.getByRole("heading", { name: "Copy groups immediately from prior assignment" })
+    ).toBeVisible();
+    await expect(copyDialog.getByText("This action is not staged.")).toBeVisible();
     await copyDialog.getByLabel("Prior assignment").selectOption(String(sourceAssignment.id));
-    await copyDialog.getByRole("button", { name: "Overwrite Groups" }).click();
+    await copyDialog.getByRole("button", { name: "Overwrite Groups Now" }).click();
 
     await expect(page.getByText(/Groups copied/i).first()).toBeVisible({ timeout: 30_000 });
 

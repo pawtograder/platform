@@ -190,7 +190,7 @@ function CopyGroupsFromAssignmentDialog({
         <Dialog.Positioner>
           <Dialog.Content>
             <Dialog.Header>
-              <Dialog.Title>Copy groups from prior assignment</Dialog.Title>
+              <Dialog.Title>Copy groups immediately from prior assignment</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
               <VStack align="stretch" gap={4}>
@@ -198,6 +198,12 @@ function CopyGroupsFromAssignmentDialog({
                   This immediately overwrites the current group assignments for <strong>{assignment.title}</strong> with
                   the groups and memberships from a prior assignment.
                 </Text>
+                <Box border="1px solid" borderColor="border.warning" bg="bg.warning" borderRadius="md" p={3}>
+                  <Text fontWeight="semibold">This action is not staged.</Text>
+                  <Text fontSize="sm">
+                    It runs as soon as you click overwrite and does not wait for the page&apos;s Publish Changes button.
+                  </Text>
+                </Box>
                 <Text fontSize="sm" color="text.muted">
                   Existing groups that become empty are removed when they have no submission history. Groups with
                   submission history are preserved so graded work stays intact.
@@ -229,7 +235,7 @@ function CopyGroupsFromAssignmentDialog({
                   disabled={!selectedAssignment || copying}
                   onClick={copyGroups}
                 >
-                  Overwrite Groups
+                  Overwrite Groups Now
                 </Button>
               </HStack>
             </Dialog.Footer>
@@ -612,17 +618,24 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           Changes will be staged and must be published to take effect
         </Text>
       </Text>
-      <Heading size="md" pt="10px">
-        Options
-      </Heading>
-      <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
-        <CreateNewGroup groups={groupsData} assignment={assignment} />
-        <BulkAssignGroup groups={groupsData} assignment={assignment} />
+      <Box mt={4} p={3} border="1px solid" borderColor="border.warning" bg="bg.warning" borderRadius="md">
+        <Heading size="sm">Immediate action</Heading>
+        <Text fontSize="sm" mb={3}>
+          Copying groups from a prior assignment overwrites current group assignments immediately. It is not staged and
+          does not use Publish Changes.
+        </Text>
         <CopyGroupsFromAssignmentDialog
           assignment={assignment}
           course_id={course_id}
           sourceAssignments={sourceAssignments}
         />
+      </Box>
+      <Heading size="md" pt="10px">
+        Staged options
+      </Heading>
+      <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
+        <CreateNewGroup groups={groupsData} assignment={assignment} />
+        <BulkAssignGroup groups={groupsData} assignment={assignment} />
         <BulkModifyGroup
           groups={groupsData}
           assignment={assignment}
