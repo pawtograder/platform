@@ -11,6 +11,11 @@ export const createClient = async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // See utils/supabase/middleware.ts: scope auth cookies to the parent domain
+      // for cross-channel-host sessions when NEXT_PUBLIC_SESSION_COOKIE_DOMAIN is set.
+      ...(process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN
+        ? { cookieOptions: { domain: process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN } }
+        : {}),
       cookies: {
         getAll() {
           return cookieStore.getAll();

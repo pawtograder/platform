@@ -136,12 +136,49 @@ Public URLs.
 {{- printf "https://%s" .Values.global.hostname -}}
 {{- end -}}
 
+{{/*
+The separate-API hostname. Default is "api.<hostname>". When
+global.apiHostnameFlatten is true it instead prefixes "-api" onto the first
+label — pr-123.preview.pawtograder.net -> pr-123-api.preview.pawtograder.net —
+so the host stays a single label under the parent zone and is therefore covered
+by a *.preview.pawtograder.net wildcard TLS cert (a wildcard spans only one
+label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
+*/}}
+{{- define "pawtograder.api.hostname" -}}
+{{- if and .Values.global.apiHostnameFlatten (contains "." .Values.global.hostname) -}}
+{{- $parts := splitn "." 2 .Values.global.hostname -}}
+{{- printf "%s-api.%s" $parts._0 $parts._1 -}}
+{{- else -}}
+{{- printf "api.%s" .Values.global.hostname -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.api.url" -}}
 {{- if .Values.global.apiOnSeparateHost -}}
-{{- printf "https://api.%s" .Values.global.hostname -}}
+{{- printf "https://%s" (include "pawtograder.api.hostname" .) -}}
 {{- else -}}
 {{- printf "https://%s" .Values.global.hostname -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Per-deployment-channel public host. Each channel (.Values.channels[]) is served
+on its own single-label host so a *.<zone> wildcard TLS cert covers it; the
+channel runs web + edge-functions code against the shared data plane, and the app
+redirects each course to its channel's host (classes.deployment_channel). Defaults
+to "<name>.<global.hostname>"; an entry may set `host` to override.
+Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
+*/}}
+{{- define "pawtograder.channel.host" -}}
+{{- $name := required "channels[].name is required" .channel.name -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
+{{- end -}}
+{{- $host := default (printf "%s.%s" $name .ctx.Values.global.hostname) .channel.host -}}
+{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $host) -}}
+{{- fail (printf "invalid channel host %q for channel %q: must be a DNS hostname" $host $name) -}}
+{{- end -}}
+{{- $host -}}
 {{- end -}}
 
 {{/*

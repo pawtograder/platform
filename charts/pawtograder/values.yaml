@@ -43,6 +43,45 @@ global:
   commonLabels: {}
 
 # -----------------------------------------------------------------------------
+# Deployment channels (A/B by course)
+# -----------------------------------------------------------------------------
+# Extra, concurrent web + edge-functions deployments running DIFFERENT image
+# tags against the SAME data plane (Postgres/auth/storage) as the stable
+# release. Each channel is served on its own single-label host
+# (<name>.<global.hostname>, override with `host`); the app redirects each
+# course to its channel's host based on the classes.deployment_channel column,
+# so one user can use stable + canary courses in the same session. Kong routes a
+# channel host's /functions/v1 to that channel's functions; everything else is
+# shared. Default empty = stable only, no extra objects rendered.
+#
+# Channel image build args matter: the web image for a channel must be built
+# with NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name> and its own host as
+# NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_PAWTOGRADER_WEB_URL (NEXT_PUBLIC_* bake
+# at build time). Channel code must be schema-compatible with the shared DB
+# (expand/contract migrations only).
+channels: []
+#  - name: team7
+#    # host: team7.staging.pawtograder.net   # optional; default <name>.<global.hostname>
+#    # tls:
+#    #   secretName: team7-tls   # optional per-channel cert; required if `host` is
+#    #                           # outside the *.<global.hostname> wildcard zone
+#    web:
+#      image:
+#        tag: "team7-<sha>"      # repository/pullPolicy default from web.image
+#      replicas: 1
+#    edgeFunctions:
+#      image:
+#        tag: "team7-<sha>"      # repository/pullPolicy default from edgeFunctions.image
+#      replicas: 1
+
+# Reflected *.<zone> wildcard TLS secret used by every channel Ingress (e.g.
+# "staging-wildcard-tls" for *.staging.pawtograder.net). REQUIRED when channels
+# with `web` are set and ingress.tls.enabled. One wildcard avoids per-channel
+# ACME issuance; provision it once (cert-manager DNS-01 + reflector) like the
+# *.preview.pawtograder.net cert.
+channelWildcardTlsSecret: ""
+
+# -----------------------------------------------------------------------------
 # Secrets
 # -----------------------------------------------------------------------------
 # Two ways to provide secrets:

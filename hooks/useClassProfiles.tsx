@@ -18,7 +18,7 @@ type ClassProfileContextType = {
   public_profile_id: string;
   private_profile: UserProfile;
   public_profile: UserProfile;
-  /** True when a real instructor is viewing the course as a student (read-only). */
+  /** True when real staff are viewing the course as a student (read-only). */
   isViewingAsStudent: boolean;
   /** Convenience alias for `isViewingAsStudent` — gate write surfaces on this. */
   isReadOnly: boolean;
@@ -28,8 +28,8 @@ type ClassProfileContextType = {
   realPrivateProfileId: string;
   /** Display name of the student being viewed, when viewing as. */
   viewAsProfileName?: string;
-  /** Instructor-only: enter read-only view as the given student's private profile id. */
-  enterViewAs: (studentPrivateProfileId: string) => void;
+  /** Staff-only: enter read-only view as the given private profile id. */
+  enterViewAs: (studentPrivateProfileId: string, redirectTo?: string) => void;
   /** Exit read-only student view and return to the instructor view. */
   exitViewAs: () => void;
 };
@@ -199,12 +199,22 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     setViewAsProfileId(getViewAsCookie(course_id as string));
   }, [course_id]);
 
-  // When an instructor has an active view-as target, fetch that student's role + profiles.
+  // When staff have an active view-as target, resolve the effective student role + profiles.
   // Until the lookup resolves we MUST keep the provider in a loading state — see
-  // isResolvingViewAs below — otherwise consumers briefly see the real instructor role.
+  // isResolvingViewAs below — otherwise consumers briefly see the real staff role.
   useEffect(() => {
-    const isInstructor = realMyRole?.role === "instructor";
-    if (!isInstructor || !viewAsProfileId || !course_id) {
+    const isStaff = realMyRole?.role === "instructor" || realMyRole?.role === "grader";
+    if (!isStaff || !viewAsProfileId || !course_id) {
+      setViewAsRole(null);
+      setIsResolvingViewAs(false);
+      return;
+    }
+    if (viewAsProfileId === realMyRole.private_profile_id) {
+      setViewAsRole({ ...realMyRole, role: "student" } as UserRoleWithClassAndUser);
+      setIsResolvingViewAs(false);
+      return;
+    }
+    if (realMyRole.role !== "instructor") {
       setViewAsRole(null);
       setIsResolvingViewAs(false);
       return;
@@ -230,10 +240,10 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [realMyRole?.role, viewAsProfileId, course_id]);
+  }, [realMyRole, viewAsProfileId, course_id]);
 
   const enterViewAs = useCallback(
-    (studentPrivateProfileId: string) => {
+    (studentPrivateProfileId: string, redirectTo?: string) => {
       if (!course_id) return;
       setViewAsCookie(course_id as string, studentPrivateProfileId);
       // Do a full document navigation rather than a soft client transition. The server
@@ -242,7 +252,19 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       // (router.push + refresh) flips the client identity while the existing controllers
       // are still being torn down, which surfaces stale-reference crashes such as
       // "TableController for table 'discussion_threads' is closed. Cannot call getById(...)".
-      window.location.assign(`/course/${course_id}`);
+      const fallback = `/course/${course_id}`;
+      let destination = fallback;
+      if (redirectTo) {
+        try {
+          const nextUrl = new URL(redirectTo, window.location.origin);
+          if (nextUrl.origin === window.location.origin) {
+            destination = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+          }
+        } catch {
+          destination = fallback;
+        }
+      }
+      window.location.assign(destination);
     },
     [course_id]
   );
@@ -251,8 +273,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     if (!course_id) return;
     clearViewAsCookie(course_id as string);
     // Full reload for the same reason as enterViewAs: rebuild all controllers under the
-    // restored instructor identity instead of racing a soft teardown/rebuild.
-    window.location.assign(`/course/${course_id}`);
+    // restored staff identity instead of racing a soft teardown/rebuild.
+    window.location.assign(`${window.location.pathname}${window.location.search}${window.location.hash}`);
   }, [course_id]);
 
   if (isLoading || isResolvingViewAs) {
@@ -320,7 +342,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     );
   }
 
-  const isViewingAsStudent = myRole.role === "instructor" && !!viewAsRole;
+  const isViewingAsStudent = (myRole.role === "instructor" || myRole.role === "grader") && !!viewAsRole;
   const effectiveRole = isViewingAsStudent ? viewAsRole : myRole;
 
   return (

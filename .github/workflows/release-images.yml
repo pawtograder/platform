@@ -13,7 +13,7 @@ name: Release images
 #   - workflow_dispatch    → manual, with optional hostname/version overrides
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -108,7 +108,7 @@ jobs:
     # cluster's JWT_SECRET, so a static copy drifts the moment the bundle is
     # rotated and silently breaks browser login (gateway 401). Reading it from
     # the cluster at build time guarantees build == runtime.
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
     steps:
       - uses: actions/checkout@v5
 
@@ -310,3 +310,67 @@ jobs:
           set -euo pipefail
           helm push pawtograder-${{ needs.meta.outputs.chart_version }}.tgz \
             oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/charts
+
+  # Auto-roll the long-lived staging environment forward to the images this
+  # push just built. This is the piece that was missing: release-images used to
+  # only build+push, leaving staging on hand-tagged `staging-manual-*` images
+  # that someone had to `helm upgrade` by hand. Now every push to `staging`
+  # deploys itself.
+  #
+  # NON-DESTRUCTIVE on purpose: a plain `helm upgrade` (no uninstall, no PVC
+  # delete). The wipe-and-reinstall flow lives in scripts/redeploy-staging.sh
+  # and is never run from CI. The per-revision migrations Job runs as part of
+  # the upgrade and `--wait` blocks until it — and every Deployment — is
+  # healthy, so a failed migration or rollout turns this job red.
+  deploy-staging:
+    needs: [meta, build-web, build-edge-functions, build-migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    # Serialize deploys so two staging pushes landing close together can't run
+    # overlapping `helm upgrade`s against the same release.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # This job handles cluster credentials; no later step needs the git
+          # token, so don't leave it persisted in .git/config.
+          persist-credentials: false
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          [ -n "$KUBECONFIG_B64" ] || { echo "::error::KUBECONFIG_BASE64 secret is required to deploy staging"; exit 1; }
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: helm upgrade pawtograder (staging)
+        # helm/kubectl pick up $HOME/.kube/config (written above) by default.
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Pin all three app images to the exact tag built from this SHA
+          # (staging-<sha>) for traceability + easy rollback, overriding the
+          # defaults in values-staging.yaml.
+          helm upgrade --install pawtograder charts/pawtograder \
+            --namespace pawtograder-staging \
+            -f charts/pawtograder/examples/values-staging.yaml \
+            --set web.image.tag="$VERSION" \
+            --set edgeFunctions.image.tag="$VERSION" \
+            --set migrations.image.tag="$VERSION" \
+            --wait \
+            --wait-for-jobs \
+            --timeout 15m
+
+      - name: Post-deploy status
+        if: always()
+        run: helm status pawtograder -n pawtograder-staging --kubeconfig "$HOME/.kube/config" || true

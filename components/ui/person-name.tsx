@@ -1,5 +1,6 @@
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { Avatar, HStack, Text, TextProps, VStack } from "@chakra-ui/react";
 import { memo } from "react";
 
@@ -35,7 +36,7 @@ function PersonName({
   return (
     <HStack w="100%">
       <Avatar.Root size={size}>
-        <Avatar.Image src={userProfile?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(userProfile?.avatar_url)} alt="" />
         <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack>

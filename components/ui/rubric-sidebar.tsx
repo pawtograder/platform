@@ -1302,12 +1302,17 @@ export function RubricCriteria({
   const [selectedCheck, setSelectedCheck] = useState<HydratedRubricCheck>();
   let pointsText = "";
   if (criteria.total_points) {
+    // Grader-facing running tally. Additive shows the raw applied sum *uncapped* on purpose, so
+    // a grader sees over-cap adjustments (e.g. a +100 regrade tweak → "120.5/20"); the cap is
+    // applied only when the score is computed, not in this tally.
     if (criteria.is_deduction_only) {
       pointsText = `-${totalPoints}/${criteria.total_points}`;
     } else if (isAdditive) {
       pointsText = `${totalPoints}/${criteria.total_points}`;
     } else {
-      pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
+      // Floor the earned tally at 0 so an over-deduction doesn't render a spurious negative
+      // (mirrors the non-additive floor in _submission_review_recompute_scores).
+      pointsText = `${Math.max(criteria.total_points - totalPoints, 0)}/${criteria.total_points}`;
     }
   }
   const isGrader = useIsGraderOrInstructor();

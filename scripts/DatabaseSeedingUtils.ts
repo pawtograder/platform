@@ -18,6 +18,7 @@
  * This allows multiple test environments to have separate user pools.
  */
 import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
+import { getSymbolLanguage, parseSymbols } from "@/supabase/functions/_shared/CodeSymbolParser";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
@@ -762,84 +763,644 @@ export function calculateGroupSize(numStudents: number): number {
   return bestSize;
 }
 
-// Helper function to generate rubric structure
-function generateRubricStructure(config: RubricConfig) {
-  const partTemplates = [
-    "Code Quality",
-    "Algorithm Design",
-    "Testing",
-    "Documentation",
-    "Style",
-    "Functionality",
-    "Error Handling",
-    "Performance"
+// Rubric-check visibility values (matches the `rubric_check_student_visibility` enum).
+type CheckVisibility = "always" | "if_released" | "if_applied" | "never";
+
+interface SeedRubricCheck {
+  name: string;
+  ordinal: number;
+  points: number;
+  is_annotation: boolean;
+  is_comment_required: boolean;
+  is_required: boolean;
+  student_visibility?: CheckVisibility;
+  /** Optional per-line annotation cap (only meaningful when is_annotation). */
+  max_annotations?: number | null;
+  /** File this check is scoped to (a "file-level check"); null/undefined = global. */
+  file?: string | null;
+  /** Single-pick option list, e.g. a graded dropdown. */
+  data?: { options: Array<{ label: string; points: number }> } | null;
+}
+interface SeedRubricCriterion {
+  name: string;
+  description: string;
+  ordinal: number;
+  total_points: number;
+  is_additive: boolean;
+  is_deduction_only?: boolean;
+  min_checks_per_submission?: number | null;
+  max_checks_per_submission?: number | null;
+  checks: SeedRubricCheck[];
+}
+interface SeedRubricPart {
+  name: string;
+  description: string;
+  ordinal: number;
+  is_individual_grading?: boolean;
+  is_assign_to_student?: boolean;
+  criteria: SeedRubricCriterion[];
+}
+
+// Helper function to generate a grading rubric that deliberately exercises EVERY
+// grading style Pawtograder supports, so the hand-grading screenshots show them
+// side by side in one rubric (mirrors the shapes in tests/unit/rubric/fixtures/):
+//   • additive, multi-level "Met / Partially met / Not met" single-pick criteria
+//   • deduction-only criteria with capped per-line annotation checks
+//   • multi-option (dropdown) checks and additive checkbox checks
+//   • global + file-level checks alongside line-level annotations
+// `config` is accepted for backwards-compatibility; the curated archetypes below
+// intentionally drive a consistent, screenshot-ready structure. Any extra parts
+// requested by config.maxPartsPerAssignment are appended as plain additive parts.
+function generateRubricStructure(config: RubricConfig): SeedRubricPart[] {
+  const metLevels = (full: number): SeedRubricCheck[] => [
+    {
+      name: "Met",
+      ordinal: 0,
+      points: full,
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "always"
+    },
+    {
+      name: "Partially met",
+      ordinal: 1,
+      points: Math.round(full / 2),
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "always"
+    },
+    {
+      name: "Not met",
+      ordinal: 2,
+      points: 0,
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "always"
+    }
   ];
 
-  const criteriaTemplates = [
-    "Correctness",
-    "Efficiency",
-    "Clarity",
-    "Completeness",
-    "Organization",
-    "Best Practices",
-    "Edge Cases",
-    "Maintainability"
-  ];
+  // Part 1 — Functional correctness: additive, multi-level, single-pick criteria.
+  const correctness: SeedRubricPart = {
+    name: "Functional Correctness",
+    description: "Does the submission do what the spec requires? Pick one level per criterion.",
+    ordinal: 0,
+    criteria: [
+      {
+        name: "Core functionality",
+        description: "Primary required behavior is implemented.",
+        ordinal: 0,
+        total_points: 6,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: 1,
+        max_checks_per_submission: 1,
+        checks: metLevels(6)
+      },
+      {
+        name: "Edge cases",
+        description: "Handles empty input, boundaries, and error conditions.",
+        ordinal: 1,
+        total_points: 4,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: 1,
+        max_checks_per_submission: 1,
+        checks: metLevels(4)
+      },
+      {
+        name: "Output format",
+        description: "Matches the required output format exactly.",
+        ordinal: 2,
+        total_points: 2,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: 1,
+        max_checks_per_submission: 1,
+        checks: metLevels(2)
+      }
+    ]
+  };
 
-  const checkTemplates = [
-    "Excellent",
-    "Good",
-    "Satisfactory",
-    "Needs Improvement",
-    "Poor",
-    "Complete",
-    "Mostly Complete",
-    "Partially Complete",
-    "Incomplete",
-    "Clear",
-    "Mostly Clear",
-    "Somewhat Clear",
-    "Unclear"
-  ];
+  // Part 2 — Code quality: deduction-only with capped, comment-required annotations.
+  const codeQuality: SeedRubricPart = {
+    name: "Code Quality",
+    description: "Starts at full marks; graders deduct for issues found inline.",
+    ordinal: 1,
+    criteria: [
+      {
+        name: "Style & cleanliness",
+        description: "Readable, idiomatic, DRY code.",
+        ordinal: 0,
+        total_points: 10,
+        is_additive: false,
+        is_deduction_only: true,
+        min_checks_per_submission: 0,
+        max_checks_per_submission: null,
+        checks: [
+          {
+            name: "Inconsistent indentation",
+            ordinal: 0,
+            points: 1,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 3
+          },
+          {
+            name: "Unclear variable name",
+            ordinal: 1,
+            points: 1,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 5
+          },
+          {
+            name: "Duplicated logic",
+            ordinal: 2,
+            points: 3,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 2
+          },
+          {
+            name: "Magic number",
+            ordinal: 3,
+            points: 2,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 4
+          }
+        ]
+      },
+      {
+        name: "Documentation",
+        description: "Comments where they matter; nothing stale.",
+        ordinal: 1,
+        total_points: 4,
+        is_additive: false,
+        is_deduction_only: true,
+        min_checks_per_submission: 0,
+        max_checks_per_submission: null,
+        checks: [
+          {
+            name: "Missing method comment",
+            ordinal: 0,
+            points: 2,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 5
+          },
+          {
+            name: "Outdated / misleading comment",
+            ordinal: 1,
+            points: 2,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 3
+          }
+        ]
+      }
+    ]
+  };
 
-  const numParts = faker.number.int({
-    min: config.minPartsPerAssignment,
-    max: config.maxPartsPerAssignment
-  });
+  // Part 3 — Design: additive, mixing a multi-option dropdown with checkbox checks.
+  const design: SeedRubricPart = {
+    name: "Design & Architecture",
+    description: "Holistic design judgment plus specific engineering practices.",
+    ordinal: 2,
+    criteria: [
+      {
+        name: "Overall design quality",
+        description: "One holistic rating of the design.",
+        ordinal: 0,
+        total_points: 5,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: 1,
+        max_checks_per_submission: 1,
+        checks: [
+          {
+            name: "Design rating",
+            ordinal: 0,
+            points: 5,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: true,
+            student_visibility: "if_released",
+            data: {
+              options: [
+                { label: "Excellent", points: 5 },
+                { label: "Good", points: 3 },
+                { label: "Adequate", points: 2 },
+                { label: "Poor", points: 0 }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        name: "Engineering practices",
+        description: "Independent checkboxes — check all that apply.",
+        ordinal: 1,
+        total_points: 6,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: null,
+        max_checks_per_submission: null,
+        checks: [
+          {
+            name: "Appropriate data structures",
+            ordinal: 0,
+            points: 2,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: false,
+            student_visibility: "if_released"
+          },
+          {
+            name: "Robust error handling",
+            ordinal: 1,
+            points: 2,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: false,
+            student_visibility: "if_released"
+          },
+          {
+            name: "No unnecessary global state",
+            ordinal: 2,
+            points: 2,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: false,
+            student_visibility: "if_released"
+          }
+        ]
+      }
+    ]
+  };
 
-  return Array.from({ length: numParts }, (_, partIndex) => {
-    const numCriteria = faker.number.int({
-      min: config.minCriteriaPerPart,
-      max: config.maxCriteriaPerPart
+  // Part 4 — Conventions: global + file-level checks alongside a line-level annotation.
+  const conventions: SeedRubricPart = {
+    name: "Conventions & Submission",
+    description: "Submission hygiene — a mix of global, file-level, and inline checks.",
+    ordinal: 3,
+    criteria: [
+      {
+        name: "Submission requirements",
+        description: "Required artifacts and clean build.",
+        ordinal: 0,
+        total_points: 5,
+        is_additive: true,
+        is_deduction_only: false,
+        min_checks_per_submission: null,
+        max_checks_per_submission: null,
+        checks: [
+          {
+            name: "Compiles without warnings",
+            ordinal: 0,
+            points: 2,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: false,
+            student_visibility: "if_released",
+            file: null
+          },
+          {
+            name: "README present and complete",
+            ordinal: 1,
+            points: 2,
+            is_annotation: false,
+            is_comment_required: false,
+            is_required: false,
+            student_visibility: "if_released",
+            file: "README.md"
+          },
+          {
+            name: "No leftover debug output",
+            ordinal: 2,
+            points: 1,
+            is_annotation: true,
+            is_comment_required: true,
+            is_required: false,
+            student_visibility: "if_applied",
+            max_annotations: 5
+          }
+        ]
+      }
+    ]
+  };
+
+  const parts: SeedRubricPart[] = [correctness, codeQuality, design, conventions];
+
+  // Optionally append plain additive parts if a template asks for more breadth.
+  // When maxPartsPerAssignment is below the curated base count, trim down instead.
+  const maxParts = config.maxPartsPerAssignment ?? parts.length;
+  const extraParts = Math.max(0, maxParts - parts.length);
+  const extraNames = ["Testing", "Performance", "Documentation Quality", "Robustness"];
+  for (let e = 0; e < extraParts && e < extraNames.length; e++) {
+    parts.push({
+      name: extraNames[e],
+      description: `${extraNames[e]} evaluation`,
+      ordinal: parts.length,
+      criteria: [
+        {
+          name: extraNames[e],
+          description: `${extraNames[e]} assessment`,
+          ordinal: 0,
+          total_points: 4,
+          is_additive: true,
+          is_deduction_only: false,
+          min_checks_per_submission: 1,
+          max_checks_per_submission: 1,
+          checks: metLevels(4)
+        }
+      ]
     });
+  }
 
+  return parts.slice(0, maxParts);
+}
+
+// Meta-grading rubric: "grade the grading". Single part, single-pick + checkbox criteria.
+function generateMetaGradingStructure(): SeedRubricPart[] {
+  const levels = (full: number, labels: [string, string, string]): SeedRubricCheck[] => [
+    {
+      name: labels[0],
+      ordinal: 0,
+      points: full,
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "if_released"
+    },
+    {
+      name: labels[1],
+      ordinal: 1,
+      points: Math.round(full / 2),
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "if_released"
+    },
+    {
+      name: labels[2],
+      ordinal: 2,
+      points: 0,
+      is_annotation: false,
+      is_comment_required: false,
+      is_required: false,
+      student_visibility: "if_released"
+    }
+  ];
+  return [
+    {
+      name: "Grading Quality",
+      description: "A second grader reviews the original grader's work.",
+      ordinal: 0,
+      criteria: [
+        {
+          name: "Score accuracy",
+          description: "Were points awarded/deducted correctly?",
+          ordinal: 0,
+          total_points: 5,
+          is_additive: true,
+          is_deduction_only: false,
+          min_checks_per_submission: 1,
+          max_checks_per_submission: 1,
+          checks: levels(5, ["Fully accurate", "Minor discrepancies", "Major discrepancies"])
+        },
+        {
+          name: "Comment quality",
+          description: "Are comments clear and actionable for the student?",
+          ordinal: 1,
+          total_points: 5,
+          is_additive: true,
+          is_deduction_only: false,
+          min_checks_per_submission: 1,
+          max_checks_per_submission: 1,
+          checks: levels(5, ["Clear & actionable", "Adequate", "Unhelpful"])
+        },
+        {
+          name: "Rubric adherence",
+          description: "Did the grader follow the rubric?",
+          ordinal: 2,
+          total_points: 4,
+          is_additive: true,
+          is_deduction_only: false,
+          min_checks_per_submission: null,
+          max_checks_per_submission: null,
+          checks: [
+            {
+              name: "Applied rubric correctly",
+              ordinal: 0,
+              points: 2,
+              is_annotation: false,
+              is_comment_required: false,
+              is_required: false,
+              student_visibility: "if_released"
+            },
+            {
+              name: "Flagged for instructor follow-up",
+              ordinal: 1,
+              points: 2,
+              is_annotation: false,
+              is_comment_required: false,
+              is_required: false,
+              student_visibility: "if_released"
+            }
+          ]
+        }
+      ]
+    }
+  ];
+}
+
+// ---- Criterion-aware grading helpers --------------------------------------
+// When applying grades we must respect each criterion's style: pick exactly one
+// level for single-pick criteria, deduct (rarely) for deduction-only criteria,
+// and check a subset for additive checkbox criteria. Naively applying every
+// check would produce nonsensical totals (e.g. negative deduction scores or
+// multiple "Met/Not met" levels selected at once).
+interface GradingCheck {
+  id: number;
+  name: string;
+  is_annotation: boolean;
+  points: number;
+  is_required: boolean;
+  ordinal: number;
+  data: { options?: Array<{ label: string; points: number }> } | null;
+}
+interface GradingCriterion {
+  id: number;
+  is_additive: boolean;
+  is_deduction_only: boolean;
+  min_checks: number | null;
+  max_checks: number | null;
+  ordinal: number;
+  checks: GradingCheck[];
+}
+
+// Pick the option (for multi-option checks) or the check's own points.
+function pickCheckPoints(check: GradingCheck): { points: number; label?: string } {
+  const opts = check.data?.options;
+  if (opts && opts.length > 0) {
+    // Bias toward the better (earlier) options while keeping every option — including
+    // any middle ones like "Adequate" — reachable so the demo exercises all UI states.
+    const idx = Math.min(Math.floor(Math.pow(Math.random(), 1.5) * opts.length), opts.length - 1);
+    const opt = opts[idx];
+    return { points: opt.points, label: opt.label };
+  }
+  return { points: check.points };
+}
+
+// Decide which checks a grader "applies" to one criterion, respecting its style.
+function selectAppliedChecks(crit: GradingCriterion): Array<{ check: GradingCheck; points: number; label?: string }> {
+  const checks = crit.checks;
+  if (checks.length === 0) return [];
+
+  const singlePick = crit.max_checks === 1;
+  if (singlePick) {
+    const r = Math.random();
+    const idx = r < 0.7 ? 0 : r < 0.9 ? Math.min(1, checks.length - 1) : checks.length - 1;
+    const check = checks[idx];
+    const o = pickCheckPoints(check);
+    return [{ check, points: o.points, label: o.label }];
+  }
+
+  if (crit.is_deduction_only) {
+    const r = Math.random();
+    const numDeductions = r < 0.5 ? 0 : r < 0.8 ? 1 : 2; // most submissions lose little/nothing
+    if (numDeductions === 0) return [];
+    const shuffled = [...checks].sort(() => Math.random() - 0.5).slice(0, Math.min(numDeductions, checks.length));
+    return shuffled.map((check) => ({ check, points: check.points }));
+  }
+
+  // Additive checkbox criterion: always include required checks, ~60% of the rest.
+  const applied = checks.filter((c) => c.is_required || Math.random() < 0.6);
+  return applied.map((check) => {
+    const o = pickCheckPoints(check);
+    return { check, points: o.points, label: o.label };
+  });
+}
+
+// ---- Autograder test generation (clustered failures for Test Insights) ------
+// A realistic per-test suite where specific named tests fail for a reproducible
+// cohort of students, so the Test Insights dashboard can cluster failures by
+// pattern ("N students failed testBalanceAfterRotation"). Deterministic in the
+// submission id so re-seeding is stable and clusters are consistent.
+const AUTOGRADER_TESTS: Array<{ name: string; max: number; failRate: number; output: string; assertion: string }> = [
+  {
+    name: "testInsertAndContains",
+    max: 5,
+    failRate: 0.05,
+    output: "Inserted elements are retrievable.",
+    assertion: "expected contains(k) == true"
+  },
+  {
+    name: "testDeleteRebalances",
+    max: 5,
+    failRate: 0.1,
+    output: "Deletion preserves the balance invariant.",
+    assertion: "expected |height(L)-height(R)| <= 1"
+  },
+  {
+    name: "testBalanceAfterRotation",
+    max: 10,
+    failRate: 0.35,
+    output: "Height stays within 1.44*log2(n) after rotations.",
+    assertion: "expected height <= 17 but was 41 (tree degenerated to a list)"
+  },
+  {
+    name: "testInOrderIterator",
+    max: 5,
+    failRate: 0.08,
+    output: "Iterator yields keys in sorted order.",
+    assertion: "expected [1,2,3,4,5] but was [1,3,2,5,4]"
+  },
+  {
+    name: "testEmptyAndSingleton",
+    max: 5,
+    failRate: 0.04,
+    output: "Edge cases: empty tree and single node.",
+    assertion: "NullPointerException on empty tree"
+  },
+  {
+    name: "testLargeInputPerformance",
+    max: 5,
+    failRate: 0.15,
+    output: "10^6 operations within the time limit.",
+    assertion: "timed out after 10s (expected < 2s)"
+  },
+  {
+    name: "testConcurrentModification",
+    max: 5,
+    failRate: 0.2,
+    output: "Concurrent writers do not corrupt the structure.",
+    assertion: "ConcurrentModificationException under 8 threads"
+  }
+];
+
+// Deterministic [0,1) pseudo-random keyed on two integers (stable across runs).
+function seededUnit(a: number, b: number): number {
+  const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+interface AutograderTestResult {
+  name: string;
+  score: number;
+  max_score: number;
+  output: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  extra_data?: any;
+}
+
+// Compute the per-test results for one submission (clusters by submission id).
+function computeAutograderTests(submissionId: number): AutograderTestResult[] {
+  const results: AutograderTestResult[] = AUTOGRADER_TESTS.map((t, i) => {
+    const failed = seededUnit(submissionId, i + 1) < t.failRate;
     return {
-      name: partTemplates[partIndex % partTemplates.length],
-      description: `${partTemplates[partIndex % partTemplates.length]} evaluation`,
-      ordinal: partIndex,
-      criteria: Array.from({ length: numCriteria }, (_, criteriaIndex) => {
-        const numChecks = faker.number.int({
-          min: config.minChecksPerCriteria,
-          max: config.maxChecksPerCriteria
-        });
-
-        return {
-          name: criteriaTemplates[criteriaIndex % criteriaTemplates.length],
-          description: `${criteriaTemplates[criteriaIndex % criteriaTemplates.length]} assessment`,
-          ordinal: criteriaIndex,
-          total_points: faker.number.int({ min: 5, max: 20 }),
-          checks: Array.from({ length: numChecks }, (_, checkIndex) => ({
-            name: checkTemplates[checkIndex % checkTemplates.length],
-            ordinal: checkIndex,
-            points: faker.number.int({ min: 1, max: 5 }),
-            is_annotation: Math.random() < 0.3,
-            is_comment_required: Math.random() < 0.4,
-            is_required: Math.random() < 0.7
-          }))
-        };
-      })
+      name: t.name,
+      score: failed ? 0 : t.max,
+      max_score: t.max,
+      output: failed ? `FAILED: ${t.assertion}\n\n${t.output}` : `PASSED\n\n${t.output}`
     };
   });
+  // One opt-in AI-generated hint test (showcases the AI test-hints feature).
+  results.push({
+    name: "AI Tutor: suggested next step",
+    score: 3,
+    max_score: 5,
+    output: "An AI-generated hint is available for this submission.",
+    extra_data: {
+      llm: {
+        type: "v1",
+        prompt:
+          "You are an AI CS tutor. The student's balanced-tree implementation fails testBalanceAfterRotation. Without giving the answer, nudge them toward checking their rotation update of subtree heights.",
+        model: "gpt-4o-mini",
+        account: "e2e_test",
+        provider: "openai",
+        temperature: 1,
+        max_tokens: 120
+      }
+    }
+  });
+  return results;
 }
 
 // Helper function to define tag types (name/color combinations)
@@ -946,11 +1507,17 @@ export async function enrollExistingUserInClass(
    * pass the role explicitly in that case. */
   explicitRole?: "student" | "instructor" | "grader"
 ): Promise<TestingUser> {
+  // Recycled demo users historically inherited an email as their profile name.
+  // Always assign a fresh synthetic human name so the UI shows real-looking names,
+  // not email addresses, and a separate pseudonym for the public (anonymous) profile.
+  const privateName = faker.person.fullName();
+  const publicName = `${faker.word.adjective()}-${faker.animal.type()}-${faker.number.int({ min: 100, max: 999 })}`;
+
   const { data: privateProfile, error: privateProfileError } = await rateLimitManager.trackAndLimit("profiles", () =>
     supabase
       .from("profiles")
       .insert({
-        name: user.private_profile_name,
+        name: privateName,
         class_id: class_id,
         is_private_profile: true
       })
@@ -966,7 +1533,7 @@ export async function enrollExistingUserInClass(
     supabase
       .from("profiles")
       .insert({
-        name: user.public_profile_name,
+        name: publicName,
         class_id: class_id,
         is_private_profile: false
       })
@@ -1000,10 +1567,12 @@ export async function enrollExistingUserInClass(
     throw new Error(`Failed to create user role: ${userRoleError.message}`);
   }
 
-  // Return updated user with new profile IDs and class_id
+  // Return updated user with new profile IDs, names, and class_id
   return {
     ...user,
     class_id,
+    private_profile_name: privateName,
+    public_profile_name: publicName,
     private_profile_id: privateProfile[0].id,
     public_profile_id: publicProfile[0].id
   };
@@ -1301,7 +1870,8 @@ export class DatabaseSeeder {
       const { classSections, labSections, studentTagTypes, graderTagTypes } = await this.createClassStructure(
         config,
         class_id,
-        instructors
+        instructors,
+        graders
       );
 
       // Assign users to sections and tags
@@ -1392,6 +1962,8 @@ export class DatabaseSeeder {
           `   Filtered from ${submissionData.length} to ${latestSubmissions.length} latest submissions for grading`
         );
         await this.gradeSubmissions(latestSubmissions, graders, students);
+        await this.gradeSelfReviews(latestSubmissions, class_id);
+        await this.gradeMetaGradingReviews(latestSubmissions, instructors, graders, class_id);
       }
 
       // const class_id = 208;
@@ -1755,7 +2327,12 @@ export class DatabaseSeeder {
     return { instructors, graders, students };
   }
 
-  private async createClassStructure(config: SeedingConfiguration, class_id: number, instructors: TestingUser[]) {
+  private async createClassStructure(
+    config: SeedingConfiguration,
+    class_id: number,
+    instructors: TestingUser[],
+    graders: TestingUser[] = []
+  ) {
     console.log("\n🏫 Creating class structure...");
 
     // Create class sections
@@ -1788,11 +2365,14 @@ export class DatabaseSeeder {
       labSectionsData.length
     );
 
-    // Insert lab section leaders into junction table
+    // Insert lab section leaders into junction table. Lab leaders are TAs (graders)
+    // so their grading workload shows up on the per-grader grading-progress dashboard
+    // (which only lists role='grader'). Fall back to instructors if no graders exist.
+    const labLeaderPool = graders.length > 0 ? graders : instructors;
     if (labSections && labSections.length > 0) {
       const labSectionLeadersData = labSections.map((section, i) => ({
         lab_section_id: section.id,
-        profile_id: instructors[i % instructors.length].private_profile_id,
+        profile_id: labLeaderPool[i % labLeaderPool.length].private_profile_id,
         class_id: class_id
       }));
       await this.rateLimitManager.trackAndLimit(
@@ -3021,9 +3601,9 @@ export class DatabaseSeeder {
       const isRecentlyDue = new Date(assignment.due_date) < now;
 
       if (assignment.groups && assignment.groups.length > 0) {
-        // Group assignment - 75% chance to create 1-3 submissions per assignment
+        // Group assignment - every group submits (1-3 submissions per assignment)
         assignment.groups.forEach((group) => {
-          if (Math.random() < 0.75) {
+          if (Math.random() < 1.0) {
             const numSubmissions = Math.floor(Math.random() * 3) + 1; // 1-3 submissions
             for (let i = 0; i < numSubmissions; i++) {
               submissionsToCreate.push({
@@ -3035,9 +3615,9 @@ export class DatabaseSeeder {
           }
         });
       } else {
-        // Individual assignment - 95% chance each student submits, with 1-4 submissions per student
+        // Individual assignment - every student submits, with 1-4 submissions per student
         students.forEach((student) => {
-          if (Math.random() < 0.95) {
+          if (Math.random() < 1.0) {
             const numSubmissions = Math.floor(Math.random() * 4) + 1; // 1-4 submissions per student
             for (let i = 0; i < numSubmissions; i++) {
               submissionsToCreate.push({
@@ -3775,48 +4355,61 @@ export class DatabaseSeeder {
       reviewsByRubric.get(review.rubric_id)!.push(review);
     });
 
-    // Get all rubric checks for all rubrics in parallel — pull the parent
-    // criterion's constraints so per-review selection respects them.
+    // Get all rubric checks (with their criterion metadata) for all rubrics in parallel
     const rubricCheckQueries = Array.from(reviewsByRubric.keys()).map((rubricId) =>
       supabase
         .from("rubric_checks")
         .select(
           `
-          id, name, is_annotation, points, is_required, file,
-          rubric_criteria!inner(
-            id, rubric_id, total_points, is_additive, is_deduction_only,
-            min_checks_per_submission, max_checks_per_submission
-          )
+          id, name, is_annotation, points, is_required, file, data, student_visibility, max_annotations, ordinal,
+          rubric_criteria!inner(id, rubric_id, is_additive, is_deduction_only, min_checks_per_submission, max_checks_per_submission, ordinal)
         `
         )
         .eq("rubric_criteria.rubric_id", rubricId)
     );
 
     const rubricCheckResults = await Promise.all(rubricCheckQueries);
-    type CheckWithCriterion = {
-      id: number;
-      name: string;
-      is_annotation: boolean;
-      points: number;
-      is_required: boolean;
-      file?: string | null;
-      rubric_criteria: {
-        id: number;
-        rubric_id: number;
-        total_points: number;
-        is_additive: boolean;
-        is_deduction_only: boolean;
-        min_checks_per_submission: number | null;
-        max_checks_per_submission: number | null;
-      };
-    };
-    const rubricChecksMap = new Map<number, CheckWithCriterion[]>();
+    // Flat check-id list per rubric (used to resolve individual-grading target checks)
+    const rubricChecksMap = new Map<number, Array<{ id: number }>>();
+    // Checks grouped by criterion per rubric (used for criterion-aware grading)
+    const rubricCriteriaMap = new Map<number, GradingCriterion[]>();
 
     rubricCheckResults.forEach((result, index) => {
       const rubricId = Array.from(reviewsByRubric.keys())[index];
-      if (result.data) {
-        rubricChecksMap.set(rubricId, result.data as unknown as CheckWithCriterion[]);
+      if (!result.data) return;
+      rubricChecksMap.set(
+        rubricId,
+        result.data.map((c) => ({ id: c.id }))
+      );
+      const byCriterion = new Map<number, GradingCriterion>();
+      for (const row of result.data) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const crit = (row as any).rubric_criteria;
+        if (!byCriterion.has(crit.id)) {
+          byCriterion.set(crit.id, {
+            id: crit.id,
+            is_additive: crit.is_additive,
+            is_deduction_only: crit.is_deduction_only ?? false,
+            min_checks: crit.min_checks_per_submission,
+            max_checks: crit.max_checks_per_submission,
+            ordinal: Number(crit.ordinal ?? 0),
+            checks: []
+          });
+        }
+        byCriterion.get(crit.id)!.checks.push({
+          id: row.id,
+          name: row.name,
+          is_annotation: row.is_annotation,
+          points: Number(row.points ?? 0),
+          is_required: row.is_required,
+          ordinal: Number(row.ordinal ?? 0),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data: (row as any).data ?? null
+        });
       }
+      const criteria = [...byCriterion.values()].sort((a, b) => a.ordinal - b.ordinal);
+      criteria.forEach((c) => c.checks.sort((a, b) => a.ordinal - b.ordinal));
+      rubricCriteriaMap.set(rubricId, criteria);
     });
 
     const rubricIdToCheckIds = new Map<number, number[]>(
@@ -3836,10 +4429,18 @@ export class DatabaseSeeder {
       )
     ];
 
-    const defaultTargetBySubmission = await fetchDefaultGradeTargetStudentProfileIdsBatch(
-      supabase,
-      submissionIdsForDefaultTarget
-    );
+    // Resolve per-submission default grading targets in small chunks. The shared
+    // helper issues a single `.in(assignment_group_id, ...)` query for the whole
+    // batch; at scale that exceeds PostgREST's 1000-row cap and silently drops
+    // some groups' members, yielding null targets. Chunking keeps each query well
+    // under the cap so individual-grading checks always resolve a member.
+    const defaultTargetBySubmission = new Map<number, string | null>();
+    for (const targetChunk of chunkArray(submissionIdsForDefaultTarget, 100)) {
+      const chunkResult = await fetchDefaultGradeTargetStudentProfileIdsBatch(supabase, targetChunk);
+      for (const [submissionId, target] of chunkResult) {
+        defaultTargetBySubmission.set(submissionId, target);
+      }
+    }
 
     // Fetch all group members per submission so individual-grading targets round-
     // robin across the group, and so is_assign_to_student parts can be assigned.
@@ -3856,15 +4457,17 @@ export class DatabaseSeeder {
       type MemberRow = { assignment_group_id: number; assignment_id: number; profile_id: string };
       const membersByGroup = new Map<string, string[]>();
       if (groupIds.length > 0) {
-        const { data: members } = await supabase
-          .from("assignment_groups_members")
-          .select("assignment_group_id, assignment_id, profile_id")
-          .in("assignment_group_id", groupIds);
-        for (const m of (members ?? []) as MemberRow[]) {
-          const key = `${m.assignment_group_id}:${m.assignment_id}`;
-          const bucket = membersByGroup.get(key) ?? [];
-          bucket.push(m.profile_id);
-          membersByGroup.set(key, bucket);
+        for (const groupChunk of chunkArray(groupIds, 100)) {
+          const { data: members } = await supabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, assignment_id, profile_id")
+            .in("assignment_group_id", groupChunk);
+          for (const m of (members ?? []) as MemberRow[]) {
+            const key = `${m.assignment_group_id}:${m.assignment_id}`;
+            const bucket = membersByGroup.get(key) ?? [];
+            bucket.push(m.profile_id);
+            membersByGroup.set(key, bucket);
+          }
         }
         // Sort so round-robin is deterministic per submission.
         for (const arr of membersByGroup.values()) arr.sort((a, b) => a.localeCompare(b));
@@ -3942,137 +4545,115 @@ export class DatabaseSeeder {
       }
     >();
 
+    // Resolve the grading assignee (group mentor / lab leader / random grader) for
+    // each submission, give every assignment its own completion target (50–100%),
+    // and collect the grading review_assignments the per-TA dashboard reads.
+    const classId = (reviewInfo && reviewInfo.length > 0 ? reviewInfo[0].class_id : 0) as number;
+    const assigneeBySubmission = await this.resolveGradingAssignees(submissionData, classId, graders);
+    const assignmentIdBySubmission = new Map<number, number>();
+    const dueDateBySubmission = new Map<number, string>();
+    for (const item of submissionData) {
+      assignmentIdBySubmission.set(item.submission_id, item.assignment.id);
+      dueDateBySubmission.set(item.submission_id, item.assignment.due_date);
+    }
+    const completionFractionByAssignment = new Map<number, number>();
+    const fallbackGraderId = () => graders[Math.floor(Math.random() * graders.length)].private_profile_id;
+    const nowIso = new Date().toISOString();
+    const reviewAssignmentInserts: Array<{
+      class_id: number;
+      assignment_id: number;
+      submission_id: number;
+      submission_review_id: number;
+      rubric_id: number;
+      assignee_profile_id: string;
+      due_date: string;
+      release_date: string | null;
+      completed_at: string | null;
+      completed_by: string | null;
+      max_allowable_late_tokens: number;
+      hard_deadline: boolean;
+    }> = [];
+
     for (const review of reviewInfo || []) {
-      const isCompleted = Math.random() < 0.95; // 95% chance review is completed
-      const grader = graders[Math.floor(Math.random() * graders.length)];
-      const rubricChecks = rubricChecksMap.get(review.rubric_id) || [];
+      const assignmentId = assignmentIdBySubmission.get(review.submission_id);
+      const fracKey = assignmentId ?? -1;
+      if (!completionFractionByAssignment.has(fracKey)) {
+        completionFractionByAssignment.set(fracKey, 0.5 + Math.random() * 0.5); // 50%–100%
+      }
+      const isCompleted = Math.random() < completionFractionByAssignment.get(fracKey)!;
+      const assigneeProfileId = assigneeBySubmission.get(review.submission_id) ?? fallbackGraderId();
+      const criteria = rubricCriteriaMap.get(review.rubric_id) || [];
       const files = submissionFilesMap.get(review.submission_id) || [];
 
+      // Round-robin individual-grading targets across the group's members so each
+      // member owns a share of the individual-grading checks. A group with
+      // [ripley, orion, paws] means check 0 → ripley, check 1 → orion, check 2 →
+      // paws, check 3 → ripley, etc. For individual submissions this collapses to
+      // the lone submitter; if no members resolve, fall back to the default target.
+      const groupMembers = groupMembersBySubmission.get(review.submission_id) ?? [];
+      let individualTargetCursor = 0;
+      const pickIndividualTarget = (): string | null => {
+        if (groupMembers.length === 0) return defaultTargetBySubmission.get(review.submission_id) ?? null;
+        const t = groupMembers[individualTargetCursor % groupMembers.length];
+        individualTargetCursor++;
+        return t;
+      };
+
       if (isCompleted) {
-        // Pick which checks to apply, respecting per-criterion constraints:
-        //   • required checks are always applied
-        //   • count per criterion stays within [min_checks_per_submission,
-        //     max_checks_per_submission] (clamped by required.length and the
-        //     available pool)
-        //   • for additive criteria, drop optional checks whose points would
-        //     push the running total past the criterion's total_points cap
-        //   • points awarded per check is the check's own `points` field, NOT a
-        //     redistributed arbitrary value — so rubric arithmetic in the UI
-        //     adds up to what the rubric defines.
-        const checksByCriterion = new Map<number, CheckWithCriterion[]>();
-        for (const c of rubricChecks) {
-          const cid = c.rubric_criteria.id;
-          if (!checksByCriterion.has(cid)) checksByCriterion.set(cid, []);
-          checksByCriterion.get(cid)!.push(c);
-        }
+        // Apply checks criterion-by-criterion, respecting each criterion's style
+        // (single-pick level, deduction-only, or additive checkboxes). Per-check
+        // points are stored as-is; the submission_review total is recomputed by a
+        // DB trigger that knows how to add/deduct based on the criterion type.
+        for (const crit of criteria) {
+          for (const { check, points, label } of selectAppliedChecks(crit)) {
+            const individualSet = individualChecksByRubric.get(review.rubric_id);
+            const needsIndividualTarget = individualSet?.has(check.id) === true;
+            let targetField: { target_student_profile_id: string } | Record<string, never> = {};
+            if (needsIndividualTarget) {
+              const targetProfile = pickIndividualTarget();
+              if (targetProfile == null) {
+                // Individual-grading checks require a target student; if one can't be
+                // resolved (e.g. a group submission with no members), skip the check
+                // rather than failing the whole seed — the DB would reject it anyway.
+                continue;
+              }
+              targetField = { target_student_profile_id: targetProfile };
+            }
 
-        const applicableChecks: CheckWithCriterion[] = [];
-        const checkPointAllocations = new Map<number, number>();
+            const suffix = label ? ` — ${label}` : "";
 
-        for (const [, checks] of checksByCriterion) {
-          const criterion = checks[0].rubric_criteria;
-          const required = checks.filter((c) => c.is_required);
-          const optional = checks.filter((c) => !c.is_required);
+            if (check.is_annotation && files.length > 0) {
+              // Create submission file comment (line-level annotation)
+              const file = files[Math.floor(Math.random() * files.length)];
+              const lineNumber = Math.floor(Math.random() * 12) + 1;
 
-          const minN = criterion.min_checks_per_submission ?? 0;
-          const maxN = criterion.max_checks_per_submission ?? checks.length;
-
-          // Required checks must always be present; the floor cannot be lower
-          // than required.length, and the ceiling cannot be lower than the floor.
-          const lowerBound = Math.max(minN, required.length);
-          const upperBound = Math.max(lowerBound, Math.min(maxN, checks.length));
-          const targetN = lowerBound + Math.floor(Math.random() * (upperBound - lowerBound + 1));
-
-          // Shuffle optional and pull enough to hit targetN.
-          const shuffledOptional = [...optional].sort(() => Math.random() - 0.5);
-          const optionalSlots = Math.max(0, targetN - required.length);
-          const candidateOptional = shuffledOptional.slice(0, optionalSlots);
-
-          // Sum required first; they're mandatory regardless of total_points cap.
-          let runningCriterionTotal = 0;
-          const selected: CheckWithCriterion[] = [];
-          for (const c of required) {
-            selected.push(c);
-            runningCriterionTotal += c.points;
-          }
-          // For additive criteria, only admit optional checks while we stay at
-          // or under the cap. For deduction-only / others, take them all.
-          for (const c of candidateOptional) {
-            if (criterion.is_additive) {
-              if (runningCriterionTotal + c.points > criterion.total_points) continue;
-              runningCriterionTotal += c.points;
+              submissionFileComments.push({
+                submission_id: review.submission_id,
+                submission_file_id: file.id,
+                author: assigneeProfileId,
+                comment: `${check.name}${suffix}`,
+                points,
+                line: lineNumber,
+                class_id: review.class_id,
+                released: true,
+                rubric_check_id: check.id,
+                submission_review_id: review.id,
+                ...targetField
+              });
             } else {
-              runningCriterionTotal += c.points;
+              // Create submission comment (criterion-level / global comment)
+              submissionComments.push({
+                submission_id: review.submission_id,
+                author: assigneeProfileId,
+                comment: `${check.name}${suffix}`,
+                points,
+                class_id: review.class_id,
+                released: true,
+                rubric_check_id: check.id,
+                submission_review_id: review.id,
+                ...targetField
+              });
             }
-            selected.push(c);
-          }
-
-          for (const c of selected) {
-            applicableChecks.push(c);
-            checkPointAllocations.set(c.id, c.points);
-          }
-        }
-        // Round-robin individual-grading targets across the group's members. A
-        // group with [ripley, orion, paws] means check 0 → ripley, check 1 → orion,
-        // check 2 → paws, check 3 → ripley, etc. For individual submissions
-        // groupMembers is a single-element array, so this collapses to "all checks
-        // go to the lone submitter".
-        const groupMembers = groupMembersBySubmission.get(review.submission_id) ?? [];
-        let individualTargetCursor = 0;
-        const pickIndividualTarget = (): string | null => {
-          if (groupMembers.length === 0) return defaultTargetBySubmission.get(review.submission_id) ?? null;
-          const t = groupMembers[individualTargetCursor % groupMembers.length];
-          individualTargetCursor++;
-          return t;
-        };
-
-        // Create comments for applicable checks with allocated points
-        for (const check of applicableChecks) {
-          const pointsAwarded = checkPointAllocations.get(check.id) || 0;
-          const individualSet = individualChecksByRubric.get(review.rubric_id);
-          const needsIndividualTarget = individualSet?.has(check.id) === true;
-          const targetProfile = needsIndividualTarget ? pickIndividualTarget() : undefined;
-          let targetField: { target_student_profile_id: string } | Record<string, never> = {};
-          if (needsIndividualTarget) {
-            if (targetProfile == null) {
-              throw new Error(
-                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no group member available for submission ${review.submission_id} (review ${review.id})`
-              );
-            }
-            targetField = { target_student_profile_id: targetProfile };
-          }
-
-          if (check.is_annotation && files.length > 0) {
-            // Create submission file comment (annotation)
-            const file = files[Math.floor(Math.random() * files.length)];
-            const lineNumber = Math.floor(Math.random() * 5) + 1;
-
-            submissionFileComments.push({
-              submission_id: review.submission_id,
-              submission_file_id: file.id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: Grading comment for this check`,
-              points: pointsAwarded,
-              line: lineNumber,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id,
-              ...targetField
-            });
-          } else {
-            // Create submission comment (general comment)
-            submissionComments.push({
-              submission_id: review.submission_id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
-              points: pointsAwarded,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id,
-              ...targetField
-            });
           }
         }
       }
@@ -4083,23 +4664,38 @@ export class DatabaseSeeder {
       // submission_reviews.individual_scores, which is what the UI shows.
       const assignToParts = assignToStudentPartsByRubric.get(review.rubric_id) ?? [];
       let rubric_part_student_assignments: Record<number, string> | undefined;
-      if (assignToParts.length > 0) {
-        const members = groupMembersBySubmission.get(review.submission_id) ?? [];
-        if (members.length > 0) {
-          rubric_part_student_assignments = {};
-          for (let i = 0; i < assignToParts.length; i++) {
-            rubric_part_student_assignments[assignToParts[i]] = members[i % members.length];
-          }
+      if (assignToParts.length > 0 && groupMembers.length > 0) {
+        rubric_part_student_assignments = {};
+        for (let i = 0; i < assignToParts.length; i++) {
+          rubric_part_student_assignments[assignToParts[i]] = groupMembers[i % groupMembers.length];
         }
       }
 
       reviewUpdates.set(review.id, {
-        grader: grader.private_profile_id,
+        grader: assigneeProfileId,
         released: isCompleted,
-        completed_by: isCompleted ? grader.private_profile_id : null,
-        completed_at: isCompleted ? new Date().toISOString() : null,
+        completed_by: isCompleted ? assigneeProfileId : null,
+        completed_at: isCompleted ? nowIso : null,
         ...(rubric_part_student_assignments ? { rubric_part_student_assignments } : {})
       });
+
+      // One grading review_assignment per grading review (assignee = the grader).
+      if (assignmentId != null) {
+        reviewAssignmentInserts.push({
+          class_id: review.class_id,
+          assignment_id: assignmentId,
+          submission_id: review.submission_id,
+          submission_review_id: review.id,
+          rubric_id: review.rubric_id,
+          assignee_profile_id: assigneeProfileId,
+          due_date: dueDateBySubmission.get(review.submission_id) ?? new Date(Date.now() + 7 * 864e5).toISOString(),
+          release_date: null,
+          completed_at: isCompleted ? nowIso : null,
+          completed_by: isCompleted ? assigneeProfileId : null,
+          max_allowable_late_tokens: 0,
+          hard_deadline: false
+        });
+      }
     }
 
     // Batch insert comments sequentially in chunks of 50
@@ -4173,10 +4769,320 @@ export class DatabaseSeeder {
       })
     );
 
+    // Insert the grading review_assignments (assignee → submission). Direct inserts
+    // with completed_at already set avoid firing the completion-cascade triggers.
+    if (reviewAssignmentInserts.length > 0) {
+      let raCompleted = 0;
+      for (const chunk of chunkArray(reviewAssignmentInserts, 200)) {
+        const { error: raError } = await supabase.from("review_assignments").insert(chunk).select("id");
+        if (raError) {
+          throw new Error(`Failed to insert grading review assignments: ${raError.message}`);
+        }
+        raCompleted += chunk.filter((r) => r.completed_at != null).length;
+      }
+      console.log(`   Created ${reviewAssignmentInserts.length} grading review assignments (${raCompleted} completed)`);
+    }
+
     console.log(`✓ Processed grading for ${reviewsToProcess.length} submissions`);
     console.log(`   Created ${submissionComments.length} submission comments`);
     console.log(`   Created ${submissionFileComments.length} submission file comments`);
     return submissionComments;
+  }
+
+  /** Resolve the grading assignee for each submission: group→mentor, lab→lab leader, else random grader. */
+  private async resolveGradingAssignees(
+    latestSubmissions: Array<SubmissionDataItem>,
+    classId: number,
+    graders: TestingUser[]
+  ): Promise<Map<number, string>> {
+    const result = new Map<number, string>();
+    if (graders.length === 0) return result;
+    const randomGraderId = () => graders[Math.floor(Math.random() * graders.length)].private_profile_id;
+
+    // assignment id -> slug (lab assignments are slugged "lab-*")
+    const { data: asgs } = await supabase.from("assignments").select("id, slug").eq("class_id", classId);
+    const slugByAssignment = new Map<number, string>((asgs ?? []).map((a) => [a.id, a.slug ?? ""]));
+
+    // lab section -> a lab leader profile id
+    const { data: leaders } = await supabase
+      .from("lab_section_leaders")
+      .select("lab_section_id, profile_id")
+      .eq("class_id", classId);
+    const leaderByLabSection = new Map<number, string>();
+    for (const l of leaders ?? []) {
+      if (!leaderByLabSection.has(l.lab_section_id)) leaderByLabSection.set(l.lab_section_id, l.profile_id);
+    }
+
+    // student private profile -> lab section id
+    const { data: roles } = await supabase
+      .from("user_roles")
+      .select("private_profile_id, lab_section_id")
+      .eq("class_id", classId)
+      .eq("role", "student");
+    const labSectionByStudent = new Map<string, number | null>();
+    for (const r of roles ?? []) labSectionByStudent.set(r.private_profile_id, r.lab_section_id);
+
+    // group id -> mentor profile id
+    const groupIds = [...new Set(latestSubmissions.filter((s) => s.group).map((s) => s.group!.id))];
+    const mentorByGroup = new Map<number, string | null>();
+    for (const chunk of chunkArray(groupIds, 200)) {
+      const { data: groups } = await supabase.from("assignment_groups").select("id, mentor_profile_id").in("id", chunk);
+      for (const g of groups ?? []) mentorByGroup.set(g.id, g.mentor_profile_id);
+    }
+
+    for (const item of latestSubmissions) {
+      let assignee: string | undefined;
+      if (item.group) {
+        // Group submissions → the group's mentor.
+        assignee = mentorByGroup.get(item.group.id) ?? undefined;
+      } else if (item.student) {
+        const slug = slugByAssignment.get(item.assignment.id) ?? "";
+        if (slug.startsWith("lab-")) {
+          // Individual lab submissions → the student's lab section leader.
+          const labSectionId = labSectionByStudent.get(item.student.private_profile_id);
+          if (labSectionId != null) assignee = leaderByLabSection.get(labSectionId);
+        }
+      }
+      // Everything else (regular individual assignments) → a random grader.
+      result.set(item.submission_id, assignee ?? randomGraderId());
+    }
+    return result;
+  }
+
+  /** Fetch rubric checks grouped by criterion for the given rubric ids. */
+  private async fetchCriteriaForRubrics(rubricIds: number[]): Promise<Map<number, GradingCriterion[]>> {
+    const unique = [...new Set(rubricIds)];
+    const results = await Promise.all(
+      unique.map((rid) =>
+        supabase
+          .from("rubric_checks")
+          .select(
+            `id, name, is_annotation, points, is_required, ordinal, data,
+             rubric_criteria!inner(id, rubric_id, is_additive, is_deduction_only, min_checks_per_submission, max_checks_per_submission, ordinal)`
+          )
+          .eq("rubric_criteria.rubric_id", rid)
+      )
+    );
+    const map = new Map<number, GradingCriterion[]>();
+    results.forEach((res, i) => {
+      const rid = unique[i];
+      if (!res.data) {
+        map.set(rid, []);
+        return;
+      }
+      const byCriterion = new Map<number, GradingCriterion>();
+      for (const row of res.data) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const c = (row as any).rubric_criteria;
+        if (!byCriterion.has(c.id)) {
+          byCriterion.set(c.id, {
+            id: c.id,
+            is_additive: c.is_additive,
+            is_deduction_only: c.is_deduction_only ?? false,
+            min_checks: c.min_checks_per_submission,
+            max_checks: c.max_checks_per_submission,
+            ordinal: Number(c.ordinal ?? 0),
+            checks: []
+          });
+        }
+        byCriterion.get(c.id)!.checks.push({
+          id: row.id,
+          name: row.name,
+          is_annotation: row.is_annotation,
+          points: Number(row.points ?? 0),
+          is_required: row.is_required,
+          ordinal: Number(row.ordinal ?? 0),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data: (row as any).data ?? null
+        });
+      }
+      const crits = [...byCriterion.values()].sort((a, b) => a.ordinal - b.ordinal);
+      crits.forEach((c) => c.checks.sort((a, b) => a.ordinal - b.ordinal));
+      map.set(rid, crits);
+    });
+    return map;
+  }
+
+  /** Fetch submission_review rows of a given review round for the given submissions. */
+  private async fetchReviewsByRound(
+    submissionIds: number[],
+    reviewRound: "self-review" | "meta-grading-review"
+  ): Promise<Array<{ id: number; submission_id: number; rubric_id: number; class_id: number }>> {
+    const chunks = chunkArray(submissionIds, 200);
+    const all: Array<{ id: number; submission_id: number; rubric_id: number; class_id: number }> = [];
+    for (const chunk of chunks) {
+      const { data, error } = await supabase
+        .from("submission_reviews")
+        .select("id, submission_id, rubric_id, class_id, rubrics!inner(review_round)")
+        .in("submission_id", chunk)
+        .eq("rubrics.review_round", reviewRound);
+      if (error) throw new Error(`Failed to fetch ${reviewRound} reviews: ${error.message}`);
+      for (const r of data ?? []) {
+        if (r.rubric_id != null) {
+          all.push({ id: r.id, submission_id: r.submission_id!, rubric_id: r.rubric_id, class_id: r.class_id });
+        }
+      }
+    }
+    return all;
+  }
+
+  /** Shared: apply checks to a set of auxiliary (self- or meta-grading) reviews. */
+  private async applyAuxiliaryReviews(params: {
+    label: string;
+    reviewRound: "self-review" | "meta-grading-review";
+    latestSubmissions: Array<SubmissionDataItem>;
+    class_id: number;
+    authorFor: (submissionId: number) => string | undefined;
+    completionRate: number;
+  }): Promise<void> {
+    const { label, reviewRound, latestSubmissions, class_id, authorFor, completionRate } = params;
+    const submissionIds = latestSubmissions.map((s) => s.submission_id);
+    if (submissionIds.length === 0) return;
+
+    console.log(`\n📝 Grading ${label}...`);
+    const reviews = await this.fetchReviewsByRound(submissionIds, reviewRound);
+    if (reviews.length === 0) {
+      console.log(`   No ${label} rows found`);
+      return;
+    }
+    const criteriaMap = await this.fetchCriteriaForRubrics(reviews.map((r) => r.rubric_id));
+
+    const submissionComments: Array<{
+      submission_id: number;
+      author: string;
+      comment: string;
+      points: number;
+      class_id: number;
+      released: boolean;
+      rubric_check_id: number;
+      submission_review_id: number;
+    }> = [];
+    const reviewUpdates = new Map<
+      number,
+      { grader: string; released: boolean; completed_by: string; completed_at: string }
+    >();
+
+    for (const review of reviews) {
+      if (Math.random() > completionRate) continue;
+      const author = authorFor(review.submission_id);
+      if (!author) continue;
+      for (const crit of criteriaMap.get(review.rubric_id) ?? []) {
+        for (const { check, points, label: optLabel } of selectAppliedChecks(crit)) {
+          const suffix = optLabel ? ` — ${optLabel}` : "";
+          submissionComments.push({
+            submission_id: review.submission_id,
+            author,
+            comment: `${check.name}${suffix}`,
+            points,
+            class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: review.id
+          });
+        }
+      }
+      const now = new Date().toISOString();
+      reviewUpdates.set(review.id, { grader: author, released: true, completed_by: author, completed_at: now });
+    }
+
+    if (submissionComments.length > 0) {
+      const batchSize = this.rateLimits["submission_comments"].batchSize || 50;
+      for (const chunk of chunkArray(submissionComments, batchSize)) {
+        const { error } = await this.rateLimitManager.trackAndLimit(
+          "submission_comments",
+          () => supabase.from("submission_comments").insert(chunk).select("id"),
+          chunk.length
+        );
+        if (error) throw new Error(`Failed to insert ${label} comments: ${error.message}`);
+      }
+    }
+
+    const updateEntries = Array.from(reviewUpdates.entries());
+    for (const chunk of chunkArray(updateEntries, 5)) {
+      await Promise.all(
+        chunk.map(([reviewId, updateData]) =>
+          this.rateLimitManager.trackAndLimit("submission_reviews", () =>
+            supabase.from("submission_reviews").update(updateData).eq("id", reviewId).select("id")
+          )
+        )
+      );
+    }
+
+    console.log(
+      `   ✓ Completed ${reviewUpdates.size}/${reviews.length} ${label} (${submissionComments.length} comments)`
+    );
+  }
+
+  /** Students self-assess their own latest submission (~65% participation). */
+  protected async gradeSelfReviews(latestSubmissions: Array<SubmissionDataItem>, class_id: number) {
+    const ownerBySubmission = new Map<number, string>();
+    for (const s of latestSubmissions) {
+      const owner = s.student?.private_profile_id ?? s.group?.members?.[0];
+      if (owner) ownerBySubmission.set(s.submission_id, owner);
+    }
+    await this.applyAuxiliaryReviews({
+      label: "student self-reviews",
+      reviewRound: "self-review",
+      latestSubmissions,
+      class_id,
+      authorFor: (submissionId) => ownerBySubmission.get(submissionId),
+      completionRate: 0.65
+    });
+  }
+
+  /** A second grader meta-grades a subset (~20%) of submissions ("grade the grading"). */
+  protected async gradeMetaGradingReviews(
+    latestSubmissions: Array<SubmissionDataItem>,
+    instructors: TestingUser[],
+    graders: TestingUser[],
+    class_id: number
+  ) {
+    const metaGraders = [...instructors, ...graders.slice(0, Math.max(1, Math.floor(graders.length / 4)))];
+    if (metaGraders.length === 0) return;
+
+    // Meta-grading ("grade the grading") only makes sense once the primary grading
+    // review is finished. Resolve each submission's completed primary grader so we
+    // can (a) skip submissions whose primary review isn't done and (b) never assign
+    // a grader to meta-grade their own review.
+    const submissionIds = latestSubmissions.map((s) => s.submission_id);
+    const submissionRows = await this.batchQuerySubmissions(submissionIds);
+    const submissionByGradingReviewId = new Map<number, number>();
+    for (const row of submissionRows) {
+      if (row.grading_review_id) submissionByGradingReviewId.set(row.grading_review_id, row.id);
+    }
+
+    const primaryGraderBySubmission = new Map<number, string>();
+    for (const chunk of chunkArray([...submissionByGradingReviewId.keys()], 200)) {
+      const { data, error } = await supabase.from("submission_reviews").select("id, completed_by").in("id", chunk);
+      if (error) throw new Error(`Failed to fetch primary reviews for meta-grading: ${error.message}`);
+      for (const r of data ?? []) {
+        const submissionId = submissionByGradingReviewId.get(r.id);
+        // completed_by is only set once the primary grading review is complete.
+        if (submissionId != null && r.completed_by) {
+          primaryGraderBySubmission.set(submissionId, r.completed_by);
+        }
+      }
+    }
+
+    const eligibleSubmissions = latestSubmissions.filter((s) => primaryGraderBySubmission.has(s.submission_id));
+    if (eligibleSubmissions.length === 0) {
+      console.log("   No completed primary reviews to meta-grade");
+      return;
+    }
+
+    await this.applyAuxiliaryReviews({
+      label: "meta-grading reviews",
+      reviewRound: "meta-grading-review",
+      latestSubmissions: eligibleSubmissions,
+      class_id,
+      authorFor: (submissionId) => {
+        const primaryGrader = primaryGraderBySubmission.get(submissionId);
+        const eligible = metaGraders.filter((g) => g.private_profile_id !== primaryGrader);
+        const pool = eligible.length > 0 ? eligible : metaGraders;
+        return pool[Math.floor(Math.random() * pool.length)].private_profile_id;
+      },
+      completionRate: 0.2
+    });
   }
 
   protected async createExtensionsAndRegradeRequests(
@@ -4433,12 +5339,51 @@ export class DatabaseSeeder {
     await this.createGradebookColumn({
       class_id,
       name: "Average HW",
-      description: "Average of all homework assignments",
+      description: "Average of all (non-lab) homework assignments",
+      // Non-lab assignments are slugged `assignment-assignment-*` by the assignment→column trigger.
       slug: "average.hw",
-      score_expression: "mean(gradebook_columns('assignment-hw-*'))",
+      score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
       max_score: 100,
       sort_order: 17
     });
+
+    // Drop-lowest: average the lab scores after dropping the lowest two.
+    await this.createGradebookColumn({
+      class_id,
+      name: "Labs (drop lowest 2)",
+      description: "Average of lab scores after dropping each student's two lowest labs",
+      slug: "labs-drop-lowest",
+      score_expression: "mean(drop_lowest(gradebook_columns('assignment-lab-*'), 2))",
+      max_score: 100,
+      sort_order: 18
+    });
+
+    // Instructor-only column: hidden from students (e.g. a manual curve adjustment).
+    await this.createGradebookColumn({
+      class_id,
+      name: "Curve Adjustment (instructor-only)",
+      description: "Manual curve points applied by the instructor. Hidden from students until released.",
+      slug: "curve-adjustment",
+      max_score: 5,
+      instructor_only: true,
+      sort_order: 19
+    });
+
+    // A released, frozen snapshot column students can already see.
+    const midtermColumn = await this.createGradebookColumn({
+      class_id,
+      name: "Midterm Standing (released)",
+      description: "Snapshot of standing at the midterm, released to students.",
+      slug: "midterm-standing",
+      score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 2)',
+      max_score: 12,
+      released: true,
+      sort_order: 20
+    });
+    await supabase
+      .from("gradebook_columns")
+      .update({ render_expression: 'customLabel(score,[8,"On track";5,"At risk";0,"Off track"])' })
+      .eq("id", midtermColumn.id);
 
     // Create final grade column
     const finalColumn = await this.createGradebookColumn({
@@ -4650,6 +5595,7 @@ final;`,
     score_expression,
     dependencies,
     released = false,
+    instructor_only = false,
     sort_order
   }: {
     class_id: number;
@@ -4660,6 +5606,7 @@ final;`,
     score_expression?: string;
     dependencies?: { assignments?: number[]; gradebook_columns?: number[] };
     released?: boolean;
+    instructor_only?: boolean;
     sort_order?: number;
   }): Promise<{
     id: number;
@@ -4693,6 +5640,7 @@ final;`,
           score_expression,
           dependencies,
           released,
+          instructor_only,
           sort_order
         })
         .select("id, name, slug, max_score, score_expression")
@@ -4928,6 +5876,40 @@ final;`,
       queueId = queueData.id;
     }
 
+    // Pull a pool of real submissions (with a file) so help requests can reference
+    // the student's code + assignment — "the queue knows about the student's code".
+    const { data: submissionPool } = await supabase
+      .from("submissions")
+      .select("id, assignment_id, profile_id, assignment_group_id, submission_files(id)")
+      .eq("class_id", class_id)
+      .not("assignment_id", "is", null)
+      .limit(400);
+    const linkableSubmissions = (submissionPool ?? []).filter((s) => s.assignment_id != null);
+    type LinkableSubmission = (typeof linkableSubmissions)[number];
+
+    // Map each student to the groups they belong to so a help request can only ever
+    // reference the requester's own code (their individual or group submissions),
+    // never an unrelated student's work.
+    const { data: groupMemberships } = await supabase
+      .from("assignment_groups_members")
+      .select("profile_id, assignment_group_id")
+      .eq("class_id", class_id);
+    const groupIdsByProfile = new Map<string, Set<number>>();
+    for (const m of groupMemberships ?? []) {
+      if (m.profile_id == null || m.assignment_group_id == null) continue;
+      if (!groupIdsByProfile.has(m.profile_id)) groupIdsByProfile.set(m.profile_id, new Set());
+      groupIdsByProfile.get(m.profile_id)!.add(m.assignment_group_id);
+    }
+
+    const pickSubmission = (creatorProfileId: string): LinkableSubmission | null => {
+      const groupIds = groupIdsByProfile.get(creatorProfileId);
+      const candidates = linkableSubmissions.filter(
+        (s) =>
+          s.profile_id === creatorProfileId || (s.assignment_group_id != null && groupIds?.has(s.assignment_group_id))
+      );
+      return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+    };
+
     // Create help requests in batches
     const BATCH_SIZE = 50;
     const helpRequestBatches = chunkArray(
@@ -4971,6 +5953,9 @@ final;`,
         // Calculate resolved_at timestamp (reused for work sessions)
         const resolvedAt = isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
 
+        // ~60% of requests reference the requester's own submission + code.
+        const linkedSubmission = Math.random() < 0.6 ? pickSubmission(creator.private_profile_id) : null;
+
         // Create the help request
         const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(
           "help_requests",
@@ -4986,7 +5971,8 @@ final;`,
                 created_by: creator.private_profile_id,
                 assignee: isResolved && resolver ? resolver.private_profile_id : null,
                 resolved_by: isResolved && resolver ? resolver.private_profile_id : null,
-                resolved_at: resolvedAt ? resolvedAt.toISOString() : null
+                resolved_at: resolvedAt ? resolvedAt.toISOString() : null,
+                referenced_submission_id: linkedSubmission ? linkedSubmission.id : null
               })
               .select("id")
         );
@@ -4996,6 +5982,26 @@ final;`,
         }
 
         const helpRequestId = helpRequestData[0].id;
+
+        // Attach a file/line reference so staff see the failing code before they say hello.
+        if (linkedSubmission) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const files = (linkedSubmission as any).submission_files as Array<{ id: number }> | undefined;
+          const fileId = files && files.length > 0 ? files[0].id : null;
+          await this.rateLimitManager.trackAndLimit("help_request_students", () =>
+            supabase
+              .from("help_request_file_references")
+              .insert({
+                help_request_id: helpRequestId,
+                class_id: class_id,
+                assignment_id: linkedSubmission.assignment_id,
+                submission_id: linkedSubmission.id,
+                submission_file_id: fileId,
+                line_number: fileId ? Math.floor(Math.random() * 40) + 1 : null
+              })
+              .select("id")
+          );
+        }
 
         // Add the creator as a member
         await this.rateLimitManager.trackAndLimit("help_request_students", () =>
@@ -5269,71 +6275,10 @@ final;`,
   }
 
   // Helper method to create rubric structure for an assignment
-  private async createRubricForAssignment(assignment: Assignment, rubricConfig: RubricConfig) {
-    const rubricStructure = generateRubricStructure(rubricConfig);
-
-    // Create self-review rubric part (always include basic self-review)
-    const selfReviewPart = {
-      name: "Self Review",
-      description: "Student self-assessment",
-      ordinal: 0,
-      criteria: [
-        {
-          name: "Self Assessment",
-          description: "How well did you complete this assignment?",
-          ordinal: 0,
-          total_points: 10,
-          checks: [
-            {
-              name: "Excellent",
-              ordinal: 0,
-              points: 10,
-              is_annotation: false,
-              is_comment_required: true,
-              is_required: true
-            },
-            {
-              name: "Good",
-              ordinal: 1,
-              points: 8,
-              is_annotation: false,
-              is_comment_required: true,
-              is_required: false
-            },
-            {
-              name: "Satisfactory",
-              ordinal: 2,
-              points: 6,
-              is_annotation: false,
-              is_comment_required: true,
-              is_required: false
-            },
-            {
-              name: "Needs Work",
-              ordinal: 3,
-              points: 4,
-              is_annotation: false,
-              is_comment_required: true,
-              is_required: false
-            }
-          ]
-        }
-      ]
-    };
-
-    const allParts = [selfReviewPart, ...rubricStructure];
-
+  /** Insert a list of rubric parts (with criteria + checks) into a single rubric. */
+  private async insertRubricParts(parts: SeedRubricPart[], rubricId: number, assignment: Assignment) {
     await Promise.all(
-      allParts.map(async (partTemplate) => {
-        const isGradingPart = partTemplate.name !== "Self Review";
-        const rubricId = isGradingPart ? assignment.grading_rubric_id : assignment.self_review_rubric_id;
-
-        if (!rubricId) {
-          console.warn(`Skipping rubric part ${partTemplate.name} - no rubric ID available`);
-          return;
-        }
-
-        // Create rubric part
+      parts.map(async (partTemplate) => {
         const { data: partData, error: partError } = await this.rateLimitManager.trackAndLimit("rubric_parts", () =>
           supabase
             .from("rubric_parts")
@@ -5343,7 +6288,9 @@ final;`,
               description: partTemplate.description,
               ordinal: partTemplate.ordinal,
               rubric_id: rubricId,
-              assignment_id: assignment.id
+              assignment_id: assignment.id,
+              is_individual_grading: partTemplate.is_individual_grading ?? false,
+              is_assign_to_student: partTemplate.is_assign_to_student ?? false
             })
             .select("id")
         );
@@ -5354,7 +6301,6 @@ final;`,
 
         const partId = partData[0].id;
 
-        // Create criteria for this part
         for (const criteriaTemplate of partTemplate.criteria) {
           const { data: criteriaData, error: criteriaError } = await this.rateLimitManager.trackAndLimit(
             "rubric_criteria",
@@ -5367,7 +6313,10 @@ final;`,
                   description: criteriaTemplate.description,
                   ordinal: criteriaTemplate.ordinal,
                   total_points: criteriaTemplate.total_points,
-                  is_additive: true,
+                  is_additive: criteriaTemplate.is_additive,
+                  is_deduction_only: criteriaTemplate.is_deduction_only ?? false,
+                  min_checks_per_submission: criteriaTemplate.min_checks_per_submission ?? null,
+                  max_checks_per_submission: criteriaTemplate.max_checks_per_submission ?? null,
                   rubric_part_id: partId,
                   rubric_id: rubricId,
                   assignment_id: assignment.id
@@ -5381,7 +6330,6 @@ final;`,
 
           const criteriaId = criteriaData[0].id;
 
-          // Create checks for this criteria
           for (const checkTemplate of criteriaTemplate.checks) {
             await this.rateLimitManager.trackAndLimit("rubric_checks", () =>
               supabase
@@ -5390,21 +6338,135 @@ final;`,
                   class_id: assignment.class_id,
                   rubric_criteria_id: criteriaId,
                   name: checkTemplate.name,
-                  description: `${checkTemplate.name} evaluation`,
+                  description: `${checkTemplate.name}`,
                   ordinal: checkTemplate.ordinal,
                   points: checkTemplate.points,
                   is_annotation: checkTemplate.is_annotation,
                   is_comment_required: checkTemplate.is_comment_required,
                   is_required: checkTemplate.is_required,
+                  student_visibility: checkTemplate.student_visibility ?? "always",
+                  max_annotations: checkTemplate.max_annotations ?? null,
+                  file: checkTemplate.file ?? null,
+                  data: checkTemplate.data ?? null,
                   assignment_id: assignment.id,
                   rubric_id: rubricId
                 })
-                .select("*")
+                .select("id")
             );
           }
         }
       })
     );
+  }
+
+  private async createRubricForAssignment(assignment: Assignment, rubricConfig: RubricConfig) {
+    const gradingParts = generateRubricStructure(rubricConfig);
+
+    // For group assignments, grade the first part per-member so the hand-grading
+    // view shows per-member scoring within a single group submission.
+    const isGroupAssignment = (assignment as { group_config?: string | null }).group_config !== "individual";
+    if (isGroupAssignment && gradingParts.length > 0) {
+      gradingParts[0].is_individual_grading = true;
+    }
+
+    // Self-review rubric (student self-assessment) — single multi-level criterion.
+    const selfReviewParts: SeedRubricPart[] = [
+      {
+        name: "Self Review",
+        description: "Student self-assessment",
+        ordinal: 0,
+        criteria: [
+          {
+            name: "Self Assessment",
+            description: "How well did you complete this assignment?",
+            ordinal: 0,
+            total_points: 10,
+            is_additive: true,
+            is_deduction_only: false,
+            min_checks_per_submission: 1,
+            max_checks_per_submission: 1,
+            checks: [
+              {
+                name: "Excellent",
+                ordinal: 0,
+                points: 10,
+                is_annotation: false,
+                is_comment_required: true,
+                is_required: false,
+                student_visibility: "always"
+              },
+              {
+                name: "Good",
+                ordinal: 1,
+                points: 8,
+                is_annotation: false,
+                is_comment_required: true,
+                is_required: false,
+                student_visibility: "always"
+              },
+              {
+                name: "Satisfactory",
+                ordinal: 2,
+                points: 6,
+                is_annotation: false,
+                is_comment_required: true,
+                is_required: false,
+                student_visibility: "always"
+              },
+              {
+                name: "Needs Work",
+                ordinal: 3,
+                points: 4,
+                is_annotation: false,
+                is_comment_required: true,
+                is_required: false,
+                student_visibility: "always"
+              }
+            ]
+          }
+        ]
+      }
+    ];
+
+    const inserts: Array<Promise<void>> = [];
+    if (assignment.grading_rubric_id) {
+      inserts.push(this.insertRubricParts(gradingParts, assignment.grading_rubric_id, assignment));
+    }
+    if (assignment.self_review_rubric_id) {
+      inserts.push(this.insertRubricParts(selfReviewParts, assignment.self_review_rubric_id, assignment));
+    }
+
+    // Create a meta-grading rubric and attach it to the assignment. Doing this
+    // before submissions are created means the submission-insert hook will
+    // auto-create a meta-grading review row for every submission.
+    const { data: metaRubricData, error: metaRubricError } = await supabase
+      .from("rubrics")
+      .insert({
+        class_id: assignment.class_id,
+        name: "Meta-Grading Rubric",
+        description: "Grade the grading: a second grader reviews the original grader's work.",
+        review_round: "meta-grading-review",
+        assignment_id: assignment.id,
+        is_private: false
+      })
+      .select("id")
+      .single();
+
+    if (metaRubricError || !metaRubricData) {
+      throw new Error(`Failed to create meta-grading rubric: ${metaRubricError?.message || "No data returned"}`);
+    }
+
+    const { error: assignmentUpdateError } = await supabase
+      .from("assignments")
+      .update({ meta_grading_rubric_id: metaRubricData.id })
+      .eq("id", assignment.id);
+    if (assignmentUpdateError) {
+      throw new Error(`Failed to attach meta-grading rubric: ${assignmentUpdateError.message}`);
+    }
+
+    inserts.push(this.insertRubricParts(generateMetaGradingStructure(), metaRubricData.id, assignment));
+
+    await Promise.all(inserts);
   }
 
   /** Form group membership once (shuffle + partition). Returns array of arrays of profile_ids. */
@@ -5605,126 +6667,125 @@ final;`,
     // previous chunked path produced under contention.
     console.log(`   Processing ${submissionsToCreate.length} submissions per-row in parallel...`);
 
-    const sampleJavaCode = `package com.pawtograder.example.java;
+    // A multi-file, multi-language submission with real cross-file references, so seeded submissions
+    // exercise the grading viewer's cross-file "go to definition" (Java/Python/TypeScript). Each
+    // language has an entrypoint that references a symbol defined in a sibling file via a valid
+    // class/module path.
+    const sampleSubmissionFiles: { name: string; contents: string }[] = [
+      {
+        name: "com/pawtograder/example/java/Entrypoint.java",
+        contents: `package com.pawtograder.example.java;
 
 public class Entrypoint {
     public static void main(String[] args) {
-        System.out.println("Hello, World!");
+        Greeter greeter = new Greeter();
+        System.out.println(greeter.getMessage());
+
+        MathHelper helper = new MathHelper();
+        System.out.println(helper.doMath(2, 3));
     }
+}
+`
+      },
+      {
+        name: "com/pawtograder/example/java/Greeter.java",
+        contents: `package com.pawtograder.example.java;
 
-  /*
-   * This method takes two integers and returns their sum.
-   * 
-   * @param a the first integer
-   * @param b the second integer
-   * @return the sum of a and b
-   */
-  public int doMath(int a, int b) {
-      return a+b;
+/** Produces the greeting shown at startup. */
+public class Greeter {
+    public String getMessage() {
+        return "Hello, World!";
+    }
+}
+`
+      },
+      {
+        name: "com/pawtograder/example/java/MathHelper.java",
+        contents: `package com.pawtograder.example.java;
+
+public class MathHelper {
+    /**
+     * Takes two integers and returns their sum.
+     *
+     * @param a the first integer
+     * @param b the second integer
+     * @return the sum of a and b
+     */
+    public int doMath(int a, int b) {
+        return a + b;
+    }
+}
+`
+      },
+      {
+        name: "calculator.py",
+        contents: `from mathutils import add, Calculator
+
+
+def main():
+    calc = Calculator()
+    total = add(2, 3)
+    print(calc.describe(total))
+
+
+if __name__ == "__main__":
+    main()
+`
+      },
+      {
+        name: "mathutils.py",
+        contents: `def add(a, b):
+    return a + b
+
+
+class Calculator:
+    def describe(self, value):
+        return f"Result: {value}"
+`
+      },
+      {
+        name: "app.ts",
+        contents: `import { Circle, Shape } from "./shapes";
+
+const shapes: Shape[] = [new Circle(2)];
+
+export function totalArea(items: Shape[]): number {
+  return items.reduce((sum, shape) => sum + shape.area(), 0);
+}
+
+console.log(totalArea(shapes));
+`
+      },
+      {
+        name: "shapes.ts",
+        contents: `export interface Shape {
+  area(): number;
+}
+
+export class Circle implements Shape {
+  constructor(private radius: number) {}
+
+  area(): number {
+    return Math.PI * this.radius * this.radius;
   }
+}
+`
+      }
+    ];
 
-  /**
-   * This method returns a message, "Hello, World!"
-   * @return
-   */
-  public String getMessage() {
-      
-      return "Hello, World!";
-  }
-}`;
-
-    const llmPrompt =
-      "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.";
-
-    const buildGraderResultTests = (
-      graderResultId: number,
-      studentProfileId: string | undefined,
-      groupId: number | undefined
-    ) => {
-      const base = {
-        class_id,
-        student_id: studentProfileId,
-        assignment_group_id: groupId,
-        grader_result_id: graderResultId,
-        is_released: true,
-        name_format: "text",
-        output_format: "markdown"
-      } as const;
-      return [
-        { ...base, score: 5, max_score: 5, name: "test 1", output: "here is a bunch of output\n**wow**" },
-        { ...base, score: 5, max_score: 5, name: "test 2", output: "here is a bunch of output\n**wow**" },
-        {
-          ...base,
-          score: 3,
-          max_score: 5,
-          name: "OpenAI test",
-          output: "This test uses OpenAI for hints",
-          extra_data: {
-            llm: {
-              type: "v1",
-              prompt: llmPrompt,
-              model: "gpt-4o-mini",
-              account: "e2e_test",
-              provider: "openai",
-              temperature: 1,
-              max_tokens: 100
-            }
-          }
-        },
-        {
-          ...base,
-          score: 3,
-          max_score: 5,
-          name: "Azure test",
-          output: "This test uses Azure for hints",
-          extra_data: {
-            llm: {
-              prompt: llmPrompt,
-              model: "gpt-4o-mini",
-              account: "e2e_test",
-              provider: "azure",
-              temperature: 1,
-              max_tokens: 100
-            }
-          }
-        },
-        {
-          ...base,
-          score: 3,
-          max_score: 5,
-          name: "Anthropic test",
-          output: "This test uses Anthropic for hints",
-          extra_data: {
-            llm: {
-              prompt: llmPrompt,
-              model: "claude-3-haiku-20240307",
-              account: "e2e_test",
-              provider: "anthropic",
-              temperature: 1,
-              max_tokens: 100
-            }
-          }
-        },
-        {
-          ...base,
-          score: 3,
-          max_score: 5,
-          name: "OpenRouter test",
-          output: "This test uses OpenRouter for hints",
-          extra_data: {
-            llm: {
-              type: "v1",
-              prompt: llmPrompt,
-              model: "openai/gpt-4o-mini",
-              account: "e2e_test",
-              provider: "openrouter",
-              temperature: 1,
-              max_tokens: 100
-            }
-          }
-        }
-      ];
-    };
+    // Pre-parse the (identical-across-submissions) files once so each submission only needs to
+    // upsert the symbol-index rows. Mirrors what the index-submission edge function does at ingestion.
+    const sampleFileSymbolsByName = new Map(
+      sampleSubmissionFiles
+        .map((f) => ({ name: f.name, language: getSymbolLanguage(f.name) }))
+        .filter((x): x is { name: string; language: NonNullable<ReturnType<typeof getSymbolLanguage>> } => {
+          return x.language !== null;
+        })
+        .map((x) => {
+          const file = sampleSubmissionFiles.find((f) => f.name === x.name)!;
+          return [x.name, { language: x.language, symbols: parseSymbols(file.contents, file.name) }] as const;
+        })
+    );
 
     const submissionResults = await Promise.all(
       submissionsToCreate.map(async (item, index) => {
@@ -5804,26 +6865,66 @@ public class Entrypoint {
           throw new Error(`Failed to create submission ${index + 1}: ${submissionErr?.message ?? "no row"}`);
         }
 
-        // 4. submission_file
-        const { error: fileErr } = await this.rateLimitManager.trackAndLimit(
+        // 4. submission_files (multi-file, multi-language so go-to-definition is exercisable)
+        const { data: fileRows, error: fileErr } = await this.rateLimitManager.trackAndLimit(
           "submission_files",
           () =>
             supabase
               .from("submission_files")
-              .insert({
-                name: "sample.java",
-                contents: sampleJavaCode,
-                class_id,
-                submission_id: submissionId,
-                profile_id: studentProfileId,
-                assignment_group_id: groupId
-              })
-              .select("id"),
-          1
+              .insert(
+                sampleSubmissionFiles.map((f) => ({
+                  name: f.name,
+                  contents: f.contents,
+                  class_id,
+                  submission_id: submissionId,
+                  profile_id: studentProfileId,
+                  assignment_group_id: groupId
+                }))
+              )
+              .select("id, name"),
+          sampleSubmissionFiles.length
         );
         if (fileErr) {
-          throw new Error(`Failed to create submission_file for submission ${index + 1}: ${fileErr.message}`);
+          throw new Error(`Failed to create submission_files for submission ${index + 1}: ${fileErr.message}`);
         }
+
+        // 4b. Build the code-symbol index for those files so cross-file "go to definition" works in
+        // the grading viewer right after seeding (the autograder path does this at real ingestion).
+        const indexRows: Database["public"]["Tables"]["submission_file_symbol_index"]["Insert"][] = [];
+        for (const row of fileRows ?? []) {
+          const parsed = sampleFileSymbolsByName.get(row.name);
+          if (!parsed) continue;
+          indexRows.push({
+            submission_file_id: row.id,
+            submission_id: submissionId,
+            class_id,
+            profile_id: studentProfileId,
+            assignment_group_id: groupId,
+            language: parsed.language,
+            symbols: parsed.symbols as unknown as Json
+          });
+        }
+        if (indexRows.length > 0) {
+          const { error: indexErr } = await this.rateLimitManager.trackAndLimit(
+            "submission_file_symbol_index",
+            () =>
+              supabase
+                .from("submission_file_symbol_index")
+                .upsert(indexRows, { onConflict: "submission_file_id" })
+                .select("submission_file_id"),
+            indexRows.length
+          );
+          if (indexErr) {
+            throw new Error(`Failed to index submission_files for submission ${index + 1}: ${indexErr.message}`);
+          }
+        }
+
+        // Clustered autograder results for this submission so the parent
+        // grader_results score matches its child tests and failures cluster by
+        // name (deterministic in the submission id) for the Test Insights dashboard.
+        const tests = computeAutograderTests(submissionId);
+        const score = tests.reduce((sum, t) => sum + t.score, 0);
+        const max_score = tests.reduce((sum, t) => sum + t.max_score, 0);
 
         // 5. grader_result
         const { data: graderResultData, error: graderResultErr } = await this.rateLimitManager.trackAndLimit(
@@ -5833,14 +6934,14 @@ public class Entrypoint {
               .from("grader_results")
               .insert({
                 submission_id: submissionId,
-                score: 5,
+                score,
                 class_id,
                 profile_id: studentProfileId,
                 assignment_group_id: groupId,
                 lint_passed: true,
                 lint_output: "no lint output",
                 lint_output_format: "markdown",
-                max_score: 10
+                max_score
               })
               .select("id"),
           1
@@ -5852,13 +6953,31 @@ public class Entrypoint {
           );
         }
 
-        // 6. grader_result_tests (6 rows scoped to this submission only — mirrors a
-        //    single autograder run inserting its own test rows in one transaction).
-        const tests = buildGraderResultTests(graderResultId, studentProfileId, groupId);
+        // 6. grader_result_tests (functional tests + one AI-hint test, scoped to
+        //    this submission only — mirrors a single autograder run inserting its
+        //    own test rows in one transaction). submission_id is set so the Test
+        //    Insights RPCs (get_test_statistics_for_assignment / _common_test_errors_
+        //    for_assignment / _submissions_to_full_marks), which INNER JOIN
+        //    submissions, populate their dashboard panels.
+        const testInserts = tests.map((t) => ({
+          score: t.score,
+          max_score: t.max_score,
+          name: t.name,
+          name_format: "text",
+          output: t.output,
+          output_format: "markdown",
+          class_id,
+          student_id: studentProfileId,
+          assignment_group_id: groupId,
+          grader_result_id: graderResultId,
+          submission_id: submissionId,
+          is_released: true,
+          ...(t.extra_data ? { extra_data: t.extra_data } : {})
+        }));
         const { error: testsErr } = await this.rateLimitManager.trackAndLimit(
           "grader_result_tests",
-          () => supabase.from("grader_result_tests").insert(tests).select("id"),
-          tests.length
+          () => supabase.from("grader_result_tests").insert(testInserts).select("id"),
+          testInserts.length
         );
         if (testsErr) {
           throw new Error(`Failed to create grader_result_tests for submission ${index + 1}: ${testsErr.message}`);

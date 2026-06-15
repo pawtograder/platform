@@ -152,6 +152,38 @@ export default function ShortcutsHelpDialog() {
 
             <Box>
               <Heading size="sm" mb="2">
+                Grading (viewing submission files)
+              </Heading>
+              <Box as="ul" listStyleType="none" m="0" p="0">
+                <Row
+                  label="Next / previous file"
+                  keys={
+                    <>
+                      <Kbd>j</Kbd> / <Kbd>k</Kbd> or <Kbd>↓</Kbd> / <Kbd>↑</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Next / previous comment"
+                  keys={
+                    <>
+                      <Kbd>n</Kbd> / <Kbd>p</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Quick-apply a rubric check (in the editor)"
+                  keys={
+                    <>
+                      <Kbd>{MOD}</Kbd>+<Kbd>.</Kbd>
+                    </>
+                  }
+                />
+              </Box>
+            </Box>
+
+            <Box>
+              <Heading size="sm" mb="2">
                 Comments &amp; markdown editor
               </Heading>
               <Box as="ul" listStyleType="none" m="0" p="0">

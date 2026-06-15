@@ -101,6 +101,17 @@ Sentry.init({
       }
     }
 
+    // Filter errors thrown by injected browser extensions (reader-mode/page-scraper
+    // content scripts, etc.). Our own code is always served from `app:///_next/static/...`,
+    // whereas extension content scripts surface as `app:///assets/*.js`. These bubble up to
+    // the page's global onunhandledrejection handler and get attributed to us even though
+    // they originate from the user's extensions (e.g. invalid `querySelector` selectors).
+    if (
+      event.exception?.values?.some((e) => e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/")))
+    ) {
+      return null;
+    }
+
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
