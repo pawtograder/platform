@@ -1782,6 +1782,7 @@ export type Database = {
           archived: boolean | null;
           course_title: string | null;
           created_at: string;
+          deployment_channel: string;
           description: string | null;
           discord_channel_group_id: string | null;
           discord_server_id: string | null;
@@ -1805,6 +1806,7 @@ export type Database = {
           archived?: boolean | null;
           course_title?: string | null;
           created_at?: string;
+          deployment_channel?: string;
           description?: string | null;
           discord_channel_group_id?: string | null;
           discord_server_id?: string | null;
@@ -1828,6 +1830,7 @@ export type Database = {
           archived?: boolean | null;
           course_title?: string | null;
           created_at?: string;
+          deployment_channel?: string;
           description?: string | null;
           discord_channel_group_id?: string | null;
           discord_server_id?: string | null;
