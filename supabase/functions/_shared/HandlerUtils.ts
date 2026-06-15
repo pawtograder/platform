@@ -186,11 +186,13 @@ export async function assertUserIsAdmin(authHeader: string | null) {
   if (!user) {
     throw new SecurityError("User not found");
   }
+  // Mirror authorize_for_admin(): a disabled admin role must not authorize.
   const { data: adminEnrollment } = await supabase
     .from("user_roles")
     .select("id")
     .eq("user_id", user.id)
     .eq("role", "admin")
+    .eq("disabled", false)
     .limit(1);
   if (!adminEnrollment || adminEnrollment.length === 0) {
     throw new SecurityError("User is not an admin");

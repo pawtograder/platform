@@ -9,6 +9,12 @@
 -- un-enrollable. A class with no GitHub config should simply skip team sync, not
 -- block enrollment. The create-class form still requires org+prefix as good UX,
 -- but enforcement no longer depends on it.
+--
+-- Skipping the sync would otherwise drop the work on the floor for a class that
+-- later *does* get GitHub-configured. The repair path lives in
+-- 20260615120000_resync_github_teams_on_class_config.sql: an AFTER UPDATE trigger
+-- on classes enqueues a full team resync when github_org/slug transition from
+-- NULL to set, so anyone enrolled while the class was unconfigured is backfilled.
 
 create or replace function public.sync_staff_github_team(class_id integer, user_id uuid default null)
 returns void

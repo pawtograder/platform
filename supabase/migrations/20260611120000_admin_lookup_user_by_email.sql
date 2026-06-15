@@ -18,9 +18,14 @@ BEGIN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
 
+    -- Match case-insensitively: GoTrue stores emails lowercased and the rest of
+    -- the codebase resolves users with lower(email) (see bulk_csv_import). An
+    -- exact match would miss an existing user whose email the admin typed in a
+    -- different case, which then fails downstream when enrollment tries to
+    -- create a "new" auth user with a duplicate email.
     SELECT au.id INTO v_user_id
     FROM auth.users au
-    WHERE au.email = p_email
+    WHERE lower(au.email) = lower(p_email)
     LIMIT 1;
 
     IF v_user_id IS NULL THEN

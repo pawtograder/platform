@@ -78,6 +78,16 @@ test.describe("Admin Create Class workflow", () => {
     expect(matched![0].user_id).toBe(existingInstructor!.user_id);
     expect(matched![0].name).toBe(existingInstructor!.private_profile_name);
 
+    // Case-insensitive: GoTrue stores emails lowercased, so an admin who types a
+    // different case must still match the existing user (otherwise enrollment
+    // would try to create a duplicate auth user and silently fail).
+    const { data: upperMatched, error: upperError } = await adminClient.rpc("admin_lookup_user_by_email", {
+      p_email: existingInstructor!.email.toUpperCase()
+    });
+    expect(upperError).toBeNull();
+    expect(upperMatched).toHaveLength(1);
+    expect(upperMatched![0].user_id).toBe(existingInstructor!.user_id);
+
     // Unknown email -> no rows (frontend treats this as "no match").
     const { data: unmatched, error: unmatchedError } = await adminClient.rpc("admin_lookup_user_by_email", {
       p_email: `nobody-${Date.now()}@pawtograder.net`
@@ -91,6 +101,53 @@ test.describe("Admin Create Class workflow", () => {
       p_email: existingInstructor!.email
     });
     expect(deniedError).not.toBeNull();
+  });
+
+  test("setting github_org/slug on an unconfigured class enqueues a team resync", async () => {
+    // A class can exist without GitHub config (e.g. SIS import). Enrollment-time
+    // team sync no-ops for it (20260611120001), so when it later becomes
+    // GitHub-configured we must backfill via a resync trigger
+    // (20260615120000). Verify the NULL->set transition enqueues both team syncs.
+    const { data: cls, error: insertError } = await supabase
+      .from("classes")
+      .insert({
+        name: `E2E Resync ${Date.now()}`,
+        // slug present but github_org NULL => class is not yet GitHub-configured.
+        // e2e-ignore- prefix makes the async worker skip the real GitHub call.
+        slug: `e2e-ignore-resync-${Date.now()}`,
+        github_org: null,
+        start_date: new Date().toISOString(),
+        end_date: new Date(Date.now() + 86_400_000).toISOString(),
+        late_tokens_per_student: 10,
+        time_zone: "America/New_York"
+      })
+      .select("id")
+      .single();
+    if (insertError) throw new Error(`Failed to insert unconfigured class: ${insertError.message}`);
+    const classId = cls!.id;
+
+    // Flip the class to GitHub-configured.
+    const { error: updateError } = await supabase
+      .from("classes")
+      .update({ github_org: "pawtograder-playground" })
+      .eq("id", classId);
+    if (updateError) throw new Error(`Failed to configure class org: ${updateError.message}`);
+
+    // The trigger enqueues a staff + student resync, each logged to
+    // api_gateway_calls with our debug_id.
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("api_gateway_calls")
+            .select("method")
+            .eq("class_id", classId)
+            .eq("debug_id", "class_config_resync");
+          return (data ?? []).map((r) => r.method).sort();
+        },
+        { timeout: 30_000 }
+      )
+      .toEqual(["sync_staff_team", "sync_student_team"]);
   });
 
   test("admin creates a class with a selected org and pre-filled + new instructors", async ({ page }) => {

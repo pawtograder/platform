@@ -18,6 +18,7 @@ import { enrollmentAdd, listGitHubOrgs } from "@/lib/edgeFunctions";
 import type { GitHubOrg } from "@/supabase/functions/_shared/FunctionTypes";
 import { createClient } from "@/utils/supabase/client";
 import { Box, HStack, IconButton, Link, NativeSelect, Spinner, Text, Textarea, VStack } from "@chakra-ui/react";
+import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
 
@@ -34,10 +35,14 @@ type InstructorRow = {
   // null = not yet looked up, true = matched existing user, false = no match
   matched: boolean | null;
   lookupLoading: boolean;
+  // Set when the lookup itself failed (network/session/RPC error) as opposed to
+  // a genuine "no such user". Kept distinct from matched=false so we never treat
+  // a failed lookup as "create a brand-new user".
+  lookupError: string | null;
 };
 
 function emptyInstructor(): InstructorRow {
-  return { id: crypto.randomUUID(), email: "", name: "", matched: null, lookupLoading: false };
+  return { id: crypto.randomUUID(), email: "", name: "", matched: null, lookupLoading: false, lookupError: null };
 }
 
 const initialFormData = () => ({
@@ -62,6 +67,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
   const [instructors, setInstructors] = useState<InstructorRow[]>([emptyInstructor()]);
 
   const supabase = createClient();
+  const router = useRouter();
 
   const loadOrgs = useCallback(async () => {
     setOrgsLoading(true);
@@ -108,28 +114,42 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
     setInstructors((prev) => (prev.length === 1 ? [emptyInstructor()] : prev.filter((row) => row.id !== id)));
 
   const lookupInstructor = async (id: string, email: string) => {
-    const trimmed = email.trim();
+    const trimmed = email.trim().toLowerCase();
     if (!trimmed) {
       updateInstructor(id, { matched: null });
       return;
     }
     updateInstructor(id, { lookupLoading: true });
+    // The email may change while this lookup is in flight; only apply the
+    // result if the row still holds the email we looked up, but always clear
+    // the loading flag so a stale lookup can't leave the spinner stuck.
+    const settle = (patch: Partial<InstructorRow> | ((row: InstructorRow) => Partial<InstructorRow>)) =>
+      setInstructors((prev) =>
+        prev.map((row) => {
+          if (row.id !== id) return row;
+          if (row.email.trim().toLowerCase() !== trimmed) return { ...row, lookupLoading: false };
+          const resolved = typeof patch === "function" ? patch(row) : patch;
+          return { ...row, ...resolved, lookupLoading: false };
+        })
+      );
     try {
       const { data, error } = await supabase.rpc("admin_lookup_user_by_email", { p_email: trimmed });
       if (error) throw error;
       const match = Array.isArray(data) && data.length > 0 ? data[0] : null;
       if (match) {
-        updateInstructor(id, {
-          matched: true,
-          lookupLoading: false,
-          name: match.name ?? ""
-        });
+        // Keep the admin-typed name if the matched user has no stored name,
+        // otherwise pre-fill from the match.
+        settle((row) => ({ matched: true, name: match.name || row.name, lookupError: null }));
       } else {
-        updateInstructor(id, { matched: false, lookupLoading: false });
+        // Genuine empty result: no such user, so the admin should type a name.
+        settle({ matched: false, lookupError: null });
       }
-    } catch {
-      // Treat lookup failures as "no match" so the admin can still type a name.
-      updateInstructor(id, { matched: false, lookupLoading: false });
+    } catch (error) {
+      // A thrown error (network, expired session, denied RPC) is NOT the same as
+      // "user not found". Surface it and leave matched=null so we don't silently
+      // proceed to create a brand-new user for someone who may already exist.
+      const message = error instanceof Error ? error.message : "Lookup failed";
+      settle({ matched: null, lookupError: message });
     }
   };
 
@@ -170,26 +190,33 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
       if (error) throw error;
 
       // Enroll instructors via the existing enrollment edge function (handles
-      // existing-vs-new users, profile creation, and notifications).
-      const failures: string[] = [];
-      for (const row of instructorsToAdd) {
-        try {
-          await enrollmentAdd(
+      // existing-vs-new users, profile creation, and notifications). The rows are
+      // independent, so run them concurrently and collect per-row failures.
+      const results = await Promise.allSettled(
+        instructorsToAdd.map((row) =>
+          enrollmentAdd(
             {
               courseId: Number(classId),
-              email: row.email.trim(),
+              // Normalize case so an existing user (auth emails are stored
+              // lowercased) is matched instead of being re-created as a dup.
+              email: row.email.trim().toLowerCase(),
               name: row.name.trim(),
               role: "instructor",
               notify: true
             },
             supabase
-          );
-        } catch (instructorError) {
+          )
+        )
+      );
+      const failures: string[] = [];
+      results.forEach((result, i) => {
+        if (result.status === "rejected") {
+          const reason = result.reason;
           failures.push(
-            `${row.email.trim()}: ${instructorError instanceof Error ? instructorError.message : "failed to add"}`
+            `${instructorsToAdd[i].email.trim()}: ${reason instanceof Error ? reason.message : "failed to add"}`
           );
         }
-      }
+      });
 
       if (failures.length > 0) {
         toaster.create({
@@ -208,8 +235,10 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
       resetForm();
       setOpen(false);
 
-      // Refresh the page to show new class
-      window.location.reload();
+      // Soft-refresh the server-rendered class list so the new class shows up.
+      // (A full window.location.reload() would tear down the toast above before
+      // the admin could read which instructors, if any, failed to enroll.)
+      router.refresh();
     } catch (error) {
       toaster.create({
         title: "Error",
@@ -340,12 +369,18 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                           placeholder="instructor@northeastern.edu"
                           type="email"
                           value={row.email}
-                          onChange={(e) => updateInstructor(row.id, { email: e.target.value, matched: null })}
+                          onChange={(e) =>
+                            updateInstructor(row.id, { email: e.target.value, matched: null, lookupError: null })
+                          }
                           onBlur={(e) => lookupInstructor(row.id, e.target.value)}
                         />
                         {row.lookupLoading ? (
                           <Text fontSize="xs" color="fg.muted">
                             Checking…
+                          </Text>
+                        ) : row.lookupError ? (
+                          <Text fontSize="xs" color="fg.error">
+                            Couldn&apos;t check this email ({row.lookupError}) — retry by editing the field.
                           </Text>
                         ) : row.matched === true ? (
                           <Text fontSize="xs" color="fg.success">

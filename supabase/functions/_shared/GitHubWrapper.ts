@@ -381,22 +381,26 @@ export async function listAppInstallations(scope?: Sentry.Scope): Promise<{
   installUrl: string;
 }> {
   scope?.setTag("github_operation", "list_app_installations");
-  const installationsResp = await app.octokit.request("GET /app/installations", { per_page: 100 });
-  const orgs = installationsResp.data
+  // Fetch all installations (the App can be installed on >100 orgs, so paginate
+  // rather than capping at one page) and the App slug for the install URL
+  // concurrently — the two requests are independent.
+  const [installations, appResp] = await Promise.all([
+    app.octokit.paginate("GET /app/installations", { per_page: 100 }),
+    app.octokit.request("GET /app").catch((e) => {
+      scope?.addBreadcrumb({ message: "Failed to resolve GitHub App slug", category: "github", level: "warning" });
+      console.error("Failed to resolve GitHub App slug for install URL", e);
+      return null;
+    })
+  ]);
+  const orgs = installations
     .map((i) => ({ login: i.account?.login ?? "", installationId: i.id }))
     .filter((o) => o.login !== "")
     .sort((a, b) => a.login.localeCompare(b.login));
 
-  let installUrl = "https://github.com/settings/installations";
-  try {
-    const appResp = await app.octokit.request("GET /app");
-    if (appResp.data?.slug) {
-      installUrl = `https://github.com/apps/${appResp.data.slug}/installations/new`;
-    }
-  } catch (e) {
-    scope?.addBreadcrumb({ message: "Failed to resolve GitHub App slug", category: "github", level: "warning" });
-    console.error("Failed to resolve GitHub App slug for install URL", e);
-  }
+  const slug = appResp?.data?.slug;
+  const installUrl = slug
+    ? `https://github.com/apps/${slug}/installations/new`
+    : "https://github.com/settings/installations";
 
   return { orgs, installUrl };
 }
