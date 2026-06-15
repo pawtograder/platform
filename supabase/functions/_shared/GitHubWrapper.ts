@@ -370,29 +370,6 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   }
   return undefined;
 }
-/**
- * Thrown when the Pawtograder GitHub App is not installed on an org. Distinct
- * type so callers can decide whether to retry (async worker) or surface a clear
- * "install the App first" message (interactive init).
- */
-export class AppNotInstalledError extends Error {
-  constructor(public readonly org: string) {
-    super(`The Pawtograder GitHub App is not installed on organization "${org}". Install it, then retry.`);
-    this.name = "AppNotInstalledError";
-  }
-}
-/**
- * Like getOctoKit, but throws AppNotInstalledError instead of returning
- * undefined when the org has no installation.
- */
-export async function requireOctoKit(repoOrOrgName: string, scope?: Sentry.Scope): Promise<Octokit> {
-  const octokit = await getOctoKit(repoOrOrgName, scope);
-  if (!octokit) {
-    const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
-    throw new AppNotInstalledError(org);
-  }
-  return octokit;
-}
 export async function resolveRef(action_repository: string, action_ref: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "resolve_ref");
   scope?.setTag("repository", action_repository);
@@ -1754,27 +1731,13 @@ export async function syncRepoPermissions(
   });
   if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
     madeChanges = true;
-    const grantTeamAccess = () =>
-      octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-        org,
-        team_slug,
-        owner: org,
-        repo,
-        permission: "maintain"
-      });
-    try {
-      await grantTeamAccess();
-    } catch (e) {
-      // Self-heal: the staff team may not exist yet (no one has connected
-      // GitHub and the class GitHub init hasn't run). Create it on the spot and
-      // retry, so assignment repo creation never hard-fails on a missing team.
-      if (e instanceof RequestError && e.message.includes("Not Found")) {
-        await getTeamAndCreateIfNeeded(org, team_slug, octokit);
-        await grantTeamAccess();
-      } else {
-        throw e;
-      }
-    }
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+      org,
+      team_slug,
+      owner: org,
+      repo,
+      permission: "maintain"
+    });
   }
   const desiredUsersNotInCachedOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
   console.log(`${org}/${repo} desired users not in cached org members: ${desiredUsersNotInCachedOrg.join(", ")}`);

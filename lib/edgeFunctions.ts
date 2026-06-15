@@ -114,9 +114,6 @@ export async function assignmentGroupCreate(
 export async function autograderSyncStaffTeam(params: { course_id: number }, supabase: SupabaseClient<Database>) {
   return await invokeEdgeFunction(supabase, "autograder-sync-staff-team", { body: params });
 }
-export async function classGithubInitialize(params: { course_id: number }, supabase: SupabaseClient<Database>) {
-  return await invokeEdgeFunction<{ success: boolean }>(supabase, "class-github-initialize", { body: params });
-}
 export async function assignmentGroupJoin(
   params: FunctionTypes.AssignmentGroupJoinRequest,
   supabase: SupabaseClient<Database>

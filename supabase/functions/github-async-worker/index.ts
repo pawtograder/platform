@@ -8,15 +8,12 @@ import type {
   FetchRepoAnalyticsArgs,
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
-  InitClassGithubArgs,
   RerunAutograderArgs,
   SyncRepoPermissionsArgs,
   SyncRepoToHandoutArgs,
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { AppNotInstalledError } from "../_shared/GitHubWrapper.ts";
-import { ensureClassGithubTeams, markClassGithubInitError } from "../_shared/ClassGithubInit.ts";
 import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
@@ -635,9 +632,6 @@ export async function processEnvelope(
         return repo.split("/")[0];
       }
       if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
-      // init_class_github resolves its org from the DB inside the handler, not
-      // from args; skip the org circuit breaker (it's a low-frequency op).
-      if (envelope.method === "init_class_github") return undefined;
       throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
@@ -917,51 +911,6 @@ export async function processEnvelope(
           scope
         );
         return true;
-      }
-      case "init_class_github": {
-        const args = envelope.args as InitClassGithubArgs;
-        const classId = args.class_id ?? envelope.class_id;
-        if (!classId) return true;
-        scope.setTag("class_id", String(classId));
-        try {
-          await ensureClassGithubTeams(adminSupabase, classId, scope);
-          recordMetric(
-            adminSupabase,
-            {
-              method: envelope.method,
-              status_code: 200,
-              class_id: classId,
-              debug_id: envelope.debug_id,
-              enqueued_at: meta.enqueued_at,
-              log_id: envelope.log_id
-            },
-            scope
-          );
-          return true;
-        } catch (e) {
-          if (e instanceof AppNotInstalledError) {
-            // The org's App install can lag class setup by minutes-to-days.
-            // Re-enqueue a fresh delayed copy (resets read_ct, avoids the DLQ)
-            // up to a cap, instead of failing. The manual "Initialize GitHub"
-            // button is always available as an escape hatch.
-            const attempt = (args.attempt ?? 0) + 1;
-            const MAX_ATTEMPTS = 144; // ~24h at 10-minute spacing
-            if (attempt >= MAX_ATTEMPTS) {
-              await markClassGithubInitError(
-                adminSupabase,
-                classId,
-                `GitHub App still not installed on the org after ${attempt} attempts; run "Initialize GitHub" once it's installed.`
-              );
-              Sentry.captureMessage(`init_class_github gave up for class ${classId}: ${e.message}`, scope);
-              return true; // archive; stop retrying
-            }
-            const delayed: GitHubAsyncEnvelope = { ...envelope, args: { ...args, attempt } };
-            await requeueWithDelay(adminSupabase, delayed, 600, scope, queueName); // 10 minutes
-            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
-            return false; // already archived above
-          }
-          throw e; // other errors → normal failure/backoff path
-        }
       }
       case "create_repo": {
         const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =

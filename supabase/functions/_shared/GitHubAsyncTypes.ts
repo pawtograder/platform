@@ -6,8 +6,7 @@ export type GitHubAsyncMethod =
   | "archive_repo_and_lock"
   | "rerun_autograder"
   | "sync_repo_to_handout"
-  | "fetch_repo_analytics"
-  | "init_class_github";
+  | "fetch_repo_analytics";
 
 export type SyncTeamArgs = {
   org: string;
@@ -102,13 +101,6 @@ export type FetchRepoAnalyticsArgs = {
   repository_ids?: number[] | null;
 };
 
-/** Ensure a class's GitHub org teams exist (run roughly once per class). */
-export type InitClassGithubArgs = {
-  class_id: number;
-  /** Incremented each time we requeue because the App isn't installed yet. */
-  attempt?: number;
-};
-
 export type GitHubAsyncArgs =
   | SyncTeamArgs
   | CreateRepoArgs
@@ -116,8 +108,7 @@ export type GitHubAsyncArgs =
   | ArchiveRepoAndLockArgs
   | RerunAutograderArgs
   | SyncRepoToHandoutArgs
-  | FetchRepoAnalyticsArgs
-  | InitClassGithubArgs;
+  | FetchRepoAnalyticsArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;
