@@ -1,5 +1,6 @@
 "use client";
 
+import { EnterCourseAsInstructorButton } from "@/components/admin/EnterCourseAsInstructor";
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,7 @@ import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Card, Flex, Heading, Input, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type OrgCourse = {
@@ -27,29 +28,6 @@ function parseRepo(value: string): { org: string; repo: string } | null {
   const segments = value.split("/").map((s) => s.trim());
   if (segments.length !== 2 || !segments[0] || !segments[1]) return null;
   return { org: segments[0], repo: segments[1] };
-}
-
-/** Button that provisions an instructor enrollment for the admin, then opens the course. */
-function ManageAsInstructorButton({ classId }: { classId: number }) {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const onClick = useCallback(async () => {
-    setLoading(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase.rpc("admin_enter_course_as_instructor", { p_class_id: classId });
-      if (error) throw error;
-      router.push(`/course/${classId}/manage/assignments`);
-    } catch (err) {
-      toaster.error({ title: "Failed to enter course", description: (err as Error).message });
-      setLoading(false);
-    }
-  }, [classId, router]);
-  return (
-    <Button size="xs" variant="outline" onClick={onClick} loading={loading}>
-      Manage as instructor
-    </Button>
-  );
 }
 
 export default function GitHubOrgDetailPage() {
@@ -196,7 +174,9 @@ export default function GitHubOrgDetailPage() {
                     </Badge>
                   </Table.Cell>
                   <Table.Cell>
-                    <ManageAsInstructorButton classId={c.id} />
+                    <EnterCourseAsInstructorButton classId={c.id} size="xs" variant="outline">
+                      Manage as instructor
+                    </EnterCourseAsInstructorButton>
                   </Table.Cell>
                 </Table.Row>
               ))}
@@ -225,7 +205,7 @@ export default function GitHubOrgDetailPage() {
               Editing template repo files requires at least one course in this org to authorize GitHub access.
             </Alert>
           ) : (
-            <Tabs.Root defaultValue="handout">
+            <Tabs.Root defaultValue="handout" lazyMount unmountOnExit>
               <Tabs.List>
                 <Tabs.Trigger value="handout">Handout template</Tabs.Trigger>
                 <Tabs.Trigger value="solution">Solution template</Tabs.Trigger>

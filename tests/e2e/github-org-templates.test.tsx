@@ -47,6 +47,40 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 test.describe("GitHub org template configuration", () => {
   test.describe.configure({ mode: "serial" });
 
+  // The org detail page auto-mounts the RepoFileEditor for any template repo that lives in
+  // this org, which calls the repository-get-file / repository-write-file edge functions.
+  // Those reach the real GitHub App, which has no installation for the synthetic e2e org
+  // (`e2e-org-<id>`), so getFileFromRepo throws "No octokit found ...". This suite tests
+  // template *resolution* and org-default persistence, not the editor, so stub those edge
+  // functions at the network layer. The editor itself is covered by repo-file-editor.test.tsx.
+  test.beforeEach(async ({ page }) => {
+    const CORS = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "*",
+      "access-control-allow-methods": "*"
+    };
+    await page.route("**/functions/v1/repository-get-file", async (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 200, headers: CORS });
+      const body = JSON.parse(route.request().postData() || "{}");
+      const content = String(body.path).includes("workflows")
+        ? "name: Grade\non:\n  push:\n    branches: [main]\njobs:\n  grade:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+        : "build:\n  preset: java-gradle\n  cmd: ./gradlew test\n  artifacts: []\nsubmissionFiles:\n  files: []\n  testFiles: []\ngradedParts: []\n";
+      return route.fulfill({
+        status: 200,
+        headers: { ...CORS, "content-type": "application/json" },
+        body: JSON.stringify({ content, sha: "sha-e2e" })
+      });
+    });
+    await page.route("**/functions/v1/repository-write-file", async (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 200, headers: CORS });
+      return route.fulfill({
+        status: 200,
+        headers: { ...CORS, "content-type": "application/json" },
+        body: JSON.stringify({ commit_sha: "c-e2e", content_sha: "sha-e2e-2" })
+      });
+    });
+  });
+
   test("resolves override > org default > hardcoded constant", async () => {
     // 1. Neither override nor org default configured -> hardcoded constants.
     const { error: clearClassError } = await supabase

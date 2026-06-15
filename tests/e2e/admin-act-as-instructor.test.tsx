@@ -94,6 +94,30 @@ test.describe("Admin acts as instructor", () => {
     expect(roles?.length).toBe(1);
   });
 
+  test("entering the admin's own home course does not strip their admin role", async () => {
+    // adminHome is where the admin holds their global (role='admin') enrollment. Entering it
+    // must NOT demote that row to 'instructor' — doing so would revoke authorize_for_admin
+    // and lock the user out of the admin portal irreversibly. Regression for the promote-in-
+    // place UPDATE matching admin rows.
+    const adminClient = await createAuthenticatedClient(admin);
+    const { error } = await adminClient.rpc("admin_enter_course_as_instructor", { p_class_id: adminHome.id });
+    expect(error).toBeNull();
+
+    const { data: roles } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", admin.user_id)
+      .eq("class_id", adminHome.id)
+      .eq("disabled", false);
+    expect(roles?.length).toBe(1);
+    // Still admin — not demoted to instructor.
+    expect(roles?.[0].role).toBe("admin");
+
+    // And the admin portal is still reachable (authorize_for_admin still passes).
+    const { error: stillAdminError } = await adminClient.rpc("admin_get_github_orgs");
+    expect(stillAdminError).toBeNull();
+  });
+
   test("non-admin is redirected away from the admin portal", async ({ page }) => {
     await loginAsUser(page, student, targetCourse);
     await page.goto("/admin");

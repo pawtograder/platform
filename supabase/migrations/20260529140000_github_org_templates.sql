@@ -275,11 +275,14 @@ BEGIN
     END IF;
 
     -- Idempotent: if the admin already has an active instructor role in this class, nothing
-    -- to do. (A non-instructor active role is upgraded below rather than treated as a no-op.)
+    -- to do. (A student/grader active role is upgraded below rather than treated as a no-op.)
+    -- An active 'admin' role in this class also short-circuits: it must NOT be demoted (that
+    -- would strip the caller's global admin privilege, see authorize_for_admin), and the
+    -- one-active-role-per-class index forbids inserting a second active row alongside it.
     IF EXISTS (
         SELECT 1 FROM public.user_roles ur
         WHERE ur.user_id = v_user_id AND ur.class_id = p_class_id
-          AND ur.disabled = false AND ur.role = 'instructor'
+          AND ur.disabled = false AND ur.role IN ('instructor', 'admin')
     ) THEN
         RETURN;
     END IF;
@@ -291,13 +294,15 @@ BEGIN
     -- this also matches how the team sync is enqueued for system-driven enrollment.
     PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
-    -- If the admin already has an active non-instructor role (student/grader), promote it in
-    -- place. The DB enforces at most one active (user_id, class_id) enrollment
+    -- If the admin already has an active student/grader role, promote it in place. Never
+    -- touch an 'admin' row (already short-circuited above) — demoting it would revoke the
+    -- caller's global admin. The DB enforces at most one active (user_id, class_id) enrollment
     -- (idx_user_roles_one_active_per_class), so we must upgrade the existing row rather than
     -- insert a second active row. The role-change trigger re-syncs the GitHub teams.
     UPDATE public.user_roles
     SET role = 'instructor'
-    WHERE user_id = v_user_id AND class_id = p_class_id AND disabled = false;
+    WHERE user_id = v_user_id AND class_id = p_class_id AND disabled = false
+      AND role NOT IN ('instructor', 'admin');
     IF FOUND THEN
         RETURN;
     END IF;

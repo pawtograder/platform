@@ -210,8 +210,11 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     };
   }, []);
 
-  // Re-apply schema when the selected file changes (a fallback alongside onDidChangeModel,
-  // and after the new model's content settles). Deferred so the model swap has committed.
+  // Re-apply schema when the selected file changes (a fallback alongside onDidChangeModel).
+  // Deferred so the model swap has committed. Intentionally NOT keyed on `content`: the
+  // schema is derived from the model URI, not the text, and configureMonacoYaml reconfigures
+  // the process-global monaco-yaml service — re-running it on every keystroke leaks/churns
+  // registrations. Live marker updates already arrive via the onDidChangeMarkers listener.
   useEffect(() => {
     const monaco = monacoRef.current;
     if (!monaco) return;
@@ -220,7 +223,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       refreshMarkers(monaco);
     }, 0);
     return () => clearTimeout(id);
-  }, [currentPath, content, applySchema, refreshMarkers]);
+  }, [currentPath, applySchema, refreshMarkers]);
 
   // Save-time structural guard, in addition to the live monaco-yaml schema markers.
   const structuralError = useMemo(() => {
