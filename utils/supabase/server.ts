@@ -37,8 +37,9 @@ export const createClient = async () => {
 
   if (FUNCTIONS_URL_OVERRIDE) {
     try {
-      (client as unknown as { functionsUrl?: URL }).functionsUrl = new URL(FUNCTIONS_URL_OVERRIDE);
-      (client.functions as unknown as { url?: string }).url = FUNCTIONS_URL_OVERRIDE;
+      const c = client as unknown as { functionsUrl?: URL; functions?: { url?: string } };
+      c.functionsUrl = new URL(FUNCTIONS_URL_OVERRIDE);
+      if (c.functions) c.functions.url = FUNCTIONS_URL_OVERRIDE;
     } catch (err) {
       // In coverage mode this MUST work — silently falling back would
       // still send requests, but they wouldn't hit our bootstrap and

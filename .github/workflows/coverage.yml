@@ -351,9 +351,11 @@ jobs:
             # Also signal the Next worker children directly in case
             # SIGUSR2 didn't propagate via the group.
             pkill -USR2 -f "next-server" || true
-            # Wait for the dump file to appear, up to 30s.
+            # Wait for the dump file to appear, up to 30s. instrumentation.ts
+            # writes a PID-suffixed file (server-cdp-<pid>.json), so glob for
+            # the family rather than the bare name (which never appears).
             for _ in $(seq 1 30); do
-              if [[ -s coverage/server-cdp.json ]]; then break; fi
+              if compgen -G 'coverage/server-cdp*.json' >/dev/null; then break; fi
               sleep 1
             done
           fi
@@ -376,7 +378,7 @@ jobs:
           pkill -INT -f "next-server" || true
           sleep 3
           echo "Coverage artifacts after stop:"
-          ls -la coverage/server-cdp.json 2>/dev/null || true
+          ls -la coverage/server-cdp*.json 2>/dev/null || true
           # Free disk before artifact upload — Playwright leaves
           # multi-GB of test-results/ and playwright-report/ that we
           # don't need once Playwright has exited.

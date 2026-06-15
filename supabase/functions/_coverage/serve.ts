@@ -19,7 +19,10 @@
 import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const FUNCTIONS_DIR = new URL("..", import.meta.url).pathname;
-const PORT = Number(Deno.env.get("COVERAGE_FUNCTIONS_PORT") ?? 9998);
+// `||` (not `??`) so an exported-but-empty COVERAGE_FUNCTIONS_PORT falls back
+// to 9998 instead of Number("") === 0 (which would bind a random port and make
+// the workflow's :9998 health check time out).
+const PORT = Number(Deno.env.get("COVERAGE_FUNCTIONS_PORT") || 9998);
 
 // Directories we never load as functions.
 const SKIP_DIRS = new Set(["_shared", "_coverage"]);

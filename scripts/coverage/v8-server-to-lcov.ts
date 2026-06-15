@@ -42,7 +42,11 @@ async function loadServerSourceMap(scriptUrl: string): Promise<unknown | null> {
   // or sometimes as bare paths. Normalize.
   let filePath: string | null = null;
   if (scriptUrl.startsWith("file://")) {
-    filePath = new URL(scriptUrl).pathname;
+    // URL.pathname keeps percent-encoded characters, so dynamic-route
+    // segments like `[course_id]` arrive as `%5Bcourse_id%5D` and the
+    // on-disk read misses. Decode to the real filename (mirrors the
+    // client converter, v8-client-to-lcov.ts).
+    filePath = decodeURIComponent(new URL(scriptUrl).pathname);
   } else if (scriptUrl.startsWith("/")) {
     filePath = scriptUrl;
   } else if (scriptUrl.includes("/.next/server/")) {
