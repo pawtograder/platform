@@ -1,11 +1,7 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useCourseController";
-import {
-  assignmentCreateHandoutRepo,
-  assignmentCreateSolutionRepo,
-  assignmentGroupCopyGroupsFromAssignment
-} from "@/lib/edgeFunctions";
+import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
 import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
@@ -142,18 +138,6 @@ export default function NewAssignmentPage() {
             { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
             supabase
           );
-          //Potentially copy groups from another assignment
-          if (getValues("copy_groups_from_assignment")) {
-            await assignmentGroupCopyGroupsFromAssignment(
-              {
-                source_assignment_id: getValues("copy_groups_from_assignment"),
-                target_assignment_id: data.id,
-                class_id: Number.parseInt(course_id as string)
-              },
-              supabase
-            );
-          }
-
           // Clear the timer and dismiss the loading toast
           clearTimeout(messageUpdateTimer);
           toaster.dismiss(loadingToast);
