@@ -538,8 +538,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
           <Field
             orientation="horizontal"
             label="Require self-evaluation"
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors.eval_config?.message?.toString()}
+            invalid={errors.eval_config ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("eval_config", { required: true })}>
@@ -562,8 +562,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                 orientation="horizontal"
                 label="Hours due after this assignment"
                 helperText="The number of hours between this assignment's deadline and when the self-evaluation is due"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors.deadline_offset?.message?.toString()}
+                invalid={errors.deadline_offset ? true : false}
                 required={withEval}
               >
                 <Input

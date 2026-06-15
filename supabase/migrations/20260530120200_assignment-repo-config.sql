@@ -2110,6 +2110,33 @@ begin
        or (p_assignment_group_id is null and profile_id = p_profile_id)
      );
 
+  -- Also deactivate any active submission in the *other* scope for the same
+  -- target, so a student can't end up with both a per-profile and a per-group
+  -- active submission on this assignment (mirrors create_manual_submission_internal
+  -- and ingest_pr_submission).
+  if p_assignment_group_id is not null then
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id is null
+       and s.profile_id in (
+         select agm.profile_id
+           from public.assignment_groups_members agm
+          where agm.assignment_group_id = p_assignment_group_id
+       );
+  else
+    update public.submissions s
+       set is_active = false
+     where s.assignment_id = p_assignment_id
+       and s.is_active = true
+       and s.assignment_group_id in (
+         select agm.assignment_group_id
+           from public.assignment_groups_members agm
+          where agm.profile_id = p_profile_id
+       );
+  end if;
+
   select coalesce(max(ordinal), 0) + 1 into v_ordinal
     from public.submissions
    where assignment_id = p_assignment_id

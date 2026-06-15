@@ -332,7 +332,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     profile_id: string | null,
     assignmentGroup: AssignmentGroup | null
   ) => {
-    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup ? sanitizeRepoNameComponent(assignmentGroup.name) : github_username[0]}`;
+    // Group repos MUST carry the `-group-` infix so this name matches every other
+    // site that derives it (the SQL enqueue existence-check, autograder-create-repos-for-student,
+    // github-user-sync). Omitting it produces a divergent name and a duplicate repo enqueue.
+    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup ? "group-" + sanitizeRepoNameComponent(assignmentGroup.name) : github_username[0]}`;
     console.log(`Creating repo ${repoName} for ${name}`);
 
     const strategy = resolveRepoCreationStrategy(
