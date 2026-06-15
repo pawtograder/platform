@@ -71,6 +71,15 @@ export async function liveMeetingEnd(params: FunctionTypes.LiveMeetingEndRequest
   return await invokeEdgeFunction<{ message: string }>(supabase, "live-meeting-end", { body: params });
 }
 
+export async function examExtractTemplate(
+  params: FunctionTypes.ExamExtractTemplateRequest,
+  supabase: SupabaseClient<Database>
+): Promise<FunctionTypes.ExamExtractTemplateResponse> {
+  return await invokeEdgeFunction<FunctionTypes.ExamExtractTemplateResponse>(supabase, "exam-extract-template", {
+    body: params
+  });
+}
+
 export async function repositoriesForClass(
   params: FunctionTypes.ListReposRequest,
   supabase: SupabaseClient<Database>

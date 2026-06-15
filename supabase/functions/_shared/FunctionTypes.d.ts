@@ -545,3 +545,30 @@ export type IndexedCheck = {
 };
 
 export type ResolveOutcome = { ok: true; target: IndexedCheck } | { ok: false; reason: string };
+
+// Exam template extraction (exam-extract-template edge function)
+export type ExamExtractTemplateRequest = { exam_id: number };
+export type ExamProposedQuestion = {
+  client_id: string;
+  parent_client_id?: string | null;
+  level: 1 | 2 | 3;
+  ordinal: number;
+  label?: string;
+  prompt?: string;
+  answer_type?: string;
+  choices?: unknown;
+  points?: number;
+};
+export type ExamProposedRegion = {
+  question_client_id?: string | null;
+  kind: "answer" | "student_id" | "name";
+  page_number: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+export type ExamExtractTemplateResponse = {
+  questions: ExamProposedQuestion[];
+  regions: ExamProposedRegion[];
+};

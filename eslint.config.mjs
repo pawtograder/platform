@@ -18,6 +18,13 @@ const eslintConfig = [
     linterOptions: { reportUnusedDisableDirectives: "warn" },
     rules: {
       "no-console": "warn",
+      // Allow the conventional leading-underscore marker for deliberately-unused bindings
+      // (e.g. interface-required parameters a fake/stub implementation ignores). Matches
+      // `deno lint`'s default and keeps `npx eslint` clean over supabase/functions too.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }
+      ],
       "no-restricted-syntax": [
         "error",
         {

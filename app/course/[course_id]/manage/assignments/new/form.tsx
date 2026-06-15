@@ -753,6 +753,26 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
+                    label="Assignment type"
+                    helperText={
+                      isEditing
+                        ? "Type cannot be changed after creation"
+                        : "Code: GitHub repo + autograder. Quiz: in-app questions, objective answers auto-graded. Paper exam: printable + scan/OCR. Survey: completion earns credit."
+                    }
+                  >
+                    <NativeSelectRoot disabled={isEditing}>
+                      <NativeSelectField {...register("assignment_type")}>
+                        <option value="code">Code (GitHub + autograder)</option>
+                        <option value="quiz">Quiz / worksheet (in-app)</option>
+                        <option value="exam">Paper exam (scan &amp; OCR)</option>
+                        <option value="survey">Required survey</option>
+                      </NativeSelectField>
+                    </NativeSelectRoot>
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
                     label="Title"
                     errorText={errors.title?.message?.toString()}
                     invalid={errors.title ? true : false}
