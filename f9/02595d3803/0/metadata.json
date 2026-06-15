@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "f902595d3803",
+  "session_id": "cfe9c606-f354-4ed1-a284-2f182aa9d5a0",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-15T16:04:02.214796356Z",
+  "branch": "feature/github-org-config",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "supabase/functions/repository-write-file/index.ts",
+    "supabase/functions/repository-get-file/index.ts",
+    "supabase/functions/_shared/FunctionTypes.d.ts",
+    "components/github/RepoFileEditor.tsx",
+    "supabase/migrations/20260529140000_github_org_templates.sql",
+    "app/course/[course_id]/manage/assignments/[assignment_id]/autograder/page.tsx",
+    "supabase/functions/_shared/GitHubSyncHelpers.ts",
+    "hooks/useClassProfiles.tsx",
+    "app/admin/github-orgs/[org]/page.tsx",
+    "lib/adminActingAs.ts",
+    "components/admin/EnterCourseAsInstructor.tsx",
+    "components/admin/AdminViewingBanner.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7c7011c5b970",
+  "token_usage": {
+    "input_tokens": 8098,
+    "cache_creation_tokens": 129642,
+    "cache_read_tokens": 5037878,
+    "output_tokens": 43554,
+    "api_call_count": 65
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-15T16:04:02.188825928Z",
+    "agent_lines": 208,
+    "agent_removed": 40,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 208,
+    "total_lines_changed": 248,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "complete-session.txt": 6118,
+        "tests/e2e/lti/.canvas-e2e.json": 26
+      }
+    }
+  ]
+}

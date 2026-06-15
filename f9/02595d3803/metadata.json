@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "f902595d3803",
+  "strategy": "manual-commit",
+  "branch": "feature/github-org-config",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "app/admin/github-orgs/[org]/page.tsx",
+    "app/course/[course_id]/manage/assignments/[assignment_id]/autograder/page.tsx",
+    "components/admin/AdminViewingBanner.tsx",
+    "components/admin/EnterCourseAsInstructor.tsx",
+    "components/github/RepoFileEditor.tsx",
+    "hooks/useClassProfiles.tsx",
+    "lib/adminActingAs.ts",
+    "supabase/functions/_shared/FunctionTypes.d.ts",
+    "supabase/functions/_shared/GitHubSyncHelpers.ts",
+    "supabase/functions/repository-get-file/index.ts",
+    "supabase/functions/repository-write-file/index.ts",
+    "supabase/migrations/20260529140000_github_org_templates.sql"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f9/02595d3803/0/metadata.json",
+      "transcript": "/f9/02595d3803/0/full.jsonl",
+      "content_hash": "/f9/02595d3803/0/content_hash.txt",
+      "prompt": "/f9/02595d3803/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8098,
+    "cache_creation_tokens": 129642,
+    "cache_read_tokens": 5037878,
+    "output_tokens": 43554,
+    "api_call_count": 65
+  }
+}
