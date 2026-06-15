@@ -2,7 +2,14 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { Database } from "./SupabaseTypes";
 
-const FUNCTIONS_URL_OVERRIDE = process.env.NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL ?? process.env.COVERAGE_FUNCTIONS_URL;
+// Gate the override on COVERAGE === "1" (defense-in-depth), not merely on
+// the URL var being present, so a stray COVERAGE_FUNCTIONS_URL in a
+// non-coverage environment can't reroute server-side functions.invoke()
+// traffic to the coverage host.
+const FUNCTIONS_URL_OVERRIDE =
+  process.env.COVERAGE === "1"
+    ? (process.env.NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL ?? process.env.COVERAGE_FUNCTIONS_URL)
+    : undefined;
 
 export const createClient = async () => {
   const cookieStore = await cookies();

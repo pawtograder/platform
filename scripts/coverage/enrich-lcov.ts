@@ -23,6 +23,18 @@
  * Files with ZERO covered lines stay untouched — we don't want to
  * inflate coverage % for genuinely untested files.
  *
+ * TRADEOFF / INFLATION (important before the gate is made required):
+ *   This deliberately marks every non-blank, non-comment line that V8 did
+ *   NOT probe as hit=1, conflating "no probe emitted" with "executed". A
+ *   file where one function ran but most branches did not will report
+ *   near-full line coverage. That is acceptable for the *informational* v1
+ *   (the goal is to stop showing executed-but-unprobed lines as "no data"),
+ *   but it would let largely-untested PRs pass an 80% patch gate. Before
+ *   the patch gate is flipped to REQUIRED, run with ENRICH_LCOV=0 so the
+ *   report reflects only what V8 actually measured.
+ *
+ * Set ENRICH_LCOV=0 to disable filling entirely (pass-through, measured-only).
+ *
  * Usage:
  *   tsx scripts/coverage/enrich-lcov.ts coverage/server.lcov
  *   tsx scripts/coverage/enrich-lcov.ts coverage/client.lcov
@@ -157,6 +169,13 @@ async function main(): Promise<void> {
   if (inputs.length === 0) {
     console.error("usage: tsx enrich-lcov.ts <file.lcov> [...]");
     process.exit(2);
+  }
+  // Measured-only mode: skip filling so the lcov reflects exactly what V8
+  // probed. Required before promoting the patch gate from informational to
+  // enforced (see the inflation note in the file header).
+  if (process.env.ENRICH_LCOV === "0") {
+    console.error("[enrich-lcov] ENRICH_LCOV=0 — skipping enrichment, leaving measured-only coverage untouched");
+    return;
   }
   for (const input of inputs) {
     const text = await readFile(input, "utf8");

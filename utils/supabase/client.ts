@@ -11,7 +11,15 @@ import { assert } from "../utils";
 // preserve the caller's generic Database parameter — using a generic
 // constraint here makes downstream T resolve to `unknown` which breaks
 // typed table access throughout the codebase.
-const FUNCTIONS_URL_OVERRIDE = process.env.NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL ?? process.env.COVERAGE_FUNCTIONS_URL;
+// Gate the override on COVERAGE === "1", not merely on the URL var being
+// set. NEXT_PUBLIC_* is inlined into the browser bundle at build time, so
+// any non-coverage build that happened to have this var exported would
+// otherwise reroute ALL functions.invoke() traffic to the coverage host.
+// COVERAGE is the single activation flag for the whole coverage pipeline.
+const COVERAGE_ACTIVE = process.env.NEXT_PUBLIC_COVERAGE === "1" || process.env.COVERAGE === "1";
+const FUNCTIONS_URL_OVERRIDE = COVERAGE_ACTIVE
+  ? (process.env.NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL ?? process.env.COVERAGE_FUNCTIONS_URL)
+  : undefined;
 
 function applyFunctionsUrlOverride<T>(client: T): T {
   if (!FUNCTIONS_URL_OVERRIDE) return client;

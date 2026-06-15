@@ -9,9 +9,12 @@
 //
 // Limitations vs. real edge-runtime:
 //   - No per-worker isolation, CPU/wallclock limits, or `EdgeRuntime.waitUntil`.
-//   - No JWT verification. All 47 functions currently have verify_jwt = false
-//     in config.toml; if any future function flips to true, replicate the
-//     check here before dispatching.
+//   - No JWT verification. This is only sound for functions that set
+//     verify_jwt = false in config.toml. Rather than trusting a comment to
+//     stay accurate, we parse config.toml at load time and REFUSE to serve
+//     any function that expects JWT (see assertNoJwtFunctions): otherwise a
+//     future flip to verify_jwt = true would be served unauthenticated here
+//     and the suite would stay green, silently masking the auth bypass.
 //   - Requests originating from inside Postgres (pg_net) still target the
 //     edge-runtime container — they will NOT hit this bootstrap unless
 //     Kong is rerouted (planned for v2).
@@ -84,6 +87,63 @@ Object.defineProperty(Deno, "serve", {
   configurable: true
 });
 
+// Parse supabase/config.toml for the verify_jwt setting of every
+// [functions.<name>] section. Supabase's default is verify_jwt = true, so a
+// function is only safe to serve without auth here if it EXPLICITLY sets
+// verify_jwt = false. Returns the set of names that do.
+async function readVerifyJwtFalseSet(): Promise<Set<string>> {
+  const safe = new Set<string>();
+  const configPath = new URL("../../config.toml", import.meta.url).pathname;
+  let text: string;
+  try {
+    text = await Deno.readTextFile(configPath);
+  } catch (err) {
+    throw new Error(`[coverage-bootstrap] cannot read config.toml at ${configPath}: ${err}`);
+  }
+  let currentFn = "";
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const section = line.match(/^\[functions\.([^\]]+)\]$/);
+    if (section) {
+      currentFn = section[1].trim();
+      continue;
+    }
+    if (line.startsWith("[")) {
+      currentFn = ""; // left the functions section
+      continue;
+    }
+    if (currentFn) {
+      const m = line.match(/^verify_jwt\s*=\s*(true|false)\b/i);
+      if (m && m[1].toLowerCase() === "false") safe.add(currentFn);
+    }
+  }
+  return safe;
+}
+
+// Refuse to serve (and drop the captured handler for) any loaded function
+// that does not explicitly opt out of JWT verification. Serving such a
+// function unauthenticated here would hide an auth-bypass regression behind
+// a green coverage run. ALLOW_JWT_FUNCTIONS=1 is an explicit local override.
+async function assertNoJwtFunctions(): Promise<void> {
+  const safe = await readVerifyJwtFalseSet();
+  const requiresJwt = [...handlers.keys()].filter((name) => !safe.has(name)).sort();
+  if (requiresJwt.length === 0) return;
+  for (const name of requiresJwt) handlers.delete(name);
+  console.error(
+    `[coverage-bootstrap] REFUSING to serve ${requiresJwt.length} function(s) that require JWT ` +
+      `(no \`verify_jwt = false\` in config.toml): ${requiresJwt.join(", ")}`
+  );
+  if (Deno.env.get("ALLOW_JWT_FUNCTIONS") !== "1") {
+    console.error(
+      "[coverage-bootstrap] aborting: this harness performs NO JWT verification, so serving " +
+        "these would mask an auth bypass. Set verify_jwt = false in config.toml if intended, " +
+        "or ALLOW_JWT_FUNCTIONS=1 to override for local debugging."
+    );
+    Deno.exit(1);
+  }
+}
+
 async function listFunctionDirs(): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(FUNCTIONS_DIR)) {
@@ -143,6 +203,9 @@ if (failed.length > 0 && Deno.env.get("ALLOW_PARTIAL_LOAD") !== "1") {
   console.error(`[coverage-bootstrap] aborting: ${failed.length} module(s) failed to load`);
   Deno.exit(1);
 }
+
+// Gate before we bind the port: drop/abort on any function that expects JWT.
+await assertNoJwtFunctions();
 
 realServe({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   const url = new URL(req.url);

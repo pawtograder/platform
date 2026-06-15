@@ -24,6 +24,11 @@ concurrency:
 jobs:
   jest:
     name: Jest coverage
+    # Never run for PRs opened from a fork: this job executes on the
+    # self-hosted `pawtograder-ci` runner, and a fork PR would otherwise
+    # run arbitrary attacker-controlled code (npm ci, build) on internal
+    # infrastructure. Pushes to staging/main and same-repo PRs are fine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: pawtograder-ci
     timeout-minutes: 20
     permissions:
@@ -76,6 +81,10 @@ jobs:
 
   e2e:
     name: E2E coverage (Next server + client + edge + postgres)
+    # See the `jest` job: skip fork PRs so untrusted code never runs on the
+    # self-hosted runner (this job also does `deno run` with broad
+    # --allow-* and `docker exec`, so the exposure is even larger).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: pawtograder-ci
     timeout-minutes: 90
     permissions:
@@ -84,6 +93,11 @@ jobs:
     env:
       # Coverage activation flags read by Next, Playwright, edge bootstrap.
       COVERAGE: "1"
+      # Browser-visible twin of COVERAGE. The functions-URL override in
+      # utils/supabase/client.ts is gated on this (process.env.COVERAGE is
+      # NOT inlined into the client bundle); without it the browser client
+      # would never reroute to the edge coverage host.
+      NEXT_PUBLIC_COVERAGE: "1"
       # NODE_V8_COVERAGE is intentionally NOT set: we capture server
       # coverage via the Inspector path in instrumentation.ts, which
       # sees vm-loaded scripts. The legacy NODE_V8_COVERAGE dump would
@@ -196,6 +210,8 @@ jobs:
             echo "GITHUB_APP_ID=1"
             echo "ENABLE_SIGNUPS=true"
             echo "NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL=http://127.0.0.1:9998"
+            echo "COVERAGE=1"
+            echo "NEXT_PUBLIC_COVERAGE=1"
           } > .env.local
           # GitHub App private key: GitHubWrapper.ts initializes octokit
           # at module load time, which requires a valid-shaped RSA PEM

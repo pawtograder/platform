@@ -57,6 +57,8 @@ if docker exec -i "$CONTAINER" psql -U postgres -d postgres \
   # needs_restart=false; without an explicit reload here the profiler would
   # stay off and we'd silently collect zero Postgres coverage. SIGHUP is
   # enough for this GUC, so reload rather than force a full restart.
+  # Whether this reload actually took effect is verified below (a failed
+  # reload here would otherwise leave the profiler off and the run green).
   docker exec -i "$CONTAINER" psql -U postgres -d postgres \
     -c "SELECT pg_reload_conf();" >/dev/null 2>&1 || true
 else
@@ -115,8 +117,20 @@ fi
 docker exec -i "$CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
 CREATE EXTENSION IF NOT EXISTS plpgsql_check;
 SELECT plpgsql_profiler_reset_all();
-SHOW plpgsql_check.profiler;
 SQL
+
+# --- Verify the profiler is actually ON ----------------------------------
+# Read the GUC in a fresh session (-tA = tuples-only, unaligned). Every path
+# above is best-effort (the reload is `|| true`; the restart can race), so a
+# silent failure would leave the profiler off, dump-pg emit an empty lcov,
+# and the job stay green. Treat "not on" as a hard error instead.
+profiler_state=$(docker exec -i "$CONTAINER" psql -U postgres -d postgres -tA \
+  -c "SHOW plpgsql_check.profiler;" 2>/dev/null | tr -d '[:space:]' || echo "")
+if [[ "$profiler_state" != "on" ]]; then
+  echo "[setup-pg] ERROR: plpgsql_check.profiler is '${profiler_state:-<unset>}', expected 'on' — Postgres coverage would be empty" >&2
+  exit 1
+fi
+echo "[setup-pg] verified plpgsql_check.profiler = on"
 
 # --- Sentinel for collect.sh ---------------------------------------------
 mkdir -p "$ROOT/coverage"

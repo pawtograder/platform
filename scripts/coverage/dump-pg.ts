@@ -20,6 +20,12 @@
  *   - If a function is `CREATE OR REPLACE`d across multiple migrations,
  *     we use the most recent migration's definition. The earlier ones'
  *     coverage is effectively folded into the latest file/line range.
+ *   - The header parser is single-line: a `CREATE FUNCTION` whose argument
+ *     list spans multiple lines, or contains a literal `)` (e.g.
+ *     `DEFAULT auth.uid()`, `numeric(10,2)`), still won't be indexed and
+ *     its profiler hits are dropped as "unmatched". Quoted-identifier
+ *     headers (`"public"."fn"`) ARE handled. Multi-line signatures are a
+ *     known v2 gap.
  */
 
 import { readFile, readdir } from "node:fs/promises";
@@ -48,8 +54,24 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "postgres://postgres:postgres@127.
 // `AS $body$` opener. We scan line-by-line so we can record the exact 1-based
 // line number where the body opens — that's the offset we add to the
 // profiler's reported lineno to land back in the migration file.
-const FUNC_HEADER_RE = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(\w+)\.)?(\w+)\s*\(([^)]*)\)/i;
+//
+// Both the schema and name may be double-quoted: Supabase's own pg_dump
+// output uses the `"public"."fn"` form, which accounts for ~160 of the
+// CREATE FUNCTION headers in supabase/migrations. `"[^"]+"|\w+` matches
+// either a quoted or a bare identifier; unquoteIdent() then strips quotes
+// and lowercases bare identifiers to match pg_proc's stored names.
+const FUNC_HEADER_RE = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:("[^"]+"|\w+)\.)?("[^"]+"|\w+)\s*\(([^)]*)\)/i;
 const DOLLAR_OPEN_RE = /\bAS\s+\$(\w*)\$/i;
+
+// Normalize a (possibly quoted) SQL identifier to the form Postgres stores
+// in the catalog: quoted identifiers keep their exact case (and un-double
+// any escaped `""`), bare identifiers fold to lowercase.
+function unquoteIdent(id: string): string {
+  if (id.length >= 2 && id.startsWith('"') && id.endsWith('"')) {
+    return id.slice(1, -1).replace(/""/g, '"');
+  }
+  return id.toLowerCase();
+}
 
 async function buildFunctionIndex(): Promise<Map<string, FuncIndexEntry>> {
   // key = "schema.name(normalizedArgTypes)"; later migrations overwrite earlier ones
@@ -64,8 +86,8 @@ async function buildFunctionIndex(): Promise<Map<string, FuncIndexEntry>> {
     for (let i = 0; i < lines.length; i++) {
       const header = lines[i].match(FUNC_HEADER_RE);
       if (!header) continue;
-      const schema = header[1] ?? "public";
-      const name = header[2];
+      const schema = header[1] ? unquoteIdent(header[1]) : "public";
+      const name = unquoteIdent(header[2]);
       const argList = header[3]
         .split(",")
         .map((s) => normalizeArg(s.trim()))
@@ -232,6 +254,7 @@ async function main(): Promise<void> {
   const byFile = new Map<string, LcovFile>();
   let matched = 0;
   let unmatched = 0;
+  let outOfRange = 0;
   const missing = new Set<string>();
 
   for (const row of rows) {
@@ -243,7 +266,7 @@ async function main(): Promise<void> {
       const altKey = `${row.schema}.${row.name}`;
       const candidates = [...index.entries()].filter(([k]) => k.startsWith(`${altKey}(`));
       if (candidates.length === 1) {
-        applyHit(byFile, candidates[0][1], row);
+        if (!applyHit(byFile, candidates[0][1], row)) outOfRange++;
         matched++;
         continue;
       }
@@ -251,23 +274,47 @@ async function main(): Promise<void> {
       missing.add(key);
       continue;
     }
-    applyHit(byFile, entry, row);
+    if (!applyHit(byFile, entry, row)) outOfRange++;
     matched++;
   }
 
   // Stderr summary so it's visible in CI logs without polluting the lcov stdout.
-  console.error(`[dump-pg] matched=${matched} unmatched=${unmatched} files=${byFile.size} index_size=${index.size}`);
+  console.error(
+    `[dump-pg] matched=${matched} unmatched=${unmatched} out_of_range=${outOfRange} files=${byFile.size} index_size=${index.size}`
+  );
   if (missing.size > 0 && missing.size < 50) {
     console.error("[dump-pg] missing keys (first 20):", [...missing].slice(0, 20));
+  }
+  // A nonzero out_of_range means profiler line numbers are landing outside
+  // the function body we indexed — i.e. the lineno-base assumption in
+  // applyHit() is miscalibrated for some functions (an off-by-one would be
+  // invisible otherwise, since LH/LF stay self-consistent). Surface it loudly
+  // so it's caught before this flag is promoted from informational to gating.
+  if (outOfRange > 0) {
+    console.error(
+      `[dump-pg] WARNING: ${outOfRange} profiler row(s) mapped outside their function body — ` +
+        "line offset is likely miscalibrated; recalibrate applyHit() against a live plpgsql_check run"
+    );
   }
 
   process.stdout.write(toLcov(byFile));
 }
 
-function applyHit(byFile: Map<string, LcovFile>, entry: FuncIndexEntry, row: ProfilerRow): void {
-  // Profiler reports lineno as 1-based offset from the *start of the function body*.
-  // Our index records the file line where the body opens.
+// Returns false if the mapped line falls outside the indexed function body,
+// which signals the lineno-offset assumption below is miscalibrated for this
+// row (see the out_of_range tally in main()).
+function applyHit(byFile: Map<string, LcovFile>, entry: FuncIndexEntry, row: ProfilerRow): boolean {
+  // Profiler reports lineno as a 1-based offset from the *start of the
+  // function body*. `bodyStartLine` is the file line of the first body line
+  // (the line AFTER the `AS $tag$` opener), so lineno=1 maps to bodyStartLine.
+  // NOTE: this offset has NOT been calibrated against a live plpgsql_check
+  // run; if its lineno base is actually 0- or AS-line-relative, every hit is
+  // shifted by one. The bounds check below catches gross drift, but a uniform
+  // off-by-one within the body stays invisible — calibrate before gating.
   const absLine = entry.bodyStartLine + row.lineno - 1;
+  // Body spans [bodyStartLine, bodyStartLine + bodyLineCount]; allow the
+  // closing-tag line (+1 slack) before declaring a row out of range.
+  const inRange = absLine >= entry.bodyStartLine && absLine <= entry.bodyStartLine + entry.bodyLineCount + 1;
   let lf = byFile.get(entry.file);
   if (!lf) {
     lf = { file: entry.file, lines: new Map() };
@@ -275,6 +322,7 @@ function applyHit(byFile: Map<string, LcovFile>, entry: FuncIndexEntry, row: Pro
   }
   const prev = lf.lines.get(absLine) ?? 0;
   lf.lines.set(absLine, prev + row.exec_stmts);
+  return inRange;
 }
 
 main().catch((err) => {
