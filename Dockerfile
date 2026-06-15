@@ -36,11 +36,10 @@ ARG NEXT_PUBLIC_ENABLE_SIGNUPS=""
 ARG NEXT_PUBLIC_GIT_COMMIT_SHA=""
 # A/B deployment channels (see utils/channels.ts). PAWTOGRADER_CHANNEL identifies
 # the build's channel ("" => stable). CHANNEL_HOST_SUFFIX enables per-course
-# host-redirect routing in middleware; SESSION_COOKIE_DOMAIN scopes the auth
-# cookie across channel subdomains. All empty by default => routing disabled.
+# host-redirect routing in middleware and also derives the cross-channel auth
+# cookie scope (".<suffix>"). Both empty by default => routing disabled.
 ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
 ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
-ARG NEXT_PUBLIC_SESSION_COOKIE_DOMAIN=""
 ARG SENTRY_RELEASE=""
 ARG SUPABASE_URL=""
 
@@ -57,7 +56,6 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_GIT_COMMIT_SHA=$NEXT_PUBLIC_GIT_COMMIT_SHA \
     NEXT_PUBLIC_PAWTOGRADER_CHANNEL=$NEXT_PUBLIC_PAWTOGRADER_CHANNEL \
     NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$NEXT_PUBLIC_CHANNEL_HOST_SUFFIX \
-    NEXT_PUBLIC_SESSION_COOKIE_DOMAIN=$NEXT_PUBLIC_SESSION_COOKIE_DOMAIN \
     SENTRY_RELEASE=$SENTRY_RELEASE \
     SUPABASE_URL=$SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \

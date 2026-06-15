@@ -163,22 +163,44 @@ label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 
 {{/*
 Per-deployment-channel public host. Each channel (.Values.channels[]) is served
-on its own single-label host so a *.<zone> wildcard TLS cert covers it; the
-channel runs web + edge-functions code against the shared data plane, and the app
-redirects each course to its channel's host (classes.deployment_channel). Defaults
-to "<name>.<global.hostname>"; an entry may set `host` to override.
+on its own single-label host "<name>.<global.hostname>" so a *.<zone> wildcard
+TLS cert always covers it; the channel runs web + edge-functions code against the
+shared data plane, and the app redirects each course to its channel's host
+(classes.deployment_channel). The host pattern is fixed (no per-channel override)
+because the web middleware's hostForChannel() computes the same "<name>.<suffix>"
+to drive the redirect — the chart and the app must agree on one host per channel.
+The name is capped at 63 chars to match the DB CHECK on classes.deployment_channel
+(a longer channel could render chart resources but never be stored / pinned to).
 Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
 */}}
 {{- define "pawtograder.channel.host" -}}
 {{- $name := required "channels[].name is required" .channel.name -}}
-{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
-{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label, <=63 chars (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
 {{- end -}}
-{{- $host := default (printf "%s.%s" $name .ctx.Values.global.hostname) .channel.host -}}
-{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $host) -}}
-{{- fail (printf "invalid channel host %q for channel %q: must be a DNS hostname" $host $name) -}}
+{{- printf "%s.%s" $name .ctx.Values.global.hostname -}}
 {{- end -}}
-{{- $host -}}
+
+{{/*
+Shared Supabase API path routes (auth / rest / realtime / storage / functions →
+Kong) for an Ingress host. Used by the primary host, its TLS-SAN extraHosts, and
+every deployment-channel host, so the five proxied prefixes (and their port
+handling) can't drift between the three Ingresses. Caller decides whether to emit
+them (the primary host omits these when global.apiOnSeparateHost).
+Usage: {{ include "pawtograder.ingress.apiPaths" $ | trim | nindent 10 }}
+*/}}
+{{- define "pawtograder.ingress.apiPaths" -}}
+{{- $kong := include "pawtograder.kong.host" . -}}
+{{- $port := .Values.kong.service.port -}}
+{{- range $p := (list "auth" "rest" "realtime" "storage" "functions") }}
+- path: /{{ $p }}/v1
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ $kong }}
+      port:
+        number: {{ $port }}
+{{- end }}
 {{- end -}}
 
 {{/*

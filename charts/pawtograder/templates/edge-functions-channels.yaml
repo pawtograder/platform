@@ -9,9 +9,24 @@ channel host's /functions/v1 traffic to the matching functions-<name> Service
 {{- if .Values.edgeFunctions.enabled }}
 {{- range $c := .Values.channels }}
 {{- if $c.edgeFunctions }}
-{{- $image := mergeOverwrite (deepCopy $.Values.edgeFunctions.image) ($c.edgeFunctions.image | default dict) }}
+{{- /* A channel's functions are reached only via its web host's /functions/v1
+   (Kong routes that host — see kong-config.yaml; the Ingress is created by the
+   web block in ingress-channels.yaml). An edgeFunctions-only channel renders a
+   Deployment/Service with no Ingress, so it's unreachable from outside the
+   cluster — fail fast instead of shipping a silent dead end. */ -}}
+{{- if not $c.web }}
+{{- fail (printf "channel %q: an edgeFunctions block requires a web block — without it the channel host has no Ingress and /functions/v1 is unreachable from outside the cluster" $c.name) }}
+{{- end }}
+{{- /* Require the channel's own image tag (see web-channels.yaml). */ -}}
+{{- if not (and $c.edgeFunctions.image $c.edgeFunctions.image.tag) }}
+{{- fail (printf "channel %q: channels[].edgeFunctions.image.tag is required when an edgeFunctions block is present (a channel without its own tag would run the stable functions image)" $c.name) }}
+{{- end }}
+{{- $image := mergeOverwrite (deepCopy $.Values.edgeFunctions.image) $c.edgeFunctions.image }}
+{{- /* hasKey, not `default 1`, so replicas: 0 can idle the channel (Sprig
+   `default` treats 0 as empty). */ -}}
+{{- $replicas := ternary $c.edgeFunctions.replicas 1 (hasKey $c.edgeFunctions "replicas") }}
 ---
-{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" $ "component" (printf "functions-%s" $c.name) "image" $image "replicas" (default 1 $c.edgeFunctions.replicas) "autoscaling" false) }}
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" $ "component" (printf "functions-%s" $c.name) "image" $image "replicas" $replicas "autoscaling" false) }}
 {{- end }}
 {{- end }}
 {{- end }}

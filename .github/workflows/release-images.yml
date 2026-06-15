@@ -29,6 +29,14 @@ on:
         description: "Namespace whose pawtograder-jwt:ANON_KEY is baked into the web bundle"
         required: false
         default: "pawtograder-staging"
+      channel:
+        description: "Deployment channel name (A/B). Empty/stable = primary build; a name like 'team7' bakes NEXT_PUBLIC_PAWTOGRADER_CHANNEL and tags the image '<channel>-<sha>'. Set web_hostname to the channel's own host."
+        required: false
+        default: ""
+      channel_host_suffix:
+        description: "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX build arg (the channel zone, e.g. 'staging.pawtograder.net') — enables per-course host redirect + cross-channel cookie scope. Empty = channel routing disabled."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -59,6 +67,8 @@ jobs:
 
       - id: v
         name: Compute version + tag list
+        env:
+          CHANNEL_INPUT: ${{ inputs.channel }}
         run: |
           set -euo pipefail
           chart_version=$(awk '/^version:/ {print $2; exit}' charts/pawtograder/Chart.yaml)
@@ -79,6 +89,18 @@ jobs:
             version="${safe_branch}-${short_sha}"
             is_tag=false
             tags="${safe_branch}-${short_sha},${safe_branch}-latest"
+          fi
+          # A/B channel build (workflow_dispatch only): tag the image by channel
+          # so it never collides with the stable tag, and so the chart can pin
+          # channels[].web.image.tag to "<channel>-<sha>" / "<channel>-latest".
+          channel="${CHANNEL_INPUT:-}"
+          if [[ -n "$channel" && "$channel" != "stable" ]]; then
+            if [[ ! "$channel" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+              echo "::error::channel '${channel}' must be a DNS-1123 label (lowercase alphanumeric + '-', <=63 chars)"; exit 1
+            fi
+            version="${channel}-${short_sha}"
+            tags="${channel}-${short_sha},${channel}-latest"
+            is_tag=false
           fi
           echo "version=${version}"            | tee -a "$GITHUB_OUTPUT"
           echo "is_tag=${is_tag}"              | tee -a "$GITHUB_OUTPUT"
@@ -126,26 +148,44 @@ jobs:
 
       - name: Resolve hostnames + namespace
         id: hosts
+        # CHANNEL / SUFFIX bake the A/B-channel routing into the bundle (see
+        # utils/channels.ts). On a channel build (workflow_dispatch with a
+        # `channel` input) the caller supplies the channel's own web_hostname and
+        # channel_host_suffix. On stable push/dispatch the suffix comes from the
+        # CHANNEL_HOST_SUFFIX repo variable (empty by default => routing disabled,
+        # so stable behaves exactly as before until an operator opts in fleet-wide
+        # by setting that variable).
         env:
           EVENT: ${{ github.event_name }}
           INPUT_WEB: ${{ inputs.web_hostname }}
           INPUT_API: ${{ inputs.api_hostname }}
           INPUT_NS: ${{ inputs.namespace }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_SUFFIX: ${{ inputs.channel_host_suffix }}
+          VAR_SUFFIX: ${{ vars.CHANNEL_HOST_SUFFIX }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
             web="${INPUT_WEB:-https://staging.pawtograder.net}"
             api="${INPUT_API:-https://api.staging.pawtograder.net}"
             ns="${INPUT_NS:-pawtograder-staging}"
+            channel="${INPUT_CHANNEL:-stable}"
+            suffix="${INPUT_SUFFIX:-${VAR_SUFFIX:-}}"
           else
             # push to main → staging (see job-level if condition above).
             web="https://staging.pawtograder.net"
             api="https://api.staging.pawtograder.net"
             ns="pawtograder-staging"
+            channel="stable"
+            suffix="${VAR_SUFFIX:-}"
           fi
+          # Normalize an empty channel to "stable" (the build's default).
+          [ -n "$channel" ] || channel="stable"
           echo "web=$web" >> "$GITHUB_OUTPUT"
           echo "api=$api" >> "$GITHUB_OUTPUT"
           echo "ns=$ns" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
 
       - name: Read anon key from cluster
         # The anon key the browser ships MUST match what the cluster's GoTrue /
@@ -186,6 +226,8 @@ jobs:
             NEXT_PUBLIC_POSTHOG_UI_HOST=${{ secrets.STAGING_POSTHOG_UI_HOST }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=false
             NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            NEXT_PUBLIC_PAWTOGRADER_CHANNEL=${{ steps.hosts.outputs.channel }}
+            NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=${{ steps.hosts.outputs.suffix }}
             SENTRY_RELEASE=${{ needs.meta.outputs.version }}
             SUPABASE_URL=${{ steps.hosts.outputs.api }}
           labels: |

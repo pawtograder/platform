@@ -40,41 +40,7 @@ spec:
       http:
         paths:
           {{- if not .Values.global.apiOnSeparateHost }}
-          - path: /auth/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" . }}
-                port:
-                  number: {{ .Values.kong.service.port }}
-          - path: /rest/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" . }}
-                port:
-                  number: {{ .Values.kong.service.port }}
-          - path: /realtime/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" . }}
-                port:
-                  number: {{ .Values.kong.service.port }}
-          - path: /storage/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" . }}
-                port:
-                  number: {{ .Values.kong.service.port }}
-          - path: /functions/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" . }}
-                port:
-                  number: {{ .Values.kong.service.port }}
+          {{- include "pawtograder.ingress.apiPaths" . | trim | nindent 10 }}
           {{- end }}
           - path: /
             pathType: Prefix
@@ -106,41 +72,7 @@ spec:
       http:
         paths:
           {{- if not $.Values.global.apiOnSeparateHost }}
-          - path: /auth/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /rest/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /realtime/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /storage/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /functions/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
+          {{- include "pawtograder.ingress.apiPaths" $ | trim | nindent 10 }}
           {{- end }}
           - path: /
             pathType: Prefix

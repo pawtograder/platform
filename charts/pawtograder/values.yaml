@@ -48,30 +48,35 @@ global:
 # Extra, concurrent web + edge-functions deployments running DIFFERENT image
 # tags against the SAME data plane (Postgres/auth/storage) as the stable
 # release. Each channel is served on its own single-label host
-# (<name>.<global.hostname>, override with `host`); the app redirects each
-# course to its channel's host based on the classes.deployment_channel column,
-# so one user can use stable + canary courses in the same session. Kong routes a
-# channel host's /functions/v1 to that channel's functions; everything else is
-# shared. Default empty = stable only, no extra objects rendered.
+# (<name>.<global.hostname>, a fixed pattern — the web middleware computes the
+# same host to drive its redirect, so there's no per-channel host override); the
+# app redirects each course to its channel's host based on the
+# classes.deployment_channel column, so one user can use stable + canary courses
+# in the same session. Kong routes a channel host's /functions/v1 to that
+# channel's functions; everything else is shared. Default empty = stable only,
+# no extra objects rendered.
 #
-# Channel image build args matter: the web image for a channel must be built
-# with NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name> and its own host as
-# NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_PAWTOGRADER_WEB_URL (NEXT_PUBLIC_* bake
-# at build time). Channel code must be schema-compatible with the shared DB
-# (expand/contract migrations only).
+# Channel image build args matter: the web image for a channel MUST be built with
+# NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name>, NEXT_PUBLIC_CHANNEL_HOST_SUFFIX set to
+# the zone, and its own channel host as NEXT_PUBLIC_PAWTOGRADER_WEB_URL (so
+# password-reset / signup-confirm / OAuth callbacks land on the channel host, not
+# stable), with the shared NEXT_PUBLIC_SUPABASE_URL — all NEXT_PUBLIC_* bake at
+# build time (see .github/workflows/release-images.yml `channel` input). Channel
+# code must be schema-compatible with the shared DB (expand/contract migrations
+# only). A web/edgeFunctions block without its own image.tag, and an edgeFunctions
+# block without a web block, both fail the render (see *-channels.yaml).
 channels: []
 #  - name: team7
-#    # host: team7.staging.pawtograder.net   # optional; default <name>.<global.hostname>
 #    # tls:
-#    #   secretName: team7-tls   # optional per-channel cert; required if `host` is
-#    #                           # outside the *.<global.hostname> wildcard zone
+#    #   secretName: team7-tls   # optional override for a dedicated per-channel
+#    #                           # cert; default is the *.<zone> wildcard below
 #    web:
 #      image:
-#        tag: "team7-<sha>"      # repository/pullPolicy default from web.image
-#      replicas: 1
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from web.image
+#      replicas: 1               # 0 idles the channel (kept distinct from absent)
 #    edgeFunctions:
 #      image:
-#        tag: "team7-<sha>"      # repository/pullPolicy default from edgeFunctions.image
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from edgeFunctions.image
 #      replicas: 1
 
 # Reflected *.<zone> wildcard TLS secret used by every channel Ingress (e.g.
