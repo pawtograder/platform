@@ -10809,6 +10809,13 @@ export type Database = {
           total_invitations: number;
         }[];
       };
+      admin_lookup_user_by_email: {
+        Args: { p_email: string };
+        Returns: {
+          name: string;
+          user_id: string;
+        }[];
+      };
       admin_set_section_sync_enabled: {
         Args: {
           p_admin_user_id?: string;
