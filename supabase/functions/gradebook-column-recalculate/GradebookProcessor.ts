@@ -15,6 +15,11 @@ import * as Sentry from "npm:@sentry/deno";
 
 const DEBUG_LOG = Boolean(Deno.env.get("DEBUG_GRADEBOOK_CALCULATION")) || false;
 
+// Expression functions whose first argument is a dependency slug and therefore need the `context`
+// argument injected during AST instrumentation. Kept as a single list so the three recalc paths
+// (single-row, multi-row, batch) cannot drift when a dependency function is added or renamed.
+const DEPENDENCY_FUNCTION_NAMES = ["assignments", "gradebook_columns", "assignment_released"];
+
 /** Comma-separated slugs, e.g. `final-course-total`. Read on each check so CLI scripts can set env before processing. */
 function getDebugGradebookColumnSlugs(): Set<string> | null {
   const raw = Deno.env.get("DEBUG_GRADEBOOK_COLUMN_SLUG");
@@ -446,7 +451,7 @@ export async function processGradebookRowCalculation(
           fn.args = newArgs;
           return node;
         }
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (DEPENDENCY_FUNCTION_NAMES.includes(fn.fn.name) && fn.args.length > 0) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
@@ -757,7 +762,7 @@ export async function processGradebookRowsCalculation(
           fn.args = newArgs;
           return node;
         }
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (DEPENDENCY_FUNCTION_NAMES.includes(fn.fn.name) && fn.args.length > 0) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
@@ -1105,7 +1110,7 @@ async function processCellBatch(
           return node;
         }
         // Check if this is a dependency function (assignments or gradebook_columns)
-        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
+        if (DEPENDENCY_FUNCTION_NAMES.includes(fn.fn.name) && fn.args.length > 0) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));

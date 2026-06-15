@@ -11,6 +11,7 @@ import { Box, Float, HStack, Heading, Icon, Text, VStack } from "@chakra-ui/reac
 import { memo, useCallback, useId, useRef, useState } from "react";
 import { FaRobot } from "react-icons/fa6";
 import { LuCalculator } from "react-icons/lu";
+import { TbEyeOff } from "react-icons/tb";
 import { useGradebookPopover } from "./GradebookPopoverProvider";
 
 /** Privacy blur; mount only when the cell should be hidden for the current staff view. */
@@ -89,6 +90,17 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     );
   }
 
+  // Whether this student can currently see their grade for this cell. The instructor view renders
+  // the private row; its `released` flag mirrors what the student sees (false → "In Progress").
+  const releasedToStudent = Boolean(studentGradebookColumn?.released);
+  const instructorHasScore = studentGradebookColumn?.score != null || studentGradebookColumn?.score_override != null;
+  const hasOverride = studentGradebookColumn?.score_override != null;
+  // Student view differs from what staff see: a (non-staff-only) grade the instructor can see but
+  // the student cannot yet, because it is not released to them. A *released* override is NOT a
+  // difference — the student sees the same overridden value (see the scoreAdvice below; issue #499) —
+  // and instructor-only columns are hidden from students entirely (flagged by their own header badge).
+  const studentViewDiffers = canShowGradeFor && !column.instructor_only && !releasedToStudent && instructorHasScore;
+
   let scoreAdvice: string | undefined = undefined;
   if (canShowGradeFor) {
     if (column.score_expression) {
@@ -108,6 +120,16 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     }
     if (studentGradebookColumn?.incomplete_values) {
       scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;
+    }
+    // Clarify student visibility, especially for overrides on calculated columns (issue #499).
+    if (column.score_expression && hasOverride) {
+      scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}${
+        releasedToStudent
+          ? "This override is visible to students now."
+          : "This override is hidden from students until this column's dependencies are released."
+      }`;
+    } else if (!releasedToStudent && instructorHasScore) {
+      scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}Students currently see: In Progress (not yet released).`;
     }
   }
   const isSpecial =
@@ -166,6 +188,13 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
         <Float placement="bottom-end" offset={2}>
           <Box color="fg.info" pointerEvents="none" className="gradebook-cell-pulse">
             <Icon as={LuCalculator} size="sm" />
+          </Box>
+        </Float>
+      )}
+      {studentViewDiffers && (
+        <Float placement="bottom-start" offset={2}>
+          <Box color="fg.muted" pointerEvents="none" title="Students see a different value than you">
+            <Icon as={TbEyeOff} size="sm" />
           </Box>
         </Float>
       )}

@@ -1368,6 +1368,78 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(unreleasedCard).toContainText(/In Progress/i);
     await assertStudentPageAccessible(page, "student gradebook unreleased participation");
   });
+
+  test("Release/unrelease visible students sets per-student release without changing the column flag", async ({
+    page
+  }) => {
+    // The per-student release path (set_gradebook_column_students_released) flips released on the
+    // selected students' private rows and the per-row sync trigger propagates to their public rows,
+    // while the column-level gradebook_columns.released flag is intentionally left untouched.
+    const { data: participationColumn, error: participationColumnError } = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", course.id)
+      .eq("slug", "participation")
+      .single();
+    if (participationColumnError) {
+      throw new Error(`Failed to get participation column: ${participationColumnError.message}`);
+    }
+    const columnReleasedBefore = participationColumn.released;
+
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await expect(tableRegion).toBeVisible();
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    const participationHeader = tableRegion.locator('[role="columnheader"]').filter({ hasText: /^Participation/ });
+    await participationHeader.getByRole("button", { name: "Column options" }).click();
+    // No row filter is applied, so "visible students" is the whole class.
+    await page.getByRole("menuitem", { name: /^Release visible students/ }).click();
+
+    // Every student's private and public rows should now be released.
+    await expect(async () => {
+      for (const student of students) {
+        const { data: rows, error } = await supabase
+          .from("gradebook_column_students")
+          .select("is_private, released")
+          .eq("class_id", course.id)
+          .eq("student_id", student.private_profile_id)
+          .eq("gradebook_column_id", participationColumn.id);
+        if (error) throw new Error(`Failed to read rows: ${error.message}`);
+        expect(rows?.length).toBeGreaterThanOrEqual(2);
+        for (const row of rows ?? []) {
+          expect(row.released).toBe(true);
+        }
+      }
+    }).toPass({ timeout: 60_000 });
+
+    // The column-level released flag must be unchanged by the per-student path.
+    const { data: columnAfterRelease } = await supabase
+      .from("gradebook_columns")
+      .select("released")
+      .eq("id", participationColumn.id)
+      .single();
+    expect(columnAfterRelease?.released).toBe(columnReleasedBefore);
+
+    // Unrelease the visible students and confirm both row copies flip back to false.
+    await participationHeader.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: /^Unrelease visible students/ }).click();
+    await expect(async () => {
+      for (const student of students) {
+        const { data: rows, error } = await supabase
+          .from("gradebook_column_students")
+          .select("is_private, released")
+          .eq("class_id", course.id)
+          .eq("student_id", student.private_profile_id)
+          .eq("gradebook_column_id", participationColumn.id);
+        if (error) throw new Error(`Failed to read rows: ${error.message}`);
+        expect(rows?.length).toBeGreaterThanOrEqual(2);
+        for (const row of rows ?? []) {
+          expect(row.released).toBe(false);
+        }
+      }
+    }).toPass({ timeout: 60_000 });
+  });
 });
 
 test.describe("Gradebook Page - CSV Render Export", () => {
