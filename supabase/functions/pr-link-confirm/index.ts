@@ -75,6 +75,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
     }
   }
 
+  // Read the PR's current head/base straight from GitHub (the webhook payload that
+  // created the candidate may be stale by now) BEFORE mutating any DB state.
+  // getPullRequest can throw (PR deleted, GitHub outage / rate-limit); doing it
+  // first means such a failure leaves the link table untouched, instead of having
+  // already flipped this link to confirmed (and unconfirmed every sibling via the
+  // single-confirmed trigger) with no submission to show for it.
+  const pr = await getPullRequest(link.pr_repo, link.pr_number, scope);
+  const prState = prStateFromPullRequest(pr);
+
   // Mark this link confirmed; the single-confirmed trigger unconfirms siblings.
   const { error: confirmError } = await adminSupabase
     .from("submission_pr_links")
@@ -83,11 +92,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
   if (confirmError) {
     throw new UserVisibleError(`Could not confirm pull request: ${confirmError.message}`);
   }
-
-  // Read the PR's current head/base straight from GitHub (the webhook payload
-  // that created the candidate may be stale by now).
-  const pr = await getPullRequest(link.pr_repo, link.pr_number, scope);
-  const prState = prStateFromPullRequest(pr);
 
   const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
     p_assignment_id: link.assignment_id,
@@ -102,6 +106,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
     p_auto_confirm: false
   });
   if (ingestError) {
+    // Compensate: ingest failed after we flipped this link to confirmed, so roll it
+    // back to unconfirmed. Otherwise we'd leave a confirmed link with no submission
+    // (violating "only confirmed links produce submissions") until a manual retry.
+    // Best-effort — report the original ingest error regardless of the revert.
+    const { error: revertError } = await adminSupabase
+      .from("submission_pr_links")
+      .update({ confirmed: false })
+      .eq("id", link.id);
+    if (revertError) {
+      Sentry.captureException(revertError, scope);
+    }
     throw new UserVisibleError(`Could not ingest pull request submission: ${ingestError.message}`);
   }
 

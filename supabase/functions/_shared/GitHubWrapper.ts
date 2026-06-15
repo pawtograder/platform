@@ -1052,14 +1052,34 @@ export async function createRepo(
       scope?.setTag("enable_actions_failed", "true");
       Sentry.captureException(actionsErr, scope);
     }
-    //Get the head SHA
-    scope?.setTag("github_operation", "get_head_sha");
-    scope?.setTag("ref", "heads/main");
-    const heads = await retryWithBackoff(
+    //Get the head SHA. Resolve the repo's actual default branch rather than
+    // assuming `main`: a FORK inherits the UPSTREAM's default branch (which may be
+    // `master`), and a template-generated repo inherits the template's. Hardcoding
+    // `heads/main` 404s the ref lookup for any such repo, so retryWithBackoff
+    // exhausts its 5 retries and throws, failing the whole student's repo creation
+    // even though the repo itself was created fine. Mirrors mergeForkUpstream's
+    // `repoMeta.data.default_branch` resolution.
+    scope?.setTag("github_operation", "get_default_branch");
+    const repoMeta = await retryWithBackoff(
       () =>
-        octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+        octokit.request("GET /repos/{owner}/{repo}", {
           owner: org,
           repo: repoName
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+    const defaultBranch = repoMeta.data.default_branch || "main";
+    scope?.setTag("default_branch", defaultBranch);
+    scope?.setTag("github_operation", "get_head_sha");
+    scope?.setTag("ref", `heads/${defaultBranch}`);
+    const heads = await retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: org,
+          repo: repoName,
+          ref: `heads/${defaultBranch}`
         }),
       5, // maxRetries
       3000, // baseDelayMs
@@ -1083,14 +1103,30 @@ export async function createRepo(
     console.error("Error creating repo", e);
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
-        // Repo already exists, get the head SHA
+        // Repo already exists, get the head SHA. Resolve its default branch (may be
+        // `master`, not `main`) for the same reason as the fresh-create path above.
         scope?.setTag("repo_already_exists", "true");
-        scope?.setTag("github_operation", "get_existing_repo_head_sha");
-        const heads = await retryWithBackoff(
+        scope?.setTag("github_operation", "get_existing_repo_default_branch");
+        const existingMeta = await retryWithBackoff(
           () =>
-            octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+            octokit.request("GET /repos/{owner}/{repo}", {
               owner: org,
               repo: repoName
+            }),
+          3, // maxRetries
+          1000, // baseDelayMs
+          scope
+        );
+        const existingDefaultBranch = existingMeta.data.default_branch || "main";
+        scope?.setTag("default_branch", existingDefaultBranch);
+        scope?.setTag("github_operation", "get_existing_repo_head_sha");
+        scope?.setTag("ref", `heads/${existingDefaultBranch}`);
+        const heads = await retryWithBackoff(
+          () =>
+            octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+              owner: org,
+              repo: repoName,
+              ref: `heads/${existingDefaultBranch}`
             }),
           3, // maxRetries
           1000, // baseDelayMs

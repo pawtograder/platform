@@ -42,6 +42,7 @@ import {
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMetaFromParts,
@@ -1104,51 +1105,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   } else {
     return <Spinner />;
   }
-}
-
-// Per-file line diff used for the inline PR base→head view. Mirrors the
-// `generateSimpleDiff` helper in the submission layout (which is module-local
-// there): same compact `+`/`-` line format and 100-line truncation, so the
-// export and the inline diff read identically.
-function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
-  if (oldContent == null && newContent == null) return "(both empty)";
-  if (oldContent == null) return "(new file)";
-  if (newContent == null) return "(file deleted)";
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const diffLines: string[] = [];
-  const maxLines = Math.max(oldLines.length, newLines.length);
-
-  let addedCount = 0;
-  let removedCount = 0;
-  for (let i = 0; i < maxLines; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
-    if (oldLine === undefined && newLine !== undefined) {
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-    } else if (oldLine !== undefined && newLine === undefined) {
-      diffLines.push(`- ${oldLine}`);
-      removedCount++;
-    } else if (oldLine !== newLine) {
-      diffLines.push(`- ${oldLine}`);
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-      removedCount++;
-    }
-  }
-
-  if (diffLines.length === 0) return "(no changes)";
-
-  const maxDiffLines = 100;
-  if (diffLines.length > maxDiffLines) {
-    return (
-      diffLines.slice(0, maxDiffLines).join("\n") +
-      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
-    );
-  }
-  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
 }
 
 type FileDiffStatus = "added" | "removed" | "changed";

@@ -69,6 +69,7 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
 import { activateSubmission } from "@/lib/edgeFunctions";
@@ -683,58 +684,6 @@ type FullSubmissionQueryResult = GetResult<
 
 // Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
 type FullSubmissionData = FullSubmissionQueryResult;
-
-// Simple diff generator that shows added/removed lines between two strings
-function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
-  // Use == null to check for null/undefined only (not empty strings)
-  if (oldContent == null && newContent == null) return "(both empty)";
-  if (oldContent == null) return "(new file)";
-  if (newContent == null) return "(file deleted)";
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-
-  // Simple line-by-line diff
-  const diffLines: string[] = [];
-  const maxLines = Math.max(oldLines.length, newLines.length);
-
-  let addedCount = 0;
-  let removedCount = 0;
-
-  for (let i = 0; i < maxLines; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
-
-    if (oldLine === undefined && newLine !== undefined) {
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-    } else if (oldLine !== undefined && newLine === undefined) {
-      diffLines.push(`- ${oldLine}`);
-      removedCount++;
-    } else if (oldLine !== newLine) {
-      diffLines.push(`- ${oldLine}`);
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-      removedCount++;
-    }
-    // Skip unchanged lines to keep diff compact
-  }
-
-  if (diffLines.length === 0) {
-    return "(no changes)";
-  }
-
-  // Truncate if too long
-  const maxDiffLines = 100;
-  if (diffLines.length > maxDiffLines) {
-    return (
-      diffLines.slice(0, maxDiffLines).join("\n") +
-      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
-    );
-  }
-
-  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
-}
 
 function generateSubmissionMarkdown(
   submissions: FullSubmissionData[],

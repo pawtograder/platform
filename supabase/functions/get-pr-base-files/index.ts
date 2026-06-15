@@ -144,18 +144,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
     }
   }
 
-  // Write-once: the keyed commit is immutable, so a concurrent writer that beat
-  // us is fine — ignore the conflict and return what we fetched.
-  const { error: upsertError } = await adminSupabase.from("pr_base_tree_cache").upsert(
-    { upstream_repo: upstreamRepo, base_sha: baseSha, files },
-    {
-      onConflict: "upstream_repo,base_sha",
-      ignoreDuplicates: true
+  // Don't cache an EMPTY result from a real fetch: the cache is write-once
+  // (ON CONFLICT DO NOTHING on an immutable key), so a transient empty -- an
+  // HTTP-level success returning a truncated/unusual archive that yields no
+  // collectable text files -- would be pinned permanently and a later healthy
+  // fetch could never replace it, leaving every grader/student on this
+  // (upstream_repo, base_sha) seeing "No text changes to display inline". Skip the
+  // write and re-fetch next time instead. The E2E fast path is exempt: there the
+  // empty base is intentional and stable (no real clone happens), so caching it is
+  // correct and avoids re-running the no-op on every request.
+  if (Object.keys(files).length > 0 || e2eMock) {
+    // Write-once: the keyed commit is immutable, so a concurrent writer that beat
+    // us is fine — ignore the conflict and return what we fetched.
+    const { error: upsertError } = await adminSupabase.from("pr_base_tree_cache").upsert(
+      { upstream_repo: upstreamRepo, base_sha: baseSha, files },
+      {
+        onConflict: "upstream_repo,base_sha",
+        ignoreDuplicates: true
+      }
+    );
+    if (upsertError) {
+      // The fetch succeeded; a cache-write failure shouldn't fail the request.
+      Sentry.captureException(upsertError, scope);
     }
-  );
-  if (upsertError) {
-    // The fetch succeeded; a cache-write failure shouldn't fail the request.
-    Sentry.captureException(upsertError, scope);
   }
 
   return { files };

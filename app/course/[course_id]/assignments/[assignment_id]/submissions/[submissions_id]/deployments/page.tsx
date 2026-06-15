@@ -40,18 +40,21 @@ export default function SubmissionDeploymentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // The deployment's (repository_name, sha) is matched to the submission's
-  // (repository, head_sha | sha) — the same coalesce the RLS policy and
-  // get_submission_checks use. A no-repo submission has no repository, so there
-  // is nothing to match.
-  const submissionRepository = submission.repository;
+  // Match deployments to this submission by COMMIT SHA alone — the same join
+  // get_submission_checks uses. We deliberately do NOT also filter by
+  // repository_name: in PR mode the deployment runs on (and carries) the student
+  // FORK, while submission.repository is the UPSTREAM repo, so the two never
+  // match and the tab would show "No deployments" forever. The deployment's sha
+  // equals the submission's head_sha (PR mode) or sha (push mode). RLS scopes the
+  // visible rows to the caller's own deployments. A no-repo submission has no sha
+  // to match, so there is nothing to show.
   const submissionSha = submission.head_sha ?? submission.sha;
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
     setError(null);
-    if (!submissionRepository || !submissionSha) {
+    if (!submissionSha) {
       setDeployments([]);
       setLoading(false);
       return;
@@ -60,7 +63,6 @@ export default function SubmissionDeploymentsPage() {
       const { data, error: queryError } = await supabase
         .from("github_deployments")
         .select("id, created_at, repository_name, sha, environment, state, target_url, creator_login")
-        .eq("repository_name", submissionRepository)
         .eq("sha", submissionSha)
         .order("created_at", { ascending: false });
       if (!mounted) {
@@ -77,7 +79,7 @@ export default function SubmissionDeploymentsPage() {
     return () => {
       mounted = false;
     };
-  }, [supabase, submissionRepository, submissionSha]);
+  }, [supabase, submissionSha]);
 
   if (loading) {
     return (

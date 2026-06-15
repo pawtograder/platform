@@ -236,13 +236,14 @@ begin
   -- (`createPushDirectSubmission` in github-repo-webhook) uses. The PR number lives
   -- solely in the dedicated `pr_number` column; never overload run_number with it.
   --
-  -- run_attempt carries the per-submitter version ordinal (NOT 0): the
-  -- `submissions_repository_sha_run_unique (repository, sha, run_number, run_attempt)`
-  -- constraint is shared across submitters in PR mode (repository is the upstream
-  -- repo, not a per-student repo). Setting both to 0 would collide if the same head
-  -- sha is ingested again under a different PR number for one submitter (e.g. close a
-  -- PR, reopen a new one from the same branch tip). Keying run_attempt to the ordinal
-  -- keeps each version row distinct without resurrecting the PR-number overload.
+  -- run_attempt carries the per-submitter version ordinal (NOT 0). In PR mode the
+  -- repository is the shared UPSTREAM repo (not a per-student repo), so uniqueness
+  -- is keyed per submitter by the `submissions_pr_repository_sha_run_unique` partial
+  -- index (Step 5 below): (repository, sha, run_number, run_attempt, profile_id,
+  -- assignment_group_id). Keying run_attempt to the ordinal keeps successive
+  -- versions of ONE submitter distinct (e.g. close a PR, reopen a new one from the
+  -- same branch tip) without resurrecting the PR-number overload, while the submitter
+  -- columns in the index keep DIFFERENT students from colliding on a shared head sha.
   insert into public.submissions(
     assignment_id, class_id, profile_id, assignment_group_id,
     repository, sha, head_sha, base_sha, pr_number, pr_state,
@@ -290,3 +291,37 @@ $$;
 revoke all on function public.set_pr_state(bigint, text, integer, text) from public;
 revoke all on function public.set_pr_state(bigint, text, integer, text) from authenticated;
 grant execute on function public.set_pr_state(bigint, text, integer, text) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- Step 5: make the submissions uniqueness key PR-aware (per-submitter)
+-- ----------------------------------------------------------------------------
+-- `submissions_repository_sha_run_unique (repository, sha, run_number, run_attempt)`
+-- (added in 20250930133813) assumed `repository` is per-submitter -- true for the
+-- push/autograder path, where every student has their own repo. PR-mode
+-- submissions share the UPSTREAM repo across ALL submitters, so that key collides
+-- across DIFFERENT students whenever two PR heads resolve to the same sha (two
+-- students opening an empty PR at the base-branch tip, or pushing an identical
+-- trivial commit). The per-submitter idempotency SELECT in ingest_pr_submission
+-- then falls through to INSERT for the second student and hits a duplicate-key,
+-- losing their submission.
+--
+-- Split the constraint into two PARTIAL unique indexes so each mode is keyed
+-- correctly:
+--   * non-PR rows keep the original (repository, sha, run_number, run_attempt) key.
+--   * PR rows add the submitter (profile_id / assignment_group_id) to the key, so
+--     two students sharing a head sha no longer collide. coalesce(...,'') gives a
+--     stable sentinel for the null side (exactly one of the two is set per row),
+--     because a plain nullable column in a unique index treats NULLs as distinct.
+alter table public.submissions drop constraint if exists submissions_repository_sha_run_unique;
+
+create unique index if not exists submissions_repository_sha_run_unique
+  on public.submissions (repository, sha, run_number, run_attempt)
+  where submitted_via is distinct from 'pr';
+
+create unique index if not exists submissions_pr_repository_sha_run_unique
+  on public.submissions (
+    repository, sha, run_number, run_attempt,
+    (coalesce(profile_id::text, '')),
+    (coalesce(assignment_group_id::text, ''))
+  )
+  where submitted_via = 'pr';

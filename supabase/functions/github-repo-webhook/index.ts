@@ -1926,7 +1926,9 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const headRef = pr.head.ref;
   const prNumber = pr.number;
   const headSha = pr.head.sha;
-  const baseSha = pr.base.sha;
+  // Provisional base; replaced with the merge-base below (see the merge-base
+  // resolution just before ingest). Stored as the graded diff base.
+  let baseSha = pr.base.sha;
   // The code being submitted lives in the PR's HEAD repo — the student/group
   // fork. We attribute the submission by looking that fork up in our
   // `repositories` table (the same authoritative path autograder-create-submission
@@ -1983,6 +1985,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   // assignment up front so a stale config or a missing fork can't strand the
   // stored PR state. set_pr_state is keyed by (assignment, repo, pr_number) and
   // no-ops where no submission exists, so the broadcast is safe.
+  const isMerged = action === "closed" && pr.merged === true;
   if (action === "closed") {
     for (const target of assignments) {
       console.log(
@@ -1999,8 +2002,21 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
         Sentry.captureException(stateError, scope);
       }
     }
-    console.log(`[PR_INGEST] done ${ctx}`);
-    return;
+    if (!isMerged) {
+      console.log(`[PR_INGEST] done (closed, not merged) ${ctx}`);
+      return;
+    }
+    // A MERGED PR must still produce a submission even when this 'closed' event is
+    // the first one we ever processed for the PR (delayed webhook/EventBridge, or
+    // the assignment was switched to PR mode after the PR was opened). set_pr_state
+    // above is a bare UPDATE that matches zero rows when nothing was ingested yet,
+    // so fall through to the attribution + ingest path below. ingest_pr_submission
+    // is idempotent on head_sha, so for the normal open->sync->merge sequence this
+    // is a no-op on the already-ingested head -- it only creates work when the
+    // merged head was never ingested.
+    console.log(
+      `[PR_INGEST] closed+merged: continuing to attribution/ingest so a never-ingested merged PR still yields a submission ${ctx}`
+    );
   }
 
   if (!headRepo) {
@@ -2096,8 +2112,39 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
     return;
   }
 
-  // Closing/merging is handled up front (before the attribution gates); by here
-  // the action is an open/sync/reopen event that may create a new version.
+  // Resolve the diff base to the MERGE-BASE (where the student branched off the
+  // upstream), not pr.base.sha (the base-branch tip, which keeps advancing as the
+  // upstream gets new commits). get-pr-base-files clones the upstream at base_sha
+  // and diffs the full head tree against it; using the tip folds unrelated
+  // upstream commits into the grader's inline diff and can hide student edits that
+  // overlap upstream movement. Best-effort: a failed lookup falls back to the base
+  // tip so ingestion never breaks over it.
+  try {
+    const octokit = await getOctoKit(upstreamRepo, scope);
+    if (octokit) {
+      const [upOwner, upName] = upstreamRepo.split("/");
+      const headOwner = headRepo.split("/")[0];
+      // Cross-fork compare on the upstream repo: base...headOwner:headRef.
+      const { data: cmp } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+        owner: upOwner,
+        repo: upName,
+        basehead: `${baseRef}...${headOwner}:${headRef}`
+      });
+      if (cmp?.merge_base_commit?.sha) {
+        baseSha = cmp.merge_base_commit.sha;
+        console.log(`[PR_INGEST] resolved merge-base ${baseSha} (base tip was ${pr.base.sha}) ${ctx}`);
+      }
+    }
+  } catch (mergeBaseErr) {
+    console.log(
+      `[PR_INGEST] warn: merge-base lookup failed, using base tip ${pr.base.sha}: ${mergeBaseErr instanceof Error ? mergeBaseErr.message : String(mergeBaseErr)} ${ctx}`
+    );
+    Sentry.captureException(mergeBaseErr, scope);
+  }
+
+  // Closing/merging without a new head is handled up front; by here the action is
+  // an open/sync/reopen (or a merged 'closed' that was never ingested) that may
+  // create a new version.
   const { data: submissionId, error: ingestError } = await adminSupabase.rpc("ingest_pr_submission", {
     p_assignment_id: a.id,
     p_profile_id: groupId ? undefined : (profileId ?? undefined),
@@ -2112,7 +2159,14 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   if (ingestError) {
     console.log(`[PR_INGEST] error assignment=${a.id}: ingest_pr_submission failed: ${ingestError.message} ${ctx}`);
     Sentry.captureException(ingestError, scope);
-    return;
+    // THROW (don't swallow): a transient ingest failure (advisory-lock
+    // contention, serialization failure, brief DB drop) must leave this webhook
+    // delivery INCOMPLETE so GitHub redelivers the same id. Swallowing here let
+    // the entry handler mark the delivery completed in Redis, after which the
+    // de-dup short-circuit rejects GitHub's redelivery as a duplicate and the
+    // submission is lost (auto-confirm mode has no reconciliation path).
+    // ingest_pr_submission is idempotent, so redelivery is safe.
+    throw new Error(`ingest_pr_submission failed: ${ingestError.message}`);
   }
   console.log(
     `[PR_INGEST] ingested assignment=${a.id} submission_id=${submissionId ?? "null"} group=${groupId ?? "none"} ${ctx}`
@@ -2157,106 +2211,121 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
   tagScopeWithGenericPayload(scope, "pull_request", payload);
 
   // PR-mode submission ingestion runs first and independently of the sync-PR
-  // bookkeeping below; a failure here must not block that.
+  // bookkeeping below. Capture (don't immediately rethrow) a failure so the
+  // sync-PR bookkeeping still runs, then propagate it at the very end: a thrown
+  // error leaves the entry handler from marking this delivery complete in Redis,
+  // so GitHub redelivers and the submission isn't lost. Both paths are idempotent.
+  let prIngestError: unknown = null;
   try {
     await handlePrSubmission(payload, scope);
   } catch (error) {
     Sentry.captureException(error, scope);
+    prIngestError = error;
   }
 
-  // Only handle "closed" events where the PR was merged
-  if (payload.action !== "closed" || !payload.pull_request.merged) {
-    return;
-  }
-
-  const branchName = payload.pull_request.head.ref;
-
-  // Check if this is a sync PR (branch starts with "sync-to-")
-  if (!branchName.startsWith("sync-to-")) {
-    return;
-  }
-
-  scope.setTag("sync_pr_merged", "true");
-  scope.setTag("branch", branchName);
-  scope.setTag("pr_number", payload.pull_request.number.toString());
-
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
-
-  try {
-    const repoFullName = payload.repository.full_name;
-
-    // Find the repository in our database
-    const { data: repo, error: repoError } = await adminSupabase
-      .from("repositories")
-      .select("id, synced_handout_sha, desired_handout_sha")
-      .eq("repository", repoFullName)
-      .maybeSingle();
-
-    if (repoError) {
-      Sentry.captureException(repoError, scope);
+  // Sync-PR merge bookkeeping. Wrapped in an IIFE so its early returns don't skip
+  // the prIngestError rethrow below; its own try/catch already swallows failures.
+  await (async () => {
+    // Only handle "closed" events where the PR was merged
+    if (payload.action !== "closed" || !payload.pull_request.merged) {
       return;
     }
 
-    if (!repo) {
-      // Not one of our tracked repositories
+    const branchName = payload.pull_request.head.ref;
+
+    // Check if this is a sync PR (branch starts with "sync-to-")
+    if (!branchName.startsWith("sync-to-")) {
       return;
     }
 
-    scope.setTag("repository_id", repo.id.toString());
+    scope.setTag("sync_pr_merged", "true");
+    scope.setTag("branch", branchName);
+    scope.setTag("pr_number", payload.pull_request.number.toString());
 
-    // Extract the short SHA from branch name (sync-to-abc1234 -> abc1234)
-    const shortSha = branchName.replace("sync-to-", "");
-
-    // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
-    // otherwise fall back to the short SHA (handles edge cases)
-    const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
-
-    // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
-    const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
-
-    scope.setTag("short_sha", shortSha);
-    scope.setTag("synced_sha", syncedSha);
-    scope.setTag("merge_sha", effectiveMergeSha);
-
-    // Update the repository sync status
-    const { error: updateError } = await adminSupabase
-      .from("repositories")
-      .update({
-        synced_handout_sha: syncedSha,
-        synced_repo_sha: effectiveMergeSha,
-        sync_data: {
-          pr_number: payload.pull_request.number,
-          pr_url: payload.pull_request.html_url,
-          pr_state: "merged",
-          branch_name: branchName,
-          last_sync_attempt: new Date().toISOString(),
-          merge_sha: effectiveMergeSha,
-          merged_by: payload.pull_request.merged_by?.login,
-          merged_at: payload.pull_request.merged_at
-        }
-      })
-      .eq("id", repo.id);
-
-    if (updateError) {
-      scope.setTag("error_source", "repository_update_failed");
-      Sentry.captureException(updateError, scope);
-      throw updateError;
-    }
-
-    Sentry.addBreadcrumb({
-      message: `Updated repository ${repoFullName} after sync PR #${payload.pull_request.number} was merged`,
-      level: "info"
-    });
-
-    console.log(
-      `[PULL_REQUEST] Sync PR merged: ${repoFullName} PR#${payload.pull_request.number}, synced to ${syncedSha}`
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL") || "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
     );
-  } catch (error) {
-    Sentry.captureException(error, scope);
-    // Don't throw - allow webhook to complete
+
+    try {
+      const repoFullName = payload.repository.full_name;
+
+      // Find the repository in our database
+      const { data: repo, error: repoError } = await adminSupabase
+        .from("repositories")
+        .select("id, synced_handout_sha, desired_handout_sha")
+        .eq("repository", repoFullName)
+        .maybeSingle();
+
+      if (repoError) {
+        Sentry.captureException(repoError, scope);
+        return;
+      }
+
+      if (!repo) {
+        // Not one of our tracked repositories
+        return;
+      }
+
+      scope.setTag("repository_id", repo.id.toString());
+
+      // Extract the short SHA from branch name (sync-to-abc1234 -> abc1234)
+      const shortSha = branchName.replace("sync-to-", "");
+
+      // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
+      // otherwise fall back to the short SHA (handles edge cases)
+      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
+
+      // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
+      const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
+
+      scope.setTag("short_sha", shortSha);
+      scope.setTag("synced_sha", syncedSha);
+      scope.setTag("merge_sha", effectiveMergeSha);
+
+      // Update the repository sync status
+      const { error: updateError } = await adminSupabase
+        .from("repositories")
+        .update({
+          synced_handout_sha: syncedSha,
+          synced_repo_sha: effectiveMergeSha,
+          sync_data: {
+            pr_number: payload.pull_request.number,
+            pr_url: payload.pull_request.html_url,
+            pr_state: "merged",
+            branch_name: branchName,
+            last_sync_attempt: new Date().toISOString(),
+            merge_sha: effectiveMergeSha,
+            merged_by: payload.pull_request.merged_by?.login,
+            merged_at: payload.pull_request.merged_at
+          }
+        })
+        .eq("id", repo.id);
+
+      if (updateError) {
+        scope.setTag("error_source", "repository_update_failed");
+        Sentry.captureException(updateError, scope);
+        throw updateError;
+      }
+
+      Sentry.addBreadcrumb({
+        message: `Updated repository ${repoFullName} after sync PR #${payload.pull_request.number} was merged`,
+        level: "info"
+      });
+
+      console.log(
+        `[PULL_REQUEST] Sync PR merged: ${repoFullName} PR#${payload.pull_request.number}, synced to ${syncedSha}`
+      );
+    } catch (error) {
+      Sentry.captureException(error, scope);
+      // Don't throw - allow webhook to complete
+    }
+  })();
+
+  // Propagate a transient PR-ingest failure now that sync-PR bookkeeping has run,
+  // so the entry handler leaves this delivery incomplete and GitHub redelivers it.
+  if (prIngestError) {
+    throw prIngestError;
   }
 });
 

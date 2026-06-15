@@ -483,21 +483,34 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
   if (detectEmptyForAssignmentId !== undefined) {
     // Empty submission detection: if the submitted files match ANY recorded
     // handout version for the assignment, mark the submission as empty.
-    const { data: match, error: matchError } = await adminSupabase
-      .from("assignment_handout_file_hashes")
-      .select("id")
-      .eq("assignment_id", detectEmptyForAssignmentId)
-      .eq("combined_hash", combinedHash)
-      .limit(1)
-      .maybeSingle();
-    if (matchError) {
-      // Leave isEmpty = null (unknown) on a lookup failure rather than downgrading to "not
-      // empty": silently treating an unverifiable submission as non-empty would disable a
-      // `permit_empty_submissions = false` policy exactly when the check is unavailable. The
-      // caller decides how to treat the unknown state.
-      Sentry.captureException(matchError, scope);
-    } else {
-      isEmpty = !!match;
+    //
+    // Retry transient lookup failures (statement timeout / pool exhaustion under
+    // load) before giving up to the unknown state. The caller fails CLOSED on
+    // null when `permit_empty_submissions = false` (rejects with a 503), so a
+    // single DB blip on this read would otherwise bounce a student's real,
+    // non-empty submission. Only a persistent failure should surface as null.
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const { data: match, error: matchError } = await adminSupabase
+        .from("assignment_handout_file_hashes")
+        .select("id")
+        .eq("assignment_id", detectEmptyForAssignmentId)
+        .eq("combined_hash", combinedHash)
+        .limit(1)
+        .maybeSingle();
+      if (!matchError) {
+        isEmpty = !!match;
+        break;
+      }
+      if (attempt === MAX_ATTEMPTS) {
+        // Leave isEmpty = null (unknown) on a persistent lookup failure rather than
+        // downgrading to "not empty": silently treating an unverifiable submission as
+        // non-empty would disable a `permit_empty_submissions = false` policy exactly
+        // when the check is unavailable. The caller decides how to treat the unknown state.
+        Sentry.captureException(matchError, scope);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+      }
     }
   }
 

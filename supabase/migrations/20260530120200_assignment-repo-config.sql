@@ -2107,7 +2107,13 @@ begin
      and is_active = true
      and (
        (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-       or (p_assignment_group_id is null and profile_id = p_profile_id)
+       -- Qualify the profile branch with `assignment_group_id is null` (matching the
+       -- idempotency SELECT in create_manual_submission_internal): without it, an
+       -- individual no-repo upload would also match a still-active GROUP submission
+       -- whose row happens to carry this profile_id, flipping that group submission's
+       -- is_active to false as a side effect. The other-scope deactivation below
+       -- handles cross-scope conflicts deliberately; this branch must stay in-scope.
+       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
      );
 
   -- Also deactivate any active submission in the *other* scope for the same

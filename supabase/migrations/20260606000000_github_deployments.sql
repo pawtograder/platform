@@ -141,16 +141,48 @@ USING (
     )
   )
   OR
-  -- Path 3: one of the student's own submissions matches by (repo, head sha)
+  -- Path 3: a deployment on a repository the caller OWNS (e.g. the student's PR
+  -- fork) whose sha matches one of the caller's own submissions. Two conditions,
+  -- BOTH scoped to the caller:
+  --   (a) the deployment's repository_name is a repository the caller owns, and
+  --   (b) the caller owns a submission whose head_sha (PR mode) / sha (push mode)
+  --       equals the deployment sha.
+  -- We deliberately do NOT match `s.repository = repository_name`: in PR mode the
+  -- deployment runs on (and carries) the student FORK while the submission carries
+  -- the UPSTREAM, so that equality is always false and the row would be invisible.
+  -- Requiring (a) also closes the cross-student leak: when a deployment runs on the
+  -- shared upstream (repository_id NULL), no student owns that repo, so a sha shared
+  -- by two students' PR submissions no longer lets each read the other's row
+  -- (environment / target_url / payload). coalesce mirrors get_submission_checks.
   (
     sha IS NOT NULL
     AND EXISTS (
       SELECT 1
+      FROM public.repositories r
+      WHERE r.repository = github_deployments.repository_name
+        AND (
+          r.profile_id IN (
+            SELECT up.private_profile_id FROM public.user_privileges up
+              WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
+            UNION
+            SELECT up.public_profile_id FROM public.user_privileges up
+              WHERE up.user_id = auth.uid() AND up.public_profile_id IS NOT NULL
+          )
+          OR (
+            r.assignment_group_id IS NOT NULL
+            AND r.assignment_group_id IN (
+              SELECT agm.assignment_group_id
+              FROM public.assignment_groups_members agm
+              JOIN public.user_privileges up ON up.private_profile_id = agm.profile_id
+              WHERE up.user_id = auth.uid()
+            )
+          )
+        )
+    )
+    AND EXISTS (
+      SELECT 1
       FROM public.submissions s
-      WHERE s.repository = github_deployments.repository_name
-        -- match the deployment sha against the submission head (PR mode) or its
-        -- plain sha (push mode); coalesce mirrors get_submission_checks below.
-        AND coalesce(s.head_sha, s.sha) = github_deployments.sha
+      WHERE coalesce(s.head_sha, s.sha) = github_deployments.sha
         AND (
           s.profile_id IN (
             SELECT up.private_profile_id FROM public.user_privileges up
