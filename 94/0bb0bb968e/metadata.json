@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.6.3",
+  "checkpoint_id": "940bb0bb968e",
+  "strategy": "manual-commit",
+  "branch": "chore/deployment-channels-review-followups",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "charts/pawtograder/templates/ingress-channels.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/0bb0bb968e/0/metadata.json",
+      "transcript": "/94/0bb0bb968e/0/full.jsonl",
+      "content_hash": "/94/0bb0bb968e/0/content_hash.txt",
+      "prompt": "/94/0bb0bb968e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4849,
+    "cache_creation_tokens": 163277,
+    "cache_read_tokens": 1835341,
+    "output_tokens": 73925,
+    "api_call_count": 27
+  }
+}

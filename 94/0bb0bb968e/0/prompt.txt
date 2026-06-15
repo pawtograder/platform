@@ -1,0 +1,16 @@
+Verify each finding against current code. Fix only still-valid issues, skip the
+rest with a brief reason, keep changes minimal, and validate.
+
+In `@charts/pawtograder/templates/ingress-channels.yaml` at line 24, The current
+hasSuffix check (else if hasSuffix (printf ".%s" $.Values.global.hostname)
+$host) allows multi-label subdomains like "foo.bar.staging.example.com" to match
+the wildcard zone; update the template logic to extract the prefix before ".{{
+$.Values.global.hostname }}" (the subdomain label used with channels[].host) and
+validate it contains no dots (single-label only); if the prefix contains a dot
+and channels[].tls.secretName is not provided, fail rendering or require
+channels[].tls.secretName instead of using channelWildcardTlsSecret so wildcard
+certs are only applied to single-label subdomains.
+
+---
+
+/code-review max --comment entire PR
