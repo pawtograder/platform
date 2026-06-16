@@ -27,3 +27,30 @@ web:
     favicon: "/branding/tartangrader-favicon.png"
     # Carnegie Mellon cardinal red ≈ Chakra's "red" palette.
     colorPalette: "red"
+    # Custom sign-in SSO buttons (replaces the default Microsoft-only button).
+    # Each provider listed here MUST also be enabled in GoTrue below (or via
+    # auth.external.{github,azure,discord}); otherwise the button errors on click.
+    ssoProviders:
+      - provider: google
+        label: "Continue with Google"
+        icon: google
+      - provider: azure
+        label: "Continue with Microsoft"
+        icon: microsoft
+        scopes: "email User.Read"
+      - provider: github
+        label: "Continue with GitHub"
+        icon: github
+
+# GoTrue must have each SSO provider enabled. github/azure use their first-class
+# blocks; google goes through the generic externalProviders list. Client id/secret
+# come from the pawtograder-web Secret (GOOGLE_OAUTH_CLIENT_ID/_SECRET, etc.).
+auth:
+  external:
+    github:
+      enabled: true
+    azure:
+      enabled: true
+  externalProviders:
+    - name: google
+      enabled: true

@@ -194,6 +194,42 @@ spec:
                   key: DISCORD_OAUTH_CLIENT_SECRET
                   optional: true
             {{- end }}
+            {{- /*
+            Generic external OAuth providers — for any GoTrue provider beyond the
+            built-in github/azure/discord blocks above (google, apple, gitlab,
+            keycloak, okta-style OIDC, …). Each entry renders the standard
+            GOTRUE_EXTERNAL_<NAME>_* env. Client id/secret are read (optional)
+            from the web Secret under <NAME>_OAUTH_CLIENT_ID / _SECRET unless
+            clientIdKey / clientSecretKey override the key names. Do NOT also
+            configure the same provider via the dedicated blocks above (duplicate
+            env). Pair each enabled provider with a sign-in button in
+            web.branding.ssoProviders.
+            */ -}}
+            {{- range .Values.auth.externalProviders }}
+            {{- if .enabled }}
+            {{- $name := .name | upper }}
+            - name: GOTRUE_EXTERNAL_{{ $name }}_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_{{ $name }}_REDIRECT_URI
+              value: {{ default (printf "%s/auth/v1/callback" (include "pawtograder.api.url" $)) .redirectUri | quote }}
+            - name: GOTRUE_EXTERNAL_{{ $name }}_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.names.web }}
+                  key: {{ default (printf "%s_OAUTH_CLIENT_ID" $name) .clientIdKey }}
+                  optional: true
+            - name: GOTRUE_EXTERNAL_{{ $name }}_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.names.web }}
+                  key: {{ default (printf "%s_OAUTH_CLIENT_SECRET" $name) .clientSecretKey }}
+                  optional: true
+            {{- if .url }}
+            - name: GOTRUE_EXTERNAL_{{ $name }}_URL
+              value: {{ .url | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.auth.smtp.enabled }}
             - name: GOTRUE_SMTP_ADMIN_EMAIL
               valueFrom:

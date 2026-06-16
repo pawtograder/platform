@@ -166,6 +166,17 @@ spec:
             - name: BRAND_COLOR_PALETTE
               value: {{ .colorPalette | quote }}
             {{- end }}
+            {{- if .ssoProviders }}
+            {{- /*
+            JSON array of sign-in SSO buttons ({provider,label,icon?,scopes?}).
+            Each provider must ALSO be enabled in GoTrue (auth.external.* or
+            auth.externalProviders). Omitted/empty => app default (the single
+            Microsoft/Northeastern button). To render NO SSO buttons, set
+            BRAND_SSO_PROVIDERS=[] via web.extraEnv instead.
+            */}}
+            - name: BRAND_SSO_PROVIDERS
+              value: {{ .ssoProviders | toJson | quote }}
+            {{- end }}
             {{- end }}
             {{- with $ctx.Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}

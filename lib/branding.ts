@@ -30,6 +30,47 @@ export const BRAND_COLOR_PALETTES = [
 
 export type BrandColorPalette = (typeof BRAND_COLOR_PALETTES)[number];
 
+/**
+ * OAuth providers Supabase GoTrue supports as `signInWithOAuth({ provider })`.
+ * The sign-in page only renders SSO buttons for providers in this allowlist,
+ * and the server action validates against it, so a tampered form can't trigger
+ * an arbitrary provider string.
+ */
+export const SSO_ALLOWED_PROVIDERS = [
+  "apple",
+  "azure",
+  "bitbucket",
+  "discord",
+  "facebook",
+  "figma",
+  "github",
+  "gitlab",
+  "google",
+  "kakao",
+  "keycloak",
+  "linkedin_oidc",
+  "notion",
+  "slack_oidc",
+  "spotify",
+  "twitch",
+  "workos",
+  "zoom"
+] as const;
+
+export type SsoProviderId = (typeof SSO_ALLOWED_PROVIDERS)[number];
+
+/** A single configurable SSO button on the sign-in page. */
+export type SsoProvider = {
+  /** Supabase/GoTrue OAuth provider id (must be enabled in GoTrue too). */
+  provider: SsoProviderId;
+  /** Button text, e.g. "Continue with Microsoft (Northeastern Login)". */
+  label: string;
+  /** Icon key from the SSO icon registry (components/branding/sso-icon.tsx). */
+  icon?: string;
+  /** Optional space-separated OAuth scopes passed to signInWithOAuth. */
+  scopes?: string;
+};
+
 export type Branding = {
   /** Product name shown in titles, headings, and wordmarks. */
   name: string;
@@ -45,6 +86,12 @@ export type Branding = {
   favicon: string;
   /** Chakra color palette used as the brand accent. */
   colorPalette: BrandColorPalette;
+  /**
+   * SSO buttons shown on the sign-in page, in order. An empty array hides all
+   * SSO options (email-only sign-in). Each provider must also be configured in
+   * GoTrue (see the chart README "Single sign-on (SSO)" section).
+   */
+  ssoProviders: SsoProvider[];
 };
 
 /** Built-in Pawtograder defaults, used whenever an env var is unset/blank. */
@@ -55,7 +102,17 @@ export const DEFAULT_BRANDING: Branding = {
   logoLight: "/Logo-Light.png",
   logoDark: "/Logo-Dark.png",
   favicon: "/favicon.ico",
-  colorPalette: "gray"
+  colorPalette: "gray",
+  // Preserves the historical single Microsoft (Northeastern) SSO button when no
+  // BRAND_SSO_PROVIDERS override is provided.
+  ssoProviders: [
+    {
+      provider: "azure",
+      label: "Continue with Microsoft (Northeastern Login)",
+      icon: "microsoft",
+      scopes: "email User.Read"
+    }
+  ]
 };
 
 function cleanString(value: string | undefined): string | undefined {
@@ -69,6 +126,53 @@ function resolvePalette(value: string | undefined): BrandColorPalette {
     return normalized as BrandColorPalette;
   }
   return DEFAULT_BRANDING.colorPalette;
+}
+
+function isAllowedProvider(value: unknown): value is SsoProviderId {
+  return typeof value === "string" && (SSO_ALLOWED_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * Parse the `BRAND_SSO_PROVIDERS` env (a JSON array of {provider,label,icon?,
+ * scopes?}). Returns:
+ *   - the default (single Microsoft button) when the var is unset/blank,
+ *   - a validated list when set to a JSON array (invalid entries are dropped;
+ *     an explicit `[]` yields no SSO buttons / email-only sign-in),
+ *   - the default when the value is present but not parseable, with a warning.
+ */
+function resolveSsoProviders(raw: string | undefined): SsoProvider[] {
+  const value = cleanString(raw);
+  if (!value) {
+    return DEFAULT_BRANDING.ssoProviders;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    // eslint-disable-next-line no-console -- surface misconfiguration without crashing the page
+    console.warn("BRAND_SSO_PROVIDERS is not valid JSON; falling back to default SSO providers");
+    return DEFAULT_BRANDING.ssoProviders;
+  }
+  if (!Array.isArray(parsed)) {
+    // eslint-disable-next-line no-console -- surface misconfiguration without crashing the page
+    console.warn("BRAND_SSO_PROVIDERS must be a JSON array; falling back to default SSO providers");
+    return DEFAULT_BRANDING.ssoProviders;
+  }
+  return parsed.flatMap((entry): SsoProvider[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const { provider, label, icon, scopes } = entry as Record<string, unknown>;
+    if (!isAllowedProvider(provider)) return [];
+    const cleanLabel = typeof label === "string" ? label.trim() : "";
+    if (!cleanLabel) return [];
+    return [
+      {
+        provider,
+        label: cleanLabel,
+        ...(typeof icon === "string" && icon.trim() ? { icon: icon.trim() } : {}),
+        ...(typeof scopes === "string" && scopes.trim() ? { scopes: scopes.trim() } : {})
+      }
+    ];
+  });
 }
 
 /**
@@ -87,6 +191,7 @@ export function getBranding(): Branding {
     logoLight: cleanString(process.env.BRAND_LOGO_LIGHT) ?? DEFAULT_BRANDING.logoLight,
     logoDark: cleanString(process.env.BRAND_LOGO_DARK) ?? DEFAULT_BRANDING.logoDark,
     favicon: cleanString(process.env.BRAND_FAVICON) ?? DEFAULT_BRANDING.favicon,
-    colorPalette: resolvePalette(process.env.BRAND_COLOR_PALETTE)
+    colorPalette: resolvePalette(process.env.BRAND_COLOR_PALETTE),
+    ssoProviders: resolveSsoProviders(process.env.BRAND_SSO_PROVIDERS)
   };
 }

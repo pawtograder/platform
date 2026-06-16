@@ -415,6 +415,28 @@ auth:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
 
+  # Generic external OAuth providers — for any GoTrue provider beyond the three
+  # first-class ones above (google, apple, gitlab, keycloak/OIDC, …). Renders the
+  # standard GOTRUE_EXTERNAL_<NAME>_* env. Use this to back the sign-in buttons
+  # configured in web.branding.ssoProviders. Do NOT also configure github/azure/
+  # discord here (use their dedicated blocks above to avoid duplicate env).
+  #   name            REQUIRED. GoTrue provider name (lowercased), e.g. "google".
+  #                   Uppercased for the env var (GOTRUE_EXTERNAL_GOOGLE_*).
+  #   enabled         Set true to render the provider's env.
+  #   redirectUri     Optional. Default: https://api.<hostname>/auth/v1/callback.
+  #   clientIdKey     Optional web-Secret key for the client id.
+  #                   Default: <NAME>_OAUTH_CLIENT_ID (e.g. GOOGLE_OAUTH_CLIENT_ID).
+  #   clientSecretKey Optional web-Secret key for the client secret.
+  #                   Default: <NAME>_OAUTH_CLIENT_SECRET.
+  #   url             Optional issuer URL (required by some providers, e.g.
+  #                   keycloak): sets GOTRUE_EXTERNAL_<NAME>_URL.
+  externalProviders: []
+  #  - name: google
+  #    enabled: true
+  #  - name: keycloak
+  #    enabled: true
+  #    url: https://sso.example.edu/realms/main
+
   smtp:
     enabled: false
     # adminEmail (the From: address) is read from the smtp Secret key
@@ -857,6 +879,31 @@ web:
     logoDark: ""
     favicon: ""
     colorPalette: ""
+    # Sign-in SSO buttons. A list of providers, each rendered as a button on the
+    # sign-in page in order. Leave empty ([]) to keep the built-in default (a
+    # single Microsoft / Northeastern Login button). Each entry:
+    #   provider  REQUIRED. Supabase/GoTrue OAuth provider id. One of: apple,
+    #             azure, bitbucket, discord, facebook, figma, github, gitlab,
+    #             google, kakao, keycloak, linkedin_oidc, notion, slack_oidc,
+    #             spotify, twitch, workos, zoom.
+    #   label     REQUIRED. Button text, e.g. "Continue with Google".
+    #   icon      Optional icon key: microsoft, github, google, apple, discord,
+    #             gitlab, slack, twitch, linkedin, sso (key), generic (default).
+    #   scopes    Optional space-separated OAuth scopes.
+    #
+    # IMPORTANT: each provider listed here must ALSO be enabled in GoTrue — via
+    # auth.external.{github,azure,discord} or the generic auth.externalProviders
+    # list below — or the button will error on click. See the chart README
+    # "Single sign-on (SSO)" section. To show NO SSO buttons (email-only), set
+    # `BRAND_SSO_PROVIDERS: "[]"` via web.extraEnv.
+    ssoProviders: []
+    #  - provider: azure
+    #    label: "Continue with Microsoft (Northeastern Login)"
+    #    icon: microsoft
+    #    scopes: "email User.Read"
+    #  - provider: google
+    #    label: "Continue with Google"
+    #    icon: google
 
   resources:
     requests: { cpu: "200m", memory: "512Mi" }

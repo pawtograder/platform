@@ -350,6 +350,62 @@ favicon from `web.branding.favicon` via root-layout metadata; the former
 `app/favicon.ico` / `app/icon.svg` file-convention icons were moved to `public/`
 so a single, override-able `<link rel="icon">` is emitted).
 
+### Single sign-on (SSO)
+
+The sign-in page renders one button per provider in `web.branding.ssoProviders`
+(in order). Leaving it empty keeps the historical default — a single
+**Continue with Microsoft (Northeastern Login)** button. Configuring SSO is a
+**two-part** job: the **button** (frontend) and the **provider** (GoTrue) must
+both be set up, or the button errors on click.
+
+**1. Buttons (frontend):**
+
+```yaml
+web:
+  branding:
+    ssoProviders:
+      - provider: google # Supabase/GoTrue OAuth provider id
+        label: "Continue with Google" # button text
+        icon: google # microsoft|github|google|apple|discord|gitlab|slack|twitch|linkedin|sso|generic
+      - provider: azure
+        label: "Continue with Microsoft"
+        icon: microsoft
+        scopes: "email User.Read" # optional OAuth scopes
+```
+
+Allowed `provider` values: `apple, azure, bitbucket, discord, facebook, figma,
+github, gitlab, google, kakao, keycloak, linkedin_oidc, notion, slack_oidc,
+spotify, twitch, workos, zoom`. The server action validates the provider and
+re-reads its scopes from config (never from the client form). To show **no** SSO
+buttons (email-only), set `BRAND_SSO_PROVIDERS: "[]"` via `web.extraEnv`.
+
+**2. Provider (GoTrue):** enable each provider and supply its OAuth client
+id/secret (stored in the `pawtograder-web` Secret). `github`, `azure`, and
+`discord` have first-class blocks; everything else uses the generic
+`auth.externalProviders` list:
+
+```yaml
+auth:
+  external:
+    github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
+    azure: { enabled: true } # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+  externalProviders:
+    - name: google # -> GOTRUE_EXTERNAL_GOOGLE_*
+      enabled: true # reads GOOGLE_OAUTH_CLIENT_ID / _SECRET from the web Secret
+    - name: keycloak
+      enabled: true
+      url: https://sso.example.edu/realms/main # some providers require an issuer URL
+      # clientIdKey / clientSecretKey override the default <NAME>_OAUTH_CLIENT_ID/_SECRET keys
+```
+
+Each enabled provider's redirect URI defaults to
+`https://api.<hostname>/auth/v1/callback` — register that exact URL in the
+provider's OAuth app. Put the client id/secret in the `pawtograder-web` Secret
+under the `<NAME>_OAUTH_CLIENT_ID` / `<NAME>_OAUTH_CLIENT_SECRET` keys (e.g.
+`GOOGLE_OAUTH_CLIENT_ID`). A complete worked example (Google + Microsoft +
+GitHub) is in
+[`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
+
 ## Realtime sizing
 
 The chart sizes realtime for ~600 concurrent websocket connections out of the
