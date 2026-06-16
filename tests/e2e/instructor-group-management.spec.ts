@@ -16,6 +16,7 @@ import {
   ensureTimeZonePreferenceInitialized,
   gotoCourseUrlWhenHeadingVisible,
   insertAssignment,
+  insertPreBakedSubmission,
   supabase
 } from "./TestingUtils";
 
@@ -32,6 +33,7 @@ test.describe("Instructor group management", () => {
   let studentBName: string;
   let studentAProfileId: string;
   let studentBProfileId: string;
+  let studentCProfileId: string;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -64,6 +66,13 @@ test.describe("Instructor group management", () => {
     });
     studentBName = studentB.private_profile_name;
     studentBProfileId = studentB.private_profile_id;
+    const studentC = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `E2E Student C ${suffix}`,
+      email: `e2e-stu-c-${suffix}@pawtograder.net`
+    });
+    studentCProfileId = studentC.private_profile_id;
 
     const assignment = await insertAssignment({
       class_id: classId,
@@ -263,6 +272,18 @@ test.describe("Instructor group management", () => {
     expect(staleGroupError).toBeNull();
     expect(staleGroup?.id).toBeDefined();
 
+    const { data: submittedStaleGroup, error: submittedStaleGroupError } = await supabase
+      .from("assignment_groups")
+      .insert({
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        name: `submittedstale${suffix.slice(0, 6)}`
+      })
+      .select("id")
+      .single();
+    expect(submittedStaleGroupError).toBeNull();
+    expect(submittedStaleGroup?.id).toBeDefined();
+
     const { error: staleMembersError } = await supabase.from("assignment_groups_members").insert([
       {
         assignment_id: targetAssignment.id,
@@ -277,9 +298,24 @@ test.describe("Instructor group management", () => {
         assignment_group_id: staleGroup!.id,
         profile_id: studentBProfileId,
         added_by: instructorProfileId
+      },
+      {
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        assignment_group_id: submittedStaleGroup!.id,
+        profile_id: studentCProfileId,
+        added_by: instructorProfileId
       }
     ]);
     expect(staleMembersError).toBeNull();
+
+    const staleSubmission = await insertPreBakedSubmission({
+      assignment_id: targetAssignment.id,
+      class_id: classId,
+      assignment_group_id: submittedStaleGroup!.id,
+      student_profile_id: studentCProfileId,
+      repositorySuffix: `copy-stale-${suffix}`
+    });
 
     await ensureTimeZonePreferenceInitialized(page, "course");
     await page.goto("/sign-in");
@@ -336,6 +372,27 @@ test.describe("Instructor group management", () => {
         .maybeSingle();
       expect(error).toBeNull();
       expect(data).toBeNull();
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("assignment_groups_members")
+        .select("id")
+        .eq("assignment_id", targetAssignment.id)
+        .eq("profile_id", studentCProfileId)
+        .maybeSingle();
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("submissions")
+        .select("is_active")
+        .eq("id", staleSubmission.submission_id)
+        .single();
+      expect(error).toBeNull();
+      expect(data?.is_active).toBe(false);
     }).toPass({ timeout: 60_000 });
   });
 });

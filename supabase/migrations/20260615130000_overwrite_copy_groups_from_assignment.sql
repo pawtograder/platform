@@ -22,6 +22,7 @@ DECLARE
   v_groups_processed int := 0;
   v_members_copied int := 0;
   v_memberships_removed int := 0;
+  v_submissions_deactivated int := 0;
   v_groups_deleted int := 0;
   v_groups_preserved int := 0;
   v_empty_gid bigint;
@@ -76,6 +77,8 @@ BEGIN
       USING ERRCODE = 'data_exception';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtextextended(format('copy_groups:%s:%s', p_class_id, p_target_assignment_id), 0));
+
   SELECT COUNT(*) INTO v_groups_processed
   FROM assignment_groups
   WHERE assignment_id = p_source_assignment_id
@@ -100,19 +103,19 @@ BEGIN
     DELETE FROM assignment_groups_members
     WHERE assignment_id = p_target_assignment_id
       AND class_id = p_class_id
+    RETURNING id, profile_id
+  ),
+  deactivated_submissions AS (
+    UPDATE submissions
+    SET is_active = false
+    WHERE assignment_id = p_target_assignment_id
+      AND profile_id IN (SELECT profile_id FROM deleted_memberships)
     RETURNING id
   )
-  SELECT COUNT(*) INTO v_memberships_removed FROM deleted_memberships;
-
-  UPDATE submissions
-  SET is_active = false
-  WHERE assignment_id = p_target_assignment_id
-    AND profile_id IN (
-      SELECT sm.profile_id
-      FROM assignment_groups_members sm
-      WHERE sm.assignment_id = p_source_assignment_id
-        AND sm.class_id = p_class_id
-    );
+  SELECT
+    (SELECT COUNT(*) FROM deleted_memberships),
+    (SELECT COUNT(*) FROM deactivated_submissions)
+  INTO v_memberships_removed, v_submissions_deactivated;
 
   WITH inserted_members AS (
     INSERT INTO assignment_groups_members (

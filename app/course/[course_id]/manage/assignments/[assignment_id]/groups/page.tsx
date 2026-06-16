@@ -274,6 +274,10 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     [assignment.due_date, assignment.id, sourceAssignmentIdsWithGroups]
   );
   const sourceAssignments = useListTableControllerValues(assignments, assignmentPredicate);
+  const orderedSourceAssignments = useMemo(
+    () => [...sourceAssignments].sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()),
+    [sourceAssignments]
+  );
 
   const studentPredicate = useCallback(
     (r: RolesWithProfilesAndGroupMemberships) => r.role === "student" && !r.disabled,
@@ -421,7 +425,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         <CopyGroupsFromAssignmentDialog
           assignment={assignment}
           course_id={course_id}
-          sourceAssignments={sourceAssignments}
+          sourceAssignments={orderedSourceAssignments}
         />
       </Flex>
       {loading && (
