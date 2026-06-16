@@ -834,19 +834,28 @@ web:
   #   description   <meta name="description"> / default site description.
   #   tagline       Short line under the wordmark on the auth screens.
   #   logoLight     Logo for light mode. Either a path bundled in the image
-  #                 (e.g. /Logo-Light.png) or an absolute https:// URL to a
-  #                 custom-hosted asset (rendered with a plain <img>, so no
+  #                 (e.g. /branding/logo-light.png) or an absolute https:// URL
+  #                 to a custom-hosted asset (rendered with a plain <img>, so no
   #                 next.config image-host allow-listing is needed).
   #   logoDark      Logo for dark mode (same rules as logoLight).
+  #   favicon       Browser-tab icon. Bundled path (e.g. /branding/favicon.png)
+  #                 or absolute https:// URL. Default: the bundled /favicon.ico.
   #   colorPalette  Chakra accent palette. One of: gray, red, orange, yellow,
   #                 green, teal, blue, cyan, purple, pink. Drives the brand
   #                 accent (wordmark color + default component palette).
+  #
+  # To AVOID hosting assets externally, "burn" custom logos/favicon into the web
+  # image at build time: drop files into the repo's `public/branding/` directory
+  # (served at /branding/*) before `docker build`, then point logoLight/logoDark/
+  # favicon at those /branding/... paths. See the chart README "Deployment
+  # skinning / branding" section.
   branding:
     name: ""
     description: ""
     tagline: ""
     logoLight: ""
     logoDark: ""
+    favicon: ""
     colorPalette: ""
 
   resources:

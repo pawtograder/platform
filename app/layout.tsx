@@ -21,7 +21,12 @@ export async function generateMetadata() {
   return {
     metadataBase: new URL(defaultUrl),
     title: branding.name,
-    description: branding.description
+    description: branding.description,
+    // Drives the browser-tab favicon from branding so deployments can swap it
+    // without rebuilding (replaces the app/favicon.ico + app/icon.svg file
+    // conventions, now moved to public/). Point BRAND_FAVICON at a bundled path
+    // (e.g. /branding/favicon.png) or an absolute URL.
+    icons: { icon: branding.favicon }
   };
 }
 

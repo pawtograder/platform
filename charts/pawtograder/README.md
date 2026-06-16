@@ -309,15 +309,46 @@ web:
     tagline: "…" # line under the wordmark on auth screens
     logoLight: "/Logo-Light.png" # bundled path OR absolute https:// URL
     logoDark: "/Logo-Dark.png" # bundled path OR absolute https:// URL
+    favicon: "/favicon.svg" # browser-tab icon; bundled path OR https:// URL
     colorPalette: "teal" # accent: gray|red|orange|yellow|green|teal|blue|cyan|purple|pink
 ```
 
-Any field left blank keeps its built-in Pawtograder default. Custom logos can be
-absolute `https://` URLs to externally hosted assets (rendered with a plain
-`<img>`, so no `next.config` image-host allow-listing is needed) or paths to
-files baked into the image. The staging overlay
+Any field left blank keeps its built-in Pawtograder default. The staging overlay
 ([`examples/values-staging.yaml`](./examples/values-staging.yaml)) uses this to
 run staging as **PawtograderNext** with a teal accent.
+
+### Logos & favicon: bake into the image (no asset hosting)
+
+Custom logos and the favicon can be provided two ways:
+
+- **Absolute `https://` URL** to an externally hosted asset — logos render with a
+  plain `<img>` (no `next.config` image-host allow-listing needed), and the
+  favicon is set via `<link rel="icon">`.
+- **Baked into the image (recommended — avoids hosting mess).** Drop your files
+  into the repo's [`public/branding/`](../../public/branding/) directory before
+  `docker build`; everything under `public/` is copied into the web image and
+  served at `/branding/*`. Then point the values at those paths:
+
+  ```yaml
+  web:
+    branding:
+      name: "TartanGrader"
+      logoLight: "/branding/logo-light.png"
+      logoDark: "/branding/logo-dark.png"
+      favicon: "/branding/favicon.png"
+      colorPalette: "red"
+  ```
+
+  The same published image still re-skins per deployment from the env vars; the
+  assets just need to be present inside it. A complete worked example (CMU-themed
+  **TartanGrader**, with assets shipped under `public/branding/tartangrader-*`)
+  lives in
+  [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
+
+The default favicon is the bundled `public/favicon.ico` (the app reads the
+favicon from `web.branding.favicon` via root-layout metadata; the former
+`app/favicon.ico` / `app/icon.svg` file-convention icons were moved to `public/`
+so a single, override-able `<link rel="icon">` is emitted).
 
 ## Realtime sizing
 

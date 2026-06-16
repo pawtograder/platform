@@ -158,6 +158,10 @@ spec:
             - name: BRAND_LOGO_DARK
               value: {{ .logoDark | quote }}
             {{- end }}
+            {{- if .favicon }}
+            - name: BRAND_FAVICON
+              value: {{ .favicon | quote }}
+            {{- end }}
             {{- if .colorPalette }}
             - name: BRAND_COLOR_PALETTE
               value: {{ .colorPalette | quote }}

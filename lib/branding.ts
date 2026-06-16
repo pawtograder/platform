@@ -41,6 +41,8 @@ export type Branding = {
   logoLight: string;
   /** Logo shown in dark mode. Local path (bundled) or absolute URL. */
   logoDark: string;
+  /** Browser tab favicon. Local path (bundled) or absolute URL. */
+  favicon: string;
   /** Chakra color palette used as the brand accent. */
   colorPalette: BrandColorPalette;
 };
@@ -52,6 +54,7 @@ export const DEFAULT_BRANDING: Branding = {
   tagline: "Your pawsome course companion",
   logoLight: "/Logo-Light.png",
   logoDark: "/Logo-Dark.png",
+  favicon: "/favicon.ico",
   colorPalette: "gray"
 };
 
@@ -83,6 +86,7 @@ export function getBranding(): Branding {
     tagline: cleanString(process.env.BRAND_TAGLINE) ?? DEFAULT_BRANDING.tagline,
     logoLight: cleanString(process.env.BRAND_LOGO_LIGHT) ?? DEFAULT_BRANDING.logoLight,
     logoDark: cleanString(process.env.BRAND_LOGO_DARK) ?? DEFAULT_BRANDING.logoDark,
+    favicon: cleanString(process.env.BRAND_FAVICON) ?? DEFAULT_BRANDING.favicon,
     colorPalette: resolvePalette(process.env.BRAND_COLOR_PALETTE)
   };
 }
