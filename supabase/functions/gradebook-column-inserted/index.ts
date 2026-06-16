@@ -30,16 +30,26 @@ function extractDependenciesFromExpression(
     (node: { type: string; fn?: { name: string }; args?: Array<{ type: string; value?: unknown }> }) => {
       if (node.type === "FunctionNode" && node.fn) {
         const functionName = node.fn.name;
-        if (functionName === "assignments" || functionName === "gradebook_columns") {
+        // assignment_released("slug") references an assignment, so it registers the same
+        // dependency as assignments("slug") (keyed under "assignments").
+        const depKey =
+          functionName === "assignment_released"
+            ? "assignments"
+            : functionName === "assignments" || functionName === "gradebook_columns"
+              ? functionName
+              : null;
+        if (depKey) {
           const args = node.args ?? [];
           if (args[0]?.type === "ConstantNode") {
             const argVal = args[0].value;
             if (typeof argVal === "string") {
-              const pool = functionName === "assignments" ? availableAssignments : availableColumns;
-              const matching = pool.filter((d) => minimatch(d.slug, argVal));
+              const pool = depKey === "assignments" ? availableAssignments : availableColumns;
+              const matching = pool.filter((d) =>
+                functionName === "assignment_released" ? d.slug === argVal : minimatch(d.slug, argVal)
+              );
               if (matching.length > 0) {
-                if (!dependencies[functionName]) dependencies[functionName] = new Set<number>();
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                if (!dependencies[depKey]) dependencies[depKey] = new Set<number>();
+                matching.forEach((d) => dependencies[depKey].add(d.id));
               }
             }
           }

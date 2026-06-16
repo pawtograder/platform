@@ -1,4 +1,5 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
+import { matrix } from "mathjs";
 import { addCommonExpressionFunctions } from "./commonMathFunctions.ts";
 import { pickPreferredGradebookValue } from "./shared.ts";
 
@@ -66,10 +67,8 @@ Deno.test("countif: counts values satisfying the predicate", () => {
 
 Deno.test("countif: empty input is undefined", () => {
   // deno-lint-ignore no-explicit-any
-  assertEquals(
-    fns()["countif"](ctx, [], (_v: any) => true),
-    undefined
-  );
+  const count = fns()["countif"](ctx, [], (_v: any) => true);
+  assertEquals(count, undefined);
 });
 
 Deno.test("sum: adds gradebook scores", () => {
@@ -104,6 +103,65 @@ Deno.test("comparisons: larger/smaller/equal coerce gradebook values", () => {
   assertEquals(f["smaller"](gv(40), 50), 1);
   assertEquals(f["equal"](gv(50), 50), 1);
   assertEquals(f["equal"](gv(51), 50), 0);
+});
+
+Deno.test("is_released: reflects the explicit is_released field", () => {
+  const f = fns();
+  assertEquals(f["is_released"](gv(80, 100, { is_released: true })), true);
+  assertEquals(f["is_released"](gv(80, 100, { is_released: false })), false);
+});
+
+Deno.test("is_released: falls back to the raw `released` field", () => {
+  const f = fns();
+  // recalc gradebook_columns values spread the row, which carries `released` (not is_released).
+  assertEquals(f["is_released"](gv(80, 100, { released: true })), true);
+  assertEquals(f["is_released"](gv(80, 100, { released: false })), false);
+});
+
+Deno.test("is_released: non-gradebook operands (bare numbers) are not released", () => {
+  const f = fns();
+  assertEquals(f["is_released"](42), false);
+  assertEquals(f["is_released"](undefined), false);
+});
+
+Deno.test("is_released: array operand (e.g. gradebook_columns glob) is released iff all elements are", () => {
+  const f = fns();
+  // All released → true.
+  assertEquals(f["is_released"]([gv(80, 100, { released: true }), gv(90, 100, { released: true })]), true);
+  // Any unreleased element → false (no longer silently false for the whole array).
+  assertEquals(f["is_released"]([gv(80, 100, { released: true }), gv(90, 100, { released: false })]), false);
+  // Empty array is vacuously released.
+  assertEquals(f["is_released"]([]), true);
+});
+
+Deno.test("is_released: dense-matrix operand maps element-wise", () => {
+  const f = fns();
+  assertEquals(f["is_released"](matrix([gv(80, 100, { released: true }), gv(90, 100, { released: true })])), true);
+  assertEquals(f["is_released"](matrix([gv(80, 100, { released: true }), gv(90, 100, { released: false })])), false);
+});
+
+Deno.test("is_released: usable as a case_when condition", () => {
+  const f = fns();
+  const table = (rows: [boolean, number][]) => ({ toArray: () => rows });
+  // released → take the real score branch; otherwise fall through to 0.
+  assertEquals(
+    f["case_when"](
+      table([
+        [f["is_released"](gv(90, 100, { is_released: true })) as boolean, 90],
+        [true, 0]
+      ])
+    ),
+    90
+  );
+  assertEquals(
+    f["case_when"](
+      table([
+        [f["is_released"](gv(90, 100, { is_released: false })) as boolean, 90],
+        [true, 0]
+      ])
+    ),
+    0
+  );
 });
 
 Deno.test("case_when: returns the first matching branch's result (curving)", () => {

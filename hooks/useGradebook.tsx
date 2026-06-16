@@ -364,7 +364,14 @@ export function useAreAllDependenciesReleased(columnId: number): boolean {
     const allReleased = allDependencyColumnIds.every((depId) => {
       const depColumn = gradebookController.getGradebookColumn(depId);
       if (!depColumn) return false;
-      return depColumn.released;
+      // The column-level flag means the column was released atomically to all students.
+      if (depColumn.released) return true;
+      // Otherwise it may still be released to every student via per-section release, which
+      // deliberately never sets the column-level flag (see set_gradebook_column_students_released).
+      // Derive "released for all" from the per-student rows so the calculated-column badge does
+      // not falsely report "partially visible" when every student can in fact see the value.
+      const rows = gradebookController.getStudentsForColumn(depId);
+      return rows.length > 0 && rows.every((r) => r.released);
     });
 
     setDependenciesReleased(allReleased);
@@ -1819,20 +1826,29 @@ export class GradebookController {
     exprNode.traverse((node: MathNode) => {
       if (node.type === "FunctionNode") {
         const functionName = (node as FunctionNode).fn.name;
-        if (functionName in availableDependencies) {
+        // assignment_released("slug") references an assignment, so it registers under the same
+        // "assignments" dependency key as assignments("slug") (mirrors the server-side extractor in
+        // gradebook-column-inserted). Unlike assignments(), it matches a literal slug only (no glob).
+        const depKey: keyof typeof availableDependencies | null =
+          functionName === "assignment_released"
+            ? "assignments"
+            : functionName in availableDependencies
+              ? (functionName as keyof typeof availableDependencies)
+              : null;
+        if (depKey) {
           const args = (node as FunctionNode).args;
           const argType = args[0].type;
           if (argType === "ConstantNode") {
             const argName = (args[0] as ConstantNode).value;
             if (typeof argName === "string") {
-              const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
-                minimatch(d.slug!, argName)
+              const matching = availableDependencies[depKey].filter((d) =>
+                functionName === "assignment_released" ? d.slug === argName : minimatch(d.slug!, argName)
               );
               if (matching.length > 0) {
-                if (!(functionName in dependencies)) {
-                  dependencies[functionName] = new Set();
+                if (!(depKey in dependencies)) {
+                  dependencies[depKey] = new Set();
                 }
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                matching.forEach((d) => dependencies[depKey].add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }

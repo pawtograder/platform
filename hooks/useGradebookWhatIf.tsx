@@ -30,7 +30,12 @@ export type ExpressionContext = {
   class_id: number;
 };
 //These functions should be called with a context object as the first argument
-export const ContextFunctions = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments"];
+export const ContextFunctions = [
+  ...COMMON_CONTEXT_FUNCTIONS,
+  "gradebook_columns",
+  "assignments",
+  "assignment_released"
+];
 
 export type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
@@ -487,6 +492,23 @@ class GradebookWhatIfController {
           const ret = findOne(assignmentSlug);
           return ret;
         }
+      }) as ImportFunction;
+      // assignment_released(slug): resolve real per-student release the same way assignments()
+      // does (see above) — find the gradebook column that depends on this assignment and read
+      // this student's release flag on it. Students can see an assignment before its grade is
+      // released, so mere existence is NOT release; fall back to false when no dependent column
+      // or per-student row exists. Literal-slug match only, mirroring the server (no glob).
+      imports["assignment_released"] = ((_context: ExpressionContext, assignmentSlug: string | string[]) => {
+        const releasedFor = (slug: string) => {
+          const assignment = this.gradebookController.assignments?.find((a) => a.slug === slug);
+          if (!assignment) return false;
+          const column = allColumns.find((c) => c.dependencies?.assignments?.includes(assignment.id));
+          if (!column) return false;
+          const columnStudent = this.gradebookController.getGradebookColumnStudent(column.id, this.private_profile_id);
+          return columnStudent?.released ?? false;
+        };
+        if (Array.isArray(assignmentSlug)) return assignmentSlug.map(releasedFor);
+        return releasedFor(assignmentSlug);
       }) as ImportFunction;
       // Client what-if runs in the student UI: users only see public-facing grades and
       // is_private_calculation is always false here. Server-side recalculation sets

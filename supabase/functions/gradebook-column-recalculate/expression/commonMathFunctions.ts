@@ -6,6 +6,8 @@ export type GradebookExpressionValue = {
   score: number | null;
   score_override: number | null;
   is_missing?: boolean | null;
+  /** True when this value is released to (visible to) the student. See `is_released(...)`. */
+  is_released?: boolean | null;
   is_droppable: boolean;
   is_excused: boolean;
   max_score: number;
@@ -297,6 +299,28 @@ export function addCommonExpressionFunctions(
       }
     }
     return ret;
+  }) as (...args: never[]) => unknown;
+
+  // is_released(value): true when a gradebook column value is released (visible) to the student.
+  // Accepts a single gradebook value object, or an array/matrix of them (e.g. from
+  // gradebook_columns("hw-*")), in which case it is released iff every element is released.
+  // Non-gradebook operands (e.g. bare numbers from assignments()) are treated as not
+  // release-aware and return false — use assignment_released() for assignment dependencies.
+  // Reads the explicit `is_released` field, falling back to the raw `released` field carried
+  // on the underlying gradebook_column_students row.
+  const releasedForValue = (value: unknown): boolean => {
+    if (isGradebookExpressionValue(value)) {
+      const v = value as GradebookExpressionValue & { released?: boolean | null };
+      return Boolean(v.is_released ?? v.released ?? false);
+    }
+    return false;
+  };
+  imports["is_released"] = ((value: unknown) => {
+    const values = isDenseMatrix(value) ? value.toArray() : value;
+    if (Array.isArray(values)) {
+      return values.every((v) => releasedForValue(v));
+    }
+    return releasedForValue(values);
   }) as (...args: never[]) => unknown;
 
   imports["case_when"] = ((conditions: Matrix<unknown>) => {
