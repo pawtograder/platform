@@ -218,6 +218,18 @@ web:
     - pawtograder-canvas
     - pawtograder-llm
     - pawtograder-sentry
+  # ----- Skinning demo: staging runs as "PawtograderNext" --------------------
+  # Demonstrates the chart's deployment-skinning support. These plain env vars
+  # are read server-side by the web app at request time (lib/branding.ts), so
+  # the SAME ghcr.io/pawtograder/web image is re-branded with no rebuild. The
+  # teal accent + distinct name make staging instantly recognizable vs prod.
+  # Logos keep the bundled defaults here; point logoLight/logoDark at an
+  # absolute https:// URL to swap artwork too.
+  branding:
+    name: "PawtograderNext"
+    description: "PawtograderNext — the next generation of Pawtograder course operations"
+    tagline: "The next generation of your pawsome course companion"
+    colorPalette: "teal"
   # Multiple web replicas → leader flag stays off; if you need workflow
   # metrics on staging, drop web.replicas to 1 and flip this true (see
   # values-preview.yaml for the pattern).

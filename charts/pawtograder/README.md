@@ -290,6 +290,35 @@ docker build \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
+## Deployment skinning / branding
+
+Self-hosted deployments can re-brand the app — service name, tagline, logos, and
+accent color — **without rebuilding the web image**. Unlike the `NEXT_PUBLIC_*`
+build-time vars above, branding is delivered as **plain runtime env vars** that
+the app reads server-side on every request (`lib/branding.ts`) and hands to the
+client via a React context. The same published `ghcr.io/pawtograder/web` image
+therefore renders whatever branding the chart injects.
+
+Configure it under `web.branding`:
+
+```yaml
+web:
+  branding:
+    name: "PawtograderNext" # titles, headings, wordmarks
+    description: "…" # <meta name="description">
+    tagline: "…" # line under the wordmark on auth screens
+    logoLight: "/Logo-Light.png" # bundled path OR absolute https:// URL
+    logoDark: "/Logo-Dark.png" # bundled path OR absolute https:// URL
+    colorPalette: "teal" # accent: gray|red|orange|yellow|green|teal|blue|cyan|purple|pink
+```
+
+Any field left blank keeps its built-in Pawtograder default. Custom logos can be
+absolute `https://` URLs to externally hosted assets (rendered with a plain
+`<img>`, so no `next.config` image-host allow-listing is needed) or paths to
+files baked into the image. The staging overlay
+([`examples/values-staging.yaml`](./examples/values-staging.yaml)) uses this to
+run staging as **PawtograderNext** with a teal accent.
+
 ## Realtime sizing
 
 The chart sizes realtime for ~600 concurrent websocket connections out of the

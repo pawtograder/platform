@@ -130,6 +130,39 @@ spec:
             # cross-pollinate cache entries or tag-revalidation markers.
             - name: NEXT_CACHE_PREFIX
               value: {{ printf "nextcache:%s" $ctx.Release.Namespace | quote }}
+            {{- /*
+            Deployment skinning. These are plain (non-NEXT_PUBLIC_) env vars read
+            server-side by lib/branding.ts at request time, so the SAME published
+            web image can be re-branded per deployment — name, tagline, logos, and
+            accent color — without a rebuild. Only render the ones explicitly set
+            in values so the app falls back to its built-in Pawtograder defaults.
+            */ -}}
+            {{- with $ctx.Values.web.branding }}
+            {{- if .name }}
+            - name: BRAND_NAME
+              value: {{ .name | quote }}
+            {{- end }}
+            {{- if .description }}
+            - name: BRAND_DESCRIPTION
+              value: {{ .description | quote }}
+            {{- end }}
+            {{- if .tagline }}
+            - name: BRAND_TAGLINE
+              value: {{ .tagline | quote }}
+            {{- end }}
+            {{- if .logoLight }}
+            - name: BRAND_LOGO_LIGHT
+              value: {{ .logoLight | quote }}
+            {{- end }}
+            {{- if .logoDark }}
+            - name: BRAND_LOGO_DARK
+              value: {{ .logoDark | quote }}
+            {{- end }}
+            {{- if .colorPalette }}
+            - name: BRAND_COLOR_PALETTE
+              value: {{ .colorPalette | quote }}
+            {{- end }}
+            {{- end }}
             {{- with $ctx.Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

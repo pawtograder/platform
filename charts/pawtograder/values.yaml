@@ -820,6 +820,35 @@ web:
   # is https://api.<hostname>. Override here for unusual topologies.
   apiUrl: ""
 
+  # ---------------------------------------------------------------------------
+  # Deployment skinning / branding
+  # ---------------------------------------------------------------------------
+  # Re-brand the app for a self-hosted deployment: service name, tagline, logos,
+  # and accent color. These are passed to the web pod as PLAIN env vars (NOT
+  # NEXT_PUBLIC_*) and read server-side at request time (lib/branding.ts), so a
+  # SINGLE published web image can be re-skinned per deployment with NO rebuild.
+  #
+  # Leave a field blank to keep the built-in Pawtograder default for it.
+  #
+  #   name          Product name shown in page titles, headings, and wordmarks.
+  #   description   <meta name="description"> / default site description.
+  #   tagline       Short line under the wordmark on the auth screens.
+  #   logoLight     Logo for light mode. Either a path bundled in the image
+  #                 (e.g. /Logo-Light.png) or an absolute https:// URL to a
+  #                 custom-hosted asset (rendered with a plain <img>, so no
+  #                 next.config image-host allow-listing is needed).
+  #   logoDark      Logo for dark mode (same rules as logoLight).
+  #   colorPalette  Chakra accent palette. One of: gray, red, orange, yellow,
+  #                 green, teal, blue, cyan, purple, pink. Drives the brand
+  #                 accent (wordmark color + default component palette).
+  branding:
+    name: ""
+    description: ""
+    tagline: ""
+    logoLight: ""
+    logoDark: ""
+    colorPalette: ""
+
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }

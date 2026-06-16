@@ -1,14 +1,17 @@
 import { signInOrSignUpWithEmailAction, signInWithMicrosoftAction } from "@/app/actions";
 import { FormMessage, Message } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
-import Logo from "@/components/ui/logo";
-import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
+import AuthBrandHeader from "@/components/branding/auth-brand-header";
+import { Box, Container, HStack, Input, Separator, Stack, Text } from "@chakra-ui/react";
 import { BsMicrosoft } from "react-icons/bs";
 import { isSignupsEnabled } from "@/lib/features";
+import { getBranding } from "@/lib/branding";
 
-export const metadata = {
-  title: "Sign in · Pawtograder"
-};
+export async function generateMetadata() {
+  return {
+    title: `Sign in · ${getBranding().name}`
+  };
+}
 
 type SearchParams = Message & { email?: string; code?: string; redirect?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
@@ -19,11 +22,7 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">
-        <VStack gap="2" textAlign="center" mt="4">
-          <Logo width={100} />
-          <Heading size="3xl">Pawtograder</Heading>
-          <Text color="fg.muted">Your pawsome course companion</Text>
-        </VStack>
+        <AuthBrandHeader />
 
         <Stack gap="3" colorPalette="gray">
           <form action={signInWithMicrosoftAction}>
