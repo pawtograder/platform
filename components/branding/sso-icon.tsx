@@ -34,6 +34,10 @@ const SSO_ICONS: Record<string, IconType> = {
   generic: BsBoxArrowInRight
 };
 
+/**
+ * Renders the icon for a configured SSO provider by its branding `icon` key,
+ * falling back to a generic "sign in" glyph for unknown/unset keys.
+ */
 export default function SsoIcon({ name }: { name?: string }) {
   const Icon = (name && SSO_ICONS[name.toLowerCase()]) || BsBoxArrowInRight;
   return <Icon aria-hidden />;

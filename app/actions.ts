@@ -157,9 +157,12 @@ export const signInWithSSOAction = async (formData: FormData) => {
   const redirectParam = formData.get("redirect") as string | null;
   const nextPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
 
-  const idx = Number(formData.get("sso_index"));
+  // Validate sso_index explicitly: Number(null/"") is 0, which would silently
+  // select the first provider for a missing/blank field. Require a non-empty,
+  // integer-only string.
+  const rawIndex = formData.get("sso_index");
   const providers = getBranding().ssoProviders;
-  const cfg = Number.isInteger(idx) && idx >= 0 ? providers[idx] : undefined;
+  const cfg = typeof rawIndex === "string" && /^\d+$/.test(rawIndex) ? providers[Number(rawIndex)] : undefined;
   if (!cfg) {
     return encodedRedirect("error", "/sign-in", "Unknown sign-in provider", { redirect: nextPath });
   }

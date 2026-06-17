@@ -115,11 +115,13 @@ export const DEFAULT_BRANDING: Branding = {
   ]
 };
 
+/** Trim a possibly-undefined env value, returning undefined for blank/whitespace. */
 function cleanString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
+/** Resolve a color-palette env value to a known palette, else the default. */
 function resolvePalette(value: string | undefined): BrandColorPalette {
   const normalized = cleanString(value)?.toLowerCase();
   if (normalized && (BRAND_COLOR_PALETTES as readonly string[]).includes(normalized)) {
@@ -128,6 +130,7 @@ function resolvePalette(value: string | undefined): BrandColorPalette {
   return DEFAULT_BRANDING.colorPalette;
 }
 
+/** Type guard: whether a value is one of the allowlisted SSO provider ids. */
 function isAllowedProvider(value: unknown): value is SsoProviderId {
   return typeof value === "string" && (SSO_ALLOWED_PROVIDERS as readonly string[]).includes(value);
 }

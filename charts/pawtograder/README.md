@@ -398,12 +398,19 @@ auth:
       # clientIdKey / clientSecretKey override the default <NAME>_OAUTH_CLIENT_ID/_SECRET keys
 ```
 
-Each enabled provider's redirect URI defaults to
-`https://api.<hostname>/auth/v1/callback` — register that exact URL in the
-provider's OAuth app. Put the client id/secret in the `pawtograder-web` Secret
-under the `<NAME>_OAUTH_CLIENT_ID` / `<NAME>_OAUTH_CLIENT_SECRET` keys (e.g.
-`GOOGLE_OAUTH_CLIENT_ID`). A complete worked example (Google + Microsoft +
-GitHub) is in
+Each enabled provider's redirect URI defaults to the API gateway origin +
+`/auth/v1/callback`. That origin depends on `global.apiOnSeparateHost`:
+
+- **Separate API host (default, `apiOnSeparateHost: true`):**
+  `https://api.<hostname>/auth/v1/callback`
+- **Path-based routing (`apiOnSeparateHost: false`, API shares the web host):**
+  `https://<hostname>/auth/v1/callback`
+
+Register that exact URL in the provider's OAuth app (override per provider with
+`redirectUri` if your topology differs). Put the client id/secret in the
+`pawtograder-web` Secret under the `<NAME>_OAUTH_CLIENT_ID` /
+`<NAME>_OAUTH_CLIENT_SECRET` keys (e.g. `GOOGLE_OAUTH_CLIENT_ID`). A complete
+worked example (Google + Microsoft + GitHub) is in
 [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
 
 ## Realtime sizing

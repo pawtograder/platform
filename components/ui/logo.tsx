@@ -4,6 +4,7 @@ import { useColorMode } from "@/components/ui/color-mode";
 import { useBranding } from "@/components/branding/branding-provider";
 import Image from "next/image";
 
+/** True for absolute http(s) URLs (custom-hosted logos), false for bundled paths. */
 function isRemote(src: string): boolean {
   return /^https?:\/\//i.test(src);
 }
