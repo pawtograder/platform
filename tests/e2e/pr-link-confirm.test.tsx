@@ -194,9 +194,14 @@ test.describe("pr-link-confirm (multi-candidate student picks + authz)", () => {
 
   test("authz: a different student in the class cannot confirm the owner's link", async () => {
     const otherClient = await createAuthenticatedClient(otherStudent);
-    // SecurityError is thrown before the GitHub fetch and the confirm UPDATE -> the
-    // SDK surfaces a rejection and the links are left untouched.
-    await expect(confirmPrLink({ link_id: link1Id }, otherClient)).rejects.toBeTruthy();
+    // The authz SecurityError is thrown BEFORE the GitHub fetch and the confirm
+    // UPDATE; it surfaces (via wrapRequestHandler -> EdgeFunctionError) with the
+    // authorization message. Assert on that message specifically so the test fails
+    // if the rejection is instead a later GitHub-fetch error (which would mean the
+    // authorization check was bypassed) rather than the authorization boundary.
+    await expect(confirmPrLink({ link_id: link1Id }, otherClient)).rejects.toThrow(
+      /can only confirm your own pull request/i
+    );
     expect(await readConfirmed(link1Id)).toBe(false);
     expect(await readConfirmed(link2Id)).toBe(false);
   });
