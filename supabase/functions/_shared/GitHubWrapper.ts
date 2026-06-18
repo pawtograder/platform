@@ -787,42 +787,6 @@ export async function getFileFromRepo(repoName: string, path: string, scope?: Se
   }
 }
 
-/**
- * Create or update a file in a repo via the GitHub contents API.
- * Pass `sha` (the blob sha of the file being replaced) to update an existing file;
- * omit it to create a new file. Returns the new commit sha and the file's new blob sha.
- */
-export async function writeFileToRepo(
-  repoName: string,
-  path: string,
-  content: string,
-  message: string,
-  sha?: string,
-  scope?: Sentry.Scope
-) {
-  scope?.setTag("github_operation", "write_file");
-  scope?.setTag("repository", repoName);
-  scope?.setTag("file_path", path);
-
-  console.log("writing file to repo", repoName, path);
-  const octokit = await getOctoKit(repoName, scope);
-  if (!octokit) {
-    throw new Error(`Write file to repo failed: No octokit found for ${repoName}`);
-  }
-  const response = await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
-    owner: repoName.split("/")[0],
-    repo: repoName.split("/")[1],
-    path,
-    message,
-    content: Buffer.from(content, "utf-8").toString("base64"),
-    ...(sha ? { sha } : {})
-  });
-  return {
-    commit_sha: response.data.commit?.sha,
-    content_sha: response.data.content?.sha
-  };
-}
-
 async function getJwks() {
   const jwks = await fetch("https://token.actions.githubusercontent.com/.well-known/jwks");
   const jwksData = await jwks.json();
@@ -872,27 +836,6 @@ export function getRepoToCloneConsideringE2E(repository: string): string {
     return repository.slice(0, separatorPosition);
   }
   return repository;
-}
-
-/**
- * Whether the webhook-direct / PR submission-file ingestion paths should write a
- * canned file instead of cloning `repo` from GitHub.
- *
- * E2E student/fork repos (`<fixture>--<suffix>`) are synthetic and are not
- * reliably cloneable in every E2E environment, so the submission-file ingestion
- * that backs the webhook-direct e2e (push-no-autograder's push-direct path and
- * pr-webhook-ingest's PR-head path) must mock them. Preview deploys opt in
- * explicitly with E2E_MOCK_GITHUB=true, but the `pull_request_target` CI
- * workflow only sets E2E_ENABLE=true — so honor either signal, otherwise the
- * ingestion tries to clone in CI and the webhook fails with a 500. Production
- * sets neither, and real repos never carry END_TO_END_REPO_PREFIX, so this is
- * inert outside E2E.
- */
-export function shouldUseE2eCannedFiles(repo: string): boolean {
-  if (!repo.startsWith(END_TO_END_REPO_PREFIX)) {
-    return false;
-  }
-  return Deno.env.get("E2E_MOCK_GITHUB") === "true" || Deno.env.get("E2E_ENABLE") === "true";
 }
 // Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
 const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");

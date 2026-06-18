@@ -23,7 +23,7 @@ import {
   triggerWorkflow,
   SecondaryRateLimitError,
   PrimaryRateLimitError,
-  shouldUseE2eCannedFiles
+  END_TO_END_REPO_PREFIX
 } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
@@ -465,13 +465,11 @@ async function createPushDirectSubmission(
   scope.setTag("submission_id", submissionId.toString());
   console.log(`Created push-direct submission ${submissionId} for ${repoName}@${sha}`);
 
-  // E2E fast path: a synthetic E2E student repo isn't a real GitHub repo, so
-  // bypass the clone and write a single canned file (parallels the
+  // E2E fast path: under E2E_MOCK_GITHUB an E2E student repo isn't a real GitHub
+  // repo, so bypass the clone and write a single canned file (parallels the
   // PrSubmissionFiles / autograder-create-submission E2E mocks) so this push
-  // path is end-to-end testable without GitHub. Engaged under E2E_MOCK_GITHUB
-  // (preview) or E2E_ENABLE (the pull_request_target CI workflow) — see
-  // shouldUseE2eCannedFiles.
-  const e2eMock = shouldUseE2eCannedFiles(repoName);
+  // path is end-to-end testable without GitHub.
+  const e2eMock = Deno.env.get("E2E_MOCK_GITHUB") === "true" && repoName.startsWith(END_TO_END_REPO_PREFIX);
   if (e2eMock) {
     const mockContents = `// push-direct submission mock for ${repoName}@${sha}\n`;
     const { error: mockErr } = await adminSupabase.from("submission_files").insert({
