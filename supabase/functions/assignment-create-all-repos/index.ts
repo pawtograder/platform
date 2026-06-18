@@ -8,6 +8,13 @@ import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "..
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import {
+  resolveRepoCreationStrategy,
+  type AssignmentForRepoCreation,
+  type SourceRepoRow,
+  type StudentIdentity
+} from "../_shared/repoCreationStrategy.ts";
+import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -45,14 +52,18 @@ async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: stri
         attempts++;
       }
     } catch (e) {
+      // A freshly-created repo can 404 briefly until GitHub finishes
+      // provisioning it — retry those. Anything else is a real error.
       if (e instanceof Error && e.message.includes("Not Found")) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         attempts++;
       } else {
         throw e;
       }
-      throw e;
     }
+  }
+  if (!repoExists) {
+    throw new Error(`Repo ${repo} did not become ready after ${maxAttempts} attempts`);
   }
 }
 
@@ -62,7 +73,10 @@ async function ensureExistingRepoCreated({
   adminSupabase,
   courseId,
   assignmentId,
-  scope
+  scope,
+  assignmentForStrategy,
+  branchProtection,
+  sourceAssignmentRepos
 }: {
   repo: any;
   assignment: any;
@@ -70,6 +84,9 @@ async function ensureExistingRepoCreated({
   courseId: number;
   assignmentId: number;
   scope: Sentry.Scope;
+  assignmentForStrategy: AssignmentForRepoCreation;
+  branchProtection: BranchProtectionConfig;
+  sourceAssignmentRepos: SourceRepoRow[];
 }) {
   const [org, repoName] = repo.repository.split("/");
 
@@ -101,9 +118,32 @@ async function ensureExistingRepoCreated({
         return;
       }
 
+      // Resolve creation strategy using the same logic the synchronous path uses.
+      const student: StudentIdentity = {
+        profile_id: repo.profile_id ?? undefined,
+        assignment_group_id: repo.assignment_group_id ?? undefined,
+        group_name: repo.assignment_groups?.name ?? undefined
+      };
+      const strategy = resolveRepoCreationStrategy(assignmentForStrategy, student, sourceAssignmentRepos);
+      if (strategy.kind !== "create") {
+        console.log(
+          `Skipping recreation of ${repo.repository}: ${strategy.kind === "skip" ? strategy.reason : "unknown"}`
+        );
+        return;
+      }
+
       try {
-        // Create the repository using the existing createRepo logic
-        const headSha = await github.createRepo(org, repoName, assignment.template_repo, {}, scope);
+        // Create the repository via template-generate or fork as configured.
+        const headSha = await github.createRepo(
+          org,
+          repoName,
+          strategy.sourceRepo,
+          {
+            creation_method: strategy.creationMethod,
+            branch_protection: branchProtection
+          },
+          scope
+        );
 
         // Sync repository permissions
         await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
@@ -166,11 +206,53 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   scope.setTag("assignment_group_config", assignment.group_config || "unknown");
   scope.setTag("github_org", assignment.classes?.github_org || "unknown");
   scope.setTag("template_repo", assignment.template_repo || "none");
+  scope.setTag("repo_mode", assignment.repo_mode || "template_only_staff");
+
+  // Modes 'none' (upload) and 'no_submission' (manual grading, no artifact)
+  // have no per-student repos to create.
+  if (assignment.repo_mode === "none" || assignment.repo_mode === "no_submission") {
+    console.log(`Assignment has repo_mode=${assignment.repo_mode}; skipping per-student repo creation`);
+    return;
+  }
+
+  const branchProtection: BranchProtectionConfig = {
+    blockForcePush: assignment.protect_block_force_push ?? true,
+    requirePullRequest: assignment.protect_require_pull_request ?? false,
+    requiredReviewers: assignment.protect_required_reviewers ?? 0
+  };
+
+  const assignmentForStrategy: AssignmentForRepoCreation = {
+    id: assignment.id,
+    repo_mode: assignment.repo_mode ?? "template_only_staff",
+    template_repo: assignment.template_repo,
+    source_assignment_id: assignment.source_assignment_id
+  };
+
+  // For mode 3, fetch the source assignment's per-student/group repos so each
+  // new repo can fork the right upstream.
+  let sourceAssignmentRepos: SourceRepoRow[] = [];
+  if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
+    const { data: priorRepos, error: priorReposError } = await adminSupabase
+      .from("repositories")
+      .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
+      .eq("assignment_id", assignment.source_assignment_id)
+      .limit(2000);
+    if (priorReposError) {
+      throw new UserVisibleError(`Error fetching source assignment repositories: ${priorReposError.message}`);
+    }
+    sourceAssignmentRepos = (priorRepos ?? []).map((r) => ({
+      repository: r.repository,
+      profile_id: r.profile_id,
+      assignment_group_id: r.assignment_group_id,
+      group_name: r.assignment_groups?.name ?? null
+    }));
+    scope.setTag("source_assignment_repo_count", String(sourceAssignmentRepos.length));
+  }
   // Select all existing repos for the assignment
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username), github_org_confirmed))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username), github_org_confirmed))"
+      "*, assignment_groups(name, assignment_groups_members(*,user_roles(users(github_username), github_org_confirmed))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username), github_org_confirmed))"
     )
     .eq("assignment_id", assignmentId)
     .limit(1000);
@@ -216,7 +298,11 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   scope?.setTag("assignment_groups_count", assignment.assignment_groups?.length.toString() || "0");
 
   //Before creating repos, check to make sure template repo exists in GitHub, wait for it to exist
-  await ensureRepoCreated({ org: assignment.classes!.github_org!, repo: assignment.template_repo!, scope });
+  // (mode 3 has no Pawtograder-owned handout — the per-student forks resolve against the source
+  // assignment's per-student repos, which already exist if students reached that assignment).
+  if (assignment.repo_mode !== "fork_from_prior_assignment" && assignment.template_repo) {
+    await ensureRepoCreated({ org: assignment.classes!.github_org!, repo: assignment.template_repo, scope });
+  }
 
   //Check that all existing repos in DB actually exist in GitHub, create them if they don't
   if (existingRepos && existingRepos.length > 0) {
@@ -230,7 +316,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
             adminSupabase,
             courseId,
             assignmentId,
-            scope
+            scope,
+            assignmentForStrategy,
+            branchProtection,
+            sourceAssignmentRepos
           })
         )
       )
@@ -243,12 +332,29 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     profile_id: string | null,
     assignmentGroup: AssignmentGroup | null
   ) => {
-    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup ? sanitizeRepoNameComponent(assignmentGroup.name) : github_username[0]}`;
+    // Group repos MUST carry the `-group-` infix so this name matches every other
+    // site that derives it (the SQL enqueue existence-check, autograder-create-repos-for-student,
+    // github-user-sync). Omitting it produces a divergent name and a duplicate repo enqueue.
+    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup ? "group-" + sanitizeRepoNameComponent(assignmentGroup.name) : github_username[0]}`;
     console.log(`Creating repo ${repoName} for ${name}`);
-    if (!assignment.template_repo) {
-      console.log(`No template repo for assignment ${assignment.id}`);
+
+    const strategy = resolveRepoCreationStrategy(
+      assignmentForStrategy,
+      {
+        profile_id: profile_id ?? undefined,
+        assignment_group_id: assignmentGroup?.id ?? undefined,
+        group_name: assignmentGroup?.name ?? undefined,
+        display_name: name
+      },
+      sourceAssignmentRepos
+    );
+    if (strategy.kind !== "create") {
+      console.log(
+        `Skipping repo ${repoName}: ${strategy.kind === "skip" ? `${strategy.reason}${strategy.reason === "missing_source" ? ` (${strategy.error})` : ""}` : "unknown"}`
+      );
       return;
     }
+
     const { error, data: dbRepo } = await adminSupabase
       .from("repositories")
       .insert({
@@ -276,8 +382,11 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
       const headSha = await github.createRepo(
         assignment.classes!.github_org!,
         repoName,
-        assignment.template_repo,
-        {},
+        strategy.sourceRepo,
+        {
+          creation_method: strategy.creationMethod,
+          branch_protection: branchProtection
+        },
         scope
       );
       await github.syncRepoPermissions(

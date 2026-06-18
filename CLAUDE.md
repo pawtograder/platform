@@ -63,6 +63,6 @@ The `TableController` class manages data caching and loading, scoped to a contex
 
 ### Key Conventions
 
-- `@/*` path alias maps to project root.
+- `@/*` path alias maps to project root. This alias applies only to Next.js/Node.js code; it does **not** work in Deno. Files under `supabase/functions/` are Deno edge functions and must use relative (`./foo.ts`) or URL-based imports, not `@/*`.
 - Copy `.env.local.staging` to `.env.local` for frontend-only dev against staging. Signups disabled on staging; use local Supabase for full dev.
 - Seeded test users have password `change-it`. Include "instructor" in email for instructor role.

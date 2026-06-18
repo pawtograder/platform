@@ -1,9 +1,14 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
-import type { Json } from "@/utils/supabase/SupabaseTypes";
+import type { Json, Database } from "@/utils/supabase/SupabaseTypes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RubricFilter } from "./filterSchema";
+
+// class_id is populated by a BEFORE INSERT trigger from assignment_id, so callers
+// omit it. The generated Insert type marks it required (NOT NULL, no default) and
+// can't model the trigger, so the trigger-filled payload is cast to the Insert type.
+type DashboardViewInsert = Database["public"]["Tables"]["assignment_dashboard_views"]["Insert"];
 
 export type DashboardViz = "bars" | "options" | "table" | "section";
 
@@ -91,7 +96,9 @@ export function useAssignmentDashboardView(assignmentId: number | undefined): Us
       const supabase = createClient();
       const { error: upsertErr } = await supabase
         .from("assignment_dashboard_views")
-        .upsert({ assignment_id: assignmentId, config: config as unknown as Json }, { onConflict: "assignment_id" });
+        .upsert({ assignment_id: assignmentId, config: config as unknown as Json } as DashboardViewInsert, {
+          onConflict: "assignment_id"
+        });
       if (upsertErr) return { ok: false, error: upsertErr.message };
       await load();
       return { ok: true };

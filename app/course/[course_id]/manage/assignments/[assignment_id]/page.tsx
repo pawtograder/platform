@@ -5,13 +5,14 @@ import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssi
 import { useCourseController } from "@/hooks/useCourseController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, Tabs, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import AssignmentDashboard from "./assignmentDashboard";
 import { AssignmentExportControls } from "./assignmentsTable";
+import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 const VALID_TABS = ["dashboard", "assigned-grading"] as const;
@@ -126,9 +127,19 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Handout repo</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
-                    {assignment.template_repo}
-                  </Link>
+                  {assignment.repo_mode === "fork_from_prior_assignment" ? (
+                    <Text fontStyle="italic" color="fg.muted">
+                      Copied from a prior assignment
+                    </Text>
+                  ) : assignment.template_repo ? (
+                    <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
+                      {assignment.template_repo}
+                    </Link>
+                  ) : (
+                    <Text fontStyle="italic" color="fg.muted">
+                      No handout repository
+                    </Text>
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
@@ -144,7 +155,24 @@ export default function AssignmentHome() {
               </DataList.Item>
             </DataList.Root>
           </VStack>
-          {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
+          <HStack>
+            {assignment.repo_mode === "none" && (
+              <CreateSubmissionForStudentDialog
+                assignmentId={assignment.id}
+                groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
+                onSubmissionCreated={async () => {
+                  // Pull the just-created submission into the table cache; without
+                  // this the new row only appears after a full page reload.
+                  try {
+                    await tableController?.refetchAll();
+                  } catch (e) {
+                    Sentry.captureException(e);
+                  }
+                }}
+              />
+            )}
+            {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
+          </HStack>
         </HStack>
       </Box>
       <Suspense fallback={null}>
