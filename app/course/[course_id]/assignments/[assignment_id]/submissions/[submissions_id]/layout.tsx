@@ -2310,22 +2310,21 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </Text>
               )}
             </HStack>
-            {submission.sha && submission.repository && (
-              <HStack gap={1} flexWrap="wrap">
-                <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
-                  Commit {submission.sha.substring(0, 7)}
-                </Link>
-                <Link
-                  href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
-                  target="_blank"
-                >
-                  (Download)
-                </Link>
-              </HStack>
-            )}
-            {/* Most recent Pawtograder submission time, visible without opening Submission History
-                (#103b). Not sha-dependent, so it shows for PR / no-repo submissions too. */}
+            {/* Commit/download when present; timestamp always on the same row (#103b). */}
             <HStack gap={1} flexWrap="wrap">
+              {submission.sha && submission.repository && (
+                <>
+                  <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
+                    Commit {submission.sha.substring(0, 7)}
+                  </Link>
+                  <Link
+                    href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
+                    target="_blank"
+                  >
+                    (Download)
+                  </Link>
+                </>
+              )}
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
                 <Text color="fg.muted" data-visual-test="blackout">
                   · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
