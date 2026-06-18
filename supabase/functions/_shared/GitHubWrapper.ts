@@ -873,6 +873,27 @@ export function getRepoToCloneConsideringE2E(repository: string): string {
   }
   return repository;
 }
+
+/**
+ * Whether the webhook-direct / PR submission-file ingestion paths should write a
+ * canned file instead of cloning `repo` from GitHub.
+ *
+ * E2E student/fork repos (`<fixture>--<suffix>`) are synthetic and are not
+ * reliably cloneable in every E2E environment, so the submission-file ingestion
+ * that backs the webhook-direct e2e (push-no-autograder's push-direct path and
+ * pr-webhook-ingest's PR-head path) must mock them. Preview deploys opt in
+ * explicitly with E2E_MOCK_GITHUB=true, but the `pull_request_target` CI
+ * workflow only sets E2E_ENABLE=true — so honor either signal, otherwise the
+ * ingestion tries to clone in CI and the webhook fails with a 500. Production
+ * sets neither, and real repos never carry END_TO_END_REPO_PREFIX, so this is
+ * inert outside E2E.
+ */
+export function shouldUseE2eCannedFiles(repo: string): boolean {
+  if (!repo.startsWith(END_TO_END_REPO_PREFIX)) {
+    return false;
+  }
+  return Deno.env.get("E2E_MOCK_GITHUB") === "true" || Deno.env.get("E2E_ENABLE") === "true";
+}
 // Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
 const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");
 // Explicit opt-in flag for E2E testing

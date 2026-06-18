@@ -25,7 +25,7 @@
  */
 import * as Sentry from "npm:@sentry/deno";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { END_TO_END_REPO_PREFIX } from "./GitHubWrapper.ts";
+import { shouldUseE2eCannedFiles } from "./GitHubWrapper.ts";
 import { ingestSubmissionFilesFromRepo } from "./SubmissionIngestion.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
 
@@ -58,10 +58,11 @@ export async function ingestPrSubmissionFiles(params: IngestPrFilesParams): Prom
     return;
   }
 
-  // E2E fast path: under E2E_MOCK_GITHUB the head repo isn't a real GitHub repo,
-  // so bypass the fetch and write a single canned file (parallels the
+  // E2E fast path: a synthetic E2E head repo isn't a real GitHub repo, so bypass
+  // the fetch and write a single canned file (parallels the
   // autograder-create-submission E2E mock) so the flow is end-to-end testable.
-  const e2eMock = Deno.env.get("E2E_MOCK_GITHUB") === "true" && headRepo.startsWith(END_TO_END_REPO_PREFIX);
+  // Engaged under E2E_MOCK_GITHUB (preview) or E2E_ENABLE (pull_request_target CI).
+  const e2eMock = shouldUseE2eCannedFiles(headRepo);
   if (e2eMock) {
     const mockContents = `// PR submission mock for ${headRepo}@${headSha}\n`;
     const { error } = await adminSupabase.from("submission_files").insert({

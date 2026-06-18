@@ -101,20 +101,11 @@ jobs:
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
-          # Take the canned-file ingestion fast path for E2E-prefixed repos
-          # (END_TO_END_REPO_PREFIX) instead of cloning from GitHub. The
-          # webhook-direct e2e (push-no-autograder, pr-webhook-ingest,
-          # deployment-status-webhook) drive github-repo-webhook with synthetic
-          # `pawtograder-playground/test-e2e-student-repo--<id>` repos that don't
-          # exist on GitHub; without this the ingestion path calls cloneRepository
-          # and fails with "No octokit found", returning 500. The mock fast paths
-          # are all guarded by the END_TO_END_REPO_PREFIX check, so real repos
-          # used by other suites are unaffected.
-          E2E_MOCK_GITHUB=true
           END_TO_END_SECRET=not-a-secret
           EDGE_FUNCTION_SECRET=some-secret-value
-          # Auth gate for the github-repo-webhook EventBridge envelope, so the
-          # webhook-direct e2e above can authenticate and run in CI.
+          # Auth gate for the github-repo-webhook EventBridge envelope. Lets the
+          # webhook-direct e2e (push-no-autograder, pr-webhook-ingest) authenticate
+          # and run in CI; no real GitHub (E2E repos resolve via getRepoToCloneConsideringE2E).
           EVENTBRIDGE_SECRET=some-eventbridge-secret
           GITHUB_APP_ID=${GITHUB_APP_ID}
           GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
