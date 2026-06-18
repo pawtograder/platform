@@ -381,6 +381,12 @@ entrypoint = "./functions/assignment-create-all-repos/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/assignment-create-all-repos/*.html" ]
 
+[functions.list-github-orgs]
+enabled = true
+verify_jwt = false
+import_map = "./functions/list-github-orgs/deno.json"
+entrypoint = "./functions/list-github-orgs/index.ts"
+
 [functions.enrollments-add]
 enabled = true
 verify_jwt = false
