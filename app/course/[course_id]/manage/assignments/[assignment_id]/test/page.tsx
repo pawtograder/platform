@@ -123,9 +123,15 @@ export default function TestAssignmentPage() {
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
-                        <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
-                          {submission.sha.slice(0, 7)}
-                        </Link>
+                        {submission.sha && submission.repository ? (
+                          <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                            {submission.sha.slice(0, 7)}
+                          </Link>
+                        ) : submission.submitted_via === "manual" ? (
+                          <span>Manual</span>
+                        ) : (
+                          <span>Upload</span>
+                        )}
                       </Table.Cell>
                       <Table.Cell>
                         <Link {...submissionLinkProps(submissionHref)}>

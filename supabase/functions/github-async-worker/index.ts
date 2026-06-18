@@ -737,7 +737,11 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          args.org === "pawtograder-playground" &&
+          args.courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -827,7 +831,11 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          args.org === "pawtograder-playground" &&
+          args.courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -913,9 +921,25 @@ export async function processEnvelope(
         return true;
       }
       case "create_repo": {
-        const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
-          envelope.args as CreateRepoArgs;
+        const {
+          org,
+          repoName,
+          templateRepo,
+          isTemplateRepo,
+          courseSlug,
+          githubUsernames,
+          creationMethod,
+          sourceRepo,
+          branchProtection,
+          studentTeamPermission
+        } = envelope.args as CreateRepoArgs;
+        // The e2e-ignore short-circuit avoids hitting real GitHub for the
+        // pawtograder-playground org's e2e test fixtures. When the github stub
+        // is active we WANT the call to fall through (the stub records it for
+        // assertions and returns a fake SHA), so only skip when the stub is
+        // disabled.
         if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
           org === "pawtograder-playground" &&
           (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
         ) {
@@ -924,12 +948,30 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
-        // createRepo patches repo settings after generate (squash merge on, template flag, branch ruleset, …).
+        // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
+        const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
-          github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
+          github.createRepo(
+            org,
+            repoName,
+            effectiveSource,
+            {
+              is_template_repo: isTemplateRepo,
+              creation_method: creationMethod ?? "template",
+              branch_protection: branchProtection
+            },
+            scope
+          )
         );
         Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
-        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        await github.syncRepoPermissions(
+          org,
+          repoName,
+          courseSlug,
+          githubUsernames,
+          scope,
+          studentTeamPermission ? { studentTeamPermission } : undefined
+        );
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
@@ -997,7 +1039,11 @@ export async function processEnvelope(
         if (repoName.startsWith(org + "/")) {
           repoName = repoName.substring(org.length + 1);
         }
-        if (org === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          org === "pawtograder-playground" &&
+          courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1030,7 +1076,11 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
-        if (org === "pawtograder-playground" && repo?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          org === "pawtograder-playground" &&
+          repo?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1135,16 +1185,27 @@ export async function processEnvelope(
         return true;
       }
       case "sync_repo_to_handout": {
-        const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
-          envelope.args as SyncRepoToHandoutArgs;
+        const {
+          repository_id,
+          repository_full_name,
+          template_repo,
+          from_sha,
+          to_sha,
+          sync_strategy,
+          upstream_repo_full_name
+        } = envelope.args as SyncRepoToHandoutArgs;
 
         scope.setTag("repository_id", String(repository_id));
         scope.setTag("repository", repository_full_name);
         scope.setTag("template_repo", template_repo);
         scope.setTag("to_sha", to_sha);
+        scope.setTag("sync_strategy", sync_strategy ?? "template_pr");
+        if (upstream_repo_full_name) {
+          scope.setTag("upstream_repo_full_name", upstream_repo_full_name);
+        }
 
         Sentry.addBreadcrumb({
-          message: `Syncing ${repository_full_name} to handout SHA ${to_sha}`,
+          message: `Syncing ${repository_full_name} to handout SHA ${to_sha} via ${sync_strategy ?? "template_pr"}`,
           level: "info"
         });
 
@@ -1179,10 +1240,65 @@ export async function processEnvelope(
                 started_at: new Date().toISOString(),
                 msg_id: meta.msg_id,
                 from_sha,
-                to_sha
+                to_sha,
+                sync_strategy: sync_strategy ?? "template_pr"
               }
             })
             .eq("id", repository_id);
+
+          // For fork-based assignments (mode 2 / mode 3) GitHub already knows the
+          // upstream — one call to POST /repos/{owner}/{repo}/merge-upstream
+          // fast-forwards or merges the fork. Skip the PR-based handout-sync
+          // flow entirely on success. Fall back to template_pr if GitHub reports
+          // the branch has diverged or the repo is no longer a fork.
+          if (sync_strategy === "fork_merge_upstream") {
+            const merge = await github.mergeForkUpstream(
+              repository_full_name,
+              "main",
+              upstream_repo_full_name ?? null,
+              scope
+            );
+            if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update({
+                  synced_handout_sha: to_sha,
+                  synced_repo_sha: merge.mergedSha,
+                  desired_handout_sha: to_sha,
+                  sync_data: {
+                    last_sync_attempt: new Date().toISOString(),
+                    status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
+                    sync_strategy: "fork_merge_upstream",
+                    upstream_repo_full_name: upstream_repo_full_name ?? null,
+                    merge_sha: merge.mergedSha
+                  }
+                })
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+              recordMetric(
+                adminSupabase,
+                {
+                  method: envelope.method,
+                  status_code: 200,
+                  class_id: envelope.class_id,
+                  debug_id: envelope.debug_id,
+                  enqueued_at: meta.enqueued_at,
+                  log_id: envelope.log_id
+                },
+                scope
+              );
+              return true;
+            }
+            // dirty / not_a_fork → fall through to the template_pr path so the
+            // student can resolve conflicts via PR review.
+            scope.setTag("fork_merge_upstream_fallback", merge.kind);
+            Sentry.addBreadcrumb({
+              message:
+                `fork_merge_upstream returned ${merge.kind} for ${repository_full_name}; ` +
+                `falling back to template_pr sync`,
+              level: "warning"
+            });
+          }
 
           // Get syncedRepoSha - either from DB or fetch first commit if not set
           let syncedRepoSha = currentRepo?.synced_repo_sha;

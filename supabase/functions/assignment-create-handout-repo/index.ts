@@ -5,8 +5,7 @@ import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.t
 import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-
-const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
+import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -24,7 +23,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,classes(slug,github_org)")
+    .select(
+      "id, slug, class_id, repo_mode, submission_mode, source_assignment_id, template_repo, latest_template_sha, " +
+        "protect_block_force_push, protect_require_pull_request, protect_required_reviewers, " +
+        "classes(slug,github_org)"
+    )
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -35,28 +38,141 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
-  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   const handoutRepoOrg = assignment.classes.github_org;
-  if (!handoutRepoOrg) {
+  if (!handoutRepoOrg && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
     throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
+  scope.setTag("repo_mode", assignment.repo_mode);
+
+  let sourceAssignment: HandoutSourceAssignment | null = null;
+  if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
+    const { data: src } = await adminSupabase
+      .from("assignments")
+      .select("id, class_id, template_repo, latest_template_sha")
+      .eq("id", assignment.source_assignment_id)
+      .maybeSingle();
+    if (src) {
+      sourceAssignment = src as HandoutSourceAssignment;
+    }
+  }
+
+  const action = resolveHandoutRepoAction(
+    {
+      id: assignment.id,
+      class_id: assignment.class_id,
+      repo_mode: assignment.repo_mode,
+      source_assignment_id: assignment.source_assignment_id
+    },
+    sourceAssignment
+  );
+
+  if (action.kind === "noop") {
+    // repo_mode in ('none', 'no_submission'). Clear template_repo so downstream
+    // consumers don't try to use a stale value, and skip GitHub entirely.
+    if (assignment.template_repo) {
+      await adminSupabase.from("assignments").update({ template_repo: null }).eq("id", assignment_id);
+    }
+    return {
+      repo_name: null,
+      org_name: null,
+      skipped: true,
+      repo_mode: assignment.repo_mode
+    };
+  }
+
+  if (action.kind === "inherit_from_source") {
+    // For fork_from_prior_assignment we don't create a new handout repo; the
+    // student repos fork from each student's prior-assignment repo. We still
+    // copy the source assignment's template_repo + latest_template_sha onto
+    // this assignment so the handout-history UI and template-SHA-driven sync
+    // continue to work.
+    await adminSupabase
+      .from("assignments")
+      .update({
+        template_repo: sourceAssignment!.template_repo,
+        latest_template_sha: sourceAssignment!.latest_template_sha ?? null
+      })
+      .eq("id", assignment_id);
+    // Populate this assignment's autograder.workflow_sha from the inherited
+    // handout's grade.yml. Without this the auto-created autograder row keeps
+    // workflow_sha = NULL and every student submission is rejected with a
+    // "workflow sha mismatch" error. updateAutograderWorkflowHash bulk-updates
+    // all assignments sharing this template_repo, so the source assignment is
+    // unaffected (it already has the same value).
+    if (sourceAssignment!.template_repo) {
+      await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
+    }
+    return {
+      repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
+      org_name: sourceAssignment!.template_repo?.split("/")[0] ?? null,
+      inherited_from_source: true,
+      source_assignment_id: sourceAssignment!.id,
+      repo_mode: assignment.repo_mode
+    };
+  }
+
+  // action.kind === "create"
+  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
+  scope.setTag("handout_repo_name", handoutRepoName);
+  scope.setTag("handout_repo_org", handoutRepoOrg!);
+
+  // An explicit override (e.g. demo-mode provisioning) wins over the strategy's
+  // default source template repo.
+  const sourceTemplateRepo = template_repo_override ?? action.sourceRepo;
+  scope.setTag("source_template_repo", sourceTemplateRepo);
+
+  // The protect_* columns configure STUDENT repos. The staff handout repo must
+  // never require pull requests / approving reviews — that would block
+  // instructors pushing handout updates — so only carry force-push protection
+  // onto the handout (and only when configured for student repos).
+  const branchProtection = {
+    blockForcePush: assignment.protect_block_force_push ?? true,
+    requirePullRequest: false,
+    requiredReviewers: 0
+  };
+
+  await createRepo(
+    handoutRepoOrg!,
+    handoutRepoName,
+    sourceTemplateRepo,
+    {
+      is_template_repo: action.isTemplateRepo,
+      creation_method: "template",
+      branch_protection: branchProtection
+    },
+    scope
+  );
+  await syncRepoPermissions(
+    handoutRepoOrg!,
+    handoutRepoName,
+    assignment.classes.slug,
+    [],
+    scope,
+    action.studentTeamPermission ? { studentTeamPermission: action.studentTeamPermission } : undefined
+  );
+  // Branch protection is applied inside createRepo (both the fresh-create and
+  // the pre-existing-repo branches), so we no longer need a redundant call here.
+  await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+
+  // Only persist the template_repo pointer after GitHub creation + permission
+  // sync succeed, so a partial failure does not leave the assignment pointing
+  // at a repo that does not exist. For pr-mode the handout IS the upstream repo
+  // (students fork it and PR back to it), so point upstream_repo at the same
+  // repo here — the github-repo-webhook PR ingestion matches upstream_repo
+  // against the repo a PR targets, and handout == upstream must never drift.
+  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
   await adminSupabase
     .from("assignments")
     .update({
-      template_repo: `${handoutRepoOrg}/${handoutRepoName}`
+      template_repo: handoutFullName,
+      ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
-  scope.setTag("handout_repo_name", handoutRepoName);
-  scope.setTag("handout_repo_org", handoutRepoOrg);
-  const sourceTemplateRepo = template_repo_override ?? TEMPLATE_HANDOUT_REPO_NAME;
-  scope.setTag("source_template_repo", sourceTemplateRepo);
-  await createRepo(handoutRepoOrg, handoutRepoName, sourceTemplateRepo, { is_template_repo: true }, scope);
-  await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, [], scope);
-  await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 
   return {
     repo_name: handoutRepoName,
-    org_name: handoutRepoOrg
+    org_name: handoutRepoOrg,
+    repo_mode: assignment.repo_mode
   };
 }
 

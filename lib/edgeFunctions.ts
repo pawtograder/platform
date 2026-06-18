@@ -146,6 +146,310 @@ export async function assignmentGroupInstructorMoveStudent(
 ) {
   return await invokeEdgeFunction(supabase, "assignment-group-instructor-move-student", { body: params });
 }
+export type NoRepoSubmissionFile = {
+  /** Display name (e.g. "presentation.pdf"). */
+  name: string;
+  /** Full path within the `submission-files` bucket. */
+  storage_key: string;
+  file_size: number;
+  mime_type: string | null;
+};
+
+/**
+ * Create a submission for an assignment with repo_mode='none'. The caller must
+ * upload each file to the `submission-files` storage bucket first; this RPC
+ * just inserts the submission row + the submission_files records referencing
+ * the storage keys. Returns the new submission id.
+ */
+export async function createNoRepoSubmission(
+  params: { assignment_id: number; files: NoRepoSubmissionFile[] },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  const { data, error } = await (supabase.rpc as CallableFunction)("create_no_repo_submission", {
+    p_assignment_id: params.assignment_id,
+    p_files: params.files
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to create no-repo submission",
+      recoverable: false
+    });
+  }
+  if (typeof data !== "number" || !Number.isFinite(data)) {
+    throw new EdgeFunctionError({
+      details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+      message: "Failed to create no-repo submission",
+      recoverable: false
+    });
+  }
+  return data;
+}
+
+/**
+ * A file row to register against an upload submission: either inline text
+ * (`contents` + `is_binary:false`, rendered by the existing file viewer like a
+ * git text file) or a binary object already uploaded to storage (`storage_key`
+ * + `is_binary:true`, under the submission-id-scoped prefix so its read RLS
+ * applies).
+ */
+export type AttachSubmissionFile = {
+  name: string;
+  file_size: number;
+  mime_type: string | null;
+  is_binary: boolean;
+  storage_key?: string | null;
+  contents?: string | null;
+};
+
+/**
+ * Phase two of the no-repo upload flow: register the uploaded files against an
+ * already-created `upload` submission.
+ */
+export async function attachNoRepoSubmissionFiles(
+  params: { submission_id: number; files: AttachSubmissionFile[] },
+  supabase: SupabaseClient<Database>
+): Promise<void> {
+  const { error } = await supabase.rpc("attach_no_repo_submission_files", {
+    p_submission_id: params.submission_id,
+    p_files: params.files
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to attach uploaded files to submission",
+      recoverable: false
+    });
+  }
+}
+
+/** A file the student picked in the browser, plus its target storage path. */
+export type PendingUploadFile = { name: string; file: Blob; size: number; mimeType: string | null };
+
+// Text files (markdown, source, etc.) are stored inline so the existing file
+// viewer renders them. Anything larger than this, or not recognized as text,
+// is stored as a binary object in the submission-files bucket instead.
+const INLINE_TEXT_MAX_BYTES = 1024 * 1024;
+const INLINE_TEXT_EXTENSIONS = new Set([
+  "md",
+  "markdown",
+  "mdown",
+  "mkdn",
+  "mkd",
+  "txt",
+  "text",
+  "rst",
+  "csv",
+  "tsv",
+  "json",
+  "jsonl",
+  "yaml",
+  "yml",
+  "toml",
+  "xml",
+  "html",
+  "htm",
+  "css",
+  "scss",
+  "less",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "py",
+  "java",
+  "c",
+  "h",
+  "cpp",
+  "hpp",
+  "cc",
+  "cs",
+  "go",
+  "rb",
+  "rs",
+  "php",
+  "sh",
+  "bash",
+  "zsh",
+  "sql",
+  "r",
+  "kt",
+  "swift",
+  "scala",
+  "pl",
+  "lua",
+  "ini",
+  "cfg",
+  "conf",
+  "env",
+  "gitignore",
+  "dockerfile",
+  "makefile",
+  "log",
+  "tex"
+]);
+
+/** Whether a picked file should be stored inline as text rather than as a binary blob. */
+function isInlineTextUpload(name: string, mimeType: string | null, size: number): boolean {
+  if (size > INLINE_TEXT_MAX_BYTES) return false;
+  if (
+    mimeType &&
+    (mimeType.startsWith("text/") ||
+      mimeType === "application/json" ||
+      mimeType === "application/xml" ||
+      mimeType === "application/javascript")
+  ) {
+    return true;
+  }
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : name.toLowerCase();
+  return INLINE_TEXT_EXTENSIONS.has(ext);
+}
+
+/**
+ * Orchestrate a file-upload submission for a `repo_mode='none'` assignment:
+ * create an empty active submission, upload each file to the `submission-files`
+ * bucket under `classes/{class}/profiles/{profile_or_group}/submissions/
+ * {submission_id}/files/{name}`, then register the file rows. Returns the new
+ * submission id.
+ *
+ * When `target` is omitted the caller submits for themselves (student flow).
+ * When `target` is provided the caller is an instructor/grader submitting on
+ * behalf of a student or group (`create_submission_for_student`).
+ */
+export async function uploadNoRepoSubmission(
+  params: {
+    assignment_id: number;
+    files: PendingUploadFile[];
+    target?: { profile_id?: string; assignment_group_id?: number };
+  },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  let submissionId: number;
+  if (params.target) {
+    const { data, error } = await supabase.rpc("create_submission_for_student", {
+      p_assignment_id: params.assignment_id,
+      p_profile_id: params.target.profile_id ?? undefined,
+      p_assignment_group_id: params.target.assignment_group_id ?? undefined
+    });
+    if (error) {
+      Sentry.captureException(error);
+      throw new EdgeFunctionError({
+        details: error.message,
+        message: "Failed to create submission on behalf of student",
+        recoverable: false
+      });
+    }
+    if (typeof data !== "number" || !Number.isFinite(data)) {
+      throw new EdgeFunctionError({
+        details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+        message: "Failed to create submission on behalf of student",
+        recoverable: false
+      });
+    }
+    submissionId = data;
+  } else {
+    submissionId = await createNoRepoSubmission({ assignment_id: params.assignment_id, files: [] }, supabase);
+  }
+
+  const { data: sub, error: subErr } = await supabase
+    .from("submissions")
+    .select("class_id, profile_id, assignment_group_id")
+    .eq("id", submissionId)
+    .single();
+  if (subErr || !sub) {
+    throw new EdgeFunctionError({
+      details: subErr?.message ?? "submission not found after creation",
+      message: "Failed to resolve submission for upload",
+      recoverable: false
+    });
+  }
+
+  const scopeId = sub.assignment_group_id ?? sub.profile_id;
+  const prefix = `classes/${sub.class_id}/profiles/${scopeId}/submissions/${submissionId}/files`;
+  const attached: AttachSubmissionFile[] = [];
+  const usedNames = new Set<string>();
+  for (const f of params.files) {
+    // Keep the on-disk name but strip path separators so a malicious / odd name
+    // can't escape the submission's prefix.
+    let safeName = f.name.replace(/[/\\]/g, "_");
+    // Two distinct files can sanitize to the same name; disambiguate so neither
+    // the storage key nor the file row overwrites the other (e.g. `foo (2).md`).
+    if (usedNames.has(safeName)) {
+      const dot = safeName.lastIndexOf(".");
+      const base = dot > 0 ? safeName.slice(0, dot) : safeName;
+      const ext = dot > 0 ? safeName.slice(dot) : "";
+      let n = 2;
+      while (usedNames.has(`${base} (${n})${ext}`)) n++;
+      safeName = `${base} (${n})${ext}`;
+    }
+    usedNames.add(safeName);
+    if (isInlineTextUpload(safeName, f.mimeType, f.size)) {
+      // Store text inline (like git text files) so the file viewer renders it.
+      const contents = await f.file.text();
+      attached.push({ name: safeName, file_size: f.size, mime_type: f.mimeType, is_binary: false, contents });
+      continue;
+    }
+    const storageKey = `${prefix}/${safeName}`;
+    const { error: uploadErr } = await supabase.storage.from("submission-files").upload(storageKey, f.file, {
+      contentType: f.mimeType ?? undefined,
+      upsert: true
+    });
+    if (uploadErr) {
+      Sentry.captureException(uploadErr);
+      throw new EdgeFunctionError({
+        details: uploadErr.message,
+        message: `Failed to upload ${f.name}`,
+        recoverable: false
+      });
+    }
+    attached.push({
+      name: safeName,
+      file_size: f.size,
+      mime_type: f.mimeType,
+      is_binary: true,
+      storage_key: storageKey
+    });
+  }
+
+  await attachNoRepoSubmissionFiles({ submission_id: submissionId, files: attached }, supabase);
+  return submissionId;
+}
+
+/**
+ * Create an instructor-authored stub submission for an assignment with
+ * repo_mode='no_submission' (e.g. presentations / oral exams). Returns the
+ * submission id — either the newly-created one or, if a manual submission was
+ * already active for that profile/group, the existing one.
+ */
+export async function createManualSubmission(
+  params: { assignment_id: number; profile_id?: string; assignment_group_id?: number },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  const { data, error } = await (supabase.rpc as CallableFunction)("create_manual_submission", {
+    p_assignment_id: params.assignment_id,
+    p_profile_id: params.profile_id ?? null,
+    p_assignment_group_id: params.assignment_group_id ?? null
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to create manual submission",
+      recoverable: false
+    });
+  }
+  if (typeof data !== "number" || !Number.isFinite(data)) {
+    throw new EdgeFunctionError({
+      details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+      message: "Failed to create manual submission",
+      recoverable: false
+    });
+  }
+  return data;
+}
+
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
   const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });
   if (ret.data) {
@@ -165,6 +469,67 @@ export async function activateSubmission(params: { submission_id: number }, supa
     recoverable: false
   });
 }
+export type CheckAppInstallationResponse = {
+  installed: boolean;
+  repo_accessible: boolean;
+  org: string;
+  install_url: string;
+};
+
+/**
+ * Checks whether the Pawtograder GitHub App is installed in (and can see) `repo`
+ * ("owner/name"). Used by the assignment config form to gate PR-mode assignments
+ * whose upstream/handout repo may be in a different org than the class.
+ */
+export async function checkAppInstallation(
+  params: { repo: string; class_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<CheckAppInstallationResponse> {
+  return await invokeEdgeFunction<CheckAppInstallationResponse>(supabase, "github-check-app-installation", {
+    body: params
+  });
+}
+
+export type PrLinkConfirmResponse = { submission_id: number | null };
+
+/**
+ * Confirms which candidate pull request is the submission PR for a pr-mode
+ * assignment and ingests its current state as a submission. Used by the student
+ * "which PR is your submission?" picker and by staff linking a PR manually.
+ */
+export async function confirmPrLink(
+  params: { link_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<PrLinkConfirmResponse> {
+  return await invokeEdgeFunction<PrLinkConfirmResponse>(supabase, "pr-link-confirm", {
+    body: params
+  });
+}
+
+export type GetPrBaseFilesResponse = {
+  /** Text files of the upstream base tree as { "path": "contents" }. */
+  files: Record<string, string>;
+  /** Present when the base fetch failed; the caller should fall back to the GitHub compare link. */
+  error?: string;
+};
+
+/**
+ * Fetch the upstream BASE tree (text files) for a pr-mode submission so the
+ * Files view can render an inline base->head diff (head comes from the already
+ * loaded `submission_files`). Results are served from an immutable, content
+ * addressed cache; only one GitHub clone happens per (upstream_repo, base_sha).
+ * Returns `{ files: {} }` for non-pr submissions or on clone failure so the UI
+ * can degrade to the GitHub compare link.
+ */
+export async function getPrBaseFiles(
+  submissionId: number,
+  supabase: SupabaseClient<Database>
+): Promise<GetPrBaseFilesResponse> {
+  return await invokeEdgeFunction<GetPrBaseFilesResponse>(supabase, "get-pr-base-files", {
+    body: { submission_id: submissionId }
+  });
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,

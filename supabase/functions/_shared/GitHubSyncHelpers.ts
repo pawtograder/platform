@@ -154,15 +154,36 @@ export async function getFirstCommit(repoFullName: string, branch: string, scope
 
   const [owner, repo] = repoFullName.split("/");
 
-  // Start from the branch HEAD and traverse back to find the first commit
+  // Start from the branch HEAD and traverse back to find the first commit.
   let oldestSha: string | undefined;
-  const { data: headRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branch}`
-  });
 
-  let currentSha = headRef.object.sha;
+  const fetchHeadSha = async (br: string): Promise<string> => {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${br}`
+    });
+    return data.object.sha;
+  };
+
+  // The requested branch may not exist (e.g. a fork whose default branch is not
+  // "main"); fall back to the repo's actual default branch in that case.
+  let currentSha: string;
+  try {
+    currentSha = await fetchHeadSha(branch);
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    if (status !== 404) throw e;
+    const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    const defaultBranch = repoData.default_branch;
+    if (!defaultBranch || defaultBranch === branch) throw e;
+    scope?.addBreadcrumb({
+      message: `Branch ${branch} not found in ${repoFullName}; falling back to default branch ${defaultBranch}`,
+      category: "git",
+      level: "info"
+    });
+    currentSha = await fetchHeadSha(defaultBranch);
+  }
 
   // Keep following parent commits until we find one with no parents
   while (currentSha) {
