@@ -120,9 +120,12 @@ test.describe("GitHub org template configuration", () => {
     expect(resolved.handout_template_repo).toBe(overrideHandout);
     expect(resolved.solution_template_repo).toBe(overrideSolution);
 
-    // Clear the override; org default should re-apply.
+    // Clear the override (empty string clears; a NULL/omitted param leaves it unchanged);
+    // org default should re-apply.
     const { error: clearOverrideError } = await supabase.rpc("set_class_template_overrides", {
-      p_class_id: course.id
+      p_class_id: course.id,
+      p_handout: "",
+      p_solution: ""
     });
     expect(clearOverrideError).toBeNull();
     resolved = await resolve(course.id);

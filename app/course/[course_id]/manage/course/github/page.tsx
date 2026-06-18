@@ -62,10 +62,13 @@ export default function CourseGitHubSettingsPage() {
     setSaving(true);
     const supabase = createClient();
     try {
+      // Send both fields every save: an empty string clears the override (inherit the org
+      // default), a non-empty value sets it. (Passing undefined/NULL would leave the column
+      // unchanged, which would make "leave blank to inherit" silently fail to clear.)
       const { error } = await supabase.rpc("set_class_template_overrides", {
         p_class_id: courseIdNum,
-        p_handout: handout.trim() === "" ? undefined : handout.trim(),
-        p_solution: solution.trim() === "" ? undefined : solution.trim()
+        p_handout: handout.trim(),
+        p_solution: solution.trim()
       });
       if (error) throw error;
       toaster.success({ title: "GitHub template settings saved" });
