@@ -53,6 +53,17 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),
+    // Coverage builds: keep the Node server bundle UNMINIFIED. Server-side
+    // V8 coverage records byte ranges over the compiled bundle and maps
+    // them back through the source map; minified output collapses many
+    // statements onto a single position, so the resolution lands on
+    // coarse/wrong original lines (covered code attributed to the wrong
+    // function, called-function bodies dropped). Next gates node-server
+    // minification on this flag (webpack-config.js: `isNodeServer &&
+    // config.experimental.serverMinification`), default true — the webpack
+    // tweak below also forces `optimization.minimize = false` on the
+    // server, but disabling it here keeps Next's own pipeline honest.
+    ...(coverageBuild ? { serverMinification: false } : {}),
     // Coverage builds: drop the client Router Cache TTL to 0 so EVERY
     // client-side navigation re-fetches its RSC segment from the server.
     // Server Components only execute server-side when their segment is
@@ -94,22 +105,28 @@ const nextConfig: NextConfig = {
         }
   },
   // Coverage-build webpack tweaks:
-  // - Client: disable SWC minification so V8 byte ranges → source-map
-  //   resolution stays byte-precise. With minify on, inlined wrappers
-  //   and dead-coded branches lose their probes, producing skewed
-  //   per-line counts. Bundle size is irrelevant in CI.
-  // - Server: emit source maps. We KNOW that NODE_V8_COVERAGE does
-  //   not currently capture Next 15's vm-loaded Server Component
-  //   bundles, so these maps are mostly unused today — but we leave
-  //   them in so a future Inspector-attach path (see COVERAGE.md
-  //   v2 plan) gets the source mapping for free.
+  // - Both bundles: disable SWC/Terser minification. V8 records byte
+  //   ranges over the COMPILED output and we map them back through the
+  //   source map. Minified code collapses many statements onto a single
+  //   position, so the byte-range→source-map resolution lands on
+  //   coarse/wrong original lines — covered code gets attributed to the
+  //   wrong function and called-function bodies vanish (the "coverage
+  //   pattern doesn't line up" symptom on e.g. app/actions.ts). Keeping
+  //   the output unminified preserves a ~1:1 statement layout so the
+  //   resolution stays line-accurate. Bundle size is irrelevant in CI.
+  //   (The server is ALSO gated by experimental.serverMinification, set
+  //   false above; this override is the belt to that suspenders.)
+  // - Server: additionally emit source maps so the Inspector-based
+  //   server collector (instrumentation.ts) can resolve the vm-loaded
+  //   Server Component / server-action bundles back to source.
   ...(coverageBuild
     ? {
         webpack: (config: { devtool?: string; optimization?: { minimize?: boolean } }, ctx: { isServer: boolean }) => {
+          if (config.optimization) {
+            config.optimization.minimize = false;
+          }
           if (ctx.isServer) {
             config.devtool = "source-map";
-          } else if (config.optimization) {
-            config.optimization.minimize = false;
           }
           return config;
         }
