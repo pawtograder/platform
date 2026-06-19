@@ -1,0 +1,80 @@
+{{- /*
+PodDisruptionBudgets — one per enabled multi-replica component so a node
+drain or cluster-autoscaler event can never evict an entire tier at once.
+Single-replica components are deliberately skipped: minAvailable:1 over one
+replica blocks voluntary eviction outright and wedges drains.
+
+Postgres (always 1 replica) gets an explicit opt-in via postgres.pdb.enabled
+for installs that WANT drains to stop and wait at the database.
+*/ -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $ctx := . }}
+{{- /* component key -> (values block, selector component label) */}}
+{{- $components := dict
+      "web"       (list .Values.web "web")
+      "kong"      (list .Values.kong "kong")
+      "rest"      (list .Values.rest "rest")
+      "auth"      (list .Values.auth "auth")
+      "realtime"  (list .Values.realtime "realtime")
+      "storage"   (list .Values.storage "storage")
+      "imgproxy"  (list .Values.imgproxy "imgproxy")
+      "supavisor" (list .Values.supavisor "supavisor")
+}}
+{{- range $name, $pair := $components }}
+{{- $comp := index $pair 0 }}
+{{- $label := index $pair 1 }}
+{{- if and $comp.enabled (gt (int ($comp.replicas | default 1)) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" $ctx "component" $label) }}
+  namespace: {{ $ctx.Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $label) | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $label) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- /* edge functions: replica count comes from the HPA when autoscaling */}}
+{{- $edgeReplicas := int .Values.edgeFunctions.replicas }}
+{{- if .Values.edgeFunctions.autoscaling.enabled }}
+{{- $edgeReplicas = int .Values.edgeFunctions.autoscaling.minReplicas }}
+{{- end }}
+{{- if and .Values.edgeFunctions.enabled (gt $edgeReplicas 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "functions") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+{{- end }}
+{{- if and .Values.postgres.enabled .Values.postgres.pdb.enabled }}
+---
+# Blocks voluntary eviction of the single postgres pod entirely: drains hang
+# at this pod until an operator deletes it deliberately. That is the point —
+# a speed bump in front of an otherwise-silent database outage.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+{{- end }}
+{{- end }}

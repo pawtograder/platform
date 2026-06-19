@@ -24,6 +24,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "storage") | nindent 4 }}
 spec:
   replicas: {{ .Values.storage.replicas }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.storage) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
@@ -34,10 +35,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.storage) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.storage) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.storage.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: storage
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.storage.image) }}
           imagePullPolicy: {{ .Values.storage.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.storage) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" .Values.storage) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.storage.service.port }}
@@ -147,6 +153,7 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.storage "name" "storage") | nindent 6 }}
 {{- if and (eq .Values.storage.backend "file") .Values.storage.persistence.enabled }}
 ---
 apiVersion: v1

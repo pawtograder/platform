@@ -34,10 +34,13 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.imgproxy) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.imgproxy) | nindent 6 }}
       containers:
         - name: imgproxy
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.imgproxy.image) }}
           imagePullPolicy: {{ .Values.imgproxy.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.imgproxy) | nindent 10 }}
           ports:
             - name: http
               containerPort: 8080

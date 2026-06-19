@@ -37,12 +37,20 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
-      securityContext:
-        fsGroup: 999
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
+      {{- /* fsGroup 999 + seccomp; see postgres.podSecurityContext in values */}}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
+      # Long grace so a busy postgres can checkpoint + flush WAL instead of
+      # being SIGKILLed 30s into a drain and paying a recovery replay on the
+      # next boot.
+      terminationGracePeriodSeconds: {{ .Values.postgres.terminationGracePeriodSeconds | default 600 }}
       containers:
         - name: postgres
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          {{- /* opted out by default (postgres.containerSecurityContext: {});
+               renders only if an overlay sets one */}}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 10 }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -144,6 +152,8 @@ spec:
         - name: postgres-exporter
           image: {{ .Values.monitoring.postgresExporter.image.repository }}:{{ .Values.monitoring.postgresExporter.image.tag }}
           imagePullPolicy: {{ .Values.monitoring.postgresExporter.image.pullPolicy }}
+          {{- /* the exporter is a static nonroot binary — global default applies */}}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.monitoring.postgresExporter) | nindent 10 }}
           ports:
             - name: metrics
               containerPort: 9187
