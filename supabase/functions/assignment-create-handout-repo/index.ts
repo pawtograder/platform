@@ -120,9 +120,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // An explicit override (e.g. demo-mode provisioning) wins; otherwise resolve the
   // configured handout template (per-class override -> github_org default -> hardcoded
   // constant). resolveTemplateRepos already falls back to the same constant the strategy
-  // uses as action.sourceRepo, so it supersedes it for the create case.
-  const { handout: resolvedHandoutTemplate } = await resolveTemplateRepos(adminSupabase, class_id);
-  const sourceTemplateRepo = template_repo_override ?? resolvedHandoutTemplate;
+  // uses as action.sourceRepo, so it supersedes it for the create case. Resolve lazily so an
+  // explicit override skips the extra resolve_class_template_repos round-trip.
+  const sourceTemplateRepo = template_repo_override ?? (await resolveTemplateRepos(adminSupabase, class_id)).handout;
   scope.setTag("source_template_repo", sourceTemplateRepo);
 
   // The protect_* columns configure STUDENT repos. The staff handout repo must

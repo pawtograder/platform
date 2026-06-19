@@ -115,14 +115,19 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       setCommitMessage(`Update ${currentPath} via Pawtograder`);
     } catch (err) {
       const message = err instanceof EdgeFunctionError || err instanceof Error ? err.message : String(err);
-      // A missing file is an editable starting point (create-on-save), not a hard error.
-      if (message === "Not Found") {
+      const details = err instanceof EdgeFunctionError ? err.details : "";
+      // A genuinely-missing file is an editable starting point (create-on-save). But other
+      // 404-shaped errors serialize to the same message "Not Found" with the specifics in
+      // `details` — notably the org-not-installed case ("No GitHub App installation found...").
+      // Only treat it as create-on-save when the details confirm a missing FILE; otherwise surface
+      // the actionable error instead of presenting a misleading blank "Create file" buffer.
+      if (message === "Not Found" && /not found in/i.test(details)) {
         setContent("");
         setSha(undefined);
         setDirty(false);
         setCommitMessage(`Create ${currentPath} via Pawtograder`);
       } else {
-        setLoadError(message);
+        setLoadError(details || message);
       }
     } finally {
       setLoading(false);
@@ -303,7 +308,10 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
         </VStack>
         {paths && paths.length > 0 && (
           <Field label="File" w="auto">
-            <NativeSelect.Root size="sm" w="320px">
+            {/* Disable while a save is in flight (or a load is pending): switching files mid-save
+                would let the in-flight save's setSha/setDirty resolve against the newly-loaded
+                file, clobbering its sha and corrupting optimistic-concurrency on the next save. */}
+            <NativeSelect.Root size="sm" w="320px" disabled={saving || loading}>
               <NativeSelect.Field
                 aria-label="Select file to edit"
                 value={currentPath}

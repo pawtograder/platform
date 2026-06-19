@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { setActingAsAdminCookie } from "@/lib/adminActingAs";
 import { createClient } from "@/utils/supabase/client";
@@ -33,8 +33,8 @@ export function EnterCourseAsInstructorButton({
 }: {
   classId: number;
   children: ReactNode;
-  size?: string;
-  variant?: string;
+  size?: ButtonProps["size"];
+  variant?: ButtonProps["variant"];
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -43,8 +43,7 @@ export function EnterCourseAsInstructorButton({
     await enterCourse(classId, router, () => setLoading(false));
   }, [classId, router]);
   return (
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    <Button size={size as any} variant={variant as any} onClick={onClick} loading={loading}>
+    <Button size={size} variant={variant} onClick={onClick} loading={loading}>
       {children}
     </Button>
   );

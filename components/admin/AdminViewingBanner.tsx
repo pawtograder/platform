@@ -1,7 +1,7 @@
 "use client";
 
 import { useClassProfiles, useIsAdmin } from "@/hooks/useClassProfiles";
-import { getActingAsAdminCookie } from "@/lib/adminActingAs";
+import { clearActingAsAdminCookie, getActingAsAdminCookie } from "@/lib/adminActingAs";
 import { Box, HStack, Link, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -51,7 +51,18 @@ export default function AdminViewingBanner() {
             as a platform admin.
           </Text>
         </HStack>
-        <Link href="/admin" fontSize="sm" fontWeight="medium" color="orange.fg">
+        <Link
+          href="/admin"
+          fontSize="sm"
+          fontWeight="medium"
+          color="orange.fg"
+          // Clear the acting-as flag on exit so the banner doesn't keep showing on this course for
+          // the rest of the session (the cookie is otherwise never cleared, which misleadingly
+          // marks even a later genuine-instructor visit as impersonation).
+          onClick={() => {
+            if (typeof course_id === "string") clearActingAsAdminCookie(course_id);
+          }}
+        >
           Back to Admin Portal
         </Link>
       </HStack>

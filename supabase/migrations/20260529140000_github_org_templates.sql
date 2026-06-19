@@ -121,10 +121,10 @@ BEGIN
 
     -- Reject malformed values early: a non-empty override must be exactly "owner/repo".
     -- (An invalid value would otherwise fail opaquely in createRepo at assignment-creation time.)
-    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/]+/[^/]+$' THEN
+    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
         RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
     END IF;
-    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/]+/[^/]+$' THEN
+    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
         RAISE EXCEPTION 'Invalid solution template repo "%": expected "owner/repo"', p_solution;
     END IF;
 
@@ -204,10 +204,10 @@ BEGIN
     END IF;
 
     -- A non-empty default must be exactly "owner/repo" (NULL/empty falls back to the constant).
-    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/]+/[^/]+$' THEN
+    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
         RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
     END IF;
-    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/]+/[^/]+$' THEN
+    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
         RAISE EXCEPTION 'Invalid solution template repo "%": expected "owner/repo"', p_solution;
     END IF;
 

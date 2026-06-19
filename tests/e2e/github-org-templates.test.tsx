@@ -130,6 +130,9 @@ test.describe("GitHub org template configuration", () => {
     expect(clearOverrideError).toBeNull();
     resolved = await resolve(course.id);
     expect(resolved.handout_template_repo).toBe(orgHandout);
+    // Both overrides were cleared, so the org default must re-apply to the solution repo too
+    // (guards against the clear logic only resetting one column, or swapping the two columns).
+    expect(resolved.solution_template_repo).toBe(orgSolution);
   });
 
   test("admin can set org defaults from the GitHub Orgs dashboard", async ({ page }) => {
