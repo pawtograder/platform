@@ -115,12 +115,48 @@ async function enrichBlock(block: LcovBlock): Promise<string[]> {
   }
 
   // Build the new DA list: existing + filled.
+  //
+  // Fill an unprobed line ONLY when it sits INSIDE a covered span — the
+  // nearest probed line ABOVE and the nearest probed line BELOW were both
+  // executed. V8 precise coverage emits byte ranges for statement starts
+  // but not for continuation lines (object-literal args, multi-line
+  // expressions/templates, JSX text & props), so monocart leaves those
+  // with no DA entry. Inside an executed statement that's a false "no
+  // data"; inside a function that never ran it is genuinely uncovered.
+  //
+  // The old heuristic filled EVERY gap line with hit=1 as long as the file
+  // had any coverage. Because each `export const fooAction = async …`
+  // assignment in a "use server" module (e.g. app/actions.ts) runs at
+  // module load, the file always "has coverage" — so the continuation
+  // lines inside never-called actions got painted as hit, producing a
+  // scattered green/red pattern on functions that never executed (the
+  // "coverage doesn't line up" symptom). Requiring BOTH neighbours to be
+  // covered confines the fill to regions that actually ran, while still
+  // closing the gray gaps inside genuinely-executed code (the original
+  // JSX-continuation use case).
+  const probedLines = [...existing.keys()].sort((a, b) => a - b);
+  // nearest probed line strictly greater than `ln` was executed?
+  const coveredBelow = (ln: number): boolean => {
+    let lo = 0;
+    let hi = probedLines.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (probedLines[mid] <= ln) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < probedLines.length && (existing.get(probedLines[lo]) ?? 0) > 0;
+  };
+
   const filled = new Map<number, number>(existing);
+  let aboveCovered = false; // nearest probed line above the cursor was executed
   for (let i = 0; i < sourceLines.length; i++) {
     const ln = i + 1; // 1-based
-    if (filled.has(ln)) continue;
+    if (existing.has(ln)) {
+      aboveCovered = (existing.get(ln) ?? 0) > 0;
+      continue;
+    }
     if (isPureCommentOrStructure(sourceLines[i])) continue;
-    filled.set(ln, 1);
+    if (aboveCovered && coveredBelow(ln)) filled.set(ln, 1);
   }
 
   // Rebuild the block: keep TN/SF, FN/FNF/FNH/FNDA as-is, replace DA/LF/LH,
