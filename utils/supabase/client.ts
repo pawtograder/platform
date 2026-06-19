@@ -12,7 +12,12 @@ export const createClient = () => {
   return createBrowserClient<Database>(supabaseUrl, supabaseAnonKey, {
     realtime: {
       worker: true
-    }
+    },
+    // See utils/supabase/middleware.ts: scope auth cookies to the parent domain
+    // for cross-channel-host sessions when NEXT_PUBLIC_SESSION_COOKIE_DOMAIN is set.
+    ...(process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN
+      ? { cookieOptions: { domain: process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN } }
+      : {})
   });
 };
 

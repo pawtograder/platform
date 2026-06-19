@@ -69,6 +69,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {
     scope?.setTag("get_file_error", JSON.stringify(error));
+    // No GitHub App installation for this org (a course whose org hasn't installed
+    // the app, or a synthetic org in e2e). This is an expected, instructor-actionable
+    // condition — surface it as a clean 404 instead of a generic 500 that pages us
+    // via Sentry.
+    if (error instanceof Error && error.message.includes("No octokit found")) {
+      scope?.setTag("get_file_no_installation", "true");
+      throw new NotFoundError(
+        `No GitHub App installation found for organization ${orgName}. Install the Pawtograder GitHub App on ${orgName} to read ${path}.`
+      );
+    }
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
       scope?.setTag("get_file_error_status", (error as { status: number }).status.toString());
       // Add a delay to help clients get over racing with repo creation

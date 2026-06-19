@@ -1,6 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { channelHostSuffix, currentChannel, hostForChannel, STABLE_CHANNEL } from "@/utils/channels";
 export const updateSession = async (request: NextRequest) => {
   try {
     // Create a new Headers object to inject validated user ID
@@ -17,6 +18,13 @@ export const updateSession = async (request: NextRequest) => {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        // Cross-subdomain session: when set (e.g. ".staging.pawtograder.net"),
+        // scope the auth cookies to the parent domain so a session survives a
+        // redirect between deployment-channel hosts (<channel>.<base>). Unset on
+        // local/supabase.com/single-channel installs => host-only cookies, unchanged.
+        ...(process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN
+          ? { cookieOptions: { domain: process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN } }
+          : {}),
         cookies: {
           getAll() {
             return request.cookies.getAll();
@@ -62,6 +70,32 @@ export const updateSession = async (request: NextRequest) => {
         const originalPathWithSearch = `${request.nextUrl.pathname}${request.nextUrl.search}`;
         signInUrl.searchParams.set("redirect", originalPathWithSearch);
         return NextResponse.redirect(signInUrl);
+      }
+    }
+
+    // A/B deployment channels: send each course to the host running its pinned
+    // channel's build (classes.deployment_channel). Entirely gated on
+    // NEXT_PUBLIC_CHANNEL_HOST_SUFFIX so deployments without channels (local,
+    // supabase.com, single-channel staging/prod) do ZERO extra work — no DB
+    // lookup. Only /course/<id> is course-scoped, so that's the only path where
+    // a channel can be resolved.
+    if (channelHostSuffix() && claims?.data?.claims) {
+      const courseMatch = request.nextUrl.pathname.match(/^\/course\/(\d+)(?:\/|$)/);
+      if (courseMatch) {
+        const courseId = Number(courseMatch[1]);
+        const { data: cls } = await supabase
+          .from("classes")
+          .select("deployment_channel")
+          .eq("id", courseId)
+          .maybeSingle();
+        const courseChannel = cls?.deployment_channel || STABLE_CHANNEL;
+        if (courseChannel !== currentChannel()) {
+          const targetHost = hostForChannel(courseChannel);
+          if (targetHost && targetHost !== request.nextUrl.host) {
+            const target = new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, `https://${targetHost}`);
+            return NextResponse.redirect(target);
+          }
+        }
       }
     }
 

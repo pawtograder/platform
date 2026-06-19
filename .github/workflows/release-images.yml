@@ -325,7 +325,13 @@ jobs:
   deploy-staging:
     needs: [meta, build-web, build-edge-functions, build-migrations]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
-    runs-on: ubuntu-latest
+    # MUST run on the self-hosted, in-network runner. The cluster API
+    # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
+    # from GitHub-hosted runners — `helm upgrade` there fails instantly with
+    # "Kubernetes cluster unreachable: ... i/o timeout". build-web reaches the
+    # same cluster from this runner to read the anon-key secret, so it's the
+    # proven path for the helm upgrade too.
+    runs-on: pawtograder-ci
     # Serialize deploys so two staging pushes landing close together can't run
     # overlapping `helm upgrade`s against the same release.
     concurrency:
@@ -351,6 +357,36 @@ jobs:
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
+
+      - name: Recover stuck helm release
+        # If a prior deploy was interrupted mid-`helm upgrade` (runner crash/OOM
+        # — cancel-in-progress is off here, so a cancelled run can't be the
+        # cause), the release is left in a `pending-*` state and every later
+        # upgrade aborts with "another operation (install/upgrade/rollback) is
+        # in progress". Clear it. Unlike previews we do NOT uninstall — staging
+        # is long-lived and uninstall means downtime — so roll back to the last
+        # good revision, which clears the lock and keeps staging serving.
+        run: |
+          set -euo pipefail
+          status=$(helm status pawtograder -n pawtograder-staging 2>/dev/null | sed -n 's/^STATUS: //p' || true)
+          echo "current helm release status: ${status:-<none>}"
+          case "$status" in
+            pending-install)
+              echo "::warning::staging release stuck in pending-install — uninstalling the aborted install (PVCs survive)"
+              helm uninstall pawtograder -n pawtograder-staging --wait --timeout 10m || true
+              ;;
+            pending-upgrade|pending-rollback)
+              last=$(helm history pawtograder -n pawtograder-staging -o json 2>/dev/null \
+                | jq -r '[.[] | select(.status=="deployed")] | last | .revision // empty' 2>/dev/null || true)
+              if [ -n "${last:-}" ]; then
+                echo "::warning::staging release stuck in '$status' — rolling back to last deployed revision $last to clear the lock"
+                helm rollback pawtograder "$last" -n pawtograder-staging --wait --timeout 10m || true
+              else
+                echo "::warning::staging release stuck in '$status' — rolling back to previous revision"
+                helm rollback pawtograder -n pawtograder-staging --wait --timeout 10m || true
+              fi
+              ;;
+          esac
 
       - name: helm upgrade pawtograder (staging)
         # helm/kubectl pick up $HOME/.kube/config (written above) by default.

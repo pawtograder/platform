@@ -1,0 +1,17 @@
+{{- /*
+Extra web deployment channels. Each entry in .Values.channels with a `web`
+block renders its own web Service+Deployment (component "web-<name>") from the
+shared pawtograder.web.workload definition, on its own image tag. Channels share
+the stable data plane (Postgres/auth/storage) and are reached on their own host
+(see templates/ingress-channels.yaml); the app redirects each course to its
+channel's host based on classes.deployment_channel.
+*/ -}}
+{{- if .Values.web.enabled }}
+{{- range $c := .Values.channels }}
+{{- if $c.web }}
+{{- $image := mergeOverwrite (deepCopy $.Values.web.image) ($c.web.image | default dict) }}
+---
+{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" (default 1 $c.web.replicas)) }}
+{{- end }}
+{{- end }}
+{{- end }}

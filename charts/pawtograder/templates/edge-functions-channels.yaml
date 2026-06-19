@@ -1,0 +1,17 @@
+{{- /*
+Extra edge-functions deployment channels. Each entry in .Values.channels with an
+`edgeFunctions` block renders its own functions Service+Deployment (component
+"functions-<name>") from the shared pawtograder.edgeFunctions.workload definition,
+on its own image tag and a fixed replica count (no per-channel HPA). Kong routes a
+channel host's /functions/v1 traffic to the matching functions-<name> Service
+(see templates/kong-config.yaml).
+*/ -}}
+{{- if .Values.edgeFunctions.enabled }}
+{{- range $c := .Values.channels }}
+{{- if $c.edgeFunctions }}
+{{- $image := mergeOverwrite (deepCopy $.Values.edgeFunctions.image) ($c.edgeFunctions.image | default dict) }}
+---
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" $ "component" (printf "functions-%s" $c.name) "image" $image "replicas" (default 1 $c.edgeFunctions.replicas) "autoscaling" false) }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -393,7 +393,7 @@ export default function SubmissionRepoAnalyticsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `repo-analytics-${submission.repository.split("/").pop()}-${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = `repo-analytics-${submission.repository?.split("/").pop() ?? "upload"}-${new Date().toISOString().split("T")[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

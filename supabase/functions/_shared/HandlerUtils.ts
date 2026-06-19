@@ -158,6 +158,47 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   const result = await assertUserIsInstructor(courseId, authHeader);
   return { ...result, isServiceRole: false };
 }
+/**
+ * Assert that the caller is a platform admin (has an `admin` role in any class),
+ * or is the service role. Use for admin-only functions that are not scoped to a
+ * single course (e.g. listing GitHub App installations for the create-class form).
+ */
+export async function assertUserIsAdmin(authHeader: string | null) {
+  if (!authHeader) {
+    throw new SecurityError("Authorization header required");
+  }
+  if (isServiceRoleRequest(authHeader)) {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    return { supabase: adminSupabase, isServiceRole: true as const };
+  }
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: {
+      headers: { Authorization: authHeader }
+    }
+  });
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user }
+  } = await supabase.auth.getUser(token);
+  if (!user) {
+    throw new SecurityError("User not found");
+  }
+  // Mirror authorize_for_admin(): a disabled admin role must not authorize.
+  const { data: adminEnrollment } = await supabase
+    .from("user_roles")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("role", "admin")
+    .eq("disabled", false)
+    .limit(1);
+  if (!adminEnrollment || adminEnrollment.length === 0) {
+    throw new SecurityError("User is not an admin");
+  }
+  return { supabase, isServiceRole: false as const };
+}
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -255,7 +296,13 @@ export async function wrapRequestHandler(
       if (recordSecurityErrors) {
         Sentry.captureException(e, scope);
       }
-    } else {
+    } else if (!(e instanceof NotFoundError) && !(e instanceof IllegalArgumentError)) {
+      // Generic/unexpected server fault — capture it. Expected client-facing
+      // conditions (NotFoundError → 404, IllegalArgumentError → 400) have their own
+      // clean responses below and must NOT page us via Sentry. Previously they fell
+      // into this branch and were captured — e.g. every read of a repo whose org
+      // hasn't installed the GitHub App (common in e2e against synthetic orgs)
+      // produced a noisy error event.
       Sentry.captureException(e, scope);
     }
     const genericErrorHeaders = {
@@ -300,7 +347,10 @@ export async function wrapRequestHandler(
           error: {
             recoverable: false,
             message: "Not Found",
-            details: "The requested resource was not found"
+            // Surface the thrower's actionable detail when present (e.g. the
+            // "install the GitHub App on <org>" guidance) instead of swallowing
+            // it; fall back to the generic message otherwise.
+            details: e.details || "The requested resource was not found"
           }
         }),
         {

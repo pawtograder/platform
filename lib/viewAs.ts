@@ -3,8 +3,9 @@
  *
  * The active view-as target is stored in a per-course cookie so that it can be read
  * identically on the server (role-branching pages/layouts) and on the client
- * (ClassProfileProvider). The cookie only takes effect when the real user is an
- * instructor for that course and the named profile is a student in it.
+ * (ClassProfileProvider). The cookie takes effect when the real user is an
+ * instructor viewing an enrolled student, or when staff view their own test-assignment
+ * submission through the student-facing UI.
  */
 
 export function viewAsCookieName(courseId: number | string): string {
