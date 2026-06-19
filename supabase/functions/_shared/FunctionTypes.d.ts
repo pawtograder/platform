@@ -223,6 +223,26 @@ export type GetFileRequest = {
   orgName: string;
   repoName: string;
   path: string;
+  /**
+   * Skip the 15s delay + single retry the function otherwise performs on a 404. The interactive
+   * editor sets this so opening a not-yet-created file (create-on-save) fails fast instead of
+   * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
+   */
+  skipRetryOnNotFound?: boolean;
+};
+export type WriteFileRequest = {
+  courseId: number;
+  orgName: string;
+  repoName: string;
+  path: string;
+  content: string;
+  message: string;
+  /** Blob sha of the file being replaced. Omit to create a new file. */
+  sha?: string;
+};
+export type WriteFileResponse = {
+  commit_sha?: string;
+  content_sha?: string;
 };
 export type GithubRepoConfigureWebhookRequest = {
   assignment_id: number;

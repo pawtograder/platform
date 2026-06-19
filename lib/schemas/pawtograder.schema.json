@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pawtograder.com/schemas/pawtograder.yml.json",
+  "$comment": "Derived from the PawtograderConfig type in utils/PawtograderYml.d.ts. Used for live validation/autocomplete in the in-app config editor; a structural save-time guard (validatePawtograderConfig) runs in addition.",
+  "title": "Pawtograder autograder configuration",
+  "type": "object",
+  "required": ["gradedParts", "submissionFiles"],
+  "additionalProperties": true,
+  "properties": {
+    "build": {
+      "type": "object",
+      "description": "Build configuration for the autograder.",
+      "required": ["preset", "cmd", "artifacts", "linter"],
+      "properties": {
+        "preset": { "type": "string", "enum": ["java-gradle"] },
+        "cmd": { "type": "string", "description": "Build command to run." },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "linter": {
+          "type": "object",
+          "required": ["preset", "policy"],
+          "properties": {
+            "preset": { "type": "string", "enum": ["checkstyle"] },
+            "policy": { "type": "string", "enum": ["fail", "warn", "ignore"] }
+          }
+        }
+      }
+    },
+    "gradedParts": {
+      "type": "array",
+      "description": "The graded parts of the assignment.",
+      "items": {
+        "type": "object",
+        "required": ["name", "gradedUnits"],
+        "properties": {
+          "name": { "type": "string" },
+          "gradedUnits": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "title": "Mutation test unit",
+                  "required": ["name", "locations"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "locations": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": { "type": "string", "description": "Format: \"file:line-line\"" }
+                    },
+                    "breakPoints": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["minimumMutantsDetected", "pointsToAward"],
+                        "properties": {
+                          "minimumMutantsDetected": { "type": "number" },
+                          "pointsToAward": { "type": "number" }
+                        }
+                      }
+                    },
+                    "linearScoring": {
+                      "type": "object",
+                      "required": ["points", "total_faults"],
+                      "properties": {
+                        "points": { "type": "number" },
+                        "total_faults": { "type": "number" }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "title": "Regular test unit",
+                  "required": ["name", "tests", "points"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "tests": {
+                      "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }],
+                      "description": "Test selector(s), format \"[T#.#]\"."
+                    },
+                    "points": { "type": "number" },
+                    "testCount": { "type": "number" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "submissionFiles": {
+      "type": "object",
+      "description": "Files that students submit and the test files they are graded against.",
+      "required": ["files", "testFiles"],
+      "properties": {
+        "files": { "type": "array", "items": { "type": "string" } },
+        "testFiles": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

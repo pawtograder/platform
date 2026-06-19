@@ -3,6 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
@@ -116,9 +117,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg!);
 
-  // An explicit override (e.g. demo-mode provisioning) wins over the strategy's
-  // default source template repo.
-  const sourceTemplateRepo = template_repo_override ?? action.sourceRepo;
+  // An explicit override (e.g. demo-mode provisioning) wins; otherwise resolve the
+  // configured handout template (per-class override -> github_org default -> hardcoded
+  // constant). resolveTemplateRepos already falls back to the same constant the strategy
+  // uses as action.sourceRepo, so it supersedes it for the create case. Resolve lazily so an
+  // explicit override skips the extra resolve_class_template_repos round-trip.
+  const sourceTemplateRepo = template_repo_override ?? (await resolveTemplateRepos(adminSupabase, class_id)).handout;
   scope.setTag("source_template_repo", sourceTemplateRepo);
 
   // The protect_* columns configure STUDENT repos. The staff handout repo must

@@ -82,7 +82,14 @@ export async function repositoryListFiles(params: FunctionTypes.ListFilesRequest
   return await invokeEdgeFunction<FunctionTypes.FileListing[]>(supabase, "repository-list-files", { body: params });
 }
 export async function repositoryGetFile(params: FunctionTypes.GetFileRequest, supabase: SupabaseClient<Database>) {
-  return await invokeEdgeFunction<{ content: string }>(supabase, "repository-get-file", { body: params });
+  return await invokeEdgeFunction<{ content: string; sha?: string }>(supabase, "repository-get-file", {
+    body: params
+  });
+}
+export async function repositoryWriteFile(params: FunctionTypes.WriteFileRequest, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.WriteFileResponse>(supabase, "repository-write-file", {
+    body: params
+  });
 }
 export async function githubRepoConfigureWebhook(
   params: FunctionTypes.GithubRepoConfigureWebhookRequest,

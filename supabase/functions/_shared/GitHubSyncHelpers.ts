@@ -1906,3 +1906,42 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
     });
   });
 }
+
+/**
+ * Documented fallback template repos, kept in sync with the github_orgs table defaults
+ * and the resolve_class_template_repos RPC.
+ */
+export const DEFAULT_HANDOUT_TEMPLATE_REPO = "pawtograder/template-assignment-handout";
+export const DEFAULT_SOLUTION_TEMPLATE_REPO = "pawtograder/template-assignment-grader";
+
+/**
+ * Resolve the handout and solution (grader) template repos for a class.
+ *
+ * Resolution order (handled by the resolve_class_template_repos RPC):
+ *   class override -> github_orgs default -> hardcoded constant.
+ *
+ * Falls back to the hardcoded constants only when the class row is genuinely missing. A real
+ * RPC error is surfaced rather than swallowed: silently falling back on error would build repos
+ * from the wrong template and defeat the per-org feature with no signal. The "no override
+ * configured" case never reaches the fallback — it is handled inside the RPC via COALESCE.
+ */
+export async function resolveTemplateRepos(
+  supabase: SupabaseClient<Database>,
+  classId: number
+): Promise<{ handout: string; solution: string }> {
+  const { data, error } = await supabase.rpc("resolve_class_template_repos", { p_class_id: classId });
+  if (error) {
+    throw error;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) {
+    // No row => the class itself is missing. The RPC always returns COALESCEd (non-null)
+    // template values for an existing class, so a present row never needs this fallback.
+    console.warn(`resolveTemplateRepos: no row for class ${classId}; using hardcoded defaults`);
+    return { handout: DEFAULT_HANDOUT_TEMPLATE_REPO, solution: DEFAULT_SOLUTION_TEMPLATE_REPO };
+  }
+  return {
+    handout: row.handout_template_repo ?? DEFAULT_HANDOUT_TEMPLATE_REPO,
+    solution: row.solution_template_repo ?? DEFAULT_SOLUTION_TEMPLATE_REPO
+  };
+}
