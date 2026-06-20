@@ -247,16 +247,20 @@ jobs:
             echo "COVERAGE=1"
             echo "NEXT_PUBLIC_COVERAGE=1"
           } > .env.local
-          # GitHub App private key: GitHubWrapper.ts initializes octokit
-          # at module load time, which requires a valid-shaped RSA PEM
-          # (E2E_ENABLE bypasses the actual GitHub calls). Multi-line
-          # quoted form: Deno's --env-file and Next.js dotenv both
-          # support it; the \n-escaped single-line form is passed to
-          # octokit literally and rejected as malformed PEM.
+          # GitHub App private key: GitHubWrapper.ts (Next lib + the Deno
+          # _shared module) calls `new App({ privateKey })` at module load, so
+          # the value must parse as a valid RSA PEM (E2E_ENABLE bypasses the
+          # actual GitHub calls, but octokit still parses the key on
+          # construction). Write it SINGLE-LINE with \n escapes inside double
+          # quotes: both Next.js dotenv and Deno's --env-file expand \n to real
+          # newlines in double-quoted values, but Deno's --env-file — used by
+          # the edge coverage bootstrap — does NOT support a value that spans
+          # multiple physical lines. The old multi-line form left
+          # GITHUB_PRIVATE_KEY_STRING empty under Deno, so octokit threw at
+          # import and the edge bootstrap never came up. Mirrors deploy.yml.
           PRIVKEY=$(openssl genrsa 2048 2>/dev/null)
-          {
-            echo "GITHUB_PRIVATE_KEY_STRING=\"$PRIVKEY\""
-          } >> .env.local
+          KEY_ESCAPED=$(printf '%s' "$PRIVKEY" | awk 'BEGIN{ORS=""} {printf "%s\\n", $0}')
+          printf 'GITHUB_PRIVATE_KEY_STRING="%s"\n' "$KEY_ESCAPED" >> .env.local
 
       - name: Build Next.js (with sourcemaps for client coverage)
         env:
