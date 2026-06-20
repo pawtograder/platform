@@ -151,7 +151,40 @@ jobs:
           set -euo pipefail
           # Move the storage-owner-blocked migration aside.
           mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/binmig.sql
-          npx supabase start --ignore-health-check
+
+          # `supabase start` flakes on the self-hosted runner: a prior
+          # cancelled/failed run (this workflow uses concurrency
+          # cancel-in-progress) can leave containers/volumes holding the fixed
+          # host ports (54321/54322), so the next attempt dies with
+          # "address already in use". This was the failing step on the last
+          # two coverage commits. Mirror the proven retry+reset loop from
+          # deploy.yml's E2E job: reset this project's containers/volumes,
+          # then retry up to 5 times with backoff. Scoped to the default
+          # `pawtograder-platform` project that the downstream `docker exec`
+          # psql calls already target.
+          reset_supabase() {
+            npx supabase stop --no-backup >/dev/null 2>&1 || true
+            docker ps -aq --filter "label=com.supabase.cli.project=pawtograder-platform" \
+              | xargs -r docker rm -f >/dev/null 2>&1 || true
+            docker volume ls --filter "label=com.supabase.cli.project=pawtograder-platform" -q \
+              | xargs -r docker volume rm >/dev/null 2>&1 || true
+          }
+          reset_supabase
+          started=0
+          for attempt in $(seq 1 5); do
+            echo "=== supabase start attempt ${attempt}/5 ==="
+            if npx supabase start --ignore-health-check; then
+              started=1
+              break
+            fi
+            echo "supabase start failed on attempt ${attempt}; resetting and retrying"
+            reset_supabase
+            sleep $((attempt * 3))
+          done
+          if [ "$started" != "1" ]; then
+            echo "supabase start exhausted its retries and never came up"
+            exit 1
+          fi
           # Apply as superuser.
           docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/binmig.sql
           docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
