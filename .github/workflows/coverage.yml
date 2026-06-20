@@ -143,15 +143,21 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      # AGENTS.md: must NOT restore from backup — start fresh, then deal
-      # with the binary-submission-files migration that can't run via
-      # supabase start, then create today's audit partition.
+      # AGENTS.md: must NOT restore from backup — start fresh. Apply ALL
+      # migrations in order via `supabase start`, exactly like the passing
+      # deploy.yml "E2E Tests" job, then create today's audit partition.
+      #
+      # We used to move 20260217000000_binary_submission_files.sql aside and
+      # apply it afterwards as superuser, but that DROPS its
+      # can_access_submission_storage_path() definition from the migration
+      # run — so the later 20260530120200_assignment-repo-config.sql fails
+      # creating a storage policy that references it ("function ... does not
+      # exist", SQLSTATE 42883). That migration's storage policies are
+      # commented out, so it applies cleanly via `supabase start` (deploy.yml,
+      # which never special-cased it, proves this). Drop the move-aside.
       - name: Start Supabase (fresh)
         run: |
           set -euo pipefail
-          # Move the storage-owner-blocked migration aside.
-          mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/binmig.sql
-
           # `supabase start` flakes on the self-hosted runner: a prior
           # cancelled/failed run (this workflow uses concurrency
           # cancel-in-progress) can leave containers/volumes holding the fixed
@@ -185,11 +191,6 @@ jobs:
             echo "supabase start exhausted its retries and never came up"
             exit 1
           fi
-          # Apply as superuser.
-          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/binmig.sql
-          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
-            -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
-          mv /tmp/binmig.sql supabase/migrations/20260217000000_binary_submission_files.sql
           # Create today's audit partition.
           docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
             -c "SELECT public.audit_maintain_partitions();"

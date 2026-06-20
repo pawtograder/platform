@@ -17,15 +17,14 @@ All five upload as separate flags to Codecov on every PR. v1 is **informational 
 Local coverage runs require a real local Supabase + the prod-mode Next build (port 3001). The shape mirrors the AGENTS.md "Prod E2E mode" path, with three extra steps: enable `plpgsql_check`, build with `NODE_V8_COVERAGE`, and replace `supabase functions serve` with the coverage bootstrap.
 
 ```bash
-# 1. Local Supabase (per AGENTS.md — fresh start, no backup restore)
+# 1. Local Supabase (per AGENTS.md — fresh start, no backup restore).
+#    Apply ALL migrations via `supabase start` — do NOT move the
+#    binary_submission_files migration aside: it defines
+#    can_access_submission_storage_path(), which later migrations
+#    (e.g. 20260530120200_assignment-repo-config.sql) reference.
 npx supabase stop --no-backup || true
 docker volume ls --filter label=com.supabase.cli.project=pawtograder-platform -q | xargs -r docker volume rm
-mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/
 npx supabase start
-docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/20260217000000_binary_submission_files.sql
-docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
-  -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
-mv /tmp/20260217000000_binary_submission_files.sql supabase/migrations/
 docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
   -c "SELECT public.audit_maintain_partitions();"
 
