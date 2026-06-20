@@ -510,3 +510,17 @@ jobs:
           echo "===== next.log ====="; tail -c 50000 /tmp/next.log || true
           echo "===== edge.log ====="; tail -c 50000 /tmp/edge.log || true
           docker logs --tail 200 supabase_db_pawtograder-platform 2>&1 || true
+          # Stage logs for artifact upload so they're readable without
+          # repo-admin (step logs require admin on a public repo).
+          mkdir -p /tmp/failure-logs
+          cp /tmp/edge.log /tmp/failure-logs/edge.log 2>/dev/null || true
+          cp /tmp/next.log /tmp/failure-logs/next.log 2>/dev/null || true
+          docker logs --tail 400 supabase_db_pawtograder-platform > /tmp/failure-logs/supabase_db.log 2>&1 || true
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs
+          path: /tmp/failure-logs/
+          if-no-files-found: ignore
