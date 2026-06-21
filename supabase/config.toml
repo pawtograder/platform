@@ -741,9 +741,9 @@ entrypoint = "./functions/cli/index.ts"
 [functions.index-submission]
 enabled = true
 verify_jwt = false
+entrypoint = "./functions/index-submission/index.ts"
 
 [functions.get-pr-base-files]
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/get-pr-base-files/index.ts"
-entrypoint = "./functions/index-submission/index.ts"
