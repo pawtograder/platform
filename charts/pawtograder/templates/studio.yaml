@@ -34,10 +34,13 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.studio) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.studio) | nindent 6 }}
       containers:
         - name: studio
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.studio.image) }}
           imagePullPolicy: {{ .Values.studio.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.studio) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.studio.service.port }}

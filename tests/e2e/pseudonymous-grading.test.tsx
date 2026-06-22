@@ -220,7 +220,13 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
+    // The submission root client-redirects graders to a default tab (router.replace, usually the
+    // autograder). Wait for that redirect to settle before clicking Files: otherwise the click can
+    // race the in-flight replace and leave the URL on /files while the previous tab stays mounted,
+    // so the file source never renders (flaky under CI load).
+    await page.waitForURL(/\/submissions\/\d+\/(?:results|files|grade)(?:[/?#]|$)/);
     await page.getByRole("button", { name: "Files" }).click();
+    await page.waitForURL(/\/submissions\/\d+\/files(?:[/?#]|$)/);
 
     // Scroll grading rubric to top of its container
     await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {

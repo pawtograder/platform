@@ -163,22 +163,44 @@ label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 
 {{/*
 Per-deployment-channel public host. Each channel (.Values.channels[]) is served
-on its own single-label host so a *.<zone> wildcard TLS cert covers it; the
-channel runs web + edge-functions code against the shared data plane, and the app
-redirects each course to its channel's host (classes.deployment_channel). Defaults
-to "<name>.<global.hostname>"; an entry may set `host` to override.
+on its own single-label host "<name>.<global.hostname>" so a *.<zone> wildcard
+TLS cert always covers it; the channel runs web + edge-functions code against the
+shared data plane, and the app redirects each course to its channel's host
+(classes.deployment_channel). The host pattern is fixed (no per-channel override)
+because the web middleware's hostForChannel() computes the same "<name>.<suffix>"
+to drive the redirect — the chart and the app must agree on one host per channel.
+The name is capped at 63 chars to match the DB CHECK on classes.deployment_channel
+(a longer channel could render chart resources but never be stored / pinned to).
 Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
 */}}
 {{- define "pawtograder.channel.host" -}}
 {{- $name := required "channels[].name is required" .channel.name -}}
-{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) -}}
-{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label, <=63 chars (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
 {{- end -}}
-{{- $host := default (printf "%s.%s" $name .ctx.Values.global.hostname) .channel.host -}}
-{{- if not (regexMatch "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$" $host) -}}
-{{- fail (printf "invalid channel host %q for channel %q: must be a DNS hostname" $host $name) -}}
+{{- printf "%s.%s" $name .ctx.Values.global.hostname -}}
 {{- end -}}
-{{- $host -}}
+
+{{/*
+Shared Supabase API path routes (auth / rest / realtime / storage / functions →
+Kong) for an Ingress host. Used by the primary host, its TLS-SAN extraHosts, and
+every deployment-channel host, so the five proxied prefixes (and their port
+handling) can't drift between the three Ingresses. Caller decides whether to emit
+them (the primary host omits these when global.apiOnSeparateHost).
+Usage: {{ include "pawtograder.ingress.apiPaths" $ | trim | nindent 10 }}
+*/}}
+{{- define "pawtograder.ingress.apiPaths" -}}
+{{- $kong := include "pawtograder.kong.host" . -}}
+{{- $port := .Values.kong.service.port -}}
+{{- range $p := (list "auth" "rest" "realtime" "storage" "functions") }}
+- path: /{{ $p }}/v1
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ $kong }}
+      port:
+        number: {{ $port }}
+{{- end }}
 {{- end -}}
 
 {{/*
@@ -255,5 +277,105 @@ Image pull secrets.
 {{- with .Values.global.imagePullSecrets }}
 imagePullSecrets:
 {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod-level securityContext. A component that defines its own
+`podSecurityContext` key wins outright (set it to {} to opt a component out
+entirely — postgres-style images whose entrypoints need more than the
+default allows). Otherwise global.podSecurityContext applies.
+Usage: {{ include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.podSecurityContext" -}}
+{{- $sc := .ctx.Values.global.podSecurityContext -}}
+{{- if hasKey .component "podSecurityContext" -}}
+{{- $sc = .component.podSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Container-level securityContext, same precedence rules as
+pawtograder.podSecurityContext. Applied to main containers only — init
+containers and hook Jobs that legitimately need root (apk/apt installs,
+postgres entrypoint chown/su) are left alone.
+Usage: {{ include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.containerSecurityContext" -}}
+{{- $sc := .ctx.Values.global.containerSecurityContext -}}
+{{- if hasKey .component "containerSecurityContext" -}}
+{{- $sc = .component.containerSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+priorityClassName — component override, else global.
+Usage: {{ include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.priorityClassName" -}}
+{{- $p := default .ctx.Values.global.priorityClassName .component.priorityClassName -}}
+{{- with $p }}
+priorityClassName: {{ . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod affinity block. Per-component / global affinity (if set) wins — the
+user opted into custom placement explicitly. Otherwise emit a soft
+podAntiAffinity spreading the component's pods across nodes when its
+`spreadAcrossNodes` value is true (no effect on single-node tiers).
+Generalizes the pattern realtime.yaml pioneered.
+Usage: {{ include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.web "name" "web") | nindent 6 }}
+*/}}
+{{- define "pawtograder.componentAffinity" -}}
+{{- $userAffinity := include "pawtograder.affinity" (dict "ctx" .ctx "component" .component) -}}
+{{- if $userAffinity }}
+affinity:
+  {{- $userAffinity | nindent 2 }}
+{{- else if .component.spreadAcrossNodes }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              {{- include "pawtograder.componentSelectorLabels" (dict "ctx" .ctx "component" .name) | nindent 14 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+preStop drain hook: sleep so the kubelet's endpoint removal propagates to
+kube-proxy/ingress before the process gets SIGTERM, instead of dropping
+in-flight requests. Rendered only when the component sets a non-zero
+preStopSleepSeconds (images without /bin/sh must keep it 0).
+Usage: {{ include "pawtograder.preStop" (dict "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.preStop" -}}
+{{- with .component.preStopSleepSeconds }}
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep {{ . }}"]
+{{- end -}}
+{{- end -}}
+
+{{/*
+Deployment rollout strategy from the component's updateStrategy value.
+Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web) | nindent 2 }}
+*/}}
+{{- define "pawtograder.deploymentStrategy" -}}
+{{- with .component.updateStrategy }}
+strategy:
+  {{- toYaml . | nindent 2 }}
 {{- end -}}
 {{- end -}}

@@ -23,7 +23,7 @@ import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
-import { FaRobot, FaScroll } from "react-icons/fa";
+import { FaGithub, FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
   FiBarChart,
@@ -146,6 +146,12 @@ const LinkItems = (courseID: number) => [
         icon: FiSliders,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/feature-flags`
+      },
+      {
+        name: "GitHub Templates",
+        icon: FaGithub,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/github`
       },
       {
         name: "Lab Sections",

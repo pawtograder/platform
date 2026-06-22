@@ -1,3 +1,4 @@
+import AdminViewingBanner from "@/components/admin/AdminViewingBanner";
 import { getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -6,6 +7,9 @@ import { redirect } from "next/navigation";
  * Staff-only routes under `/manage/`. When an instructor is viewing the course as a
  * student, redirect back to the student-facing course home — manage pages assume the
  * real staff identity and must not render under the masqueraded student role.
+ *
+ * Also renders the admin-viewing banner for global admins who entered the course via
+ * the admin dashboard.
  */
 export default async function ManageLayout({
   children,
@@ -33,5 +37,10 @@ export default async function ManageLayout({
     redirect(`/course/${course_id}`);
   }
 
-  return children;
+  return (
+    <>
+      <AdminViewingBanner />
+      {children}
+    </>
+  );
 }

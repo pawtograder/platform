@@ -9,9 +9,18 @@ channel's host based on classes.deployment_channel.
 {{- if .Values.web.enabled }}
 {{- range $c := .Values.channels }}
 {{- if $c.web }}
-{{- $image := mergeOverwrite (deepCopy $.Values.web.image) ($c.web.image | default dict) }}
+{{- /* Require the channel's own image tag: without it mergeOverwrite falls back
+   to the stable repository+tag, so the channel host would serve byte-identical
+   stable code (the intended A/B split silently produces zero difference). */ -}}
+{{- if not (and $c.web.image $c.web.image.tag) }}
+{{- fail (printf "channel %q: channels[].web.image.tag is required when a web block is present (a channel without its own tag would run the stable image, not a canary build)" $c.name) }}
+{{- end }}
+{{- $image := mergeOverwrite (deepCopy $.Values.web.image) $c.web.image }}
+{{- /* hasKey, not `default 1`: Sprig `default` treats 0 as empty, which would
+   render replicas: 0 as 1 and make a channel impossible to idle to zero. */ -}}
+{{- $replicas := ternary $c.web.replicas 1 (hasKey $c.web "replicas") }}
 ---
-{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" (default 1 $c.web.replicas)) }}
+{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" $replicas) }}
 {{- end }}
 {{- end }}
 {{- end }}

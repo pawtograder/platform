@@ -24,6 +24,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
 spec:
   replicas: {{ .Values.rest.replicas }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.rest) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest") | nindent 6 }}
@@ -34,10 +35,14 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.rest) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.rest) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.rest.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: postgrest
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.rest.image) }}
           imagePullPolicy: {{ .Values.rest.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.rest) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ .Values.rest.service.port }}
@@ -104,6 +109,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
           resources:
             {{- toYaml .Values.rest.resources | nindent 12 }}
       volumes:
@@ -121,4 +132,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.rest "name" "rest") | nindent 6 }}
 {{- end }}

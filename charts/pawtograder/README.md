@@ -290,6 +290,40 @@ docker build \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
+## Deploying production
+
+Start from `examples/values-prod.yaml` — it is a documented template, not a
+deployable file: copy it into your deployment repo and fill in the hostname,
+storage classes, S3 endpoints, and pinned image tags. The full gap analysis
+that drove the production hardening (and the items still deferred — postgres
+HA, WAL archiving/PITR) lives in [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
+
+Key mechanics:
+
+- **`global.environment: production` arms render-time guard rails**
+  (`templates/validations.yaml`): the chart refuses to render with e2e
+  bypasses, `secrets.create`/`autogenerate`, `seed.enabled`,
+  `migrations.resetOnDrift`, floating `-latest` image tags, or a Studio
+  ingress without basic-auth. Staging arms a smaller subset.
+- **NetworkPolicies** (`networkPolicy.enabled=true`): default-deny ingress
+  to every release pod, with allows for intra-release traffic, the ingress
+  controller's namespace (→ web/kong/studio), and the monitoring namespace.
+- **PDBs, zero-downtime rollouts, preStop drains, soft node-spread, and
+  baseline security contexts** are chart defaults — see
+  `podDisruptionBudget`, per-component `updateStrategy` /
+  `terminationGracePeriodSeconds` / `spreadAcrossNodes`, and
+  `global.podSecurityContext` / `global.containerSecurityContext` in
+  values.yaml.
+- **Backups verify themselves**: the backup CronJob dumps in `pg_dump -Fc`
+  format, validates the archive TOC before AND size-checks after upload,
+  and a weekly `backup-verify` CronJob re-downloads the newest object,
+  re-parses its TOC, and fails if the newest backup is older than 48 h.
+  Restore with `pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>`.
+- **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
+  cluster's anon key) are baked at build time. Build prod images via
+  `release-images.yml` `workflow_dispatch` with the prod hostname/namespace
+  inputs before the first deploy.
+
 ## Realtime sizing
 
 The chart sizes realtime for ~600 concurrent websocket connections out of the
