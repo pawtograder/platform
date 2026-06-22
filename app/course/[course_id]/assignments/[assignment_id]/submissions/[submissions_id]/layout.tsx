@@ -1764,12 +1764,17 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
                   This grading review is not marked complete yet. Releasing now will still publish it to students.
                 </Text>
               </Dialog.Body>
-              <Dialog.Footer>
+              <Dialog.Footer flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
                 <Dialog.ActionTrigger asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                    Cancel
+                  </Button>
                 </Dialog.ActionTrigger>
                 <Button
                   variant="outline"
+                  w={{ base: "100%", md: "auto" }}
+                  whiteSpace="normal"
+                  h="auto"
                   onClick={() => {
                     setIsReleaseIncompleteWarningOpen(false);
                     router.push(
@@ -1782,6 +1787,7 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
                 </Button>
                 <Button
                   colorPalette="green"
+                  w={{ base: "100%", md: "auto" }}
                   loading={updatingReview}
                   onClick={async () => {
                     await releaseReview();

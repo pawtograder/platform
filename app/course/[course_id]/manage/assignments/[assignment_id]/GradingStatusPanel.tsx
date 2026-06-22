@@ -202,12 +202,17 @@ export default function GradingStatusPanel({
               publish these grades anyway.
             </Text>
           </DialogBody>
-          <DialogFooter>
+          <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
             <DialogActionTrigger asChild>
-              <Button variant="ghost">Cancel</Button>
+              <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                Cancel
+              </Button>
             </DialogActionTrigger>
             <Button
               variant="outline"
+              w={{ base: "100%", md: "auto" }}
+              whiteSpace="normal"
+              h="auto"
               onClick={() => {
                 setIsReleaseIncompleteWarningOpen(false);
                 router.push(reviewIncompleteHref);
@@ -217,6 +222,7 @@ export default function GradingStatusPanel({
             </Button>
             <Button
               colorPalette="green"
+              w={{ base: "100%", md: "auto" }}
               loading={isContinuingReleaseAll}
               onClick={async () => {
                 setIsContinuingReleaseAll(true);
