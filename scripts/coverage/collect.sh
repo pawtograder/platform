@@ -41,7 +41,15 @@ fi
 #                      runtime (so they never re-execute under instrumentation).
 if compgen -G "coverage/server-cdp*.json" >/dev/null || compgen -G "coverage/build-cdp*.json" >/dev/null; then
   echo "[collect] v8-server-to-lcov (Inspector CDP: runtime + build dumps)"
-  npx tsx scripts/coverage/v8-server-to-lcov.ts \
+  # Give the converter a large heap. It loads the runtime dump (~13 MB) plus
+  # ~130 build dumps and every referenced .js + .js.map into memory, then
+  # builds the monocart coverage model — thousands of V8 entries. With the
+  # node default heap this OOMs ("Ineffective mark-compacts near heap limit"),
+  # producing NO server.lcov, so the next-server flag silently uploads 0 files.
+  # Unminified server bundles (coverage build) make the sources/maps bigger,
+  # which is what tipped it over. 8 GB matches the build:coverage ceiling that
+  # the runner already sustains.
+  NODE_OPTIONS="--max-old-space-size=8192" npx tsx scripts/coverage/v8-server-to-lcov.ts \
     || echo "[collect] WARN: server CDP conversion failed"
 else
   echo "[collect] skip: no coverage/server-cdp*.json or build-cdp*.json"
