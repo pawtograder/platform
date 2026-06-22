@@ -1806,14 +1806,12 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
 }
 function ReviewActions() {
   const submission = useSubmission();
-  const submissionController = useSubmissionController();
   const reviewId = submission.grading_review_id;
   if (!reviewId) {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
   const isInstructor = useIsInstructor();
-  const [isUpdatingCompletionState, setIsUpdatingCompletionState] = useState(false);
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
@@ -1852,48 +1850,6 @@ function ReviewActions() {
                 Mark as Checked
               </Button>
             )} */}
-          </HStack>
-        </VStack>
-      )}
-      {showCompletionActions && review.completed_at && isInstructor && (
-        <VStack>
-          <Heading as="h2" size="md">
-            Submission Review Actions
-          </Heading>
-          <HStack w="100%" justify="space-between">
-            <Button
-              variant="outline"
-              colorPalette="orange"
-              loading={isUpdatingCompletionState}
-              onClick={async () => {
-                setIsUpdatingCompletionState(true);
-                try {
-                  if (review.released) {
-                    toaster.warning({
-                      title: "Grade already released",
-                      description: "This grade is already released to students. Marking incomplete will not hide it."
-                    });
-                  }
-                  await submissionController.submission_reviews.update(review.id, {
-                    completed_at: null,
-                    completed_by: null
-                  });
-                  toaster.success({
-                    title: "Review marked incomplete"
-                  });
-                } catch (error) {
-                  const errorId = Sentry.captureException(error);
-                  toaster.error({
-                    title: "Error marking review incomplete",
-                    description: `Failed to mark this review as incomplete. Trace ID: ${errorId}`
-                  });
-                } finally {
-                  setIsUpdatingCompletionState(false);
-                }
-              }}
-            >
-              Mark Incomplete
-            </Button>
           </HStack>
         </VStack>
       )}
