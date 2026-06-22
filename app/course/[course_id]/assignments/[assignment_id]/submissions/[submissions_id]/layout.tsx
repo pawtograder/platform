@@ -1675,7 +1675,31 @@ function ReviewStats() {
 function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionReviewId: number }) {
   const review = useSubmissionReview(submissionReviewId);
   const submissionController = useSubmissionController();
+  const { course_id, assignment_id } = useParams();
+  const router = useRouter();
   const [updatingReview, setUpdatingReview] = useState(false);
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
+
+  const releaseReview = useCallback(async () => {
+    setUpdatingReview(true);
+    try {
+      await submissionController.submission_reviews.update(submissionReviewId, { released: true });
+      toaster.create({
+        title: "Review released",
+        type: "success"
+      });
+    } catch (error) {
+      const errorId = Sentry.captureException(error);
+      toaster.create({
+        title: "Error releasing review",
+        description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+        type: "error"
+      });
+    } finally {
+      setUpdatingReview(false);
+    }
+  }, [submissionController.submission_reviews, submissionReviewId]);
+
   if (review?.released) {
     return (
       <Button
@@ -1708,48 +1732,87 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
     );
   } else {
     return (
-      <Button
-        size="xs"
-        variant="outline"
-        colorPalette="green"
-        loading={updatingReview}
-        onClick={async () => {
-          setUpdatingReview(true);
-          try {
-            await submissionController.submission_reviews.update(submissionReviewId, { released: true });
-            toaster.create({
-              title: "Review released",
-              type: "success"
-            });
-          } catch (error) {
-            const errorId = Sentry.captureException(error);
-            toaster.create({
-              title: "Error releasing review",
-              description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
-              type: "error"
-            });
-          } finally {
-            setUpdatingReview(false);
-          }
-        }}
-      >
-        Release
-      </Button>
+      <>
+        <Button
+          size="xs"
+          variant="outline"
+          colorPalette="green"
+          loading={updatingReview}
+          onClick={async () => {
+            if (!review?.completed_at) {
+              setIsReleaseIncompleteWarningOpen(true);
+              return;
+            }
+            await releaseReview();
+          }}
+        >
+          Release
+        </Button>
+        <Dialog.Root
+          open={isReleaseIncompleteWarningOpen}
+          onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}
+          placement="center"
+        >
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>This review is incomplete</Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                <Text>
+                  This grading review is not marked complete yet. Releasing now will still publish it to students.
+                </Text>
+              </Dialog.Body>
+              <Dialog.Footer>
+                <Dialog.ActionTrigger asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </Dialog.ActionTrigger>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsReleaseIncompleteWarningOpen(false);
+                    router.push(
+                      `/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`,
+                      { scroll: false }
+                    );
+                  }}
+                >
+                  Review incomplete grading reviews
+                </Button>
+                <Button
+                  colorPalette="green"
+                  loading={updatingReview}
+                  onClick={async () => {
+                    await releaseReview();
+                    setIsReleaseIncompleteWarningOpen(false);
+                  }}
+                >
+                  Continue anyway
+                </Button>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Dialog.Root>
+      </>
     );
   }
 }
 function ReviewActions() {
   const submission = useSubmission();
+  const submissionController = useSubmissionController();
   const reviewId = submission.grading_review_id;
   if (!reviewId) {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
+  const isInstructor = useIsInstructor();
+  const [isUpdatingCompletionState, setIsUpdatingCompletionState] = useState(false);
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  const showCompleteReviewButton = assignedRubricParts.length == 0 && isInstructorOrGrader;
+  const showCompletionActions = isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader);
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -1757,7 +1820,7 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {showCompleteReviewButton && !review.completed_at && (
+      {showCompletionActions && !review.completed_at && (
         <VStack>
           <Heading as="h2" size="md">
             Submission Review Actions
@@ -1783,6 +1846,48 @@ function ReviewActions() {
                 Mark as Checked
               </Button>
             )} */}
+          </HStack>
+        </VStack>
+      )}
+      {showCompletionActions && review.completed_at && isInstructor && (
+        <VStack>
+          <Heading as="h2" size="md">
+            Submission Review Actions
+          </Heading>
+          <HStack w="100%" justify="space-between">
+            <Button
+              variant="outline"
+              colorPalette="orange"
+              loading={isUpdatingCompletionState}
+              onClick={async () => {
+                setIsUpdatingCompletionState(true);
+                try {
+                  if (review.released) {
+                    toaster.warning({
+                      title: "Grade already released",
+                      description: "This grade is already released to students. Marking incomplete will not hide it."
+                    });
+                  }
+                  await submissionController.submission_reviews.update(review.id, {
+                    completed_at: null,
+                    completed_by: null
+                  });
+                  toaster.success({
+                    title: "Review marked incomplete"
+                  });
+                } catch (error) {
+                  const errorId = Sentry.captureException(error);
+                  toaster.error({
+                    title: "Error marking review incomplete",
+                    description: `Failed to mark this review as incomplete. Trace ID: ${errorId}`
+                  });
+                } finally {
+                  setIsUpdatingCompletionState(false);
+                }
+              }}
+            >
+              Mark Incomplete
+            </Button>
           </HStack>
         </VStack>
       )}

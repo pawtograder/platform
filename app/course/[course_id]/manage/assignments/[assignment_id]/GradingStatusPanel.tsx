@@ -1,11 +1,21 @@
 "use client";
 
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import FinalizeGradingButton from "./FinalizeGradingButton";
 
 type ReleaseAllRpc = "release_all_grading_reviews_for_assignment" | "unrelease_all_grading_reviews_for_assignment";
@@ -103,6 +113,10 @@ export default function GradingStatusPanel({
   onChanged?: () => void | Promise<void>;
 }) {
   const counts = useMemo(() => computeGradingCounts(rows), [rows]);
+  const router = useRouter();
+  const { course_id } = useParams();
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
+  const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
 
   const runReleaseAll = async (rpc: ReleaseAllRpc, successVerb: string) => {
     const { data, error } = await supabase.rpc(rpc, { assignment_id: assignmentId });
@@ -116,6 +130,17 @@ export default function GradingStatusPanel({
       title: "Success",
       description: `${count} submission review(s) ${successVerb}`
     });
+  };
+
+  const incompleteCount = counts.total - counts.graded;
+  const reviewIncompleteHref = `/course/${course_id}/manage/assignments/${assignmentId}?grading_complete=incomplete`;
+
+  const confirmReleaseAll = async () => {
+    if (incompleteCount > 0) {
+      setIsReleaseIncompleteWarningOpen(true);
+      return;
+    }
+    await runReleaseAll("release_all_grading_reviews_for_assignment", "released");
   };
 
   return (
@@ -153,7 +178,7 @@ export default function GradingStatusPanel({
               confirmTitle="Release all grading reviews"
               confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
               tooltip="Make grades visible to students for every submission in this assignment."
-              onConfirm={() => runReleaseAll("release_all_grading_reviews_for_assignment", "released")}
+              onConfirm={confirmReleaseAll}
             />
             <ConfirmButton
               label="Unrelease all"
@@ -166,6 +191,48 @@ export default function GradingStatusPanel({
           </HStack>
         </HStack>
       </CardBody>
+      <DialogRoot open={isReleaseIncompleteWarningOpen} onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Some grading reviews are incomplete</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <Text>
+              {incompleteCount} grading review{incompleteCount === 1 ? "" : "s"} are incomplete. Releasing now will
+              publish these grades anyway.
+            </Text>
+          </DialogBody>
+          <DialogFooter>
+            <DialogActionTrigger asChild>
+              <Button variant="ghost">Cancel</Button>
+            </DialogActionTrigger>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsReleaseIncompleteWarningOpen(false);
+                router.push(reviewIncompleteHref);
+              }}
+            >
+              Review incomplete grading reviews
+            </Button>
+            <Button
+              colorPalette="green"
+              loading={isContinuingReleaseAll}
+              onClick={async () => {
+                setIsContinuingReleaseAll(true);
+                try {
+                  await runReleaseAll("release_all_grading_reviews_for_assignment", "released");
+                  setIsReleaseIncompleteWarningOpen(false);
+                } finally {
+                  setIsContinuingReleaseAll(false);
+                }
+              }}
+            >
+              Continue anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
     </CardRoot>
   );
 }

@@ -3,6 +3,15 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -46,7 +55,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender, RowSelectionState } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
@@ -303,6 +312,7 @@ export default function AssignmentsTable({
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
@@ -312,6 +322,7 @@ export default function AssignmentsTable({
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   // Get sections and assignment data for default visibility logic
@@ -778,8 +789,53 @@ export default function AssignmentsTable({
   const selectedSubmissionIds = getFilteredRowModel()
     .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
     .map((row) => row.original.activesubmissionid as number);
+  const selectedIncompleteCount = getFilteredRowModel().rows.filter(
+    (row) => row.getIsSelected() && row.original.activesubmissionid != null && row.original.completed_at == null
+  ).length;
 
   const selectedCount = selectedSubmissionIds.length;
+
+  const applyIncompleteFilter = useCallback(() => {
+    setColumnFilters((prev) => {
+      const others = prev.filter((f) => f.id !== "grading_complete");
+      return [...others, { id: "grading_complete", value: ["Incomplete"] }];
+    });
+    resetRowSelection();
+  }, [resetRowSelection, setColumnFilters]);
+
+  const releaseSelectedSubmissionReviews = useCallback(async () => {
+    setIsReleasingAll(true);
+    try {
+      const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
+        p_assignment_id: Number(assignment_id),
+        p_submission_ids: selectedSubmissionIds
+      });
+
+      if (error) {
+        throw new Error(`Failed to release reviews: ${error.message}`);
+      }
+
+      await tableController?.refetchAll();
+      resetRowSelection();
+
+      toaster.success({
+        title: "Success",
+        description:
+          selectedCount === 1
+            ? "1 selected submission review released"
+            : `${selectedCount} selected submission reviews released`
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error releasing grading reviews for selection:", error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+      });
+    } finally {
+      setIsReleasingAll(false);
+    }
+  }, [assignment_id, resetRowSelection, selectedCount, selectedSubmissionIds, supabase, tableController]);
 
   const columnFiltersKey = JSON.stringify(getState().columnFilters);
   useEffect(() => {
@@ -793,6 +849,18 @@ export default function AssignmentsTable({
       return restrictRowIds == null ? others : [...others, { id: "cohort_membership", value: restrictRowIds }];
     });
   }, [restrictRowIds, setColumnFilters]);
+
+  useEffect(() => {
+    const gradingCompleteParam = searchParams.get("grading_complete");
+    if (!gradingCompleteParam) return;
+    const normalized = gradingCompleteParam.trim().toLowerCase();
+    const filterValue = normalized === "complete" ? "Complete" : normalized === "incomplete" ? "Incomplete" : null;
+    if (!filterValue) return;
+    setColumnFilters((prev) => {
+      const others = prev.filter((f) => f.id !== "grading_complete");
+      return [...others, { id: "grading_complete", value: [filterValue] }];
+    });
+  }, [searchParams, setColumnFilters]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({
@@ -822,38 +890,11 @@ export default function AssignmentsTable({
                 loading={isReleasingAll}
                 disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
                 onClick={async () => {
-                  setIsReleasingAll(true);
-                  try {
-                    const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
-                      p_assignment_id: Number(assignment_id),
-                      p_submission_ids: selectedSubmissionIds
-                    });
-
-                    if (error) {
-                      throw new Error(`Failed to release reviews: ${error.message}`);
-                    }
-
-                    await tableController?.refetchAll();
-                    resetRowSelection();
-
-                    toaster.success({
-                      title: "Success",
-                      description:
-                        selectedCount === 1
-                          ? "1 selected submission review released"
-                          : `${selectedCount} selected submission reviews released`
-                    });
-                  } catch (error) {
-                    // eslint-disable-next-line no-console
-                    console.error("Error releasing grading reviews for selection:", error);
-                    toaster.error({
-                      title: "Error",
-                      description:
-                        error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
-                    });
-                  } finally {
-                    setIsReleasingAll(false);
+                  if (selectedIncompleteCount > 0) {
+                    setIsReleaseIncompleteWarningOpen(true);
+                    return;
                   }
+                  await releaseSelectedSubmissionReviews();
                 }}
               >
                 {selectedCount === 0
@@ -905,6 +946,49 @@ export default function AssignmentsTable({
               </Button>
             </HStack>
           ))}
+        <DialogRoot
+          open={isReleaseIncompleteWarningOpen}
+          onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Some selected reviews are incomplete</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <Text>
+                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"} are
+                incomplete. Releasing now will publish those grades anyway.
+              </Text>
+            </DialogBody>
+            <DialogFooter>
+              <DialogActionTrigger asChild>
+                <Button variant="ghost">Cancel</Button>
+              </DialogActionTrigger>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsReleaseIncompleteWarningOpen(false);
+                  applyIncompleteFilter();
+                  router.push(`/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`, {
+                    scroll: false
+                  });
+                }}
+              >
+                Review incomplete grading reviews
+              </Button>
+              <Button
+                colorPalette="green"
+                loading={isReleasingAll}
+                onClick={async () => {
+                  await releaseSelectedSubmissionReviews();
+                  setIsReleaseIncompleteWarningOpen(false);
+                }}
+              >
+                Continue anyway
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </DialogRoot>
         {/* Column Visibility Controls */}
         <Box w="100%" p={4} bg="bg.subtle" borderRadius="md" mb={0}>
           <Text fontSize="sm" fontWeight="medium" mb={3}>

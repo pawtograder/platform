@@ -177,6 +177,7 @@ function CompleteReviewAssignmentDialog({
   reviewAssignment,
   missing_required_checks,
   missing_required_criteria,
+  isReleased,
   isLoading,
   setIsLoading
 }: {
@@ -195,6 +196,7 @@ function CompleteReviewAssignmentDialog({
     };
     check_count_applied: number;
   }[];
+  isReleased: boolean;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
 }) {
@@ -260,6 +262,13 @@ function CompleteReviewAssignmentDialog({
               onClick={async () => {
                 try {
                   setIsLoading(true);
+                  if (isReleased) {
+                    toaster.warning({
+                      title: "Grade already released",
+                      description:
+                        "This grade is already released to students. You can still mark this review complete."
+                    });
+                  }
                   await reviewAssignments.update(reviewAssignment.id, {
                     completed_at: new Date().toISOString(),
                     completed_by: private_profile_id
@@ -303,6 +312,7 @@ export function CompleteReviewAssignmentButton() {
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
+  const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
 
   if (
@@ -333,6 +343,7 @@ export function CompleteReviewAssignmentButton() {
           reviewAssignment={reviewAssignment}
           missing_required_checks={missing_required_checks}
           missing_required_criteria={missing_required_criteria}
+          isReleased={Boolean(activeSubmissionReview?.released)}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
         />
@@ -367,6 +378,13 @@ export function CompleteReviewButton() {
       }
       try {
         setIsLoading(true);
+        if (activeSubmissionReview.released) {
+          toaster.warning({
+            title: "Grade already released",
+            description:
+              "This grade is already released to students. Marking complete will update grading after release."
+          });
+        }
         await submissionController.submission_reviews.update(activeSubmissionReview.id, {
           completed_at: new Date().toISOString(),
           completed_by: private_profile_id
