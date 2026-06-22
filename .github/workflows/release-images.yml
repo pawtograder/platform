@@ -34,7 +34,7 @@ on:
         required: false
         default: ""
       channel_host_suffix:
-        description: "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX build arg (the channel zone, e.g. 'staging.pawtograder.net') — enables per-course host redirect + cross-channel cookie scope. Empty = channel routing disabled."
+        description: "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX build arg (the channel zone, e.g. 'staging.pawtograder.net') — enables per-course host redirect + cross-channel cookie scope. Empty falls back to the vars.CHANNEL_HOST_SUFFIX repo variable; routing is disabled only when both are empty."
         required: false
         default: ""
 
