@@ -19,6 +19,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import MCR from "monocart-coverage-reports";
+import { mergeProcessCovs } from "@bcoe/v8-coverage";
 
 const REPO_ROOT = process.cwd();
 const COVERAGE_DIR = path.resolve(REPO_ROOT, "coverage");
@@ -136,19 +137,40 @@ async function main(): Promise<void> {
     console.error(`[v8-server-to-lcov] no server-cdp*.json / build-cdp*.json under ${COVERAGE_DIR}`);
     return;
   }
-  const entries: V8Entry[] = [];
+  // Load each dump as a separate V8 ProcessCov, then MERGE by URL up front
+  // (summing block counts) before doing anything else. The ~130 build-time
+  // dumps come from per-route static-generation workers that each re-execute
+  // the same chunks, so the raw set is ~3700 ScriptCovs across only ~240
+  // distinct scripts. Handing all 3700 to monocart — each carrying a big
+  // unminified source + sourcemap — exhausts the heap ("Reached heap limit"
+  // even at 8 GB) and yields NO server.lcov, so next-server uploads 0 files.
+  // mergeProcessCovs collapses them to one ScriptCov per URL with counts
+  // summed (identical to monocart's own per-file summing, just done once and
+  // cheaply), which is what makes the conversion fit in memory.
+  let rawTotal = 0;
+  const covs: { result: V8Entry[] }[] = [];
   for (const f of files) {
     const fp = path.join(COVERAGE_DIR, f);
     try {
       const raw = await readFile(fp, "utf8");
       const payload: { result?: V8Entry[] } = JSON.parse(raw);
       const r = payload.result ?? [];
-      entries.push(...r);
+      if (r.length) covs.push({ result: r });
+      rawTotal += r.length;
       console.error(`[v8-server-to-lcov] loaded ${r.length} entries from ${f}`);
     } catch (err) {
       console.error(`[v8-server-to-lcov] WARN: skipping ${f}:`, err);
     }
   }
+  // mergeProcessCovs is typed for the standard V8 ProcessCov shape; our V8Entry
+  // is structurally compatible (url + functions + ranges).
+  const merged = covs.length
+    ? (mergeProcessCovs(covs as unknown as Parameters<typeof mergeProcessCovs>[0]) as unknown as {
+        result: V8Entry[];
+      })
+    : { result: [] as V8Entry[] };
+  const entries: V8Entry[] = merged.result;
+  console.error(`[v8-server-to-lcov] merged ${rawTotal} raw entries → ${entries.length} distinct scripts`);
 
   const mcr = (MCR as unknown as (opts: unknown) => unknown)({
     name: "next-server",
@@ -182,15 +204,35 @@ async function main(): Promise<void> {
     }
   }) as { add: (entries: unknown) => Promise<unknown>; generate: () => Promise<unknown> };
 
-  // Profiler.takePreciseCoverage returns URL + functions + ranges, but
-  // NOT the script source — V8 holds the source in the isolate and the
-  // inspector doesn't serialize it. We have to read both the .js text
-  // and its .js.map from disk ourselves and attach them; otherwise
-  // monocart has nothing to map V8 byte offsets against.
+  if (entries.length === 0) {
+    console.error("[v8-server-to-lcov] empty result array — nothing to do");
+    return;
+  }
+
+  // Add entries to monocart ONE AT A TIME, loading each script's source + map
+  // from disk just-in-time and dropping them again right after the add. This
+  // mirrors the client converter (v8-client-to-lcov.ts), which adds per dump
+  // and digests 40k+ unminified entries at the default heap without trouble.
+  //
+  // The previous one-shot `mcr.add(entries)` held EVERY entry's unminified
+  // source + parsed sourcemap in memory simultaneously, which OOMed the heap
+  // ("Reached heap limit" even at 8/12 GB) → no server.lcov → next-server
+  // uploaded 0 files. monocart digests each entry into its coverage model at
+  // add() time, so once added we can release the big strings; peak memory then
+  // tracks the model (bounded by the app source) plus a single script, not the
+  // whole corpus.
+  //
+  // Profiler.takePreciseCoverage gives URL + functions + ranges but NOT source
+  // (V8 keeps it in the isolate), so we read the .js text and its .js.map from
+  // disk ourselves — without them monocart has nothing to map byte offsets to.
   let sourcesLoaded = 0;
   let mapsLoaded = 0;
   for (const entry of entries) {
     if (!entry.url) continue;
+    // Some entries arrive as bare paths; monocart's resolver wants file://.
+    if (!entry.url.includes("://") && entry.url.startsWith("/")) {
+      entry.url = pathToFileURL(entry.url).href;
+    }
     let filePath: string | null = null;
     if (entry.url.startsWith("file://")) {
       filePath = new URL(entry.url).pathname;
@@ -202,7 +244,7 @@ async function main(): Promise<void> {
         entry.source = await readFile(filePath, "utf8");
         sourcesLoaded++;
       } catch {
-        // skip
+        // skip — no source on disk
       }
       const sourceMap = await loadServerSourceMap(entry.url);
       if (sourceMap) {
@@ -210,22 +252,12 @@ async function main(): Promise<void> {
         mapsLoaded++;
       }
     }
+    await mcr.add([entry]);
+    // Release the heavy fields now that monocart has digested this entry.
+    entry.source = undefined;
+    entry.sourceMap = undefined;
   }
 
-  // Ensure URLs are file:// for monocart's resolver. Some entries
-  // come through as bare paths.
-  for (const entry of entries) {
-    if (entry.url && !entry.url.includes("://") && entry.url.startsWith("/")) {
-      entry.url = pathToFileURL(entry.url).href;
-    }
-  }
-
-  if (entries.length === 0) {
-    console.error("[v8-server-to-lcov] empty result array — nothing to do");
-    return;
-  }
-
-  await mcr.add(entries);
   const summary = (await mcr.generate()) as { summary?: { lines?: { pct?: number } } };
 
   console.error(
