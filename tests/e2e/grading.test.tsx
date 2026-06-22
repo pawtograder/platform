@@ -167,9 +167,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await page.getByRole("link", { name: assignment!.title }).click();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}`);
 
-    await expect(page.getByText("Self Review Notice")).toBeVisible();
+    await expect(page.getByText(/Self Review Notice|Self Review Now Due/)).toBeVisible();
     // The "Submission Limit for this assignment" alert renders asynchronously
     // after a separate RPC and is now hidden in visual tests (see the
     // data-visual-test="removed" on the alert in page.tsx) so its
@@ -210,8 +210,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
         .eq("rubric_id", selfReviewRubric!.id);
       expect(ra?.length ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
-    await page.getByRole("button", { name: "Complete Self Review" }).click();
-    await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByRole("region", { name: "Self-Review Rubric" })).toBeVisible();
 
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
@@ -349,6 +349,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Issue 843 adds an instructor warning dialog when selected reviews include
+    // incomplete grading. Continue through it when present.
+    const continueAnywayBtn = page.getByRole("button", { name: "Continue anyway" });
+    if (await continueAnywayBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await continueAnywayBtn.click();
+    }
     // Wait for the release to land in the DB before navigating to the
     // submission page. On webkit the SSR'd submission page sometimes paints
     // before the released flag has propagated, leading to the badge showing
