@@ -218,7 +218,7 @@ export default function GradingStatusPanel({
                 router.push(reviewIncompleteHref);
               }}
             >
-              Review incomplete grading reviews
+              Review
             </Button>
             <Button
               colorPalette="green"

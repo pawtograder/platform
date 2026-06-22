@@ -1783,7 +1783,7 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
                     );
                   }}
                 >
-                  Review incomplete grading reviews
+                  Review
                 </Button>
                 <Button
                   colorPalette="green"

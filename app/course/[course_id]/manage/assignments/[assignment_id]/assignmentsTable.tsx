@@ -979,7 +979,7 @@ export default function AssignmentsTable({
                   });
                 }}
               >
-                Review incomplete grading reviews
+                Review
               </Button>
               <Button
                 colorPalette="green"
