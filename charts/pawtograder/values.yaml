@@ -603,6 +603,12 @@ realtime:
     repository: supabase/realtime
     tag: "v2.76.5" # stock supabase docker-compose pin — fixes partition / metrics auth
     pullPolicy: IfNotPresent
+  # The supabase/realtime entrypoint starts as root and `sudo -u nobody`s to
+  # run migrations + the BEAM — so it needs the default capability set and
+  # privilege escalation. Under the global drop-ALL / allowPrivilegeEscalation:
+  # false context, sudo fails ("setresuid: Operation not permitted") and the
+  # pod CrashLoopBackOffs, so opt out here — same as postgres above.
+  containerSecurityContext: {}
   # BEAM clustering — pods discover peers via a headless Service.
   cluster:
     strategy: "Elixir.Cluster.Strategy.Kubernetes.DNS"
