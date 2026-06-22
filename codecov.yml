@@ -47,7 +47,14 @@ coverage:
 
 flag_management:
   default_rules:
-    carryforward: true # if a flag is missing on a commit, reuse the last value
+    # carryforward disabled: when a file is absent from a flag's upload we want
+    # it reported as genuinely uncovered, NOT reused from the last commit.
+    # Carryforward was freezing pre-fix (minified, mis-attributed) next-server
+    # data for files the E2E never exercises server-side (e.g. app/actions.ts,
+    # whose actions only run via auth flows the suite doesn't drive) — so the
+    # report showed stale, execution-impossible line patterns long after the
+    # pipeline was fixed. Measured-only is the honest signal for a coverage gate.
+    carryforward: false
     statuses:
       - type: project
         target: auto
