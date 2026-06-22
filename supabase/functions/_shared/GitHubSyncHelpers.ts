@@ -154,15 +154,36 @@ export async function getFirstCommit(repoFullName: string, branch: string, scope
 
   const [owner, repo] = repoFullName.split("/");
 
-  // Start from the branch HEAD and traverse back to find the first commit
+  // Start from the branch HEAD and traverse back to find the first commit.
   let oldestSha: string | undefined;
-  const { data: headRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branch}`
-  });
 
-  let currentSha = headRef.object.sha;
+  const fetchHeadSha = async (br: string): Promise<string> => {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${br}`
+    });
+    return data.object.sha;
+  };
+
+  // The requested branch may not exist (e.g. a fork whose default branch is not
+  // "main"); fall back to the repo's actual default branch in that case.
+  let currentSha: string;
+  try {
+    currentSha = await fetchHeadSha(branch);
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    if (status !== 404) throw e;
+    const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    const defaultBranch = repoData.default_branch;
+    if (!defaultBranch || defaultBranch === branch) throw e;
+    scope?.addBreadcrumb({
+      message: `Branch ${branch} not found in ${repoFullName}; falling back to default branch ${defaultBranch}`,
+      category: "git",
+      level: "info"
+    });
+    currentSha = await fetchHeadSha(defaultBranch);
+  }
 
   // Keep following parent commits until we find one with no parents
   while (currentSha) {
@@ -1884,4 +1905,43 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
       }
     });
   });
+}
+
+/**
+ * Documented fallback template repos, kept in sync with the github_orgs table defaults
+ * and the resolve_class_template_repos RPC.
+ */
+export const DEFAULT_HANDOUT_TEMPLATE_REPO = "pawtograder/template-assignment-handout";
+export const DEFAULT_SOLUTION_TEMPLATE_REPO = "pawtograder/template-assignment-grader";
+
+/**
+ * Resolve the handout and solution (grader) template repos for a class.
+ *
+ * Resolution order (handled by the resolve_class_template_repos RPC):
+ *   class override -> github_orgs default -> hardcoded constant.
+ *
+ * Falls back to the hardcoded constants only when the class row is genuinely missing. A real
+ * RPC error is surfaced rather than swallowed: silently falling back on error would build repos
+ * from the wrong template and defeat the per-org feature with no signal. The "no override
+ * configured" case never reaches the fallback — it is handled inside the RPC via COALESCE.
+ */
+export async function resolveTemplateRepos(
+  supabase: SupabaseClient<Database>,
+  classId: number
+): Promise<{ handout: string; solution: string }> {
+  const { data, error } = await supabase.rpc("resolve_class_template_repos", { p_class_id: classId });
+  if (error) {
+    throw error;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) {
+    // No row => the class itself is missing. The RPC always returns COALESCEd (non-null)
+    // template values for an existing class, so a present row never needs this fallback.
+    console.warn(`resolveTemplateRepos: no row for class ${classId}; using hardcoded defaults`);
+    return { handout: DEFAULT_HANDOUT_TEMPLATE_REPO, solution: DEFAULT_SOLUTION_TEMPLATE_REPO };
+  }
+  return {
+    handout: row.handout_template_repo ?? DEFAULT_HANDOUT_TEMPLATE_REPO,
+    solution: row.solution_template_repo ?? DEFAULT_SOLUTION_TEMPLATE_REPO
+  };
 }

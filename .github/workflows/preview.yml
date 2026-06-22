@@ -423,6 +423,32 @@ jobs:
           chmod 600 "$HOME/.kube/config"
           kubectl version --client=true --output=yaml | head -20
 
+      - name: Recover stuck helm release
+        # A preview deploy that gets interrupted mid-`helm upgrade` — most
+        # commonly when `concurrency.cancel-in-progress: true` SIGKILLs the
+        # runner because a newer push to the same PR arrived, but also any
+        # runner crash/OOM — leaves the release in a `pending-*` state. Helm
+        # never clears that on its own, so every later deploy aborts instantly
+        # with "UPGRADE FAILED: another operation (install/upgrade/rollback) is
+        # in progress", permanently bricking the PR's preview until someone
+        # intervenes by hand. Uninstall the stuck release so the upgrade below
+        # recreates it cleanly. Safe for previews: `helm uninstall` does NOT
+        # delete the Postgres PVC (see the destroy job), so DB data survives,
+        # and the migration/seed jobs re-run on every deploy anyway.
+        env:
+          RELEASE: ${{ needs.meta.outputs.release }}
+          NAMESPACE: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          status=$(helm status "$RELEASE" -n "$NAMESPACE" 2>/dev/null | sed -n 's/^STATUS: //p' || true)
+          echo "current helm release status: ${status:-<none>}"
+          case "$status" in
+            pending-install|pending-upgrade|pending-rollback)
+              echo "::warning::release '$RELEASE' is stuck in '$status' (a previous deploy was interrupted). Uninstalling so this deploy can recreate it; Postgres PVC is preserved."
+              helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 10m || true
+              ;;
+          esac
+
       - name: helm upgrade --install
         env:
           RELEASE: ${{ needs.meta.outputs.release }}

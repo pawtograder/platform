@@ -4,11 +4,10 @@ import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandl
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-
-const TEMPLATE_SOLUTION_REPO_NAME = "pawtograder/template-assignment-grader";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
@@ -48,7 +47,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
     })
     .eq("id", assignment_id);
-  await createRepo(solutionRepoOrg, solutionRepoName, TEMPLATE_SOLUTION_REPO_NAME, {}, scope);
+  const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
+  scope.setTag("solution_template_repo", solutionTemplateRepo);
+  await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
   const asObj = (await parse(graderConfig.content)) as Json;

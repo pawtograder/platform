@@ -92,10 +92,11 @@ export function RubricQuickApplyPalette({
       }
     } else if (/^[1-9]$/.test(e.key)) {
       // Number keys 1-9 directly apply the Nth visible check (the digit is consumed, not typed into
-      // the filter — rubric checks are picked by name, not by number).
+      // the filter — rubric checks are picked by name, not by number). Always consume the digit,
+      // even when out of range, so it never leaks into the filter input.
+      e.preventDefault();
       const idx = Number(e.key) - 1;
       if (idx < filtered.length) {
-        e.preventDefault();
         onPick(filtered[idx].action);
         onClose();
       }

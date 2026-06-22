@@ -22,12 +22,7 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
      1. If Supabase is already running, stop it WITHOUT a backup: `npx supabase stop --no-backup` (this deletes the stale volume).
      2. Also delete any leftover project volumes just to be safe: `docker volume ls --filter label=com.supabase.cli.project=pawtograder-platform -q | xargs -r docker volume rm`.
      3. Start fresh: `npx supabase start` — this will run every migration in `supabase/migrations/` against an empty DB.
-   - **Known migration issue**: Migration `20260217000000_binary_submission_files.sql` fails during `supabase start` with `must be owner of table objects` because it creates RLS policies on `storage.objects`. Workaround (do this every fresh start):
-     1. Before `supabase start`, move the file aside: `mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/`.
-     2. Run `npx supabase start`.
-     3. Apply it as superuser: `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/20260217000000_binary_submission_files.sql`.
-     4. Record it: `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"`.
-     5. Restore the file: `mv /tmp/20260217000000_binary_submission_files.sql supabase/migrations/`.
+   - **Storage RLS policies & the Supabase CLI version (IMPORTANT — pinned to `2.105.0`)**: storage bucket policies (avatars, uploads, submission-files) live **inline** in their migrations as plain `CREATE POLICY ... ON storage.objects`; no post-start superuser step is needed. This requires the pinned CLI: `supabase` is pinned to `2.105.0` in `package.json` (matching `.github/workflows/deploy.yml`), and `npx supabase` resolves that local devDep — don't run a globally-installed older CLI. On **older CLIs (e.g. 2.77.0)**, `supabase db reset` fails partway with `ERROR: must be owner of table objects` on the _later_ storage-policy migrations (e.g. `20260530120200`, `20260217000000`) while _earlier_ ones (avatars/uploads) succeed in the same run. Root cause is a race between the CLI's migration runner and the storage container re-owning `storage.objects` to `supabase_storage_admin` mid-reset — not the policy SQL itself (the same statement run interactively as `postgres` succeeds). CLI `2.105.0` applies all of them cleanly in both `supabase start` and `db reset`. If you hit `must be owner` on a fresh start, you're on the wrong CLI version — `rm -rf node_modules/.bin/supabase && npm install` (or `npm install supabase@2.105.0 -D`).
    - **Audit partitions**: The partitioned `public.audit` table only has partitions for a narrow date range out of migrations. If the current date is outside that range, inserts fail with `no partition of relation "audit" found for row`. After starting Supabase, run `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "SELECT public.audit_maintain_partitions();"` to create today's partition (and the next 7 days).
    - **Sanity check the schema is current** before running E2E: the newest row of `supabase_migrations.schema_migrations` should match the newest file under `supabase/migrations/` (e.g. `20260413234500`). If it doesn't, the DB was restored from a backup — redo the stop/restart-without-backup sequence above.
 3. **Configure `.env.local`**: After `supabase start`, get keys with `npx supabase status -o env` and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, and `ENABLE_SIGNUPS=true`.
@@ -96,3 +91,23 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 - The staging Supabase backend (`.env.local.staging`) has signups disabled; use local Supabase for full dev.
 - Docker in this cloud VM requires `fuse-overlayfs` storage driver and `iptables-legacy`. These are configured during initial setup.
 - Edge Functions should be started with `.env.local` when needed: `npx supabase functions serve --env-file .env.local`.
+
+### GitHub App webhook subscription (ACTION REQUIRED for deployment ingestion)
+
+The App-level webhook event subscription lives in the **GitHub App settings UI**, not in this repo
+(there is no app manifest/IaC). The authoritative list of events Pawtograder handlers expect is
+`GITHUB_APP_WEBHOOK_EVENTS` in `supabase/functions/github-repo-configure-webhook/index.ts`. When you add
+a handler in `github-repo-webhook/index.ts`, add the event there **and** subscribe the App to it.
+
+**Deployment ingestion (`github_deployments`, PR-submission-mode Phase 4)** needs the App subscribed to
+**Deployment** and **Deployment status** — until then no `deployment_status` deliveries arrive and the
+table stays empty (the ingestion code + table are already in place). To enable (needs org/App admin):
+
+1. GitHub → the org's **Pawtograder GitHub App** → **Settings** → **Permissions & events**.
+2. Ensure the **Deployments** repository permission is granted (Read-only is enough), then under
+   **Subscribe to events** check **Deployment** and **Deployment status**. Save (re-accept the permission
+   prompt on installations if shown).
+3. **Verify:** trigger a deployment on a tracked repo (or replay a `deployment_status` delivery from the
+   App's **Advanced → Recent Deliveries**), then confirm a row lands:
+   `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "select repository_name, environment, state from public.github_deployments order by id desc limit 5;"`
+   (locally) or query `github_deployments` on the target environment.

@@ -14,6 +14,13 @@ import { clearViewAsCookie, getViewAsCookie, setViewAsCookie } from "@/lib/viewA
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
+  /**
+   * Whether the viewer holds a global admin role, determined independently of class archival.
+   * `allOfMyRoles` excludes archived classes, so an admin row in an archived/disabled class
+   * would not appear there — this flag stays true regardless, matching the server-side
+   * `authorize_for_admin`.
+   */
+  isAdmin: boolean;
   private_profile_id: string;
   public_profile_id: string;
   private_profile: UserProfile;
@@ -89,6 +96,15 @@ export function useIsReadOnly() {
   return isReadOnly;
 }
 
+/**
+ * Returns whether the current user holds a global admin role (a `user_roles` row with
+ * role "admin" in any class). Admins can act as instructors in any course.
+ */
+export function useIsAdmin() {
+  const { isAdmin } = useClassProfiles();
+  return isAdmin;
+}
+
 type UserRoleWithClassAndUser = GetResult<
   Database["public"],
   Database["public"]["Tables"]["user_roles"]["Row"],
@@ -108,6 +124,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   const { user } = useAuthState();
   const userId = user?.id;
   const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
+  // Global admin status, queried independently of class archival (the main roles query filters
+  // archived classes, which would hide an admin row living in an archived/disabled class).
+  const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -181,6 +200,38 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     fetchRolesWithRetry();
     return () => {
       cleanedUp = true;
+    };
+  }, [userId, retryNonce]);
+
+  // Determine global admin status independently of the per-course roles query above, which
+  // joins classes!inner and filters archived=false — that would drop an admin row whose class
+  // is archived/disabled, hiding admin affordances even though the server still authorizes it.
+  useEffect(() => {
+    if (!userId) {
+      setIsAdmin(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("role", "admin")
+        .eq("disabled", false)
+        .limit(1);
+      if (cancelled) return;
+      if (error) {
+        console.error("Error fetching admin status:", error);
+        // Fail closed: don't leave a stale `true` enabling admin UI after a failed re-check.
+        setIsAdmin(false);
+        return;
+      }
+      setIsAdmin((data?.length ?? 0) > 0);
+    })();
+    return () => {
+      cancelled = true;
     };
   }, [userId, retryNonce]);
 
@@ -352,6 +403,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         private_profile_id: effectiveRole.private_profile_id,
         public_profile_id: effectiveRole.public_profile_id,
         allOfMyRoles: roles,
+        isAdmin,
         private_profile: effectiveRole.privateProfile,
         public_profile: effectiveRole.publicProfile,
         isViewingAsStudent,
