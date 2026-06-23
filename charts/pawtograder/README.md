@@ -290,6 +290,129 @@ docker build \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
+## Deployment skinning / branding
+
+Self-hosted deployments can re-brand the app — service name, tagline, logos, and
+accent color — **without rebuilding the web image**. Unlike the `NEXT_PUBLIC_*`
+build-time vars above, branding is delivered as **plain runtime env vars** that
+the app reads server-side on every request (`lib/branding.ts`) and hands to the
+client via a React context. The same published `ghcr.io/pawtograder/web` image
+therefore renders whatever branding the chart injects.
+
+Configure it under `web.branding`:
+
+```yaml
+web:
+  branding:
+    name: "PawtograderNext" # titles, headings, wordmarks
+    description: "…" # <meta name="description">
+    tagline: "…" # line under the wordmark on auth screens
+    logoLight: "/Logo-Light.png" # bundled path OR absolute https:// URL
+    logoDark: "/Logo-Dark.png" # bundled path OR absolute https:// URL
+    favicon: "/favicon.svg" # browser-tab icon; bundled path OR https:// URL
+    colorPalette: "teal" # accent: gray|red|orange|yellow|green|teal|blue|cyan|purple|pink
+```
+
+Any field left blank keeps its built-in Pawtograder default. The staging overlay
+([`examples/values-staging.yaml`](./examples/values-staging.yaml)) uses this to
+run staging as **PawtograderNext** with a teal accent.
+
+### Logos & favicon: bake into the image (no asset hosting)
+
+Custom logos and the favicon can be provided two ways:
+
+- **Absolute `https://` URL** to an externally hosted asset — logos render with a
+  plain `<img>` (no `next.config` image-host allow-listing needed), and the
+  favicon is set via `<link rel="icon">`.
+- **Baked into the image (recommended — avoids hosting mess).** Drop your files
+  into the repo's [`public/branding/`](../../public/branding/) directory before
+  `docker build`; everything under `public/` is copied into the web image and
+  served at `/branding/*`. Then point the values at those paths:
+
+  ```yaml
+  web:
+    branding:
+      name: "TartanGrader"
+      logoLight: "/branding/logo-light.png"
+      logoDark: "/branding/logo-dark.png"
+      favicon: "/branding/favicon.png"
+      colorPalette: "red"
+  ```
+
+  The same published image still re-skins per deployment from the env vars; the
+  assets just need to be present inside it. A complete worked example (CMU-themed
+  **TartanGrader**, with assets shipped under `public/branding/tartangrader-*`)
+  lives in
+  [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
+
+The default favicon is the bundled `public/favicon.ico` (the app reads the
+favicon from `web.branding.favicon` via root-layout metadata; the former
+`app/favicon.ico` / `app/icon.svg` file-convention icons were moved to `public/`
+so a single, override-able `<link rel="icon">` is emitted).
+
+### Single sign-on (SSO)
+
+The sign-in page renders one button per provider in `web.branding.ssoProviders`
+(in order). Leaving it empty keeps the historical default — a single
+**Continue with Microsoft (Northeastern Login)** button. Configuring SSO is a
+**two-part** job: the **button** (frontend) and the **provider** (GoTrue) must
+both be set up, or the button errors on click.
+
+**1. Buttons (frontend):**
+
+```yaml
+web:
+  branding:
+    ssoProviders:
+      - provider: google # Supabase/GoTrue OAuth provider id
+        label: "Continue with Google" # button text
+        icon: google # microsoft|github|google|apple|discord|gitlab|slack|twitch|linkedin|sso|generic
+      - provider: azure
+        label: "Continue with Microsoft"
+        icon: microsoft
+        scopes: "email User.Read" # optional OAuth scopes
+```
+
+Allowed `provider` values: `apple, azure, bitbucket, discord, facebook, figma,
+github, gitlab, google, kakao, keycloak, linkedin_oidc, notion, slack_oidc,
+spotify, twitch, workos, zoom`. The server action validates the provider and
+re-reads its scopes from config (never from the client form). To show **no** SSO
+buttons (email-only), set `BRAND_SSO_PROVIDERS: "[]"` via `web.extraEnv`.
+
+**2. Provider (GoTrue):** enable each provider and supply its OAuth client
+id/secret (stored in the `pawtograder-web` Secret). `github`, `azure`, and
+`discord` have first-class blocks; everything else uses the generic
+`auth.externalProviders` list:
+
+```yaml
+auth:
+  external:
+    github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
+    azure: { enabled: true } # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+  externalProviders:
+    - name: google # -> GOTRUE_EXTERNAL_GOOGLE_*
+      enabled: true # reads GOOGLE_OAUTH_CLIENT_ID / _SECRET from the web Secret
+    - name: keycloak
+      enabled: true
+      url: https://sso.example.edu/realms/main # some providers require an issuer URL
+      # clientIdKey / clientSecretKey override the default <NAME>_OAUTH_CLIENT_ID/_SECRET keys
+```
+
+Each enabled provider's redirect URI defaults to the API gateway origin +
+`/auth/v1/callback`. That origin depends on `global.apiOnSeparateHost`:
+
+- **Separate API host (default, `apiOnSeparateHost: true`):**
+  `https://api.<hostname>/auth/v1/callback`
+- **Path-based routing (`apiOnSeparateHost: false`, API shares the web host):**
+  `https://<hostname>/auth/v1/callback`
+
+Register that exact URL in the provider's OAuth app (override per provider with
+`redirectUri` if your topology differs). Put the client id/secret in the
+`pawtograder-web` Secret under the `<NAME>_OAUTH_CLIENT_ID` /
+`<NAME>_OAUTH_CLIENT_SECRET` keys (e.g. `GOOGLE_OAUTH_CLIENT_ID`). A complete
+worked example (Google + Microsoft + GitHub) is in
+[`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
+
 ## Deploying production
 
 Start from `examples/values-prod.yaml` — it is a documented template, not a

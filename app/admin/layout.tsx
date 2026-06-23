@@ -1,18 +1,22 @@
 import { createClient } from "@/utils/supabase/server";
 import { Link, Box, Flex, VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
+import { getBranding } from "@/lib/branding";
 import { redirect } from "next/navigation";
 import { ReactNode } from "react";
 
 /** Default when no course context; matches course layout fallback. */
 const ADMIN_DISPLAY_TIME_ZONE = "America/New_York";
 
-export const metadata = {
-  title: {
-    default: "Admin · Pawtograder",
-    template: "%s · Admin · Pawtograder"
-  }
-};
+export async function generateMetadata() {
+  const brandName = getBranding().name;
+  return {
+    title: {
+      default: `Admin · ${brandName}`,
+      template: `%s · Admin · ${brandName}`
+    }
+  };
+}
 
 interface AdminLayoutProps {
   children: ReactNode;
