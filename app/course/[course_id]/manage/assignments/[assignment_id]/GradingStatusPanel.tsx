@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
@@ -115,6 +116,9 @@ export default function GradingStatusPanel({
   const counts = useMemo(() => computeGradingCounts(rows), [rows]);
   const router = useRouter();
   const { course_id } = useParams();
+  // Releasing/unreleasing grades is an instructor-only action; graders may view
+  // progress and finalize (mark complete), but not publish grades to students.
+  const isInstructor = useIsInstructor();
   const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
 
@@ -172,22 +176,26 @@ export default function GradingStatusPanel({
               onCompleted={onChanged}
               tooltip="Mark every eligible submission review complete — those whose required rubric checks are all applied. This does not release grades to students."
             />
-            <ConfirmButton
-              label="Release all"
-              colorPalette="green"
-              confirmTitle="Release all grading reviews"
-              confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
-              tooltip="Make grades visible to students for every submission in this assignment."
-              onConfirm={confirmReleaseAll}
-            />
-            <ConfirmButton
-              label="Unrelease all"
-              colorPalette="red"
-              confirmTitle="Unrelease all grading reviews"
-              confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
-              tooltip="Hide grades from students again for every submission (reverses Release all)."
-              onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
-            />
+            {isInstructor && (
+              <>
+                <ConfirmButton
+                  label="Release all"
+                  colorPalette="green"
+                  confirmTitle="Release all grading reviews"
+                  confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+                  tooltip="Make grades visible to students for every submission in this assignment."
+                  onConfirm={confirmReleaseAll}
+                />
+                <ConfirmButton
+                  label="Unrelease all"
+                  colorPalette="red"
+                  confirmTitle="Unrelease all grading reviews"
+                  confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+                  tooltip="Hide grades from students again for every submission (reverses Release all)."
+                  onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
+                />
+              </>
+            )}
           </HStack>
         </HStack>
       </CardBody>
@@ -198,8 +206,8 @@ export default function GradingStatusPanel({
           </DialogHeader>
           <DialogBody>
             <Text>
-              {incompleteCount} grading review{incompleteCount === 1 ? "" : "s"} are incomplete. Releasing now will
-              publish these grades anyway.
+              {incompleteCount} grading review{incompleteCount === 1 ? "" : "s"} {incompleteCount === 1 ? "is" : "are"}{" "}
+              incomplete. Releasing now will publish these grades anyway.
             </Text>
           </DialogBody>
           <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
@@ -215,7 +223,7 @@ export default function GradingStatusPanel({
               h="auto"
               onClick={() => {
                 setIsReleaseIncompleteWarningOpen(false);
-                router.push(reviewIncompleteHref);
+                router.push(reviewIncompleteHref, { scroll: false });
               }}
             >
               Review

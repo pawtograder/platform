@@ -55,7 +55,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender, RowSelectionState } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
@@ -312,6 +312,7 @@ export default function AssignmentsTable({
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
@@ -786,22 +787,26 @@ export default function AssignmentsTable({
   });
   const isInstructor = classRole.role === "instructor";
 
-  const selectedSubmissionIds = getFilteredRowModel()
-    .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
-    .map((row) => row.original.activesubmissionid as number);
-  const selectedIncompleteCount = getFilteredRowModel().rows.filter(
-    (row) => row.getIsSelected() && row.original.activesubmissionid != null && row.original.completed_at == null
-  ).length;
+  // The dashboard view emits one row per group member, so a single group
+  // submission appears as multiple selected rows that share one
+  // activesubmissionid. Dedupe by submission id so the counts, labels, and
+  // success toast reflect distinct submissions rather than group members.
+  const selectedSubmissionIds = Array.from(
+    new Set(
+      getFilteredRowModel()
+        .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
+        .map((row) => row.original.activesubmissionid as number)
+    )
+  );
+  const selectedIncompleteCount = new Set(
+    getFilteredRowModel()
+      .rows.filter(
+        (row) => row.getIsSelected() && row.original.activesubmissionid != null && row.original.completed_at == null
+      )
+      .map((row) => row.original.activesubmissionid as number)
+  ).size;
 
   const selectedCount = selectedSubmissionIds.length;
-
-  const applyIncompleteFilter = useCallback(() => {
-    setColumnFilters((prev) => {
-      const others = prev.filter((f) => f.id !== "grading_complete");
-      return [...others, { id: "grading_complete", value: ["Incomplete"] }];
-    });
-    resetRowSelection();
-  }, [resetRowSelection, setColumnFilters]);
 
   const releaseSelectedSubmissionReviews = useCallback(async () => {
     setIsReleasingAll(true);
@@ -850,17 +855,29 @@ export default function AssignmentsTable({
     });
   }, [restrictRowIds, setColumnFilters]);
 
+  // A `?grading_complete=complete|incomplete` query param is a one-shot deep link
+  // (used by the release-incomplete warning dialogs) that filters the table to the
+  // matching rows. Apply it once and reveal the otherwise-hidden column so the
+  // filter is visible and clearable, then strip the param from the URL so it does
+  // not stick (the user could not clear the filter while the param lingered) and
+  // does not re-apply on later navigations.
   useEffect(() => {
     const gradingCompleteParam = searchParams.get("grading_complete");
     if (!gradingCompleteParam) return;
     const normalized = gradingCompleteParam.trim().toLowerCase();
     const filterValue = normalized === "complete" ? "Complete" : normalized === "incomplete" ? "Incomplete" : null;
-    if (!filterValue) return;
-    setColumnFilters((prev) => {
-      const others = prev.filter((f) => f.id !== "grading_complete");
-      return [...others, { id: "grading_complete", value: [filterValue] }];
-    });
-  }, [searchParams, setColumnFilters]);
+    if (filterValue) {
+      setColumnVisibility((prev) => ({ ...prev, grading_complete: true }));
+      setColumnFilters((prev) => {
+        const others = prev.filter((f) => f.id !== "grading_complete");
+        return [...others, { id: "grading_complete", value: [filterValue] }];
+      });
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("grading_complete");
+    const queryString = params.toString();
+    router.replace(`${pathname}${queryString ? `?${queryString}` : ""}`, { scroll: false });
+  }, [searchParams, setColumnFilters, setColumnVisibility, router, pathname]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({
@@ -956,8 +973,9 @@ export default function AssignmentsTable({
             </DialogHeader>
             <DialogBody>
               <Text>
-                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"} are
-                incomplete. Releasing now will publish those grades anyway.
+                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
+                {selectedIncompleteCount === 1 ? "is" : "are"} incomplete. Releasing now will publish those grades
+                anyway.
               </Text>
             </DialogBody>
             <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
@@ -973,7 +991,6 @@ export default function AssignmentsTable({
                 h="auto"
                 onClick={() => {
                   setIsReleaseIncompleteWarningOpen(false);
-                  applyIncompleteFilter();
                   router.push(`/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`, {
                     scroll: false
                   });
