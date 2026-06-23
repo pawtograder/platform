@@ -27,8 +27,8 @@ import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
+import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
@@ -212,17 +212,6 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
 }
 
 function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
-  const { course_id } = useParams();
-  const { data: otherAssignments } = useList({
-    resource: "assignments",
-    queryOptions: { enabled: !!course_id },
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "group_config", operator: "ne", value: "individual" }
-    ],
-    pagination: { pageSize: 1000 }
-  });
-
   const [withGroups, setWithGroups] = useState<boolean>(() => {
     const groupConfig = form.getValues("group_config");
     return groupConfig === "groups" || groupConfig === "both";
@@ -352,24 +341,6 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                     </NativeSelectRoot>
                   )}
                 />
-              </Field>
-            </Fieldset.Content>
-            <Fieldset.Content>
-              <Field
-                orientation="horizontal"
-                label="Copy groups from assignment"
-                helperText="Copy groups from another assignment"
-              >
-                <NativeSelectRoot>
-                  <NativeSelectField {...register("copy_groups_from_assignment", { required: false })}>
-                    <option value="">None</option>
-                    {otherAssignments?.data?.map((assignment) => (
-                      <option key={assignment.id} value={assignment.id}>
-                        {assignment.title}
-                      </option>
-                    ))}
-                  </NativeSelectField>
-                </NativeSelectRoot>
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>
