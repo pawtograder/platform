@@ -6,12 +6,27 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { VStack, HStack, Text, Heading, Card, Badge, Table, Box, Flex, Grid } from "@chakra-ui/react";
+import {
+  VStack,
+  HStack,
+  Text,
+  Heading,
+  Card,
+  Badge,
+  Table,
+  Box,
+  Flex,
+  Grid,
+  NativeSelect,
+  Spinner,
+  Link
+} from "@chakra-ui/react";
 
 import { Checkbox } from "@chakra-ui/react";
 import { Download, Users, GraduationCap, BookOpen, MapPin, Clock, AlertCircle } from "lucide-react";
-import { courseImportSis, invitationCreate } from "@/lib/edgeFunctions";
+import { courseImportSis, invitationCreate, listGitHubOrgs } from "@/lib/edgeFunctions";
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
+import type { GitHubOrg } from "@/supabase/functions/_shared/FunctionTypes";
 import { TermSelector } from "@/components/ui/term-selector";
 
 // Use shared types
@@ -66,6 +81,14 @@ export default function CourseImportPage() {
     Array<{ id: number; name: string | null; course_title: string | null }>
   >([]);
   const [selectedExistingClassId, setSelectedExistingClassId] = useState<number | null>(null);
+  // GitHub org selection (required when creating a brand-new class, mirroring the
+  // manual CreateClassModal). Skipped when syncing into an existing class, which
+  // already has its github_org configured.
+  const [orgs, setOrgs] = useState<GitHubOrg[] | null>(null);
+  const [orgsLoading, setOrgsLoading] = useState(false);
+  const [orgsError, setOrgsError] = useState<string | null>(null);
+  const [installUrl, setInstallUrl] = useState<string>("https://github.com/settings/installations");
+  const [selectedGithubOrg, setSelectedGithubOrg] = useState<string>("");
   const [invitationProgress, setInvitationProgress] = useState<{
     current: number;
     total: number;
@@ -328,6 +351,31 @@ export default function CourseImportPage() {
     }
   }, [semester, findExistingClassesForTerm]);
 
+  // Load the installed GitHub orgs once so the admin can pick one when creating a
+  // brand-new class. (Syncing into an existing class doesn't need it.)
+  useEffect(() => {
+    let cancelled = false;
+    setOrgsLoading(true);
+    setOrgsError(null);
+    listGitHubOrgs(supabase)
+      .then(({ orgs: fetched, installUrl: url }) => {
+        if (cancelled) return;
+        setOrgs(fetched);
+        if (url) setInstallUrl(url);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setOrgs([]);
+        setOrgsError(error instanceof Error ? error.message : "Failed to load GitHub organizations");
+      })
+      .finally(() => {
+        if (!cancelled) setOrgsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
   // Find existing sections by CRN
   const findExistingSections = useCallback(
     async (classId: number, crns: number[]) => {
@@ -527,6 +575,12 @@ export default function CourseImportPage() {
         summary.classCreated = false; // Not creating, just syncing
         summary.classId = classId;
       } else {
+        // A new class must be tied to a GitHub org so handout/staff/student team
+        // and repo sync works. Enforce here (and disable the button) rather than
+        // silently creating a class with a NULL github_org.
+        if (!selectedGithubOrg) {
+          throw new Error("Please select a GitHub organization. Install the GitHub App if your org is not listed.");
+        }
         // Extract year and term from semester code (e.g., 202610 -> Fall 2026)
         let year = Math.floor(semester / 100);
         const termCode = semester % 100;
@@ -551,6 +605,7 @@ export default function CourseImportPage() {
           p_course_title: importData.courseInfo.title,
           p_start_date: importData.courseInfo.startDate,
           p_end_date: importData.courseInfo.endDate,
+          p_github_org_name: selectedGithubOrg,
           p_github_template_prefix: `${termMap[termCode]}${lastTwoDigits}`
         });
 
@@ -702,7 +757,15 @@ export default function CourseImportPage() {
       setIsCreating(false);
       setInvitationProgress(null); // Make sure to clear progress on error
     }
-  }, [importData, selectedSections, selectedExistingClassId, supabase, processBatchedInvitations, semester]);
+  }, [
+    importData,
+    selectedSections,
+    selectedExistingClassId,
+    selectedGithubOrg,
+    supabase,
+    processBatchedInvitations,
+    semester
+  ]);
 
   const toggleSection = (crn: number) => {
     const newSelected = new Set(selectedSections);
@@ -1388,6 +1451,46 @@ export default function CourseImportPage() {
             </Card.Header>
             <Card.Body>
               <VStack gap={4}>
+                {/* GitHub org picker -- only needed when creating a new class. */}
+                {!selectedExistingClassId && (
+                  <VStack align="start" w="full" gap={1}>
+                    <Label htmlFor="github_org_name">GitHub Organization *</Label>
+                    {orgsLoading ? (
+                      <HStack color="fg.muted" fontSize="sm">
+                        <Spinner size="sm" /> <Text>Loading organizations…</Text>
+                      </HStack>
+                    ) : (
+                      <NativeSelect.Root>
+                        <NativeSelect.Field
+                          id="github_org_name"
+                          value={selectedGithubOrg}
+                          onChange={(e) => setSelectedGithubOrg(e.target.value)}
+                        >
+                          <option value="">Select an organization…</option>
+                          {(orgs ?? []).map((org) => (
+                            <option key={org.installationId} value={org.login}>
+                              {org.login}
+                            </option>
+                          ))}
+                        </NativeSelect.Field>
+                        <NativeSelect.Indicator />
+                      </NativeSelect.Root>
+                    )}
+                    <Text fontSize="xs" color="fg.muted">
+                      {orgsError ? (
+                        <Text as="span" color="fg.error">
+                          {orgsError}.{" "}
+                        </Text>
+                      ) : null}
+                      Don&apos;t see your org?{" "}
+                      <Link href={installUrl} target="_blank" rel="noopener noreferrer" colorPalette="blue">
+                        Install the GitHub App
+                      </Link>{" "}
+                      then reload this page.
+                    </Text>
+                  </VStack>
+                )}
+
                 {(() => {
                   const analysis = getCreationAnalysis();
                   if (!analysis) return null;
@@ -1539,7 +1642,11 @@ export default function CourseImportPage() {
                 <Button
                   onClick={handleCreateClass}
                   loading={isCreating}
-                  disabled={selectedSections.size === 0 || !!invitationProgress}
+                  disabled={
+                    selectedSections.size === 0 ||
+                    !!invitationProgress ||
+                    (!selectedExistingClassId && !selectedGithubOrg)
+                  }
                   size="lg"
                   colorScheme="blue"
                 >
