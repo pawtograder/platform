@@ -114,9 +114,23 @@ Documented so we don't pretend coverage is complete.
 
 ## CI
 
-`.github/workflows/coverage.yml` runs two jobs in parallel on every PR:
+`.github/workflows/coverage.yml` runs two jobs in parallel:
 
 - `jest` — fast (~5 min). Just unit/integration coverage.
 - `e2e` — long (~60–90 min). Brings up local Supabase, builds Next with sourcemaps, starts everything with coverage flags, runs Playwright, collects per-layer lcov, uploads to Codecov.
+
+**Coverage is opt-in per PR** — the ~75 min `e2e` job is too expensive to run on
+every push. Both jobs run only when:
+
+- the PR carries the **`full-coverage`** label — add it to request a run; pushes
+  while the label is present re-run; remove it to stop, **or**
+- the workflow is triggered manually (Actions → Coverage → *Run workflow*), **or**
+- a commit lands on `staging`/`main` (so the base branch always has fresh full
+  coverage).
+
+An ordinary PR push with no label runs nothing here and posts no Codecov comment.
+Because there is no carryforward (`codecov.yml`), only labeled/base runs produce a
+coverage report — that's intended: a report only exists when all layers actually ran.
+Fork PRs never run either job (the self-hosted runner must not execute untrusted code).
 
 The CODECOV_TOKEN secret is required (set at the repo level — public repos still use it for upload identity/rate limits).

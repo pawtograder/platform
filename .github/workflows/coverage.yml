@@ -7,6 +7,11 @@ name: Coverage
 permissions:
   contents: read
 
+# Coverage is expensive (~75 min e2e), so it is OPT-IN per PR: nothing here
+# runs on an ordinary PR push. It runs only when a PR carries the
+# `full-coverage` label (add it to request a run; pushes while it's present
+# re-run, remove it to stop), on manual dispatch, or on push to staging/main
+# (so the base branch always has fresh full coverage). See the per-job `if`.
 on:
   push:
     branches:
@@ -15,6 +20,11 @@ on:
   pull_request:
     branches:
       - "**"
+    # `labeled` so adding `full-coverage` triggers a run; the default
+    # opened/synchronize/reopened are kept so a push to an already-labeled
+    # PR re-runs (the per-job `if` re-checks that the label is still there).
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch: {}
 
 # Cancel in-flight runs when a PR is pushed again.
 concurrency:
@@ -24,11 +34,16 @@ concurrency:
 jobs:
   jest:
     name: Jest coverage
-    # Never run for PRs opened from a fork: this job executes on the
-    # self-hosted `pawtograder-ci` runner, and a fork PR would otherwise
-    # run arbitrary attacker-controlled code (npm ci, build) on internal
-    # infrastructure. Pushes to staging/main and same-repo PRs are fine.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Two gates, both must hold:
+    #  1. Fork safety — never run for fork PRs: this job runs on the
+    #     self-hosted `pawtograder-ci` runner, and a fork PR would otherwise
+    #     run arbitrary attacker-controlled code (npm ci, build) on internal
+    #     infrastructure.
+    #  2. Opt-in — only on push to staging/main, manual dispatch, or a PR
+    #     labeled `full-coverage` (coverage is too expensive to run per push).
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-coverage'))
     runs-on: pawtograder-ci
     timeout-minutes: 20
     permissions:
@@ -81,10 +96,13 @@ jobs:
 
   e2e:
     name: E2E coverage (Next server + client + edge + postgres)
-    # See the `jest` job: skip fork PRs so untrusted code never runs on the
-    # self-hosted runner (this job also does `deno run` with broad
-    # --allow-* and `docker exec`, so the exposure is even larger).
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # See the `jest` job for the rationale. Same two gates: fork-safe AND
+    # opt-in (push to staging/main, manual dispatch, or `full-coverage`
+    # label). This job also does `deno run` with broad --allow-* and
+    # `docker exec`, so the fork exposure is even larger.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-coverage'))
     runs-on: pawtograder-ci
     timeout-minutes: 90
     permissions:
