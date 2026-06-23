@@ -1,11 +1,22 @@
 "use client";
 
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import FinalizeGradingButton from "./FinalizeGradingButton";
 
 type ReleaseAllRpc = "release_all_grading_reviews_for_assignment" | "unrelease_all_grading_reviews_for_assignment";
@@ -103,6 +114,13 @@ export default function GradingStatusPanel({
   onChanged?: () => void | Promise<void>;
 }) {
   const counts = useMemo(() => computeGradingCounts(rows), [rows]);
+  const router = useRouter();
+  const { course_id } = useParams();
+  // Releasing/unreleasing grades is an instructor-only action; graders may view
+  // progress and finalize (mark complete), but not publish grades to students.
+  const isInstructor = useIsInstructor();
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
+  const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
 
   const runReleaseAll = async (rpc: ReleaseAllRpc, successVerb: string) => {
     const { data, error } = await supabase.rpc(rpc, { assignment_id: assignmentId });
@@ -116,6 +134,17 @@ export default function GradingStatusPanel({
       title: "Success",
       description: `${count} submission review(s) ${successVerb}`
     });
+  };
+
+  const incompleteCount = counts.total - counts.graded;
+  const reviewIncompleteHref = `/course/${course_id}/manage/assignments/${assignmentId}?grading_complete=incomplete`;
+
+  const confirmReleaseAll = async () => {
+    if (incompleteCount > 0) {
+      setIsReleaseIncompleteWarningOpen(true);
+      return;
+    }
+    await runReleaseAll("release_all_grading_reviews_for_assignment", "released");
   };
 
   return (
@@ -147,25 +176,77 @@ export default function GradingStatusPanel({
               onCompleted={onChanged}
               tooltip="Mark every eligible submission review complete — those whose required rubric checks are all applied. This does not release grades to students."
             />
-            <ConfirmButton
-              label="Release all"
-              colorPalette="green"
-              confirmTitle="Release all grading reviews"
-              confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
-              tooltip="Make grades visible to students for every submission in this assignment."
-              onConfirm={() => runReleaseAll("release_all_grading_reviews_for_assignment", "released")}
-            />
-            <ConfirmButton
-              label="Unrelease all"
-              colorPalette="red"
-              confirmTitle="Unrelease all grading reviews"
-              confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
-              tooltip="Hide grades from students again for every submission (reverses Release all)."
-              onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
-            />
+            {isInstructor && (
+              <>
+                <ConfirmButton
+                  label="Release all"
+                  colorPalette="green"
+                  confirmTitle="Release all grading reviews"
+                  confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+                  tooltip="Make grades visible to students for every submission in this assignment."
+                  onConfirm={confirmReleaseAll}
+                />
+                <ConfirmButton
+                  label="Unrelease all"
+                  colorPalette="red"
+                  confirmTitle="Unrelease all grading reviews"
+                  confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+                  tooltip="Hide grades from students again for every submission (reverses Release all)."
+                  onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
+                />
+              </>
+            )}
           </HStack>
         </HStack>
       </CardBody>
+      <DialogRoot open={isReleaseIncompleteWarningOpen} onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Some grading reviews are incomplete</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <Text>
+              {incompleteCount} grading review{incompleteCount === 1 ? "" : "s"} {incompleteCount === 1 ? "is" : "are"}{" "}
+              incomplete. Releasing now will publish these grades anyway.
+            </Text>
+          </DialogBody>
+          <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
+            <DialogActionTrigger asChild>
+              <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                Cancel
+              </Button>
+            </DialogActionTrigger>
+            <Button
+              variant="outline"
+              w={{ base: "100%", md: "auto" }}
+              whiteSpace="normal"
+              h="auto"
+              onClick={() => {
+                setIsReleaseIncompleteWarningOpen(false);
+                router.push(reviewIncompleteHref, { scroll: false });
+              }}
+            >
+              Review
+            </Button>
+            <Button
+              colorPalette="green"
+              w={{ base: "100%", md: "auto" }}
+              loading={isContinuingReleaseAll}
+              onClick={async () => {
+                setIsContinuingReleaseAll(true);
+                try {
+                  await runReleaseAll("release_all_grading_reviews_for_assignment", "released");
+                  setIsReleaseIncompleteWarningOpen(false);
+                } finally {
+                  setIsContinuingReleaseAll(false);
+                }
+              }}
+            >
+              Continue anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
     </CardRoot>
   );
 }
