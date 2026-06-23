@@ -1,7 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -74,19 +74,6 @@ export default function EditAssignment() {
               }
             }
           );
-        }
-        if (values.copy_groups_from_assignment !== undefined) {
-          if (values.copy_groups_from_assignment !== "") {
-            await assignmentGroupCopyGroupsFromAssignment(
-              {
-                source_assignment_id: values.copy_groups_from_assignment,
-                target_assignment_id: Number.parseInt(assignment_id as string),
-                class_id: Number.parseInt(course_id as string)
-              },
-              supabase
-            );
-          }
-          delete values.copy_groups_from_assignment;
         }
         values.eval_config = undefined;
         values.allow_early = undefined;

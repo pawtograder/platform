@@ -16,6 +16,7 @@ import {
   ensureTimeZonePreferenceInitialized,
   gotoCourseUrlWhenHeadingVisible,
   insertAssignment,
+  insertPreBakedSubmission,
   supabase
 } from "./TestingUtils";
 
@@ -27,10 +28,12 @@ test.describe("Instructor group management", () => {
   let assignmentId: number;
   let instructorEmail: string;
   let instructorPassword: string;
+  let instructorProfileId: string;
   let studentAName: string;
   let studentBName: string;
   let studentAProfileId: string;
   let studentBProfileId: string;
+  let studentCProfileId: string;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -45,6 +48,7 @@ test.describe("Instructor group management", () => {
     });
     instructorEmail = instructor.email;
     instructorPassword = instructor.password;
+    instructorProfileId = instructor.private_profile_id;
 
     const studentA = await createUserInClass({
       role: "student",
@@ -62,6 +66,13 @@ test.describe("Instructor group management", () => {
     });
     studentBName = studentB.private_profile_name;
     studentBProfileId = studentB.private_profile_id;
+    const studentC = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `E2E Student C ${suffix}`,
+      email: `e2e-stu-c-${suffix}@pawtograder.net`
+    });
+    studentCProfileId = studentC.private_profile_id;
 
     const assignment = await insertAssignment({
       class_id: classId,
@@ -188,6 +199,200 @@ test.describe("Instructor group management", () => {
         .maybeSingle();
       expect(error).toBeNull();
       expect(data?.id).toBeDefined();
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test("overwrite target groups from a prior assignment", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "Chromium only (chakra-react-select member picker is flaky in WebKit)");
+
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceAssignment = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), 7).toISOString(),
+      name: `E2E Source Groups ${suffix}`,
+      assignment_slug: `e2e-copy-source-${suffix}`,
+      group_config: "groups",
+      min_group_size: 1,
+      max_group_size: 4,
+      group_formation_deadline: addDays(new Date(), 7).toISOString()
+    });
+    const targetAssignment = await insertAssignment({
+      class_id: classId,
+      due_date: addDays(new Date(), 21).toISOString(),
+      name: `E2E Target Groups ${suffix}`,
+      assignment_slug: `e2e-copy-target-${suffix}`,
+      group_config: "groups",
+      min_group_size: 1,
+      max_group_size: 4,
+      group_formation_deadline: addDays(new Date(), 21).toISOString()
+    });
+
+    const { data: sourceGroups, error: sourceGroupsError } = await supabase
+      .from("assignment_groups")
+      .insert([
+        { assignment_id: sourceAssignment.id, class_id: classId, name: `copyalpha${suffix.slice(0, 4)}` },
+        { assignment_id: sourceAssignment.id, class_id: classId, name: `copybeta${suffix.slice(0, 4)}` }
+      ])
+      .select("id, name");
+    expect(sourceGroupsError).toBeNull();
+    expect(sourceGroups).toHaveLength(2);
+
+    const alphaGroup = sourceGroups!.find((group) => group.name.startsWith("copyalpha"));
+    const betaGroup = sourceGroups!.find((group) => group.name.startsWith("copybeta"));
+    expect(alphaGroup?.id).toBeDefined();
+    expect(betaGroup?.id).toBeDefined();
+
+    const { error: sourceMembersError } = await supabase.from("assignment_groups_members").insert([
+      {
+        assignment_id: sourceAssignment.id,
+        class_id: classId,
+        assignment_group_id: alphaGroup!.id,
+        profile_id: studentAProfileId,
+        added_by: instructorProfileId
+      },
+      {
+        assignment_id: sourceAssignment.id,
+        class_id: classId,
+        assignment_group_id: betaGroup!.id,
+        profile_id: studentBProfileId,
+        added_by: instructorProfileId
+      }
+    ]);
+    expect(sourceMembersError).toBeNull();
+
+    const { data: staleGroup, error: staleGroupError } = await supabase
+      .from("assignment_groups")
+      .insert({
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        name: `stale${suffix.slice(0, 6)}`
+      })
+      .select("id")
+      .single();
+    expect(staleGroupError).toBeNull();
+    expect(staleGroup?.id).toBeDefined();
+
+    const { data: submittedStaleGroup, error: submittedStaleGroupError } = await supabase
+      .from("assignment_groups")
+      .insert({
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        name: `submittedstale${suffix.slice(0, 6)}`
+      })
+      .select("id")
+      .single();
+    expect(submittedStaleGroupError).toBeNull();
+    expect(submittedStaleGroup?.id).toBeDefined();
+
+    const { error: staleMembersError } = await supabase.from("assignment_groups_members").insert([
+      {
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        assignment_group_id: staleGroup!.id,
+        profile_id: studentAProfileId,
+        added_by: instructorProfileId
+      },
+      {
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        assignment_group_id: staleGroup!.id,
+        profile_id: studentBProfileId,
+        added_by: instructorProfileId
+      },
+      {
+        assignment_id: targetAssignment.id,
+        class_id: classId,
+        assignment_group_id: submittedStaleGroup!.id,
+        profile_id: studentCProfileId,
+        added_by: instructorProfileId
+      }
+    ]);
+    expect(staleMembersError).toBeNull();
+
+    const staleSubmission = await insertPreBakedSubmission({
+      assignment_id: targetAssignment.id,
+      class_id: classId,
+      assignment_group_id: submittedStaleGroup!.id,
+      student_profile_id: studentCProfileId,
+      repositorySuffix: `copy-stale-${suffix}`
+    });
+
+    await ensureTimeZonePreferenceInitialized(page, "course");
+    await page.goto("/sign-in");
+    await page.getByLabel("Sign in email").fill(instructorEmail);
+    await page.getByLabel("Sign in password").fill(instructorPassword);
+    await page.getByRole("button", { name: "Sign in with email" }).click();
+    await page.waitForURL((url) => !url.pathname.includes("/sign-in"), { timeout: 30_000 });
+    await dismissTimeZonePreferenceModal(page, 15_000);
+
+    await gotoCourseUrlWhenHeadingVisible(
+      page,
+      `/course/${classId}/manage/assignments/${targetAssignment.id}/groups`,
+      "Configure Groups"
+    );
+
+    await page.getByRole("button", { name: "Copy Groups from Prior Assignment" }).click();
+    const copyDialog = page.getByRole("alertdialog");
+    await expect(
+      copyDialog.getByRole("heading", { name: "Copy groups immediately from prior assignment" })
+    ).toBeVisible();
+    await expect(copyDialog.getByText(/This action is not staged/)).toBeVisible();
+    await expect(copyDialog.getByText(/does not wait for the page's Publish Changes button/)).toBeVisible();
+    await copyDialog.getByLabel("Prior assignment").selectOption(String(sourceAssignment.id));
+    await copyDialog.getByRole("button", { name: "Overwrite Groups Now" }).click();
+
+    await expect(page.getByText(/Groups copied/i).first()).toBeVisible({ timeout: 30_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("assignment_groups_members")
+        .select("profile_id, assignment_groups!inner(name)")
+        .eq("assignment_id", targetAssignment.id)
+        .in("profile_id", [studentAProfileId, studentBProfileId]);
+      expect(error).toBeNull();
+      expect(data).toHaveLength(2);
+
+      const groupsByProfile = new Map(
+        data!.map((membership) => [
+          membership.profile_id,
+          Array.isArray(membership.assignment_groups)
+            ? membership.assignment_groups[0]?.name
+            : membership.assignment_groups?.name
+        ])
+      );
+      expect(groupsByProfile.get(studentAProfileId)).toBe(alphaGroup!.name);
+      expect(groupsByProfile.get(studentBProfileId)).toBe(betaGroup!.name);
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("assignment_groups")
+        .select("id")
+        .eq("id", staleGroup!.id)
+        .maybeSingle();
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("assignment_groups_members")
+        .select("id")
+        .eq("assignment_id", targetAssignment.id)
+        .eq("profile_id", studentCProfileId)
+        .maybeSingle();
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      const { data, error } = await supabase
+        .from("submissions")
+        .select("is_active")
+        .eq("id", staleSubmission.submission_id)
+        .single();
+      expect(error).toBeNull();
+      expect(data?.is_active).toBe(false);
     }).toPass({ timeout: 60_000 });
   });
 });

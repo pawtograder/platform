@@ -2,6 +2,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import { createClient as supabaseCreateClient } from "@supabase/supabase-js";
 import { Database } from "./SupabaseTypes";
 import { assert } from "../utils";
+import { sessionCookieOptions } from "../channels";
 
 export const createClient = () => {
   const supabaseUrl = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -13,11 +14,9 @@ export const createClient = () => {
     realtime: {
       worker: true
     },
-    // See utils/supabase/middleware.ts: scope auth cookies to the parent domain
-    // for cross-channel-host sessions when NEXT_PUBLIC_SESSION_COOKIE_DOMAIN is set.
-    ...(process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN
-      ? { cookieOptions: { domain: process.env.NEXT_PUBLIC_SESSION_COOKIE_DOMAIN } }
-      : {})
+    // Scope auth cookies to the parent zone for cross-channel-host sessions.
+    // Derived from the channel host suffix; see utils/channels.ts.
+    ...sessionCookieOptions()
   });
 };
 

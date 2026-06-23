@@ -3,28 +3,25 @@ Per-deployment-channel Ingress. Each channel with a `web` block gets its own
 single-label host (<name>.<global.hostname>) serving that channel's web
 deployment at /, with the Supabase API paths proxied to the shared Kong (which
 routes /functions/v1 to the channel's functions by host — see
-templates/kong-config.yaml; auth/rest/realtime/storage stay shared). TLS uses the
-*.<zone> wildcard secret (channelWildcardTlsSecret), so adding channels needs no
-per-host ACME issuance.
+templates/kong-config.yaml; auth/rest/realtime/storage stay shared). The host is
+always a single label under <global.hostname>, so the *.<zone> wildcard secret
+(channelWildcardTlsSecret) always covers it and adding channels needs no per-host
+ACME issuance; channels[].tls.secretName is an optional override for a dedicated
+per-channel cert.
 */ -}}
 {{- if and .Values.ingress.enabled .Values.web.enabled }}
 {{- range $c := .Values.channels }}
 {{- if $c.web }}
 {{- $host := include "pawtograder.channel.host" (dict "ctx" $ "channel" $c) }}
-{{- /* Resolve the channel ingress TLS secret:
-   - channels[].tls.secretName, if set, wins (per-channel cert; any host).
-   - otherwise the host must be under the *.<global.hostname> wildcard zone so
-     channelWildcardTlsSecret can cover it (the default <name>.<hostname> host
-     always is); an overridden host outside the zone fails fast rather than
-     serving a mismatched cert. */ -}}
+{{- /* Channel ingress TLS secret: channels[].tls.secretName wins if set
+   (dedicated per-channel cert); otherwise the reflected *.<zone> wildcard
+   (channelWildcardTlsSecret), which always covers the single-label host. */ -}}
 {{- $tlsSecret := "" }}
 {{- if $.Values.ingress.tls.enabled }}
 {{- if and $c.tls $c.tls.secretName }}
 {{- $tlsSecret = $c.tls.secretName }}
-{{- else if hasSuffix (printf ".%s" $.Values.global.hostname) $host }}
-{{- $tlsSecret = required "channelWildcardTlsSecret is required for channels under the wildcard zone with ingress.tls.enabled (a reflected *.<zone> cert), or set channels[].tls.secretName" $.Values.channelWildcardTlsSecret }}
 {{- else }}
-{{- fail (printf "channel %q host %q is outside the wildcard zone *.%s, so channelWildcardTlsSecret can't cover it; set channels[].tls.secretName for a per-channel cert" $c.name $host $.Values.global.hostname) }}
+{{- $tlsSecret = required "channelWildcardTlsSecret is required for channels with ingress.tls.enabled (a reflected *.<zone> cert), or set channels[].tls.secretName for a per-channel cert" $.Values.channelWildcardTlsSecret }}
 {{- end }}
 {{- end }}
 {{- $component := printf "web-%s" $c.name }}
@@ -42,7 +39,12 @@ metadata:
     # overflow nginx's default proxy buffers (502 "upstream sent too big header").
     nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
     nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
-    {{- with $.Values.ingress.annotations }}
+    {{- /* Inherit the primary ingress annotations EXCEPT cert-manager's issuer
+       hints: this host's TLS uses a pre-provisioned reflected wildcard secret, so
+       an issuer annotation here would make cert-manager's ingress-shim issue a
+       competing single-SAN cert into that same secret — overwriting the shared
+       wildcard and breaking TLS for the stable host and every other channel. */ -}}
+    {{- with omit $.Values.ingress.annotations "cert-manager.io/cluster-issuer" "cert-manager.io/issuer" }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -61,41 +63,7 @@ spec:
     - host: {{ $host | quote }}
       http:
         paths:
-          - path: /auth/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /rest/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /realtime/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /storage/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
-          - path: /functions/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.kong.host" $ }}
-                port:
-                  number: {{ $.Values.kong.service.port }}
+          {{- include "pawtograder.ingress.apiPaths" $ | trim | nindent 10 }}
           - path: /
             pathType: Prefix
             backend:

@@ -109,30 +109,35 @@ networkPolicy:
 # Extra, concurrent web + edge-functions deployments running DIFFERENT image
 # tags against the SAME data plane (Postgres/auth/storage) as the stable
 # release. Each channel is served on its own single-label host
-# (<name>.<global.hostname>, override with `host`); the app redirects each
-# course to its channel's host based on the classes.deployment_channel column,
-# so one user can use stable + canary courses in the same session. Kong routes a
-# channel host's /functions/v1 to that channel's functions; everything else is
-# shared. Default empty = stable only, no extra objects rendered.
+# (<name>.<global.hostname>, a fixed pattern — the web middleware computes the
+# same host to drive its redirect, so there's no per-channel host override); the
+# app redirects each course to its channel's host based on the
+# classes.deployment_channel column, so one user can use stable + canary courses
+# in the same session. Kong routes a channel host's /functions/v1 to that
+# channel's functions; everything else is shared. Default empty = stable only,
+# no extra objects rendered.
 #
-# Channel image build args matter: the web image for a channel must be built
-# with NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name> and its own host as
-# NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_PAWTOGRADER_WEB_URL (NEXT_PUBLIC_* bake
-# at build time). Channel code must be schema-compatible with the shared DB
-# (expand/contract migrations only).
+# Channel image build args matter: the web image for a channel MUST be built with
+# NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name>, NEXT_PUBLIC_CHANNEL_HOST_SUFFIX set to
+# the zone, and its own channel host as NEXT_PUBLIC_PAWTOGRADER_WEB_URL (so
+# password-reset / signup-confirm / OAuth callbacks land on the channel host, not
+# stable), with the shared NEXT_PUBLIC_SUPABASE_URL — all NEXT_PUBLIC_* bake at
+# build time (see .github/workflows/release-images.yml `channel` input). Channel
+# code must be schema-compatible with the shared DB (expand/contract migrations
+# only). A web/edgeFunctions block without its own image.tag, and an edgeFunctions
+# block without a web block, both fail the render (see *-channels.yaml).
 channels: []
 #  - name: team7
-#    # host: team7.staging.pawtograder.net   # optional; default <name>.<global.hostname>
 #    # tls:
-#    #   secretName: team7-tls   # optional per-channel cert; required if `host` is
-#    #                           # outside the *.<global.hostname> wildcard zone
+#    #   secretName: team7-tls   # optional override for a dedicated per-channel
+#    #                           # cert; default is the *.<zone> wildcard below
 #    web:
 #      image:
-#        tag: "team7-<sha>"      # repository/pullPolicy default from web.image
-#      replicas: 1
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from web.image
+#      replicas: 1               # 0 idles the channel (kept distinct from absent)
 #    edgeFunctions:
 #      image:
-#        tag: "team7-<sha>"      # repository/pullPolicy default from edgeFunctions.image
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from edgeFunctions.image
 #      replicas: 1
 
 # Reflected *.<zone> wildcard TLS secret used by every channel Ingress (e.g.
@@ -505,6 +510,28 @@ auth:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
 
+  # Generic external OAuth providers — for any GoTrue provider beyond the three
+  # first-class ones above (google, apple, gitlab, keycloak/OIDC, …). Renders the
+  # standard GOTRUE_EXTERNAL_<NAME>_* env. Use this to back the sign-in buttons
+  # configured in web.branding.ssoProviders. Do NOT also configure github/azure/
+  # discord here (use their dedicated blocks above to avoid duplicate env).
+  #   name            REQUIRED. GoTrue provider name (lowercased), e.g. "google".
+  #                   Uppercased for the env var (GOTRUE_EXTERNAL_GOOGLE_*).
+  #   enabled         Set true to render the provider's env.
+  #   redirectUri     Optional. Default: https://api.<hostname>/auth/v1/callback.
+  #   clientIdKey     Optional web-Secret key for the client id.
+  #                   Default: <NAME>_OAUTH_CLIENT_ID (e.g. GOOGLE_OAUTH_CLIENT_ID).
+  #   clientSecretKey Optional web-Secret key for the client secret.
+  #                   Default: <NAME>_OAUTH_CLIENT_SECRET.
+  #   url             Optional issuer URL (required by some providers, e.g.
+  #                   keycloak): sets GOTRUE_EXTERNAL_<NAME>_URL.
+  externalProviders: []
+  #  - name: google
+  #    enabled: true
+  #  - name: keycloak
+  #    enabled: true
+  #    url: https://sso.example.edu/realms/main
+
   smtp:
     enabled: false
     # adminEmail (the From: address) is read from the smtp Secret key
@@ -598,6 +625,12 @@ realtime:
     repository: supabase/realtime
     tag: "v2.76.5" # stock supabase docker-compose pin — fixes partition / metrics auth
     pullPolicy: IfNotPresent
+  # The supabase/realtime entrypoint starts as root and `sudo -u nobody`s to
+  # run migrations + the BEAM — so it needs the default capability set and
+  # privilege escalation. Under the global drop-ALL / allowPrivilegeEscalation:
+  # false context, sudo fails ("setresuid: Operation not permitted") and the
+  # pod CrashLoopBackOffs, so opt out here — same as postgres above.
+  containerSecurityContext: {}
   # BEAM clustering — pods discover peers via a headless Service.
   cluster:
     strategy: "Elixir.Cluster.Strategy.Kubernetes.DNS"
@@ -962,6 +995,69 @@ web:
   # Public URL of the API gateway (Kong). If apiOnSeparateHost=true, default
   # is https://api.<hostname>. Override here for unusual topologies.
   apiUrl: ""
+
+  # ---------------------------------------------------------------------------
+  # Deployment skinning / branding
+  # ---------------------------------------------------------------------------
+  # Re-brand the app for a self-hosted deployment: service name, tagline, logos,
+  # and accent color. These are passed to the web pod as PLAIN env vars (NOT
+  # NEXT_PUBLIC_*) and read server-side at request time (lib/branding.ts), so a
+  # SINGLE published web image can be re-skinned per deployment with NO rebuild.
+  #
+  # Leave a field blank to keep the built-in Pawtograder default for it.
+  #
+  #   name          Product name shown in page titles, headings, and wordmarks.
+  #   description   <meta name="description"> / default site description.
+  #   tagline       Short line under the wordmark on the auth screens.
+  #   logoLight     Logo for light mode. Either a path bundled in the image
+  #                 (e.g. /branding/logo-light.png) or an absolute https:// URL
+  #                 to a custom-hosted asset (rendered with a plain <img>, so no
+  #                 next.config image-host allow-listing is needed).
+  #   logoDark      Logo for dark mode (same rules as logoLight).
+  #   favicon       Browser-tab icon. Bundled path (e.g. /branding/favicon.png)
+  #                 or absolute https:// URL. Default: the bundled /favicon.ico.
+  #   colorPalette  Chakra accent palette. One of: gray, red, orange, yellow,
+  #                 green, teal, blue, cyan, purple, pink. Drives the brand
+  #                 accent (wordmark color + default component palette).
+  #
+  # To AVOID hosting assets externally, "burn" custom logos/favicon into the web
+  # image at build time: drop files into the repo's `public/branding/` directory
+  # (served at /branding/*) before `docker build`, then point logoLight/logoDark/
+  # favicon at those /branding/... paths. See the chart README "Deployment
+  # skinning / branding" section.
+  branding:
+    name: ""
+    description: ""
+    tagline: ""
+    logoLight: ""
+    logoDark: ""
+    favicon: ""
+    colorPalette: ""
+    # Sign-in SSO buttons. A list of providers, each rendered as a button on the
+    # sign-in page in order. Leave empty ([]) to keep the built-in default (a
+    # single Microsoft / Northeastern Login button). Each entry:
+    #   provider  REQUIRED. Supabase/GoTrue OAuth provider id. One of: apple,
+    #             azure, bitbucket, discord, facebook, figma, github, gitlab,
+    #             google, kakao, keycloak, linkedin_oidc, notion, slack_oidc,
+    #             spotify, twitch, workos, zoom.
+    #   label     REQUIRED. Button text, e.g. "Continue with Google".
+    #   icon      Optional icon key: microsoft, github, google, apple, discord,
+    #             gitlab, slack, twitch, linkedin, sso (key), generic (default).
+    #   scopes    Optional space-separated OAuth scopes.
+    #
+    # IMPORTANT: each provider listed here must ALSO be enabled in GoTrue — via
+    # auth.external.{github,azure,discord} or the generic auth.externalProviders
+    # list below — or the button will error on click. See the chart README
+    # "Single sign-on (SSO)" section. To show NO SSO buttons (email-only), set
+    # `BRAND_SSO_PROVIDERS: "[]"` via web.extraEnv.
+    ssoProviders: []
+    #  - provider: azure
+    #    label: "Continue with Microsoft (Northeastern Login)"
+    #    icon: microsoft
+    #    scopes: "email User.Read"
+    #  - provider: google
+    #    label: "Continue with Google"
+    #    icon: google
 
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
