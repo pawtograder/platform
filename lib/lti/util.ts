@@ -4,6 +4,32 @@
  */
 import { LTI_CLAIM, ltiRolesToAppRole, type NrpsMember } from "./types";
 
+// ---- Canvas client_id (local vs global id) ----
+//
+// A Canvas object's *global* id is `shard_id * IDS_PER_SHARD + local_id`
+// (Switchman; IDS_PER_SHARD = 10^13). Instructure-hosted Canvas uses the global
+// id as the LTI `client_id` everywhere. But a self-hosted single-shard Canvas
+// hands out the *local* id in the OIDC login `client_id` while still using the
+// *global* id for the id_token `aud` and AGS line items. We register the
+// canonical global id (so launch `aud` verification stays exact); this matcher
+// lets the login lookup also accept the local-id form of that same key.
+const CANVAS_IDS_PER_SHARD = 10_000_000_000_000n;
+
+export function ltiClientIdMatches(stored: string, sent: string): boolean {
+  if (stored === sent) return true;
+  try {
+    const s = BigInt(stored);
+    const t = BigInt(sent);
+    // Only bridge a global id (≥ one shard) to its local-id form — never match
+    // two distinct global ids that merely share a local component.
+    if (s >= CANVAS_IDS_PER_SHARD && t < CANVAS_IDS_PER_SHARD) return s % CANVAS_IDS_PER_SHARD === t;
+    if (t >= CANVAS_IDS_PER_SHARD && s < CANVAS_IDS_PER_SHARD) return t % CANVAS_IDS_PER_SHARD === s;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // ---- JWT (decode only; verification lives in jwt.ts) ----
 export type DecodedJwt = Record<string, unknown>;
 

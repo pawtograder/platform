@@ -25,7 +25,10 @@ function errorPage(message: string, status = 400): NextResponse {
 h1{font-size:1.25rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}</style></head>
 <body><h1>Pawtograder couldn't complete this launch</h1><p>${escapeHtml(message)}</p>
 <p>If this keeps happening, contact your course administrator.</p></body></html>`;
-  return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  return new NextResponse(html, {
+    status,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }
+  });
 }
 
 function escapeHtml(s: string): string {
@@ -65,6 +68,7 @@ export async function POST(request: Request) {
 
     const target = resolveLaunchRedirect(persisted.classId, launch);
     const res = NextResponse.redirect(`${toolBaseUrl(request)}${target}`, { status: 302 });
+    res.headers.set("Cache-Control", "no-store");
     res.cookies.delete({ name: STATE_COOKIE, path: "/api/lti" });
     return res;
   } catch (e) {

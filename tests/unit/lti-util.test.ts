@@ -6,6 +6,7 @@ import {
   COURSE_WIDE_CONFIG,
   decodeJwtPayload,
   extractSectionNames,
+  ltiClientIdMatches,
   mapRoster,
   membersToRoster,
   parseNextLink,
@@ -197,6 +198,28 @@ describe("resolveMemberSections / mapRoster", () => {
     const r = resolveMemberSections(withNames(["L05", "L99"]), cfg);
     expect(r.lab_section_crn).toBe(22222);
     expect(r.unmappedNames).toEqual(["L99"]);
+  });
+});
+
+describe("ltiClientIdMatches", () => {
+  test("exact match", () => {
+    expect(ltiClientIdMatches("10000000000003", "10000000000003")).toBe(true);
+    expect(ltiClientIdMatches("3", "3")).toBe(true);
+  });
+  test("bridges a global id to its Canvas local-id form (either order)", () => {
+    expect(ltiClientIdMatches("10000000000003", "3")).toBe(true);
+    expect(ltiClientIdMatches("3", "10000000000003")).toBe(true);
+  });
+  test("does not match distinct keys", () => {
+    expect(ltiClientIdMatches("10000000000003", "4")).toBe(false);
+    expect(ltiClientIdMatches("3", "4")).toBe(false);
+  });
+  test("does not match two distinct globals that share a local component", () => {
+    expect(ltiClientIdMatches("10000000000003", "20000000000003")).toBe(false);
+  });
+  test("non-numeric ids fall back to exact comparison", () => {
+    expect(ltiClientIdMatches("abc", "abc")).toBe(true);
+    expect(ltiClientIdMatches("abc", "def")).toBe(false);
   });
 });
 

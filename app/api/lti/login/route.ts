@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { ltiAdminClient } from "@/lib/lti/db";
 import { createState, randomNonce } from "@/lib/lti/state";
 import { toolBaseUrl } from "@/lib/lti/url";
+import { ltiClientIdMatches } from "@/lib/lti/util";
 
 export const dynamic = "force-dynamic";
 
@@ -35,22 +36,37 @@ async function handle(request: Request) {
   const ltiMessageHint = params.get("lti_message_hint") ?? undefined;
   const clientIdParam = params.get("client_id") ?? undefined;
 
+  // LTI login is a per-launch redirect; it must never be cached by a browser,
+  // CDN, or network proxy/WAF (a cached error or redirect breaks every later
+  // launch — and intermediaries happily cache responses with no directive).
+  const NO_STORE = { "Cache-Control": "no-store" } as const;
+
   if (!iss || !loginHint) {
-    return NextResponse.json({ error: "Missing required login parameters (iss, login_hint)" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing required login parameters (iss, login_hint)" },
+      { status: 400, headers: NO_STORE }
+    );
   }
 
   const db = ltiAdminClient();
-  let query = db
+  const { data: platforms, error } = await db
     .from("lti_platforms")
     .select("id, issuer, client_id, auth_login_url, enabled")
     .eq("issuer", iss)
     .eq("enabled", true);
-  if (clientIdParam) query = query.eq("client_id", clientIdParam);
-  const { data: platforms, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const platform = platforms?.[0];
+  if (error) return NextResponse.json({ error: error.message }, { status: 500, headers: NO_STORE });
+  // Canvas may send the developer key's local id here while registering under
+  // its global id (see ltiClientIdMatches); match tolerantly. With no client_id
+  // (single-platform issuer), fall back to the only registered platform.
+  const candidates = platforms ?? [];
+  const platform = clientIdParam
+    ? candidates.find((p) => ltiClientIdMatches(p.client_id, clientIdParam))
+    : candidates[0];
   if (!platform) {
-    return NextResponse.json({ error: `No enabled LTI platform registered for issuer ${iss}` }, { status: 400 });
+    return NextResponse.json(
+      { error: `No enabled LTI platform registered for issuer ${iss}` },
+      { status: 400, headers: NO_STORE }
+    );
   }
 
   const nonce = randomNonce();
@@ -69,6 +85,7 @@ async function handle(request: Request) {
   if (ltiMessageHint) authUrl.searchParams.set("lti_message_hint", ltiMessageHint);
 
   const res = NextResponse.redirect(authUrl.toString(), { status: 302 });
+  res.headers.set("Cache-Control", "no-store");
   // Bind the state to this browser; SameSite=None because the launch is a
   // cross-site POST back from the LMS.
   res.cookies.set(STATE_COOKIE, state, {
