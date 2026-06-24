@@ -278,7 +278,10 @@ test.describe("Manual grading score calculation", () => {
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
       // Gate on the Monaco code viewer rendering (the score heading is in the sidebar
       // and can appear first) so visualScreenshot's editor-settle wait actually applies.
-      await expect(page.getByText("public static void main(")).toBeVisible();
+      // Use the same 30s budget as that settle wait — Monaco can take >20s (the default
+      // expect timeout) to mount/tokenize under full-suite load, so a shorter gate would
+      // fail before the stabilization helps.
+      await expect(page.getByText("public static void main(")).toBeVisible({ timeout: 30_000 });
       await visualScreenshot(page, "Individual grading - student view with score", {
         stabilizeRubric: "Grading Rubric"
       });
@@ -363,7 +366,7 @@ test.describe("Manual grading score calculation", () => {
       const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
       // Gate on the code viewer rendering before capture (see note above).
-      await expect(page.getByText("public static void main(")).toBeVisible();
+      await expect(page.getByText("public static void main(")).toBeVisible({ timeout: 30_000 });
       await visualScreenshot(page, "Group grading shared - student view with score", {
         stabilizeRubric: "Grading Rubric"
       });
@@ -568,7 +571,7 @@ test.describe("Manual grading score calculation", () => {
       await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
       await expect(page.getByText("(You)")).toBeVisible();
       // Gate on the code viewer rendering before capture (see note above).
-      await expect(page.getByText("public static void main(")).toBeVisible();
+      await expect(page.getByText("public static void main(")).toBeVisible({ timeout: 30_000 });
       await visualScreenshot(page, "Group individual grading - student view with individual score", {
         stabilizeRubric: "Grading Rubric"
       });
@@ -590,7 +593,7 @@ test.describe("Manual grading score calculation", () => {
       await expect(scoresSection.getByText("Score Student B").first()).toBeVisible();
       await expect(scoresSection.getByText("Score Student C").first()).toBeVisible();
       // Gate on the code viewer rendering before capture (see note above).
-      await expect(page.getByText("public static void main(")).toBeVisible();
+      await expect(page.getByText("public static void main(")).toBeVisible({ timeout: 30_000 });
       await visualScreenshot(page, "Group individual grading - instructor view with all scores", {
         stabilizeRubric: "Grading Rubric"
       });
