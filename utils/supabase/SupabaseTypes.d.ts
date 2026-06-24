@@ -1818,6 +1818,7 @@ export type Database = {
           meeting_times: string | null;
           name: string;
           sis_crn: number | null;
+          updated_at: string;
         };
         Insert: {
           campus?: string | null;
@@ -1830,6 +1831,7 @@ export type Database = {
           meeting_times?: string | null;
           name: string;
           sis_crn?: number | null;
+          updated_at?: string;
         };
         Update: {
           campus?: string | null;
@@ -1842,6 +1844,7 @@ export type Database = {
           meeting_times?: string | null;
           name?: string;
           sis_crn?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
