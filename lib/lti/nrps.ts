@@ -48,4 +48,13 @@ export async function fetchMemberships(
 }
 
 // Roster mapping helpers are pure — re-exported from ./util for convenience.
-export { membersToRoster, surrogateSisId, type RosterEntry } from "./util";
+export {
+  membersToRoster,
+  mapRoster,
+  resolveMemberSections,
+  extractSectionNames,
+  surrogateSisId,
+  COURSE_WIDE_CONFIG,
+  type RosterEntry,
+  type SectionConfig
+} from "./util";

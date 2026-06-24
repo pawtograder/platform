@@ -3,13 +3,18 @@
  */
 import {
   appendPath,
+  COURSE_WIDE_CONFIG,
   decodeJwtPayload,
+  extractSectionNames,
+  mapRoster,
   membersToRoster,
   parseNextLink,
+  resolveMemberSections,
   surrogateSisId,
-  type RosterEntry
+  type RosterEntry,
+  type SectionConfig
 } from "@/lib/lti/util";
-import { ltiRolesToAppRole, LTI_ROLE, type NrpsMember } from "@/lib/lti/types";
+import { LTI_CLAIM, ltiRolesToAppRole, LTI_ROLE, type NrpsMember } from "@/lib/lti/types";
 
 describe("ltiRolesToAppRole", () => {
   test("maps Instructor (full URN) to instructor", () => {
@@ -83,6 +88,115 @@ describe("membersToRoster", () => {
   test("maps roles to app role", () => {
     const [r] = membersToRoster([member({ roles: [LTI_ROLE.instructor] })]);
     expect(r.role).toBe("instructor");
+  });
+});
+
+describe("extractSectionNames", () => {
+  const withSectionNames = (value: unknown): NrpsMember => ({
+    user_id: "sub-1",
+    roles: [LTI_ROLE.learner],
+    message: [{ [LTI_CLAIM.custom]: { section_names: value } }]
+  });
+
+  test("parses a JSON-array string", () => {
+    expect(extractSectionNames(withSectionNames('["L05 Mon","L06 Tue"]'))).toEqual(["L05 Mon", "L06 Tue"]);
+  });
+  test("parses a comma-joined string", () => {
+    expect(extractSectionNames(withSectionNames("L05 Mon, L06 Tue"))).toEqual(["L05 Mon", "L06 Tue"]);
+  });
+  test("accepts a real array", () => {
+    expect(extractSectionNames(withSectionNames(["L05", "L06"]))).toEqual(["L05", "L06"]);
+  });
+  test("returns [] when the custom claim is absent", () => {
+    expect(extractSectionNames({ user_id: "x", roles: [] })).toEqual([]);
+    expect(extractSectionNames({ user_id: "x", roles: [], message: [{ foo: "bar" }] })).toEqual([]);
+  });
+  test("returns [] when section_names is missing in custom", () => {
+    expect(extractSectionNames({ user_id: "x", roles: [], message: [{ [LTI_CLAIM.custom]: { other: "1" } }] })).toEqual(
+      []
+    );
+  });
+  test("de-dups across message entries", () => {
+    const m: NrpsMember = {
+      user_id: "x",
+      roles: [],
+      message: [{ [LTI_CLAIM.custom]: { section_names: "L05" } }, { [LTI_CLAIM.custom]: { section_names: "L05,L06" } }]
+    };
+    expect(extractSectionNames(m)).toEqual(["L05", "L06"]);
+  });
+});
+
+describe("resolveMemberSections / mapRoster", () => {
+  const member = (over: Partial<NrpsMember>): NrpsMember => ({ user_id: "sub-1", roles: [LTI_ROLE.learner], ...over });
+  const withNames = (names: string[]): NrpsMember =>
+    member({ message: [{ [LTI_CLAIM.custom]: { section_names: JSON.stringify(names) } }] });
+
+  test("course_wide assigns no sections (regression)", () => {
+    const r = resolveMemberSections(member({}), COURSE_WIDE_CONFIG);
+    expect(r).toEqual({ class_section_crn: null, lab_section_crn: null, unmappedNames: [] });
+    const [entry] = membersToRoster([member({})]);
+    expect(entry.class_section_crn).toBeNull();
+    expect(entry.lab_section_crn).toBeNull();
+  });
+
+  test("context-level lecture sets the lecture CRN only", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lecture",
+      classSectionCrn: 11111,
+      labSectionCrn: null,
+      splitByMemberSection: false,
+      nameMap: new Map()
+    };
+    const r = resolveMemberSections(member({}), cfg);
+    expect(r.class_section_crn).toBe(11111);
+    expect(r.lab_section_crn).toBeNull();
+  });
+
+  test("context-level lab sets the lab CRN only", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lab",
+      classSectionCrn: null,
+      labSectionCrn: 22222,
+      splitByMemberSection: false,
+      nameMap: new Map()
+    };
+    const r = resolveMemberSections(member({}), cfg);
+    expect(r.lab_section_crn).toBe(22222);
+    expect(r.class_section_crn).toBeNull();
+  });
+
+  test("split: maps known section names and reports unmapped", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lab",
+      classSectionCrn: null,
+      labSectionCrn: null,
+      splitByMemberSection: true,
+      nameMap: new Map([["L05", { classSectionCrn: null, labSectionCrn: 22222 }]])
+    };
+    const mapped = resolveMemberSections(withNames(["L05"]), cfg);
+    expect(mapped).toEqual({ class_section_crn: null, lab_section_crn: 22222, unmappedNames: [] });
+
+    const unmapped = resolveMemberSections(withNames(["L99"]), cfg);
+    expect(unmapped.lab_section_crn).toBeNull();
+    expect(unmapped.unmappedNames).toEqual(["L99"]);
+
+    const { roster, unmapped: allUnmapped } = mapRoster([withNames(["L05"]), withNames(["L99"])], cfg);
+    expect(roster[0].lab_section_crn).toBe(22222);
+    expect(roster[1].lab_section_crn).toBeNull();
+    expect(allUnmapped).toEqual(["L99"]);
+  });
+
+  test("split: a member in two sections maps the known one and reports the other", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lab",
+      classSectionCrn: null,
+      labSectionCrn: null,
+      splitByMemberSection: true,
+      nameMap: new Map([["L05", { classSectionCrn: null, labSectionCrn: 22222 }]])
+    };
+    const r = resolveMemberSections(withNames(["L05", "L99"]), cfg);
+    expect(r.lab_section_crn).toBe(22222);
+    expect(r.unmappedNames).toEqual(["L99"]);
   });
 });
 

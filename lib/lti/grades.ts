@@ -27,21 +27,33 @@ type ContextForGrades = {
   platform_id: number;
   ags_lineitems_url: string;
   ags_scopes: string[] | null;
+  section_role: "lecture" | "lab" | "course_wide";
 };
 
+/**
+ * Pick the context to push grades into. With a single AGS context this is the
+ * one (today's behavior). With several (lecture+lab, cross-listed sections), we
+ * deterministically prefer the `lecture` context — the canonical gradebook —
+ * rather than the old `.limit(1)` which could pick the lab context and post to
+ * the wrong Canvas course.
+ *
+ * TODO(phase2): per-student section→context routing (docs §7.3) — route each
+ * student's score to the line item of the Canvas course that owns *their*
+ * section, instead of a single class-wide context.
+ */
 async function getGradeContext(classId: number, db: LtiDb): Promise<ContextForGrades> {
   const { data, error } = await db
     .from("lti_context_links")
-    .select("id, platform_id, ags_lineitems_url, ags_scopes")
+    .select("id, platform_id, ags_lineitems_url, ags_scopes, section_role")
     .eq("class_id", classId)
     .not("ags_lineitems_url", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .order("id", { ascending: true });
   if (error) throw error;
-  if (!data?.ags_lineitems_url) {
+  const contexts = (data ?? []) as ContextForGrades[];
+  if (contexts.length === 0) {
     throw new Error("This class has no LTI context with an AGS line items endpoint");
   }
-  return data as ContextForGrades;
+  return contexts.find((c) => c.section_role === "lecture") ?? contexts[0];
 }
 
 /** Push a single assignment's grades to the platform gradebook. */

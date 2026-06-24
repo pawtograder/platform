@@ -10414,6 +10414,7 @@ export type Database = {
           ags_lineitems_url: string | null;
           ags_scopes: string[] | null;
           class_id: number | null;
+          class_section_id: number | null;
           context_id: string;
           context_label: string | null;
           context_title: string | null;
@@ -10421,18 +10422,22 @@ export type Database = {
           deployment_id: string;
           grade_sync_enabled: boolean;
           id: number;
+          lab_section_id: number | null;
           last_roster_sync_at: string | null;
           last_roster_sync_message: string | null;
           last_roster_sync_status: string | null;
           nrps_url: string | null;
           platform_id: number;
           roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
           updated_at: string;
         };
         Insert: {
           ags_lineitems_url?: string | null;
           ags_scopes?: string[] | null;
           class_id?: number | null;
+          class_section_id?: number | null;
           context_id: string;
           context_label?: string | null;
           context_title?: string | null;
@@ -10440,18 +10445,22 @@ export type Database = {
           deployment_id: string;
           grade_sync_enabled?: boolean;
           id?: number;
+          lab_section_id?: number | null;
           last_roster_sync_at?: string | null;
           last_roster_sync_message?: string | null;
           last_roster_sync_status?: string | null;
           nrps_url?: string | null;
           platform_id: number;
           roster_sync_enabled?: boolean;
+          section_role?: string;
+          split_by_member_section?: boolean;
           updated_at?: string;
         };
         Update: {
           ags_lineitems_url?: string | null;
           ags_scopes?: string[] | null;
           class_id?: number | null;
+          class_section_id?: number | null;
           context_id?: string;
           context_label?: string | null;
           context_title?: string | null;
@@ -10459,12 +10468,15 @@ export type Database = {
           deployment_id?: string;
           grade_sync_enabled?: boolean;
           id?: number;
+          lab_section_id?: number | null;
           last_roster_sync_at?: string | null;
           last_roster_sync_message?: string | null;
           last_roster_sync_status?: string | null;
           nrps_url?: string | null;
           platform_id?: number;
           roster_sync_enabled?: boolean;
+          section_role?: string;
+          split_by_member_section?: boolean;
           updated_at?: string;
         };
         Relationships: [
@@ -10476,10 +10488,73 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "lti_context_links_class_section_id_fkey";
+            columns: ["class_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_links_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "lti_context_links_platform_id_fkey";
             columns: ["platform_id"];
             isOneToOne: false;
             referencedRelation: "lti_platforms";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_context_section_map: {
+        Row: {
+          canvas_section_name: string;
+          class_section_id: number | null;
+          context_link_id: number;
+          created_at: string;
+          id: number;
+          lab_section_id: number | null;
+        };
+        Insert: {
+          canvas_section_name: string;
+          class_section_id?: number | null;
+          context_link_id: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number | null;
+        };
+        Update: {
+          canvas_section_name?: string;
+          class_section_id?: number | null;
+          context_link_id?: number;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_context_section_map_class_section_id_fkey";
+            columns: ["class_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_section_map_context_link_id_fkey";
+            columns: ["context_link_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_context_links";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_section_map_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
             referencedColumns: ["id"];
           }
         ];
@@ -13372,6 +13447,63 @@ export type Database = {
         };
       };
       admin_delete_lti_platform: { Args: { p_id: number }; Returns: undefined };
+      admin_bind_lti_context: {
+        Args: {
+          p_class_id?: number;
+          p_context_link_id: number;
+          p_section_role?: string;
+        };
+        Returns: {
+          ags_lineitems_url: string | null;
+          ags_scopes: string[] | null;
+          class_id: number | null;
+          class_section_id: number | null;
+          context_id: string;
+          context_label: string | null;
+          context_title: string | null;
+          created_at: string;
+          deployment_id: string;
+          grade_sync_enabled: boolean;
+          id: number;
+          lab_section_id: number | null;
+          last_roster_sync_at: string | null;
+          last_roster_sync_message: string | null;
+          last_roster_sync_status: string | null;
+          nrps_url: string | null;
+          platform_id: number;
+          roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
+          updated_at: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "lti_context_links";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
+      admin_list_lti_contexts: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          class_name: string;
+          class_section_id: number;
+          context_id: string;
+          context_label: string;
+          context_title: string;
+          grade_sync_enabled: boolean;
+          id: number;
+          lab_section_id: number;
+          last_roster_sync_at: string;
+          last_roster_sync_status: string;
+          platform_id: number;
+          platform_name: string;
+          roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
+        }[];
+      };
       lti_consume_nonce: {
         Args: { p_nonce: string; p_ttl_seconds?: number };
         Returns: boolean;

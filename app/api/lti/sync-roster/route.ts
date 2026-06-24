@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { ltiAdminClient } from "@/lib/lti/db";
 import { isCronAuthorized, isInstructorOfClass } from "@/lib/lti/auth";
-import { syncAllRosters, syncContextRoster, type ContextLinkRow } from "@/lib/lti/roster";
+import { syncAllRosters, syncContextRoster, CONTEXT_LINK_COLUMNS, type ContextLinkRow } from "@/lib/lti/roster";
 import * as Sentry from "@sentry/nextjs";
 
 export const dynamic = "force-dynamic";
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
     const { data: links, error } = await db
       .from("lti_context_links")
-      .select("id, platform_id, class_id, context_id, nrps_url, roster_sync_enabled")
+      .select(CONTEXT_LINK_COLUMNS)
       .eq("class_id", classId);
     if (error) throw error;
     if (!links || links.length === 0) {

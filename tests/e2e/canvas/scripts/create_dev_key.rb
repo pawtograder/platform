@@ -62,13 +62,26 @@ configuration_params = {
   # LTI tools to "anonymous", which omits both.)
   privacy_level: "public",
   scopes:,
+  # Per-member section names for NRPS section mapping (docs/lti-section-mapping.md).
+  # Canvas substitutes $com.instructure.User.sectionNames per member into the NRPS
+  # membership record's message[].custom, letting the roster sync split members into
+  # the right Pawtograder lab/lecture section without a Canvas REST token.
+  custom_fields: { "section_names" => "$com.instructure.User.sectionNames" },
   # At least the course_navigation placement so the tool can launch in a course.
+  # windowTarget "_blank" makes Canvas open the launch in a new top-level tab
+  # instead of its course iframe. Pawtograder is a full app, not an embeddable
+  # widget: the launch lands the user in the Pawtograder UI (/course/...), which
+  # ships X-Frame-Options: DENY and would be refused inside the Canvas iframe.
+  # Launching top-level also keeps the whole OIDC flow first-party, so the
+  # session cookies set at launch aren't third-party (no SameSite/3p-cookie
+  # breakage).
   placements: [
     {
       "placement" => "course_navigation",
       "message_type" => "LtiResourceLinkRequest",
       "target_link_uri" => launch_url,
-      "text" => key_name
+      "text" => key_name,
+      "windowTarget" => "_blank"
     }
   ],
   launch_settings: {}
