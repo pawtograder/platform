@@ -329,6 +329,7 @@ export default function LtiContextsPage() {
                               labSectionId={c.lab_section_id}
                               splitByMemberSection={c.split_by_member_section}
                               nrpsAvailable
+                              canCreateSections
                               onChanged={load}
                             />
                           </Box>

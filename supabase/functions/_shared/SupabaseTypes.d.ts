@@ -11545,6 +11545,20 @@ export type Database = {
         };
         Returns: number;
       };
+      admin_create_lti_sections_from_canvas: {
+        Args: {
+          p_context_link_id: number;
+          p_created_by?: string;
+          p_section_names: string[];
+        };
+        Returns: {
+          canvas_section_name: string;
+          created: boolean;
+          section_id: number;
+          section_type: string;
+          sis_crn: number;
+        }[];
+      };
       admin_delete_class: {
         Args: { p_class_id: number; p_deleted_by?: string };
         Returns: boolean;

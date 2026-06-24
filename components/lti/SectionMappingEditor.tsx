@@ -22,7 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, HStack, NativeSelect, Table, Text } from "@chakra-ui/react";
-import { Search } from "lucide-react";
+import { Search, Sparkles } from "lucide-react";
 
 type SectionRole = "lecture" | "lab" | "course_wide";
 
@@ -36,6 +36,13 @@ export interface SectionMappingEditorProps {
   splitByMemberSection: boolean;
   /** Whether the context captured an NRPS membership URL (gates "Discover"). */
   nrpsAvailable: boolean;
+  /**
+   * Whether to offer "Auto-create from Canvas", which creates Pawtograder
+   * sections from discovered Canvas section names. Section creation is
+   * admin-only, so the admin contexts page sets this; the instructor page does
+   * not.
+   */
+  canCreateSections?: boolean;
   /** Called after a successful write so the parent can refresh its row data. */
   onChanged?: () => void;
 }
@@ -55,7 +62,7 @@ interface SectionMapRow {
 }
 
 export default function SectionMappingEditor(props: SectionMappingEditorProps) {
-  const { contextLinkId, classId, nrpsAvailable, onChanged } = props;
+  const { contextLinkId, classId, nrpsAvailable, canCreateSections, onChanged } = props;
 
   // Local mirror of the link's section fields so the UI updates immediately;
   // re-synced if the parent passes new values.
@@ -69,6 +76,7 @@ export default function SectionMappingEditor(props: SectionMappingEditorProps) {
   const [sectionMap, setSectionMap] = useState<SectionMapRow[]>([]);
   const [discovered, setDiscovered] = useState<string[]>([]);
   const [discovering, setDiscovering] = useState(false);
+  const [autoCreating, setAutoCreating] = useState(false);
 
   useEffect(() => {
     setRole(props.sectionRole);
@@ -175,6 +183,55 @@ export default function SectionMappingEditor(props: SectionMappingEditorProps) {
       setDiscovering(false);
     }
   }, [contextLinkId]);
+
+  // Admin-only: discover Canvas section names, then create a Pawtograder section
+  // per name (type from section_role, synthesized CRNs) and map them — all in
+  // one click, idempotent on re-run.
+  const autoCreate = useCallback(async () => {
+    setAutoCreating(true);
+    try {
+      const res = await fetch("/api/lti/context-sections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context_link_id: contextLinkId })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Discovery failed");
+      const sectionNames = (json.sections as string[]) ?? [];
+      setDiscovered(sectionNames);
+      if (sectionNames.length === 0) {
+        toaster.create({
+          title: "No Canvas sections found",
+          description: "The roster reported no section names to create.",
+          type: "info"
+        });
+        return;
+      }
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("admin_create_lti_sections_from_canvas", {
+        p_context_link_id: contextLinkId,
+        p_section_names: sectionNames
+      });
+      if (error) throw new Error(error.message);
+      const rows = data ?? [];
+      const createdCount = rows.filter((r) => r.created).length;
+      toaster.create({
+        title: "Sections created from Canvas",
+        description: `${createdCount} created, ${rows.length - createdCount} already existed — all mapped.`,
+        type: "success"
+      });
+      await load();
+      onChanged?.();
+    } catch (e) {
+      toaster.create({
+        title: "Auto-create failed",
+        description: e instanceof Error ? e.message : "Failed",
+        type: "error"
+      });
+    } finally {
+      setAutoCreating(false);
+    }
+  }, [contextLinkId, load, onChanged]);
 
   const setMapTarget = useCallback(
     async (canvasName: string, sectionId: number | null) => {
@@ -308,12 +365,29 @@ export default function SectionMappingEditor(props: SectionMappingEditorProps) {
             <Text fontSize="sm" color="fg.muted">
               Map each Canvas section name to a Pawtograder {role === "lab" ? "lab" : "lecture"} section.
             </Text>
-            <Button size="xs" variant="outline" loading={discovering} disabled={!nrpsAvailable} onClick={discover}>
-              <HStack gap={1}>
-                <Search size={12} />
-                <Text>Discover sections</Text>
-              </HStack>
-            </Button>
+            <HStack gap={2}>
+              <Button size="xs" variant="outline" loading={discovering} disabled={!nrpsAvailable} onClick={discover}>
+                <HStack gap={1}>
+                  <Search size={12} />
+                  <Text>Discover sections</Text>
+                </HStack>
+              </Button>
+              {canCreateSections && (
+                <Button
+                  size="xs"
+                  variant="solid"
+                  colorPalette="blue"
+                  loading={autoCreating}
+                  disabled={!nrpsAvailable}
+                  onClick={autoCreate}
+                >
+                  <HStack gap={1}>
+                    <Sparkles size={12} />
+                    <Text>Auto-create from Canvas</Text>
+                  </HStack>
+                </Button>
+              )}
+            </HStack>
           </HStack>
           {names.length === 0 ? (
             <Text fontSize="sm" color="fg.subtle">
