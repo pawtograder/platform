@@ -25,6 +25,9 @@ BEGIN
     IF p_name IS NULL OR trim(p_name) = '' THEN
         RAISE EXCEPTION 'Section name is required';
     END IF;
+    IF p_sis_crn IS NOT NULL AND p_sis_crn <= 0 THEN
+        RAISE EXCEPTION 'SIS CRN must be a positive integer';
+    END IF;
 
     UPDATE public.class_sections SET
         name = trim(p_name),
@@ -51,6 +54,9 @@ BEGIN
     END IF;
     IF p_name IS NULL OR trim(p_name) = '' THEN
         RAISE EXCEPTION 'Section name is required';
+    END IF;
+    IF p_sis_crn IS NOT NULL AND p_sis_crn <= 0 THEN
+        RAISE EXCEPTION 'SIS CRN must be a positive integer';
     END IF;
 
     UPDATE public.lab_sections SET

@@ -123,31 +123,35 @@ export default function SectionMappingEditor(props: SectionMappingEditorProps) {
 
   const onRoleChange = useCallback(
     async (next: SectionRole) => {
+      const prev = role;
       setRole(next);
-      await updateLink({ section_role: next });
+      if (!(await updateLink({ section_role: next }))) setRole(prev);
     },
-    [updateLink]
+    [role, updateLink]
   );
 
   const onSplitChange = useCallback(
     async (next: boolean) => {
+      const prev = split;
       setSplit(next);
-      await updateLink({ split_by_member_section: next });
+      if (!(await updateLink({ split_by_member_section: next }))) setSplit(prev);
     },
-    [updateLink]
+    [split, updateLink]
   );
 
   const onContextSectionChange = useCallback(
     async (kind: "class" | "lab", id: number | null) => {
       if (kind === "class") {
+        const prev = classSectionId;
         setClassSectionId(id);
-        await updateLink({ class_section_id: id });
+        if (!(await updateLink({ class_section_id: id }))) setClassSectionId(prev);
       } else {
+        const prev = labSectionId;
         setLabSectionId(id);
-        await updateLink({ lab_section_id: id });
+        if (!(await updateLink({ lab_section_id: id }))) setLabSectionId(prev);
       }
     },
-    [updateLink]
+    [classSectionId, labSectionId, updateLink]
   );
 
   const discover = useCallback(async () => {

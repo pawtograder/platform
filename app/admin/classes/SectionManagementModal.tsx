@@ -16,10 +16,15 @@ import { MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
 
 type Class = AdminGetClassesResponse[0];
 
-/** Parse a CRN input into a positive integer, or null when blank/invalid. */
-function parseCrn(value: string): number | null {
+/** Parse a CRN input: blank → null (clear it); a positive integer → that number.
+ *  Malformed input throws so we never silently wipe a CRN on a typo. */
+function parseCrnOrThrow(value: string): number | null {
   const t = value.trim();
-  return t && /^\d+$/.test(t) ? Number(t) : null;
+  if (!t) return null;
+  if (!/^\d+$/.test(t) || Number(t) <= 0) {
+    throw new Error("SIS CRN must be a positive number, or left blank to clear it.");
+  }
+  return Number(t);
 }
 
 interface Section {
@@ -91,13 +96,21 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         return;
       }
 
+      let crn: number | null;
+      try {
+        crn = parseCrnOrThrow(newSectionCrn);
+      } catch (e) {
+        toaster.create({ title: "Invalid CRN", description: (e as Error).message, type: "error" });
+        return;
+      }
+
       try {
         const functionName = type === "class" ? "admin_create_class_section" : "admin_create_lab_section";
 
         const { error } = await supabase.rpc(functionName, {
           p_class_id: class_.id,
           p_name: newSectionName.trim(),
-          p_sis_crn: parseCrn(newSectionCrn) ?? undefined
+          p_sis_crn: crn ?? undefined
         });
 
         if (error) throw error;
@@ -137,6 +150,14 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         return;
       }
 
+      let crn: number | null;
+      try {
+        crn = parseCrnOrThrow(editCrn);
+      } catch (e) {
+        toaster.create({ title: "Invalid CRN", description: (e as Error).message, type: "error" });
+        return;
+      }
+
       try {
         const functionName =
           section.section_type === "class" ? "admin_update_class_section" : "admin_update_lab_section";
@@ -144,14 +165,14 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         const { error } = await supabase.rpc(functionName, {
           p_section_id: section.section_id,
           p_name: editName.trim(),
-          p_sis_crn: parseCrn(editCrn) ?? undefined
+          p_sis_crn: crn ?? undefined
         });
 
         if (error) throw error;
 
         toaster.create({
           title: "Section Updated",
-          description: `Section "${editName}" updated (CRN ${parseCrn(editCrn) ?? "none"}).`,
+          description: `Section "${editName}" updated (CRN ${crn ?? "none"}).`,
           type: "success"
         });
 
