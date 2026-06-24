@@ -28,12 +28,14 @@ import { CrudFilter, useList } from "@refinedev/core";
 import { format, secondsToHours } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
+import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import PrSubmissionPanel from "./prSubmissionPanel";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
@@ -60,7 +62,7 @@ export default function AssignmentPage() {
     }
     return filters;
   }, [assignment_id, assignmentGroup, private_profile_id]);
-  const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
+  const { data: submissionsData, refetch: refetchSubmissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
       select:
@@ -111,6 +113,11 @@ export default function AssignmentPage() {
   if (!assignment) {
     return <Skeleton height="40" width="100%" />;
   }
+  // No-repo / no-submission / PR-mode assignments have no autograder by
+  // convention, so an autograder score is not meaningful — show "N/A" instead
+  // of progress/score.
+  const isPrMode = assignment.submission_mode === "pr";
+  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission" || isPrMode;
   return (
     <Box p={4}>
       <LinkAccount />
@@ -138,7 +145,29 @@ export default function AssignmentPage() {
 
           <Markdown>{assignment.description}</Markdown>
 
-          {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
+          {isPrMode && (
+            <PrSubmissionPanel
+              assignment={assignment}
+              assignmentGroupId={assignmentGroup?.id}
+              profileId={enrollment?.private_profile_id}
+              onConfirmed={() => refetchSubmissions()}
+            />
+          )}
+
+          {isPrMode ? (
+            <></>
+          ) : assignment.repo_mode === "none" ? (
+            <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
+          ) : assignment.repo_mode === "no_submission" ? (
+            <Alert.Root status="info" flexDirection="column" m={4} maxW="4xl">
+              <Alert.Title>No submission required</Alert.Title>
+              <Alert.Description>
+                There is nothing to submit here. Your instructor will grade this assignment manually (for example, a
+                presentation or oral exam). Complete the task as your instructor described — your grade will appear
+                below once it is released.
+              </Alert.Description>
+            </Alert.Root>
+          ) : !assignment.template_repo || !assignment.template_repo.includes("/") ? (
             <Alert.Root status="error" flexDirection="column">
               <Alert.Title>No repositories configured for this assignment</Alert.Title>
               <Alert.Description>
@@ -151,7 +180,13 @@ export default function AssignmentPage() {
             <></>
           )}
           <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
-            <ManageGroupWidget assignment={assignment} repositories={repositories ?? []} />
+            <ManageGroupWidget
+              assignment={assignment}
+              repositories={repositories ?? []}
+              showRepositories={
+                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+              }
+            />
           </Box>
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
@@ -232,23 +267,44 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
-                      {submission.sha.slice(0, 7)}
-                    </Link>
+                    {submission.submitted_via === "pr" && submission.repository && submission.pr_number ? (
+                      <Link href={`https://github.com/${submission.repository}/pull/${submission.pr_number}`}>
+                        #{submission.pr_number}
+                        {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
+                      </Link>
+                    ) : submission.sha && submission.repository ? (
+                      <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                        {submission.sha.slice(0, 7)}
+                      </Link>
+                    ) : submission.submitted_via === "manual" ? (
+                      <span>Manual</span>
+                    ) : (
+                      <span>Upload</span>
+                    )}
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {!submission.grader_results
-                        ? "In Progress"
-                        : submission.grader_results && submission.grader_results.errors
-                          ? "Error"
-                          : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                      {noAutograder
+                        ? "N/A"
+                        : !submission.grader_results
+                          ? "In Progress"
+                          : submission.grader_results && submission.grader_results.errors
+                            ? "Error"
+                            : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
                     {(() => {
-                      const gradeLabel = submission.submission_reviews?.completed_at
-                        ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
+                      // View-as-student: a real student's RLS hides unreleased reviews, so the
+                      // embedded review comes back null and the score reads "Pending"/"—". An
+                      // instructor masquerading reads the review via the staff RLS path, so mirror
+                      // RLS here and withhold the unreleased grade.
+                      const review =
+                        isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
+                          ? null
+                          : submission.submission_reviews;
+                      const gradeLabel = review?.completed_at
+                        ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded

@@ -56,6 +56,7 @@ function makeRubric(
     is_private: false,
     review_round: reviewRound,
     cap_score_to_assignment_points: false,
+    hide_unless_assigned: false,
     rubric_parts: [
       {
         id: id * 10,

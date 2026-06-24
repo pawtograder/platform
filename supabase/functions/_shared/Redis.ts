@@ -1,9 +1,197 @@
 import { Redis as UpstashRedis } from "https://esm.sh/@upstash/redis";
+import IORedisDefault, { type Redis as IORedisInstance } from "npm:ioredis";
 import * as Sentry from "npm:@sentry/deno";
+
+// npm:ioredis ships as a CJS default export; the named import above is
+// types-only. Picking the runtime constructor based on what esm interop
+// hands back keeps both Deno's npm: resolver and a future esm.sh path
+// happy.
+// deno-lint-ignore no-explicit-any
+const IORedisCtor: any = (IORedisDefault as unknown as { default?: unknown }).default ?? IORedisDefault;
+
 type EventHandler = (...args: unknown[]) => void;
 
 // Simple in-process channel bus to emulate pub/sub across duplicate() connections in the same runtime
 const channelBus: Map<string, Set<Redis>> = new Map();
+
+/**
+ * Public type for the result of `createRedis()`.
+ *
+ * Both backends — real `ioredis` and the Upstash REST adapter below —
+ * speak the same get/set/setex/scan/eval/etc. surface at runtime, but
+ * each is duck-typed differently in TypeScript:
+ *
+ *   - ioredis's npm types only partially survive Deno's `npm:` resolver
+ *   - the Upstash adapter forwards unknown methods via Proxy at runtime,
+ *     so its class declaration intentionally lists none of them
+ *
+ * A structural union `IORedis | Redis` therefore drops every command
+ * method off the intersection and every consumer breaks. Since the
+ * runtime contract is just "the Redis command set", we type the result
+ * as `any` and document the contract in this comment instead of
+ * fighting the type system. Consumers still see the right shape from
+ * the surrounding code (Bottleneck takes whatever, our wrappers know
+ * what they want to call).
+ */
+// deno-lint-ignore no-explicit-any
+export type RedisClient = any;
+
+/**
+ * Build a Redis client based on what's configured in the environment:
+ *
+ *   REDIS_URL set                 → real ioredis (TCP redis://...)
+ *   UPSTASH_REDIS_REST_URL set    → the Upstash REST adapter below
+ *   nothing                       → null (caller handles "Redis disabled")
+ *
+ * The TCP path is what the chart's `redis.provider=shared` mode wires
+ * up. The REST path remains for managed Upstash deploys. The adapter
+ * class below is intentionally untouched so existing callers that
+ * `new Redis({url, token})` directly keep working unchanged.
+ *
+ * Opts let callers override the env-based pickup (used by
+ * github-repo-webhook to build a client from supabase-stored creds and
+ * by BottleneckRedisMetrics to construct a metrics-only client).
+ */
+/**
+ * Wrap a raw ioredis client so the Upstash-style call signatures used
+ * throughout the codebase work unchanged on real Redis (TCP). The app was
+ * written against @upstash/redis, which differs from ioredis in three ways
+ * we hit: `set(k, v, { ex })` (vs positional `EX`), `scan(cursor, { match,
+ * count })` (vs positional MATCH/COUNT, and a string cursor instead of a
+ * number), and `eval(script, keys[], args[])` (vs `eval(script, numkeys,
+ * ...keys, ...args)`). `get` is also made to auto-JSON-parse like Upstash.
+ * Everything else forwards straight through to ioredis.
+ */
+// deno-lint-ignore no-explicit-any
+function ioredisUpstashCompat(client: any): any {
+  // deno-lint-ignore no-explicit-any
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (prop === "set") {
+        // deno-lint-ignore no-explicit-any
+        return (key: string, value: any, opts?: Record<string, unknown>) => {
+          const v = typeof value === "string" ? value : JSON.stringify(value);
+          const extra: (string | number)[] = [];
+          if (opts && typeof opts === "object") {
+            if (opts.ex != null) extra.push("EX", opts.ex as number);
+            else if (opts.px != null) extra.push("PX", opts.px as number);
+            else if (opts.exat != null) extra.push("EXAT", opts.exat as number);
+            else if (opts.pxat != null) extra.push("PXAT", opts.pxat as number);
+            if (opts.keepTtl) extra.push("KEEPTTL");
+            if (opts.nx) extra.push("NX");
+            else if (opts.xx) extra.push("XX");
+          }
+          return target.set(key, v, ...extra);
+        };
+      }
+      if (prop === "get") {
+        return async (key: string) => {
+          const r = await target.get(key);
+          if (r == null || typeof r !== "string") return r;
+          try {
+            return JSON.parse(r);
+          } catch {
+            return r;
+          }
+        };
+      }
+      if (prop === "scan") {
+        return async (cursor: number | string, opts?: Record<string, unknown>) => {
+          const extra: (string | number)[] = [];
+          if (opts && typeof opts === "object") {
+            if (opts.match) extra.push("MATCH", opts.match as string);
+            if (opts.count) extra.push("COUNT", opts.count as number);
+            if (opts.type) extra.push("TYPE", opts.type as string);
+          }
+          const [next, keys] = await target.scan(cursor, ...extra);
+          // Upstash returns the cursor as a number; callers loop `while
+          // (cursor !== 0)`, so coerce ioredis's string cursor to match.
+          return [Number(next), keys];
+        };
+      }
+      if (prop === "eval") {
+        // deno-lint-ignore no-explicit-any
+        return (script: string, keys: any[] = [], args: any[] = []) =>
+          target.eval(script, keys.length, ...keys, ...args);
+      }
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === "function" ? val.bind(target) : val;
+    }
+  });
+}
+
+export function createRedis(
+  opts: { redisUrl?: string; upstashUrl?: string; upstashToken?: string } = {}
+): RedisClient | null {
+  const redisUrl = opts.redisUrl || Deno.env.get("REDIS_URL");
+  if (redisUrl) {
+    return ioredisUpstashCompat(new IORedisCtor(redisUrl));
+  }
+  const upstashUrl = opts.upstashUrl || Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = opts.upstashToken || Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    return new Redis({ url: upstashUrl, token: upstashToken });
+  }
+  return null;
+}
+
+/**
+ * Build the `{ datastore, clientOptions, Redis }` block a Bottleneck
+ * constructor expects, picking real ioredis vs the Upstash REST adapter
+ * based on the same env precedence as `createRedis()`. Returns null when
+ * neither is configured — callers should fall back to a local-only
+ * limiter (no `datastore`, no `clientOptions`, no `Redis` field).
+ *
+ * Centralising the wiring here lets every Bottleneck call site stay
+ * one line; before this helper each one had to know how to construct
+ * clientOptions for one backend.
+ */
+// deno-lint-ignore no-explicit-any
+export function bottleneckRedisOptions(): {
+  datastore: "ioredis";
+  Redis: any;
+  clientOptions: Record<string, unknown>;
+} | null {
+  const redisUrl = Deno.env.get("REDIS_URL");
+  if (redisUrl) {
+    // ioredis accepts the URL constructor form directly, but Bottleneck
+    // does `new Redis(clientOptions)` — so we pass the URL as the sole
+    // positional via the special `path` field that ioredis recognises
+    // when its only option is a URL string. Most cleanly we parse it
+    // and hand Bottleneck the discrete fields it expects.
+    const u = new URL(redisUrl);
+    const clientOptions: Record<string, unknown> = {
+      host: u.hostname,
+      port: Number(u.port) || 6379
+    };
+    if (u.password) clientOptions.password = decodeURIComponent(u.password);
+    if (u.username) clientOptions.username = decodeURIComponent(u.username);
+    if (u.protocol === "rediss:") clientOptions.tls = {};
+    // Preserve the logical DB index from the URL path (redis://host:6379/N).
+    // Without this ioredis defaults to db 0, so a Bottleneck limiter would
+    // coordinate on a DIFFERENT db than createRedis() (which gets the URL whole,
+    // incl. the db) — splitting limiter state from the metrics reader.
+    if (u.pathname.length > 1) {
+      const db = Number(u.pathname.slice(1));
+      if (Number.isInteger(db) && db >= 0) clientOptions.db = db;
+    }
+    return { datastore: "ioredis", Redis: IORedisCtor, clientOptions };
+  }
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    return {
+      datastore: "ioredis",
+      Redis,
+      clientOptions: {
+        host: upstashUrl.replace("https://", ""),
+        password: upstashToken,
+        username: "default"
+      }
+    };
+  }
+  return null;
+}
 
 /**
  * IORedis-compatible adapter backed by Upstash Redis REST client.

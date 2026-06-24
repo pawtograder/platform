@@ -21,10 +21,12 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
+import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import UploadSubmissionDialog from "@/components/submissions/upload-submission-dialog";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
@@ -65,7 +67,9 @@ import {
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
+import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
 import { activateSubmission } from "@/lib/edgeFunctions";
@@ -93,6 +97,8 @@ import {
   FaInfo,
   FaQuestionCircle,
   FaRobot,
+  FaRocket,
+  FaTasks,
   FaTimesCircle
 } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -679,58 +685,6 @@ type FullSubmissionQueryResult = GetResult<
 // Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
 type FullSubmissionData = FullSubmissionQueryResult;
 
-// Simple diff generator that shows added/removed lines between two strings
-function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
-  // Use == null to check for null/undefined only (not empty strings)
-  if (oldContent == null && newContent == null) return "(both empty)";
-  if (oldContent == null) return "(new file)";
-  if (newContent == null) return "(file deleted)";
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-
-  // Simple line-by-line diff
-  const diffLines: string[] = [];
-  const maxLines = Math.max(oldLines.length, newLines.length);
-
-  let addedCount = 0;
-  let removedCount = 0;
-
-  for (let i = 0; i < maxLines; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
-
-    if (oldLine === undefined && newLine !== undefined) {
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-    } else if (oldLine !== undefined && newLine === undefined) {
-      diffLines.push(`- ${oldLine}`);
-      removedCount++;
-    } else if (oldLine !== newLine) {
-      diffLines.push(`- ${oldLine}`);
-      diffLines.push(`+ ${newLine}`);
-      addedCount++;
-      removedCount++;
-    }
-    // Skip unchanged lines to keep diff compact
-  }
-
-  if (diffLines.length === 0) {
-    return "(no changes)";
-  }
-
-  // Truncate if too long
-  const maxDiffLines = 100;
-  if (diffLines.length > maxDiffLines) {
-    return (
-      diffLines.slice(0, maxDiffLines).join("\n") +
-      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
-    );
-  }
-
-  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
-}
-
 function generateSubmissionMarkdown(
   submissions: FullSubmissionData[],
   assignmentTitle: string,
@@ -776,9 +730,15 @@ function generateSubmissionMarkdown(
     lines.push(
       `- **Submitted:** ${sub.created_at ? format(new Date(sub.created_at), "MMMM d, yyyy 'at' h:mm:ss a") : "Unknown"}`
     );
-    lines.push(`- **Commit:** \`${sub.sha}\``);
-    lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
-    lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    // No-repo (upload / manual) submissions have null sha/repository — emit the
+    // submission origin instead of bogus `null` commit/link fields.
+    if (sub.sha && sub.repository) {
+      lines.push(`- **Commit:** \`${sub.sha}\``);
+      lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
+      lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    } else {
+      lines.push(`- **Submitted via:** ${sub.submitted_via === "manual" ? "Manual (instructor)" : "File upload"}`);
+    }
     lines.push(
       `- **Status:** ${sub.is_active ? "Active (will be graded)" : sub.is_not_graded ? "Not for grading" : "Historical"}`
     );
@@ -1114,7 +1074,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1261,24 +1221,37 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {!historical_submission.grader_results
-                        ? "In Progress"
-                        : historical_submission.grader_results && historical_submission.grader_results.errors
-                          ? "Error"
-                          : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                      {assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission"
+                        ? "N/A"
+                        : !historical_submission.grader_results
+                          ? "In Progress"
+                          : historical_submission.grader_results && historical_submission.grader_results.errors
+                            ? "Error"
+                            : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {historical_submission.submission_reviews?.completed_at &&
-                        (getDisplayedGradingTotalForStudent(
-                          historical_submission.submission_reviews,
-                          private_profile_id
-                        ) ??
-                          historical_submission.submission_reviews.total_score ??
-                          "—") +
-                          "/" +
-                          (assignment?.total_points ?? <Skeleton height="20px" />)}
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so
+                        // the embedded review is null and no total shows. An instructor
+                        // masquerading reads it via the staff RLS path, so mirror RLS here and
+                        // withhold the unreleased grade. Real staff still see it.
+                        const review =
+                          isReadOnly &&
+                          historical_submission.submission_reviews &&
+                          !historical_submission.submission_reviews.released
+                            ? null
+                            : historical_submission.submission_reviews;
+                        return (
+                          review?.completed_at &&
+                          (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
+                            review.total_score ??
+                            "—") +
+                            "/" +
+                            (assignment?.total_points ?? <Skeleton height="20px" />)
+                        );
+                      })()}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -1335,8 +1308,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
   const [isStaffDialogOpen, setIsStaffDialogOpen] = useState(false);
   const courseController = useCourseController();
   const isStaff = useIsGraderOrInstructor();
+  const { assignment } = useAssignmentController();
   const { course_id } = useParams();
   const courseId = Number(course_id);
+  // No-repo assignments have no git history; staff get the submission list
+  // (with a "make active" affordance) instead, same as students.
+  const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
 
   // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
@@ -1407,7 +1384,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             colorPalette={hasNewSubmission ? "yellow" : "default"}
           >
             <Icon as={FaHistory} />
-            Commit History
+            {noRepo ? "Submission History" : "Commit History"}
             {hasNewSubmission && <Icon as={FaBell} />}
           </Button>
         </Dialog.Trigger>
@@ -1417,10 +1394,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
             <Dialog.Header p={0}>
               <Flex justify="space-between" align="center" gap={4}>
                 <Box>
-                  <Dialog.Title>Commit History</Dialog.Title>
-                  <Text fontSize="sm" color="fg.muted">
-                    {submission.repository}
-                  </Text>
+                  <Dialog.Title>{noRepo ? "Submission History" : "Commit History"}</Dialog.Title>
+                  {!noRepo && (
+                    <Text fontSize="sm" color="fg.muted">
+                      {submission.repository}
+                    </Text>
+                  )}
                 </Box>
                 <Dialog.CloseTrigger asChild>
                   <CloseButton bg="bg" size="sm" />
@@ -1428,7 +1407,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
               </Flex>
             </Dialog.Header>
             <Dialog.Body p={0} pt={3}>
-              {submission.repository_id !== null && (
+              {noRepo ? (
+                <SubmissionHistoryContents submission={submission} />
+              ) : submission.repository_id !== null && submission.repository !== null ? (
                 <StaffCommitHistory
                   courseId={courseId}
                   assignmentId={submission.assignment_id}
@@ -1438,6 +1419,12 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                   assignmentGroupId={submission.assignment_group_id}
                   currentSubmissionId={submission.id}
                 />
+              ) : (
+                <Text fontSize="sm" color="fg.muted">
+                  {submission.submitted_via === "manual"
+                    ? "No commit history available for manually-graded submissions."
+                    : "No commit history available for upload submissions."}
+                </Text>
               )}
             </Dialog.Body>
           </Dialog.Content>
@@ -1468,7 +1455,21 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 function TestResults() {
   const submission = useSubmission();
   const pathname = usePathname();
-  const testResults = submission.grader_results?.grader_result_tests;
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const rawTestResults = submission.grader_results?.grader_result_tests;
+  // Student view (including view-as) must hide tests that are flagged not-released or
+  // hide_score — these are present in the row because RLS doesn't strip them, but
+  // AutograderSection (the Grade tab) already applies the same filter. Use the same rule
+  // here so the submission sidebar's "Automated Check Results" matches.
+  const testResults = useMemo(() => {
+    if (!rawTestResults) return rawTestResults;
+    if (isGraderOrInstructor) return rawTestResults;
+    return rawTestResults.filter((t) => {
+      const extra = t.extra_data as GraderResultTestExtraData | null;
+      return extra?.hide_score !== "true" && t.is_released;
+    });
+  }, [rawTestResults, isGraderOrInstructor]);
+  const hiddenTestCount = (rawTestResults?.length ?? 0) - (testResults?.length ?? 0);
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
@@ -1576,6 +1577,11 @@ function TestResults() {
           </Box>
         );
       })}
+      {hiddenTestCount > 0 && (
+        <Text fontSize="xs" color="text.muted" mt={2}>
+          {hiddenTestCount} hidden test{hiddenTestCount === 1 ? "" : "s"} not yet released.
+        </Text>
+      )}
       {/* Show matches for submission-level (no specific test) */}
       {matches.has(null) && matches.get(null)!.length > 0 && (
         <Box mt={2}>
@@ -1669,7 +1675,31 @@ function ReviewStats() {
 function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionReviewId: number }) {
   const review = useSubmissionReview(submissionReviewId);
   const submissionController = useSubmissionController();
+  const { course_id, assignment_id } = useParams();
+  const router = useRouter();
   const [updatingReview, setUpdatingReview] = useState(false);
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
+
+  const releaseReview = useCallback(async () => {
+    setUpdatingReview(true);
+    try {
+      await submissionController.submission_reviews.update(submissionReviewId, { released: true });
+      toaster.create({
+        title: "Review released",
+        type: "success"
+      });
+    } catch (error) {
+      const errorId = Sentry.captureException(error);
+      toaster.create({
+        title: "Error releasing review",
+        description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
+        type: "error"
+      });
+    } finally {
+      setUpdatingReview(false);
+    }
+  }, [submissionController.submission_reviews, submissionReviewId]);
+
   if (review?.released) {
     return (
       <Button
@@ -1702,33 +1732,75 @@ function ReleaseOrUnreleaseReviewButton({ submissionReviewId }: { submissionRevi
     );
   } else {
     return (
-      <Button
-        size="xs"
-        variant="outline"
-        colorPalette="green"
-        loading={updatingReview}
-        onClick={async () => {
-          setUpdatingReview(true);
-          try {
-            await submissionController.submission_reviews.update(submissionReviewId, { released: true });
-            toaster.create({
-              title: "Review released",
-              type: "success"
-            });
-          } catch (error) {
-            const errorId = Sentry.captureException(error);
-            toaster.create({
-              title: "Error releasing review",
-              description: `Failed to release the review. Please try again. We have recorded this error with trace ID: ${errorId}`,
-              type: "error"
-            });
-          } finally {
-            setUpdatingReview(false);
-          }
-        }}
-      >
-        Release
-      </Button>
+      <>
+        <Button
+          size="xs"
+          variant="outline"
+          colorPalette="green"
+          loading={updatingReview}
+          onClick={async () => {
+            if (!review?.completed_at) {
+              setIsReleaseIncompleteWarningOpen(true);
+              return;
+            }
+            await releaseReview();
+          }}
+        >
+          Release
+        </Button>
+        <Dialog.Root
+          open={isReleaseIncompleteWarningOpen}
+          onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}
+          placement="center"
+        >
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>This review is incomplete</Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                <Text>
+                  This grading review is not marked complete yet. Releasing now will still publish it to students.
+                </Text>
+              </Dialog.Body>
+              <Dialog.Footer flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
+                <Dialog.ActionTrigger asChild>
+                  <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                    Cancel
+                  </Button>
+                </Dialog.ActionTrigger>
+                <Button
+                  variant="outline"
+                  w={{ base: "100%", md: "auto" }}
+                  whiteSpace="normal"
+                  h="auto"
+                  onClick={() => {
+                    setIsReleaseIncompleteWarningOpen(false);
+                    router.push(
+                      `/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`,
+                      { scroll: false }
+                    );
+                  }}
+                >
+                  Review
+                </Button>
+                <Button
+                  colorPalette="green"
+                  w={{ base: "100%", md: "auto" }}
+                  loading={updatingReview}
+                  onClick={async () => {
+                    await releaseReview();
+                    setIsReleaseIncompleteWarningOpen(false);
+                  }}
+                >
+                  Continue anyway
+                </Button>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Dialog.Root>
+      </>
     );
   }
 }
@@ -1739,11 +1811,12 @@ function ReviewActions() {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
+  const isInstructor = useIsInstructor();
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  const showCompleteReviewButton = assignedRubricParts.length == 0 && isInstructorOrGrader;
+  const showCompletionActions = isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader);
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -1751,7 +1824,7 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      {showCompleteReviewButton && !review.completed_at && (
+      {showCompletionActions && !review.completed_at && (
         <VStack>
           <Heading as="h2" size="md">
             Submission Review Actions
@@ -2032,7 +2105,7 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
   );
 }
 
-function RubricView() {
+function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
@@ -2062,16 +2135,19 @@ function RubricView() {
       as="aside"
       aria-label="Grading summary"
       data-grading-summary-aside=""
-      position={{ base: "static", lg: "sticky" }}
-      top={{ base: "auto", lg: "0" }}
+      // In the grading shell the aside is the SINGLE scroll container that exactly fills its
+      // fixed-height panel (the panel wrapper does not scroll). Outside the shell it keeps the
+      // original sticky, viewport-tall, self-scrolling behavior inside the long-scroll page.
+      position={inGradingShell ? "static" : { base: "static", lg: "sticky" }}
+      top={inGradingShell ? "auto" : { base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb={{ base: "4", lg: "80px" }}
-      height={{ base: "auto", lg: "100vh" }}
+      pb={inGradingShell ? "4" : { base: "4", lg: "80px" }}
+      height={inGradingShell ? "100%" : { base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY={{ base: "visible", lg: "auto" }}
+      overflowY={inGradingShell ? "auto" : { base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -2158,8 +2234,25 @@ function Comments() {
   );
 }
 
+/**
+ * Read-only "Required PR open" indicator for the grading view. Shown only when the assignment
+ * has `require_pr_open` enabled (a configured-but-otherwise-unconsumed signal): a PR is considered
+ * open when its `pr_state` is `open` or `reopened`. Purely informational — it does not affect the
+ * computed grade.
+ */
+function RequiredPrOpenIndicator({ prState }: { prState: string | null }) {
+  const isOpen = prState === "open" || prState === "reopened";
+  return (
+    <HStack gap={1} fontSize="sm" color={isOpen ? "fg.success" : "fg.error"}>
+      <Icon as={isOpen ? FaCheckCircle : FaTimesCircle} />
+      <Text>Required PR open: {isOpen ? "Yes" : "No"}</Text>
+    </HStack>
+  );
+}
+
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
@@ -2172,13 +2265,29 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // else files.
   const defaultSubPage =
     !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
-  const activeSubPage = explicitSubPage ?? defaultSubPage;
+  // repo-analytics / checks / deployments aren't returned by
+  // getSubmissionFilesOrResultsTab; on those pages don't fall back to the default
+  // core tab, or it would render a second highlighted tab alongside the real one.
+  const isNonCoreSubPage = /\/(repo-analytics|checks|deployments)(?:\/|$|\?|#)/.test(pathname);
+  const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
+  // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
+  // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
+  // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
+  // full-page screenshot's transient 1px viewport can't flip the layout and remount the editor.
+  const isLargeScreen = useStableDesktop();
+  const useGradingShell = activeSubPage === "files" && isLargeScreen;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
+  // Checks/Deployments are PR-mode surfaces — only relevant when this submission
+  // came from a PR (has a pr_number/pr_state) or the assignment is configured in
+  // PR submission mode. Keeps these tabs off the (majority) push-mode submissions
+  // rather than cluttering every submission. Mirrors how repo-analytics is gated.
+  const isPrSubmission =
+    submission.pr_number != null || submission.pr_state != null || assignment?.submission_mode === "pr";
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2227,11 +2336,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                       .sort((a, b) => a.id - b.id)
                       .map((member) => (
                         <HStack key={member.id} gap={1}>
-                          <PersonName uid={member.profile_id} showAvatar={false} />
-                          <StudentSummaryTrigger
-                            student_id={member.profile_id}
-                            course_id={parseInt(course_id as string, 10)}
-                          />
+                          {isGraderOrInstructor ? (
+                            <StudentSummaryTrigger
+                              student_id={member.profile_id}
+                              course_id={parseInt(course_id as string, 10)}
+                            >
+                              <PersonName uid={member.profile_id} showAvatar={false} />
+                            </StudentSummaryTrigger>
+                          ) : (
+                            <PersonName uid={member.profile_id} showAvatar={false} />
+                          )}
                         </HStack>
                       ))}
                     )
@@ -2244,13 +2358,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </HStack>
               ) : (
                 <>
-                  <Text>{submitter?.name}</Text>{" "}
-                  {isGraderOrInstructor && submission.profile_id && (
+                  {isGraderOrInstructor && submission.profile_id ? (
                     <StudentSummaryTrigger
                       student_id={submission.profile_id}
                       course_id={parseInt(course_id as string, 10)}
-                    />
-                  )}
+                    >
+                      <Text>{submitter?.name}</Text>
+                    </StudentSummaryTrigger>
+                  ) : (
+                    <Text>{submitter?.name}</Text>
+                  )}{" "}
                 </>
               )}
               - Submission #{submission.ordinal}
@@ -2260,14 +2377,33 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </Text>
               )}
             </HStack>
-            <HStack gap={1}>
-              <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
-                Commit {submission.sha.substring(0, 7)}
-              </Link>
-              <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">
-                (Download)
-              </Link>
+            {/* Commit/download when present; timestamp always on the same row (#103b). */}
+            <HStack gap={1} flexWrap="wrap">
+              {submission.sha && submission.repository && (
+                <>
+                  <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
+                    Commit {submission.sha.substring(0, 7)}
+                  </Link>
+                  <Link
+                    href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
+                    target="_blank"
+                  >
+                    (Download)
+                  </Link>
+                </>
+              )}
+              <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
+                <Text color="fg.muted" data-visual-test="blackout">
+                  · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
+                </Text>
+              </Tooltip>
             </HStack>
+            {/* Read-only grading signal: when the assignment requires an open PR, surface whether
+                this submission's PR is currently open. Derived entirely from already-loaded fields
+                (submission.pr_state + assignment.require_pr_open) — does NOT change grade computation. */}
+            {isGraderOrInstructor && assignment?.submission_mode === "pr" && assignment?.require_pr_open && (
+              <RequiredPrOpenIndicator prState={submission.pr_state} />
+            )}
           </VStack>
         </Box>
         {submission.is_not_graded && (
@@ -2310,6 +2446,30 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {assignment.repo_mode === "none" && (
+            <UploadSubmissionDialog
+              assignmentId={assignment.id}
+              // Staff submit on behalf of the submission's owner/group; the
+              // student (viewing their own submission) submits for themselves.
+              target={
+                isGraderOrInstructor
+                  ? submission.assignment_group_id
+                    ? { assignment_group_id: submission.assignment_group_id }
+                    : submission.profile_id
+                      ? { profile_id: submission.profile_id }
+                      : undefined
+                  : undefined
+              }
+              triggerLabel={isGraderOrInstructor ? "Upload submission for student" : "Upload new submission"}
+              helperText={
+                isGraderOrInstructor
+                  ? "Upload the file(s) this student submitted. They will become the student's active submission."
+                  : "Upload file(s) for a new submission. This will become your active submission."
+              }
+              buttonLabel={isGraderOrInstructor ? "Create submission" : "Upload submission"}
+              onUploaded={(id) => router.push(`/course/${course_id}/assignments/${assignment.id}/submissions/${id}`)}
+            />
+          )}
           {/* ExportSubmissionMetadataButton is instructor-only: UI gate + RLS policies enforce instructor-only access */}
           {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
@@ -2344,6 +2504,22 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Files
           </Button>
         </NextLink>
+        {isPrSubmission && (
+          <>
+            <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
+              <Button variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+                <Icon as={FaTasks} />
+                Checks
+              </Button>
+            </NextLink>
+            <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
+              <Button variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+                <Icon as={FaRocket} />
+                Deployments
+              </Button>
+            </NextLink>
+          </>
+        )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
           <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
             <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
@@ -2353,19 +2529,44 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
-          {children}
+      {useGradingShell ? (
+        // Fixed-height, resizable content | rubric shell (Files tab, large screens). The editor column
+        // (children -> FilesView) further splits into tree | code internally.
+        <Box h="calc(100vh - 12rem)" minH="32rem">
+          <Group orientation="horizontal" style={{ height: "100%" }}>
+            <Panel minSize="40">
+              <Box h="100%" minW={0} overflow="hidden" key={pathname}>
+                {children}
+              </Box>
+            </Panel>
+            <PanelSeparator>
+              <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+            </PanelSeparator>
+            <Panel defaultSize="26" minSize="15" maxSize="45">
+              {/* The aside (RubricView) is the single scroll container here, so the wrapper must NOT
+                  also scroll — nesting two overflow:auto boxes made auto-focus/scrollIntoView fight
+                  the rubric's own scroll machinery, leaving inline controls perpetually unstable. */}
+              <Box h="100%" minW={0} overflow="hidden" pl={2}>
+                <RubricView inGradingShell />
+              </Box>
+            </Panel>
+          </Group>
         </Box>
-        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
-            On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
-            so we must NOT collapse it to applied-only here. */}
-        {activeSubPage !== "grade" && (
-          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
-            <RubricView />
+      ) : (
+        <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+          <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
+            {children}
           </Box>
-        )}
-      </Flex>
+          {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
+              On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
+              so we must NOT collapse it to applied-only here. */}
+          {activeSubPage !== "grade" && (
+            <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+              <RubricView />
+            </Box>
+          )}
+        </Flex>
+      )}
     </Flex>
   );
 }

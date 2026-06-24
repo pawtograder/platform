@@ -4,6 +4,7 @@ import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
+import { useIsReadOnly } from "./useClassProfiles";
 import { useCourseController } from "./useCourseController";
 
 /**
@@ -15,6 +16,7 @@ import { useCourseController } from "./useCourseController";
  */
 export function useHelpRequestWatchStatus(helpRequestId: number) {
   const controller = useCourseController();
+  const isReadOnly = useIsReadOnly();
   const [curWatch, setCurWatch] = useState<HelpRequestWatcher | undefined>(undefined);
 
   useEffect(() => {
@@ -48,6 +50,9 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
    */
   const setHelpRequestWatchStatus = useCallback(
     async (status: boolean) => {
+      // View-as student is read-only; writing here would subscribe the masquerading
+      // instructor to help-request notifications under their own user_id.
+      if (isReadOnly) return;
       if (curWatch) {
         await updateWatch({
           id: curWatch.id,
@@ -66,11 +71,11 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
         });
       }
     },
-    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher]
+    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, isReadOnly]
   );
 
   return {
-    status: curWatch?.enabled ?? false,
+    status: isReadOnly ? false : (curWatch?.enabled ?? false),
     setHelpRequestWatchStatus
   };
 }

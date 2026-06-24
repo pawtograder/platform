@@ -1,6 +1,7 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
@@ -35,7 +36,8 @@ export default function FinalizeSubmissionEarly({
   loading: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
-  const { reviewAssignments } = useAssignmentController();
+  const isReadOnly = useIsReadOnly();
+  const assignmentController = useAssignmentController();
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
@@ -79,7 +81,9 @@ export default function FinalizeSubmissionEarly({
           "Assignment not found": "This assignment could not be found. Refresh the page or contact your instructor.",
           "No active submission found":
             "You don't have an active submission to finalize. Create or resume your submission first.",
-          "Self review already assigned": "A self-review has already been assigned for this submission."
+          "Self review already assigned": "A self-review has already been assigned for this submission.",
+          "Self review rubric not configured":
+            "Self-review is enabled but no self-review rubric has been set up for this assignment. Ask your instructor to configure the self-review rubric."
         };
         const mapped = reason && friendly[reason];
         toaster.error({
@@ -98,14 +102,16 @@ export default function FinalizeSubmissionEarly({
         description: "Your submission time is set. You can continue with self-review if your course uses it."
       });
 
-      // Refresh the review_assignments controller so the self-review row
-      // created by finalize_submission_early is in cache before the UI
-      // renders the "Complete Self Review" button. Failures here are
-      // non-fatal (the row will arrive via realtime or the next page load).
+      // Refresh review_assignments and rubric controllers so the self-review
+      // row and rubric (gated by hide_unless_assigned RLS) are in cache before
+      // the UI renders the "Complete Self Review" button.
       try {
-        await reviewAssignments.refetchAll();
+        await Promise.all([
+          assignmentController.reviewAssignments.refetchAll(),
+          assignmentController.refetchAllRubricData()
+        ]);
       } catch (refetchErr) {
-        console.warn("Submission finalized, but reviewAssignments refetch failed:", refetchErr);
+        console.warn("Submission finalized, but post-finalize cache refresh failed:", refetchErr);
         toaster.create({
           type: "warning",
           title: "Self-review may take a moment to appear",
@@ -128,7 +134,7 @@ export default function FinalizeSubmissionEarly({
       <PopConfirm
         triggerLabel="Finalize Submission Early"
         trigger={
-          <Button variant="solid" colorPalette="green" loading={loading} disabled={!enabled}>
+          <Button variant="solid" colorPalette="green" loading={loading} disabled={!enabled || isReadOnly}>
             Finalize Submission Early
           </Button>
         }

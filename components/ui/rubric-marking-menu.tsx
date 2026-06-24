@@ -1,5 +1,5 @@
 "use client";
-import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
+import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file-shared";
 import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
 import { Box } from "@chakra-ui/react";
 

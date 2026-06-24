@@ -1,6 +1,13 @@
 import * as Sentry from "@sentry/nextjs";
 import posthog from "posthog-js";
 
+// NOTE: stale-bundle recovery is installed from `<StaleBundleRecovery />` in the
+// root layout (a normal client component), NOT here. The client-instrumentation
+// entry is loaded through a special Next path whose module graph is fragile —
+// importing an extra module here can make the whole entry fail to evaluate
+// (silently taking Sentry + PostHog init down with it). The `beforeSend` filter
+// below stays here because it needs no extra imports.
+
 if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
@@ -94,6 +101,17 @@ Sentry.init({
       }
     }
 
+    // Filter errors thrown by injected browser extensions (reader-mode/page-scraper
+    // content scripts, etc.). Our own code is always served from `app:///_next/static/...`,
+    // whereas extension content scripts surface as `app:///assets/*.js`. These bubble up to
+    // the page's global onunhandledrejection handler and get attributed to us even though
+    // they originate from the user's extensions (e.g. invalid `querySelector` selectors).
+    if (
+      event.exception?.values?.some((e) => e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/")))
+    ) {
+      return null;
+    }
+
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
@@ -117,6 +135,22 @@ Sentry.init({
           exception.value?.includes("failed")
         ) {
           return null; // Discard chunk load errors
+        }
+        // Discard the stale-bundle sibling of ChunkLoadError: a deploy lands
+        // mid-session, the chunk file loads (200) but the loaded webpack runtime
+        // is missing the requested module factory, so `__webpack_require__` hits
+        // `undefined.call(...)`. `installStaleBundleRecovery()` reloads to self-heal;
+        // this just keeps the transient deploy-skew event out of Sentry. Gated on
+        // the webpack-runtime stack so genuine `reading 'call'` bugs still report.
+        if (
+          exception.type === "TypeError" &&
+          /reading 'call'|undefined is not an object \(evaluating '[^']*\.call'\)/.test(exception.value ?? "")
+        ) {
+          const frames = exception.stacktrace?.frames ?? [];
+          const fromWebpackRuntime = frames.some((f) => /webpack[-.]/.test(f.filename ?? ""));
+          if (fromWebpackRuntime) {
+            return null;
+          }
         }
         if ("message" in exception) {
           const message = exception.message as string;

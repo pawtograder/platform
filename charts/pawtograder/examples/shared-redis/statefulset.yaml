@@ -1,0 +1,94 @@
+# Single-replica Redis. Sized for Bottleneck rate-limiter state +
+# webhook tracking + sync cache across all preview namespaces — total
+# working set in practice is well under 100 MiB. Bump memory if the
+# preview count + activity ever grows past that.
+#
+# StatefulSet (not Deployment) for the PVC: Bottleneck's limiter state
+# survives Redis pod restarts via AOF, so transient pod churn doesn't
+# wipe in-flight rate-limit budgets.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pawtograder-shared-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pawtograder-shared-redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999       # 'redis' user inside redis:7-alpine
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          # requirepass via env, AOF on for crash recovery.
+          # --bind 0.0.0.0 so non-localhost preview clients can reach it.
+          # protected-mode is automatically disabled by redis when
+          # requirepass is set.
+          command: ["redis-server"]
+          args:
+            - --bind
+            - "0.0.0.0"
+            - --port
+            - "6379"
+            - --appendonly
+            - "yes"
+            - --dir
+            - "/data"
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-shared-redis
+                  key: redis_password
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { cpu: "1",   memory: "512Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Match the storageClass other stateful workloads use in this cluster.
+        # Override here if your cluster uses something other than ceph-rbd.
+        storageClassName: ceph-rbd
+        resources:
+          requests:
+            storage: 1Gi

@@ -277,6 +277,13 @@ const VISUAL_TEST_CSS = `
 
 `;
 
+// Seeded test users point avatar_url at api.dicebear.com; Chakra Avatar shows a
+// first-letter fallback until the remote SVG loads. Fulfill every dicebear request
+// with a fixed local SVG so avatars resolve instantly and identically every run.
+const DICEBEAR_AVATAR_ROUTE = "**/api.dicebear.com/**";
+const DETERMINISTIC_AVATAR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#718096"/></svg>';
+
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
   // Best-effort: this fires from a `domcontentloaded` handler, so an in-flight
@@ -359,6 +366,14 @@ export const test = base.extend<E2EFixtures>({
     { auto: true }
   ],
   page: async ({ page }, use) => {
+    await page.route(DICEBEAR_AVATAR_ROUTE, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "image/svg+xml",
+        body: DETERMINISTIC_AVATAR_SVG
+      });
+    });
+
     // Set up initial script for new page loads
     await page.addInitScript((visualTestCss) => {
       // Set the data-visual-tests attribute on the html element

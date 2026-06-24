@@ -45,3 +45,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Helm charts use Go-template directives + multi-document YAML which
+# Prettier's YAML parser can't parse (treats `---` as trailing content,
+# and `{{- ... }}` as malformed scalars). Skip the entire chart tree.
+charts/
+
+# k6 / performance test scripts: imports and globals are k6-runtime, not
+# Node, so prettier's parser flags style issues that aren't applicable.
+tests/performance/

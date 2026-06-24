@@ -7,6 +7,7 @@ import { useMemo } from "react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { getQueueTypeColor } from "@/lib/utils";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
@@ -120,7 +121,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
     if (effectiveStudents.length === 1) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} alt="" />
+          <Avatar.Image src={sanitizeImageSrc(student1Profile?.avatar_url)} alt="" />
           <Avatar.Fallback>{(student1Profile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -149,7 +150,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       <AvatarGroup size="sm">
         {avatars.map((p) => (
           <Avatar.Root key={p.id} size="sm">
-            <Avatar.Image src={p.avatar_url} alt="" />
+            <Avatar.Image src={sanitizeImageSrc(p.avatar_url)} alt="" />
             <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}

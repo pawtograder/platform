@@ -1,0 +1,9 @@
+{{- /*
+Stable edge-functions channel. The Service+Deployment body lives in
+templates/_edge-functions-workload.tpl so extra deployment channels
+(.Values.channels, rendered by templates/edge-functions-channels.yaml) reuse the
+exact same pod spec. The stable HPA stays in templates/edge-functions-hpa.yaml.
+*/ -}}
+{{- if .Values.edgeFunctions.enabled }}
+{{- include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions" "image" .Values.edgeFunctions.image "replicas" .Values.edgeFunctions.replicas "autoscaling" .Values.edgeFunctions.autoscaling.enabled) }}
+{{- end }}

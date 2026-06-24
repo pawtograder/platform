@@ -1,5 +1,5 @@
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { Redis } from "./Redis.ts";
+import { bottleneckRedisOptions } from "./Redis.ts";
 import * as Sentry from "npm:@sentry/deno";
 import type {
   SendMessageArgs,
@@ -32,33 +32,26 @@ function getGlobalLimiter(): Bottleneck {
   const existing = globalLimiters.get(key);
   if (existing) return existing;
 
+  // bottleneckRedisOptions picks ioredis (REDIS_URL) or the Upstash
+  // adapter (UPSTASH_REDIS_REST_URL+TOKEN) automatically, or returns
+  // null when neither is configured (local-only fallback below).
+  const redisOpts = bottleneckRedisOptions();
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
+  if (redisOpts) {
     limiter = new Bottleneck({
       id: `discord_global`,
       reservoir: 50,
       reservoirRefreshAmount: 50,
       reservoirRefreshInterval: 1000, // 1 second
       maxConcurrent: 50,
-      datastore: "ioredis",
       timeout: 600000, // 10 minutes
       clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default"
-      },
-      Redis
+      ...redisOpts
     });
     limiter.on("error", (err: Error) => console.error(err));
   } else {
-    console.log("No Upstash URL or token found, using local limiter for Discord");
-    Sentry.captureMessage("No Upstash URL or token found, using local Discord limiter");
+    console.log("No Redis configured (REDIS_URL / UPSTASH_*), using local Discord limiter");
+    Sentry.captureMessage("No Redis configured, using local Discord limiter");
     limiter = new Bottleneck({
       id: `discord_global:${Deno.env.get("DISCORD_BOT_TOKEN") || ""}`,
       reservoir: 50,
@@ -79,28 +72,18 @@ function getChannelLimiter(channelId: string): Bottleneck {
   const existing = channelLimiters.get(channelId);
   if (existing) return existing;
 
+  const redisOpts = bottleneckRedisOptions();
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
+  if (redisOpts) {
     limiter = new Bottleneck({
       id: `discord_channel:${channelId}`,
       reservoir: 5,
       reservoirRefreshAmount: 5,
       reservoirRefreshInterval: 5000, // 5 seconds
       maxConcurrent: 5,
-      datastore: "ioredis",
       timeout: 600000, // 10 minutes
       clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default"
-      },
-      Redis
+      ...redisOpts
     });
     limiter.on("error", (err: Error) => console.error(err));
   } else {

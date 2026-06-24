@@ -6,8 +6,8 @@
  * facts (rubrics, scores, tests, hints) and gradebook are wired in later.
  *
  * Identity modes:
- *   --identity opaque (default) — random per-run salt, intra-dump only
- *   --identity hash             — deterministic from --salt; joinable across runs
+ *   --identity opaque (default) — random per-run salt + server pepper; intra-dump only
+ *   --identity hash             — deterministic from --salt + server pepper; joinable across runs on same deployment
  *   --identity raw              — real ids/emails/names; needs --i-understand-pii
  */
 
@@ -18,6 +18,15 @@ import type { Argv, ArgumentsCamelCase } from "yargs";
 import { streamApiCall } from "@/cli/utils/streamApi";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
 import { withTransientRetry } from "@/cli/utils/transientRetry";
+import { runWithConcurrency } from "@/cli/utils/concurrency";
+import {
+  assertExpectedCount,
+  generateRandomSalt,
+  sanitizeForFilename,
+  timestamp,
+  writeJson,
+  writeJsonArray
+} from "@/cli/utils/exportFiles";
 
 type IdentityMode = "raw" | "hash" | "opaque";
 
@@ -31,11 +40,21 @@ interface ExportArgs {
   assignment?: string[];
   "gradebook-column"?: string[];
   gradebookColumn?: string[];
+  "skip-gradebook"?: boolean;
+  skipGradebook?: boolean;
   concurrency?: number;
   "with-test-output"?: boolean;
   withTestOutput?: boolean;
   "test-output-max-bytes"?: number;
   testOutputMaxBytes?: number;
+  "with-instructor-build-output"?: boolean;
+  withInstructorBuildOutput?: boolean;
+  "instructor-build-output-max-bytes"?: number;
+  instructorBuildOutputMaxBytes?: number;
+  "instructor-build-output-from-sentinel"?: string;
+  instructorBuildOutputFromSentinel?: string;
+  "all-submissions"?: boolean;
+  allSubmissions?: boolean;
 }
 
 export const exportBuilder = (yargs: Argv) => {
@@ -79,6 +98,11 @@ export const exportBuilder = (yargs: Argv) => {
       type: "string",
       array: true
     })
+    .option("skip-gradebook", {
+      describe: "Skip gradebook column metadata and private cell export",
+      type: "boolean",
+      default: false
+    })
     .option("concurrency", {
       describe: "Parallel per-assignment streams (1–8)",
       type: "number",
@@ -94,6 +118,28 @@ export const exportBuilder = (yargs: Argv) => {
       type: "number",
       default: 4096
     })
+    .option("with-instructor-build-output", {
+      describe:
+        "Include grader_result_output where visibility=hidden (truncated, grading paths sanitized). Off by default.",
+      type: "boolean",
+      default: false
+    })
+    .option("instructor-build-output-max-bytes", {
+      describe: "Per-row cap when --with-instructor-build-output is set (default 4096)",
+      type: "number",
+      default: 4096
+    })
+    .option("instructor-build-output-from-sentinel", {
+      describe:
+        "When set with --with-instructor-build-output, each log is trimmed to start at this substring (after path sanitization). Rows without the sentinel are omitted.",
+      type: "string"
+    })
+    .option("all-submissions", {
+      describe:
+        "Include every submission attempt, not just is_active. Needed for hint feedback and autograder history on earlier tries.",
+      type: "boolean",
+      default: false
+    })
     .check((argv) => {
       if (argv.identity === "raw" && !argv["i-understand-pii"]) {
         throw new Error(
@@ -105,6 +151,12 @@ export const exportBuilder = (yargs: Argv) => {
       }
       if (argv.identity === "hash" && argv.salt && argv.salt.length < 16) {
         throw new Error("--salt must be at least 16 characters");
+      }
+      if (argv["skip-gradebook"] && argv["gradebook-column"]?.length) {
+        throw new Error("--skip-gradebook cannot be combined with --gradebook-column");
+      }
+      if (argv["instructor-build-output-from-sentinel"] && !argv["with-instructor-build-output"]) {
+        throw new Error("--instructor-build-output-from-sentinel requires --with-instructor-build-output");
       }
       return true;
     });
@@ -132,8 +184,22 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
 
     logger.step(`Exporting assessment data for class: ${args.class}`);
     logger.info(`Output: ${outputDir}`);
-    logger.info(`Identity mode: ${mode}${mode === "opaque" ? " (random per-run salt, intra-dump only)" : ""}`);
+    logger.info(
+      `Identity mode: ${mode}${mode === "opaque" ? " (random per-run salt, intra-dump only; tokens require server pepper to recompute)" : mode === "hash" ? " (same --salt joins dumps on this deployment; offline recompute requires server pepper)" : ""}`
+    );
     logger.info(`Dump id: ${dumpId}`);
+    if (args.skipGradebook === true) {
+      logger.info("Gradebook export: skipped (--skip-gradebook)");
+    }
+    if (args.allSubmissions === true) {
+      logger.info("Submissions: all attempts (--all-submissions); default is is_active only");
+    }
+    if (args.withInstructorBuildOutput === true) {
+      logger.info("Instructor build output: included (--with-instructor-build-output)");
+    }
+    if (args.instructorBuildOutputFromSentinel) {
+      logger.info(`Instructor build output sentinel: ${args.instructorBuildOutputFromSentinel}`);
+    }
     if (mode === "raw") {
       logger.warning(
         "Real student ids, emails, and names will be written to disk. Handle the output directory accordingly."
@@ -149,6 +215,7 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     if (mode === "raw") params.confirm_pii = true;
     if (args.assignment && args.assignment.length > 0) params.assignments = args.assignment;
     if (args.gradebookColumn && args.gradebookColumn.length > 0) params.gradebook_columns = args.gradebookColumn;
+    if (args.skipGradebook === true) params.skip_gradebook = true;
 
     let manifest: Record<string, unknown> | null = null;
     const subjects: Record<string, unknown>[] = [];
@@ -222,6 +289,8 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     const assignmentsDir = path.join(outputDir, "assignments");
     fs.mkdirSync(assignmentsDir, { recursive: true, mode: 0o700 });
 
+    // Each assignment fans out into sectioned edge calls (meta → submissions →
+    // scores → tests → engagement), so parallel assignments are safe again.
     const concurrency = Math.max(1, Math.min(8, args.concurrency ?? 4));
     const perAssignmentTotals = await runWithConcurrency(
       assignments.map((a) => async () => {
@@ -230,98 +299,49 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         const totals = await streamAssignmentToDir(args, salt, mode, dumpId, a.id as number, slug, dir);
         logger.info(
-          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests, ${totals.hints} hints`
+          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests${
+            args.withInstructorBuildOutput ? `, ${totals.instructor_build_outputs} instructor build outputs` : ""
+          }, ${totals.hints} hints, ${totals.error_pin_engagement} error-pin engagement rows`
         );
         return totals;
       }),
       concurrency
     );
 
-    const gradebookTotals = await streamGradebookToDir(args, salt, mode, dumpId, outputDir);
-    logger.info(`  gradebook: ${gradebookTotals.gradebook_scores} private cells`);
+    const gradebookTotals =
+      args.skipGradebook === true
+        ? { gradebook_scores: 0 }
+        : await streamGradebookToDir(args, salt, mode, dumpId, outputDir);
+    if (args.skipGradebook !== true) {
+      logger.info(`  gradebook: ${gradebookTotals.gradebook_scores} private cells`);
+    }
 
     // Backfill the manifest with grand totals across all phases. Doing this
     // post-hoc avoids racing the preamble (which doesn't know how many
     // submissions/scores will arrive across the per-assignment fan-out).
     const grand = aggregateTotals(perAssignmentTotals, gradebookTotals);
-    const enrichedManifest = { ...manifest, totals: grand };
+    const enrichedManifest = {
+      ...manifest,
+      totals: grand,
+      ...(args.skipGradebook === true ? { gradebook_skipped: true } : {}),
+      ...(args.allSubmissions === true ? { all_submissions: true } : {}),
+      ...(args.withInstructorBuildOutput === true ? { with_instructor_build_output: true } : {}),
+      ...(args.instructorBuildOutputFromSentinel
+        ? { instructor_build_output_from_sentinel: args.instructorBuildOutputFromSentinel }
+        : {})
+    };
     writeJson(path.join(outputDir, "manifest.json"), enrichedManifest);
 
     logger.success(
-      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests, ${grand.hints} hints, ${grand.gradebook_scores} gradebook cells in ${outputDir}`
+      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests${
+        args.withInstructorBuildOutput ? `, ${grand.instructor_build_outputs} instructor build outputs` : ""
+      }, ${grand.hints} hints, ${grand.error_pin_engagement} error-pin engagement rows${
+        args.skipGradebook === true ? ", gradebook skipped" : `, ${grand.gradebook_scores} gradebook cells`
+      } in ${outputDir}`
     );
   } catch (error) {
     handleError(error);
   }
-}
-
-function writeJson(filePath: string, data: unknown): void {
-  // 0o600 so PII files match the 0o700 directory's posture. writeFileSync's
-  // mode option only applies on file creation; chmod afterwards covers the
-  // overwrite case where the file already existed with looser perms.
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // Best-effort on platforms where chmod is a no-op (e.g. Windows).
-  }
-}
-
-/**
- * Confirm the server-reported count for a section matches what we actually
- * received. Stops a partially-flushed stream from being silently accepted
- * just because it happened to include the trailing {end} line.
- */
-function assertExpectedCount(endRecord: Record<string, unknown>, field: string, actual: number): void {
-  const counts = endRecord.counts as Record<string, unknown> | undefined;
-  const expected = counts?.[field];
-  if (typeof expected !== "number") return; // server didn't report this count; nothing to verify
-  if (expected !== actual) {
-    throw new CLIError(
-      `Stream count mismatch for ${field}: server reported ${expected} but received ${actual}. ` +
-        "The dump is incomplete; do not use it for analysis."
-    );
-  }
-}
-
-function sanitizeForFilename(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-}
-
-function timestamp(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-/**
- * 32 bytes of OS entropy, base32-encoded. Mirrors the server-side
- * generateRandomSalt() so opaque-mode tokens have the same security
- * properties; the CLI is the source of truth since the salt never leaves it.
- */
-function generateRandomSalt(): string {
-  const bytes = crypto.randomBytes(32);
-  return base32Encode(bytes);
-}
-
-const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
-
-function base32Encode(bytes: Buffer): string {
-  let bits = 0;
-  let value = 0;
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    value = (value << 8) | bytes[i]!;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32_ALPHABET[(value >>> (bits - 5)) & 0x1f];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) {
-    out += BASE32_ALPHABET[(value << (5 - bits)) & 0x1f];
-  }
-  return out;
 }
 
 interface AssignmentTotals {
@@ -331,18 +351,88 @@ interface AssignmentTotals {
   submissions: number;
   scores: number;
   grader_tests: number;
+  instructor_build_outputs: number;
   hints: number;
+  error_pin_engagement: number;
 }
 
 interface GradebookTotals {
   gradebook_scores: number;
 }
 
+function emptyAssignmentBuckets(): Record<string, Record<string, unknown>[]> {
+  return {
+    rubric: [],
+    rubric_part: [],
+    rubric_criteria: [],
+    rubric_check: [],
+    autograder: [],
+    autograder_test: [],
+    autograder_raw_config: [],
+    group: [],
+    submission: [],
+    score: [],
+    grader_test: [],
+    instructor_build_output: [],
+    hint: [],
+    error_pin_engagement: []
+  };
+}
+
+async function consumeAssignmentStream(
+  params: Record<string, unknown>,
+  slug: string
+): Promise<{
+  manifest: Record<string, unknown> | null;
+  buckets: Record<string, Record<string, unknown>[]>;
+  endRecord: Record<string, unknown>;
+}> {
+  const buckets = emptyAssignmentBuckets();
+  let manifest: Record<string, unknown> | null = null;
+  let endRecord: Record<string, unknown> | null = null;
+
+  for await (const record of streamApiCall({ command: "assessment.export.assignment", params })) {
+    if (record.kind === "manifest") {
+      manifest = record;
+      continue;
+    }
+    if (record.kind === "end") {
+      endRecord = record;
+      continue;
+    }
+    const bucket = buckets[String(record.kind)];
+    if (bucket) bucket.push(record);
+  }
+
+  if (endRecord === null) throw new CLIError(`assignment ${slug}: stream ended without {end}`);
+  return { manifest, buckets, endRecord };
+}
+
+/**
+ * Run one assignment export section, retrying the whole call on transient
+ * failures. Paginated sections (scores/tests/engagement) call this in a loop.
+ */
+async function streamAssignmentSection(
+  baseParams: Record<string, unknown>,
+  slug: string,
+  section: string,
+  extraParams: Record<string, unknown> = {}
+): Promise<ReturnType<typeof consumeAssignmentStream>> {
+  return withTransientRetry(() => consumeAssignmentStream({ ...baseParams, section, ...extraParams }, slug), {
+    onRetry: (attempt, err, delayMs) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warning(
+        `assignment ${slug} [${section}]: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
+      );
+    }
+  });
+}
+
 /**
  * Stream one assignment's per-assignment data into its own subdirectory.
- * Demuxes NDJSON record kinds into separate files (rubric.json, groups.json,
- * submissions.json, scores.json, tests.json, hints.json) so analysts can
- * load just the table they care about without parsing the whole stream.
+ * Calls the edge function in sectioned slices (meta → submissions → scores →
+ * tests → engagement) so each invocation gets a fresh CPU budget. Heavy
+ * sections paginate until the server omits a next_* batch index.
  */
 async function streamAssignmentToDir(
   args: ArgumentsCamelCase<ExportArgs>,
@@ -353,76 +443,155 @@ async function streamAssignmentToDir(
   slug: string,
   dir: string
 ): Promise<AssignmentTotals> {
-  const params: Record<string, unknown> = {
+  const baseParams: Record<string, unknown> = {
     class: args.class,
     identity_mode: mode,
     dump_id: dumpId,
     assignment: assignmentId,
     with_test_output: args.withTestOutput === true,
-    test_output_max_bytes: args.testOutputMaxBytes ?? 4096
+    test_output_max_bytes: args.testOutputMaxBytes ?? 4096,
+    with_instructor_build_output: args.withInstructorBuildOutput === true,
+    instructor_build_output_max_bytes: args.instructorBuildOutputMaxBytes ?? 4096
   };
-  if (salt !== null) params.salt = salt;
-  if (mode === "raw") params.confirm_pii = true;
+  if (args.instructorBuildOutputFromSentinel) {
+    baseParams.instructor_build_output_from_sentinel = args.instructorBuildOutputFromSentinel;
+  }
+  if (args.allSubmissions === true) baseParams.all_submissions = true;
+  if (salt !== null) baseParams.salt = salt;
+  if (mode === "raw") baseParams.confirm_pii = true;
 
-  // The whole stream is consumed under retry. Each attempt rebuilds buckets
-  // from scratch — a "terminated" mid-stream means we've buffered partial
-  // data and can't tell what we're missing, so we throw it away and re-fetch.
-  // Tokens are derived from the same per-run salt, so a retried call yields
-  // exactly the same data as the original.
-  const { manifest, buckets, endRecord } = await withTransientRetry(
-    async () => {
-      const buckets: Record<string, Record<string, unknown>[]> = {
-        rubric: [],
-        rubric_part: [],
-        rubric_criteria: [],
-        rubric_check: [],
-        autograder: [],
-        autograder_test: [],
-        autograder_raw_config: [],
-        group: [],
-        submission: [],
-        score: [],
-        grader_test: [],
-        hint: []
-      };
-      let manifest: Record<string, unknown> | null = null;
-      let endRecord: Record<string, unknown> | null = null;
+  const buckets = emptyAssignmentBuckets();
+  const totals: AssignmentTotals = {
+    rubric_checks: 0,
+    autograder_tests: 0,
+    groups: 0,
+    submissions: 0,
+    scores: 0,
+    grader_tests: 0,
+    instructor_build_outputs: 0,
+    hints: 0,
+    error_pin_engagement: 0
+  };
 
-      for await (const record of streamApiCall({ command: "assessment.export.assignment", params })) {
-        if (record.kind === "manifest") {
-          manifest = record;
-          continue;
-        }
-        if (record.kind === "end") {
-          endRecord = record;
-          continue;
-        }
-        const bucket = buckets[String(record.kind)];
-        if (bucket) bucket.push(record);
-      }
-
-      if (manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
-      if (endRecord === null) throw new CLIError(`assignment ${slug}: stream ended without {end}`);
-      return { manifest, buckets, endRecord };
-    },
-    {
-      onRetry: (attempt, err, delayMs) => {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.warning(
-          `assignment ${slug}: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
-        );
-      }
+  const mergeBuckets = (page: Record<string, Record<string, unknown>[]>) => {
+    for (const [key, rows] of Object.entries(page)) {
+      buckets[key]!.push(...rows);
     }
-  );
+  };
 
-  // Verify counts against server-reported totals so a truncated per-assignment
-  // stream doesn't silently produce a partial dump.
-  assertExpectedCount(endRecord, "scores", buckets.score!.length);
-  assertExpectedCount(endRecord, "submissions", buckets.submission!.length);
-  assertExpectedCount(endRecord, "grader_tests", buckets.grader_test!.length);
-  assertExpectedCount(endRecord, "hints", buckets.hint!.length);
+  const addPageCounts = (endRecord: Record<string, unknown>) => {
+    const counts = (endRecord.counts as Record<string, number>) ?? {};
+    totals.rubric_checks += counts.rubric_checks ?? 0;
+    totals.autograder_tests += counts.autograder_tests ?? 0;
+    totals.groups += counts.groups ?? 0;
+    totals.submissions += counts.submissions ?? 0;
+    totals.scores += counts.scores ?? 0;
+    totals.grader_tests += counts.grader_tests ?? 0;
+    totals.instructor_build_outputs += counts.instructor_build_outputs ?? 0;
+    totals.hints += counts.hints ?? 0;
+    totals.error_pin_engagement += counts.error_pin_engagement ?? 0;
+  };
 
-  writeJson(path.join(dir, "manifest.json"), manifest);
+  /** Return the next batch index only when the server cursor strictly advances. */
+  const advanceBatchCursor = (current: number, next: unknown, section: string, cursorField: string): number | null => {
+    if (typeof next !== "number") return null;
+    if (next <= current) {
+      logger.warning(
+        `assignment ${slug} [${section}]: ${cursorField} did not advance (${current} -> ${next}); stopping pagination`
+      );
+      return null;
+    }
+    return next;
+  };
+
+  // 1. Meta (manifest, rubric, autograder config, groups)
+  const meta = await streamAssignmentSection(baseParams, slug, "meta");
+  if (meta.manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
+  mergeBuckets(meta.buckets);
+  addPageCounts(meta.endRecord);
+
+  // 2. Submissions
+  const subs = await streamAssignmentSection(baseParams, slug, "submissions");
+  mergeBuckets(subs.buckets);
+  addPageCounts(subs.endRecord);
+  assertExpectedCount(subs.endRecord, "submissions", subs.buckets.submission!.length);
+
+  // 3. Scores (paginated over grading-review batches)
+  for (let batchIndex = 0; ; ) {
+    const page = await streamAssignmentSection(baseParams, slug, "scores", {
+      score_review_batch_index: batchIndex
+    });
+    mergeBuckets(page.buckets);
+    addPageCounts(page.endRecord);
+    assertExpectedCount(page.endRecord, "scores", page.buckets.score!.length);
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_score_review_batch_index,
+      "scores",
+      "next_score_review_batch_index"
+    );
+    if (next === null) break;
+    batchIndex = next;
+  }
+
+  // 4. Grader tests (paginated over submission batches)
+  for (let batchIndex = 0; ; ) {
+    const page = await streamAssignmentSection(baseParams, slug, "tests", {
+      test_submission_batch_index: batchIndex
+    });
+    mergeBuckets(page.buckets);
+    addPageCounts(page.endRecord);
+    assertExpectedCount(page.endRecord, "grader_tests", page.buckets.grader_test!.length);
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_test_submission_batch_index,
+      "tests",
+      "next_test_submission_batch_index"
+    );
+    if (next === null) break;
+    batchIndex = next;
+  }
+
+  // 5. Instructor build output (paginated over submission batches)
+  if (args.withInstructorBuildOutput === true) {
+    for (let batchIndex = 0; ; ) {
+      const page = await streamAssignmentSection(baseParams, slug, "build_output", {
+        build_output_submission_batch_index: batchIndex
+      });
+      mergeBuckets(page.buckets);
+      addPageCounts(page.endRecord);
+      assertExpectedCount(page.endRecord, "instructor_build_outputs", page.buckets.instructor_build_output!.length);
+      const next = advanceBatchCursor(
+        batchIndex,
+        page.endRecord.next_build_output_submission_batch_index,
+        "build_output",
+        "next_build_output_submission_batch_index"
+      );
+      if (next === null) break;
+      batchIndex = next;
+    }
+  }
+
+  // 6. Hints + error-pin engagement (paginated over submission batches)
+  for (let batchIndex = 0; ; ) {
+    const page = await streamAssignmentSection(baseParams, slug, "engagement", {
+      engagement_submission_batch_index: batchIndex
+    });
+    mergeBuckets(page.buckets);
+    addPageCounts(page.endRecord);
+    assertExpectedCount(page.endRecord, "hints", page.buckets.hint!.length);
+    assertExpectedCount(page.endRecord, "error_pin_engagement", page.buckets.error_pin_engagement!.length);
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_engagement_submission_batch_index,
+      "engagement",
+      "next_engagement_submission_batch_index"
+    );
+    if (next === null) break;
+    batchIndex = next;
+  }
+
+  writeJson(path.join(dir, "manifest.json"), meta.manifest);
   writeJson(path.join(dir, "rubric.json"), {
     rubric: buckets.rubric![0] ?? null,
     parts: buckets.rubric_part,
@@ -434,22 +603,17 @@ async function streamAssignmentToDir(
     tests: buckets.autograder_test,
     raw_config: buckets.autograder_raw_config![0]?.config ?? null
   });
-  if (buckets.group!.length > 0) writeJson(path.join(dir, "groups.json"), buckets.group);
-  writeJson(path.join(dir, "submissions.json"), buckets.submission);
-  writeJson(path.join(dir, "scores.json"), buckets.score);
-  writeJson(path.join(dir, "tests.json"), buckets.grader_test);
-  writeJson(path.join(dir, "hints.json"), buckets.hint);
+  if (buckets.group!.length > 0) writeJsonArray(path.join(dir, "groups.json"), buckets.group);
+  writeJsonArray(path.join(dir, "submissions.json"), buckets.submission);
+  writeJsonArray(path.join(dir, "scores.json"), buckets.score);
+  writeJsonArray(path.join(dir, "tests.json"), buckets.grader_test);
+  if (args.withInstructorBuildOutput === true) {
+    writeJsonArray(path.join(dir, "instructor-build-output.json"), buckets.instructor_build_output);
+  }
+  writeJsonArray(path.join(dir, "hints.json"), buckets.hint);
+  writeJsonArray(path.join(dir, "error-pin-engagement.json"), buckets.error_pin_engagement);
 
-  const counts = (endRecord.counts as Record<string, number>) ?? {};
-  return {
-    rubric_checks: counts.rubric_checks ?? buckets.rubric_check!.length,
-    autograder_tests: counts.autograder_tests ?? buckets.autograder_test!.length,
-    groups: counts.groups ?? buckets.group!.length,
-    submissions: counts.submissions ?? buckets.submission!.length,
-    scores: counts.scores ?? buckets.score!.length,
-    grader_tests: counts.grader_tests ?? buckets.grader_test!.length,
-    hints: counts.hints ?? buckets.hint!.length
-  };
+  return totals;
 }
 
 async function streamGradebookToDir(
@@ -500,28 +664,9 @@ async function streamGradebookToDir(
 
   const dir = path.join(outputDir, "gradebook");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeJson(path.join(dir, "scores.json"), cells);
+  writeJsonArray(path.join(dir, "scores.json"), cells);
 
   return { gradebook_scores: cells.length };
-}
-
-/**
- * Run a list of async tasks with bounded parallelism. Promise.all + chunking
- * would force lockstep batches; this runs N workers each picking the next
- * task off the queue so a slow assignment doesn't stall the whole pool.
- */
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIdx = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (true) {
-      const idx = nextIdx++;
-      if (idx >= tasks.length) return;
-      results[idx] = await tasks[idx]!();
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function aggregateTotals(
@@ -536,7 +681,9 @@ function aggregateTotals(
     submissions: sum("submissions"),
     scores: sum("scores"),
     grader_tests: sum("grader_tests"),
+    instructor_build_outputs: sum("instructor_build_outputs"),
     hints: sum("hints"),
+    error_pin_engagement: sum("error_pin_engagement"),
     gradebook_scores: gradebook.gradebook_scores
   };
 }

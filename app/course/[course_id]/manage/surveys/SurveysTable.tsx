@@ -91,22 +91,24 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
       return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     }
 
-    // Instructors: route based on survey status
+    // Route based on survey status. The title takes you to the responses (and
+    // analytics) view for anything that can have responses; only a draft — which
+    // has none yet — opens the editor. Editing a published survey stays available
+    // via the row actions menu (getEditLink).
     if (survey.status === "draft") {
       return `/course/${courseId}/manage/surveys/${survey.id}/edit`;
-    } else if (survey.status === "published") {
-      // Instructors can edit published surveys
-      return isInstructor
-        ? `/course/${courseId}/manage/surveys/${survey.id}/edit`
-        : `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
-    } else if (survey.status === "closed") {
-      // For closed surveys, instructors and graders both view responses
+    } else if (survey.status === "published" || survey.status === "closed") {
       return `/course/${courseId}/manage/surveys/${survey.survey_id}/responses`;
     }
 
     // Default fallback
     return `/course/${courseId}/manage/surveys/${survey.id}`;
   };
+
+  // Explicit edit link for the row actions menu — kept separate from
+  // getSurveyLink (the title), which now sends published/closed surveys to the
+  // responses view rather than the editor.
+  const getEditLink = (survey: Survey) => `/course/${courseId}/manage/surveys/${survey.id}/edit`;
 
   const handlePublish = useCallback(
     async (survey: Survey) => {
@@ -433,7 +435,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                       {survey.status === "draft" && isInstructor && (
                         <>
                           <MenuItem value="edit" asChild>
-                            <Link href={getSurveyLink(survey)}>Edit</Link>
+                            <Link href={getEditLink(survey)}>Edit</Link>
                           </MenuItem>
                           <MenuItem value="publish" onClick={() => handlePublish(survey)}>
                             Publish
@@ -458,7 +460,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                           {isInstructor && (
                             <>
                               <MenuItem value="edit" asChild>
-                                <Link href={getSurveyLink(survey)}>Edit (New Version)</Link>
+                                <Link href={getEditLink(survey)}>Edit (New Version)</Link>
                               </MenuItem>
                               <MenuItem value="close" onClick={() => handleClose(survey)}>
                                 Close

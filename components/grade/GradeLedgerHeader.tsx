@@ -70,26 +70,34 @@ export default function GradeLedgerHeader({
 }: GradeLedgerHeaderProps) {
   const isGraded = released && total !== null;
 
-  // Build the breakdown terms that actually apply to this submission.
-  const breakdownTerms: string[] = [];
+  // Build the breakdown terms that actually apply to this submission. Each term carries its
+  // own operator (rather than baking a leading sign into the text) so the rendered sum reads
+  // "5 autograder + 3 hand grading − 5 adjustment" instead of an awkward "... + − 5 adjustment".
+  const breakdownTerms: { op: "+" | "−"; label: string }[] = [];
   if (hasAutograder && autoEarned !== null) {
-    breakdownTerms.push(`${autoEarned} autograder`);
+    breakdownTerms.push({ op: "+", label: `${autoEarned} autograder` });
   }
   if (hasHandGrading && handContribution !== null) {
-    breakdownTerms.push(`${handContribution} hand grading`);
+    breakdownTerms.push({ op: "+", label: `${handContribution} hand grading` });
   }
   if (tweak !== 0) {
-    breakdownTerms.push(`${tweak < 0 ? "−" : "+"} ${Math.abs(tweak)} adjustment`);
+    breakdownTerms.push({ op: tweak < 0 ? "−" : "+", label: `${Math.abs(tweak)} adjustment` });
   }
   // Only show the breakdown line when more than one source contributes; with a single source the
   // headline already conveys the full story.
   const showBreakdown = breakdownTerms.length > 1;
+  const breakdownText = breakdownTerms
+    .map((term, i) => (i === 0 ? (term.op === "−" ? `−${term.label}` : term.label) : `${term.op} ${term.label}`))
+    .join(" ");
 
   const isCapped = isGraded && totalPossible !== null && (total as number) > totalPossible;
 
+  // Clamp to [0, 100]: the headline still shows the true (possibly negative or capped) total, but
+  // the progress bar itself must stay within range — Chakra's Progress rejects values below its
+  // min (0) or above its max, so a negative total would otherwise throw an uncaught error.
   const progressValue =
     isGraded && totalPossible !== null && totalPossible > 0
-      ? Math.min(100, ((total as number) / totalPossible) * 100)
+      ? Math.max(0, Math.min(100, ((total as number) / totalPossible) * 100))
       : null;
 
   return (
@@ -133,7 +141,7 @@ export default function GradeLedgerHeader({
 
             {showBreakdown && (
               <Text fontSize="sm" color="fg.muted">
-                = {breakdownTerms.join(" + ")}
+                = {breakdownText}
               </Text>
             )}
           </VStack>

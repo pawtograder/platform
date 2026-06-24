@@ -1,12 +1,15 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import CodeFile, {
   formatPoints,
   RubricCheckSelectOption,
   RubricCheckSubOptions,
-  RubricCriteriaSelectGroupOption
+  RubricCriteriaSelectGroupOption,
+  type CodeFileHandle
 } from "@/components/ui/code-file";
+import { FileTreeSidebar, ancestorFolderPaths, buildFileTree, flattenVisibleTree } from "@/components/ui/file-tree";
 import DownloadLink from "@/components/ui/download-link";
 import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
@@ -39,6 +42,7 @@ import {
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMetaFromParts,
@@ -56,7 +60,9 @@ import {
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getPrBaseFiles } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useFindTableControllerValue } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -91,73 +97,93 @@ import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { FaCheckCircle, FaColumns, FaDownload, FaEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
 
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
 const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
-function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
-  const submission = useSubmission();
-  const comments = useSubmissionFileComments({});
-  const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
-  return (
-    <Box
-      maxH="250px"
-      overflowY="auto"
-      w="100%"
-      m={2}
-      css={{
-        "&::-webkit-scrollbar": {
-          width: "8px",
-          display: "block"
-        },
-        "&::-webkit-scrollbar-track": {
-          background: "#f1f1f1",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb": {
-          background: "#888",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb:hover": {
-          background: "#555"
-        }
-      }}
-    >
-      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
-        <Table.Header>
-          <Table.Row bg="bg.subtle">
-            <Table.ColumnHeader>File</Table.ColumnHeader>
-            {showCommentsFeature && <Table.ColumnHeader>Comments</Table.ColumnHeader>}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {submission.submission_files.map((file, idx) => (
-            <Table.Row key={file.id}>
-              <Table.Cell>
-                <Link
-                  variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onSelect(file.id);
-                  }}
-                >
-                  {file.name}
-                </Link>
-              </Table.Cell>
-              {showCommentsFeature && (
-                <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
-              )}
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
-    </Box>
+// MIME types that aren't text/* but should still render as readable source.
+const INLINE_TEXT_MIME = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/x-yaml"
+]);
+
+/** Whether a file should render as text/markdown source rather than a binary download. */
+function isTextLikeFile(file: SubmissionFile): boolean {
+  if (!file.is_binary) return true;
+  if (isMarkdownFile(file.name)) return true;
+  const mime = file.mime_type ?? "";
+  return mime.startsWith("text/") || INLINE_TEXT_MIME.has(mime);
+}
+
+/**
+ * Render a submission file as markdown (source + preview) or source code.
+ * Uploaded text files can be stored as binary storage objects (contents null,
+ * storage_key set); fetch their text and render it the same way as inline
+ * git text files so markdown gets a real preview instead of a download link.
+ */
+function TextFileView({
+  file,
+  allFiles,
+  onNavigateToFile
+}: {
+  file: SubmissionFile;
+  allFiles: SubmissionFile[];
+  onNavigateToFile?: (fileId: number) => void;
+}) {
+  const needsFetch = file.is_binary && file.contents == null && !!file.storage_key;
+  const [hydrated, setHydrated] = useState<SubmissionFile | null>(needsFetch ? null : file);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!needsFetch) {
+      setHydrated(file);
+      return;
+    }
+    let mounted = true;
+    setHydrated(null);
+    setError(null);
+    (async () => {
+      const client = createClient();
+      const { data, error: dlError } = await client.storage
+        .from("submission-files")
+        .download(file.storage_key as string);
+      if (!mounted) return;
+      if (dlError || !data) {
+        setError(dlError?.message ?? "Could not load file contents");
+        return;
+      }
+      const text = await data.text();
+      if (!mounted) return;
+      setHydrated({ ...file, contents: text, is_binary: false });
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [file, needsFetch]);
+
+  // If the text can't be fetched, fall back to the binary download view.
+  if (error) return <BinaryFilePreview file={file} />;
+  if (!hydrated) return <Skeleton height="200px" />;
+  return isMarkdownFile(hydrated.name) ? (
+    <MarkdownFilePreview file={hydrated} allFiles={allFiles} onNavigateToFile={onNavigateToFile} />
+  ) : (
+    <CodeFile file={hydrated} />
   );
 }
+
+// Parse a URL hash fragment id like `L56` into its line number, or null if it isn't a line anchor.
+// Line anchors are emitted by deep links (help-request-chat) and comment-jump links (rubric-sidebar).
+const parseLineAnchor = (id: string): number | null => {
+  const match = /^L(\d+)$/.exec(id);
+  return match ? Number(match[1]) : null;
+};
+
 function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1081,6 +1107,177 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   }
 }
 
+type FileDiffStatus = "added" | "removed" | "changed";
+type FileDiff = { path: string; status: FileDiffStatus; diff: string };
+
+/**
+ * Compute per-file base→head diffs from the base tree (text files keyed by path)
+ * and the head snapshot (the submission's text `submission_files`). Only files
+ * that differ are returned; binary files are skipped on both sides (the cache
+ * omits them and the head side filters `is_binary`).
+ */
+function computeFileDiffs(
+  baseFiles: Record<string, string>,
+  headFiles: { name: string; contents: string | null; is_binary: boolean }[]
+): FileDiff[] {
+  const headByPath = new Map<string, string | null>();
+  for (const f of headFiles) {
+    if (f.is_binary) continue;
+    headByPath.set(f.name, f.contents);
+  }
+
+  const paths = new Set<string>([...Object.keys(baseFiles), ...headByPath.keys()]);
+  const diffs: FileDiff[] = [];
+  for (const path of paths) {
+    const inBase = Object.prototype.hasOwnProperty.call(baseFiles, path);
+    const inHead = headByPath.has(path);
+    const baseContent = inBase ? baseFiles[path] : null;
+    const headContent = inHead ? (headByPath.get(path) ?? null) : null;
+    if (inBase && inHead && baseContent === headContent) continue; // unchanged
+    const status: FileDiffStatus = !inBase ? "added" : !inHead ? "removed" : "changed";
+    diffs.push({ path, status, diff: generateSimpleDiff(baseContent, headContent) });
+  }
+  return diffs.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const DIFF_STATUS_META: Record<FileDiffStatus, { label: string; palette: string }> = {
+  added: { label: "added", palette: "green" },
+  removed: { label: "removed", palette: "red" },
+  changed: { label: "changed", palette: "yellow" }
+};
+
+/** Render one file's `+`/`-` diff text with line-level coloring. */
+function DiffBlock({ fileDiff }: { fileDiff: FileDiff }) {
+  const meta = DIFF_STATUS_META[fileDiff.status];
+  return (
+    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" overflow="hidden">
+      <HStack bg="bg.muted" px={2} py={1} gap={2}>
+        <Tag.Root colorPalette={meta.palette} size="sm">
+          <Tag.Label>{meta.label}</Tag.Label>
+        </Tag.Root>
+        <Text fontSize="sm" fontFamily="mono" wordBreak="break-all">
+          {fileDiff.path}
+        </Text>
+      </HStack>
+      <Box as="pre" m={0} p={2} fontSize="xs" fontFamily="mono" overflowX="auto" whiteSpace="pre" css={{ tabSize: 2 }}>
+        {fileDiff.diff.split("\n").map((line, idx) => {
+          const isAdd = line.startsWith("+");
+          const isRemove = line.startsWith("-");
+          return (
+            <Box
+              as="span"
+              key={idx}
+              display="block"
+              color={isAdd ? "green.fg" : isRemove ? "red.fg" : "fg.muted"}
+              bg={isAdd ? "green.subtle" : isRemove ? "red.subtle" : undefined}
+            >
+              {line === "" ? " " : line}
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * For PR submissions (base_sha + head_sha present) the Files view represents a
+ * base→head diff rather than a plain snapshot. We render the per-file diff
+ * inline: head comes from the already-loaded `submission_files`, the base tree
+ * is fetched once via `get-pr-base-files` (served from an immutable cache). The
+ * GitHub compare link stays as the header and as the fallback when the base
+ * fetch is empty or errors (e.g. the upstream clone failed).
+ */
+function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const base = submission.base_sha;
+  const head = submission.head_sha;
+  const submissionId = submission.id;
+  const headFiles = submission.submission_files;
+
+  const [baseFiles, setBaseFiles] = useState<Record<string, string> | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Only fetch for PR submissions that have both endpoints of the diff.
+  const isPrSubmission = !!base && !!head;
+
+  useEffect(() => {
+    if (!isPrSubmission) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setFetchError(null);
+    const supabase = createClient();
+    getPrBaseFiles(submissionId, supabase)
+      .then((res) => {
+        if (cancelled) return;
+        setBaseFiles(res.files ?? {});
+        if (res.error) setFetchError(res.error);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setBaseFiles({});
+        setFetchError(e instanceof Error ? e.message : "Failed to load the base tree");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPrSubmission, submissionId]);
+
+  const fileDiffs = useMemo(() => (baseFiles ? computeFileDiffs(baseFiles, headFiles) : []), [baseFiles, headFiles]);
+
+  if (!isPrSubmission) {
+    return null;
+  }
+  const baseShort = base!.substring(0, 7);
+  const headShort = head!.substring(0, 7);
+  const compareUrl = submission.repository
+    ? `https://github.com/${submission.repository}/compare/${base}...${head}`
+    : null;
+  // No diff to show inline: either the base fetch failed, returned nothing
+  // (e.g. the upstream isn't fetchable / E2E mock), or there are simply no text
+  // changes. Fall back to the compare-link notice.
+  const hasInlineDiff = !fetchError && baseFiles !== null && Object.keys(baseFiles).length > 0 && fileDiffs.length > 0;
+
+  return (
+    <Box mb={3}>
+      <Alert status="info" title="Pull request submission">
+        <VStack align="start" gap={1}>
+          <Text fontSize="sm">
+            This submission is a pull request: the diff below is the base ({baseShort}) → head ({headShort}) change.
+          </Text>
+          {compareUrl && (
+            <Link href={compareUrl} target="_blank">
+              View the {baseShort}…{headShort} diff on GitHub
+            </Link>
+          )}
+        </VStack>
+      </Alert>
+      {isLoading ? (
+        <HStack mt={2} gap={2} color="fg.muted">
+          <Spinner size="sm" />
+          <Text fontSize="sm">Loading base→head diff…</Text>
+        </HStack>
+      ) : hasInlineDiff ? (
+        <VStack align="stretch" gap={2} mt={2}>
+          <Heading size="sm">Changed files ({fileDiffs.length})</Heading>
+          {fileDiffs.map((fd) => (
+            <DiffBlock key={fd.path} fileDiff={fd} />
+          ))}
+        </VStack>
+      ) : baseFiles !== null ? (
+        <Text fontSize="sm" color="fg.muted" mt={2}>
+          {fetchError
+            ? "Could not load the base tree for an inline diff; use the GitHub compare link above for the authoritative diff."
+            : "No text changes to display inline; use the GitHub compare link above for the full diff."}
+        </Text>
+      ) : null}
+    </Box>
+  );
+}
+
 export default function FilesView() {
   const searchParams = useSearchParams();
   const submissionData = useSubmissionMaybe();
@@ -1155,6 +1352,15 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
+    // For `#L<n>` line anchors, prefer the editor's imperative handle: the Monaco editor (default
+    // view) renders lines virtually, so there is no element to getElementById. This path only fires
+    // for an already-open file, so the editor is mounted and a single call suffices. If the handle
+    // isn't wired (the classic StarryNight view exposes no ref but does render `<pre id="L56">`), fall
+    // through to the DOM-id lookup below so those views still scroll.
+    const targetLine = parseLineAnchor(id);
+    if (targetLine !== null && codeFileRef.current?.scrollToLine(targetLine)) {
+      return;
+    }
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
       if (el) preciseScrollTo(el);
@@ -1228,7 +1434,7 @@ export default function FilesView() {
     [updateUrl, selectedArtifactId, selectedFileId]
   );
 
-  const submissionFiles = submissionData?.submission_files ?? [];
+  const submissionFiles = useMemo(() => submissionData?.submission_files ?? [], [submissionData]);
   const submissionArtifacts = submissionData?.submission_artifacts ?? [];
   const normalizedSelectedFileId =
     selectedFileId !== null && submissionFiles.some((file: SubmissionFile) => file.id === selectedFileId)
@@ -1240,7 +1446,18 @@ export default function FilesView() {
       ? selectedArtifactId
       : null;
 
-  const defaultFileId = submissionFiles[0]?.id ?? null;
+  // Default to a source-code file rather than whatever happens to be first: the embedded
+  // submission_files arrive in an unspecified order, and opening a markdown file shows its rendered
+  // *preview* (no code lines) — graders want to land on code. Pick deterministically by name so the
+  // default is stable across loads, preferring code over markdown/binary, falling back to the
+  // name-first file when there is no code file.
+  const filesByName = useMemo(
+    () => [...submissionFiles].sort((a: SubmissionFile, b: SubmissionFile) => a.name.localeCompare(b.name)),
+    [submissionFiles]
+  );
+  const defaultFileId =
+    (filesByName.find((file: SubmissionFile) => !file.is_binary && !isMarkdownFile(file.name)) ?? filesByName[0])?.id ??
+    null;
   const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
   // Prefer file when both file_id and artifact_id are valid in the URL — checking
   // artifact first would null out the file and then artifact suppression would null both.
@@ -1282,10 +1499,179 @@ export default function FilesView() {
   const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
 
   // Resolve prop types
-  const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
   const artifactPickerDisplayIndex = curArtifactIndex === -1 ? 0 : curArtifactIndex;
   const finalActiveSubmissionReviewId =
     activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
+
+  // ───────────────────────── File-tree navigation (#288 / #103a) ─────────────────────────
+  // Folder collapse state and a keyboard cursor are owned here (not in FileTreeSidebar) because
+  // FilesView holds the canonical ordered file list, the active id, and the selection handlers,
+  // and is the only place that also knows about artifacts. The tree stays purely presentational.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const codeFileRef = useRef<CodeFileHandle>(null);
+  const allFileComments = useSubmissionFileComments({});
+
+  const onCollapseChange = useCallback((path: string, isCollapsed: boolean) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (isCollapsed) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const fileTree = useMemo(() => buildFileTree(submissionFiles), [submissionFiles]);
+  const visibleEntries = useMemo(() => flattenVisibleTree(fileTree, collapsed), [fileTree, collapsed]);
+
+  // Auto-expand the folders leading to the active file so it is always visible in the tree.
+  // Intentionally keyed on the file name only — re-running on full `selectedFile` identity is unwanted.
+  const selectedFileName = selectedFile?.name;
+  useEffect(() => {
+    if (!selectedFileName) return;
+    const ancestors = ancestorFolderPaths(selectedFileName);
+    if (ancestors.length === 0) return;
+    setCollapsed((prev) => {
+      if (ancestors.every((p) => !prev.has(p))) return prev;
+      const next = new Set(prev);
+      ancestors.forEach((p) => next.delete(p));
+      return next;
+    });
+  }, [selectedFileName]);
+
+  // Sorted, de-duplicated commented line numbers for the active file (for next/prev-comment jumps).
+  const commentLines = useMemo(() => {
+    const lines = new Set<number>();
+    for (const c of allFileComments) {
+      if (c.submission_file_id === effectiveFileId && typeof c.line === "number") lines.add(c.line);
+    }
+    return Array.from(lines).sort((a, b) => a - b);
+  }, [allFileComments, effectiveFileId]);
+  const lastCommentLineRef = useRef<number | null>(null);
+
+  const gotoComment = useCallback(
+    (delta: 1 | -1) => {
+      if (commentLines.length === 0) return;
+      const cur = lastCommentLineRef.current;
+      let next: number;
+      if (cur === null) {
+        next = delta > 0 ? commentLines[0] : commentLines[commentLines.length - 1];
+      } else if (delta > 0) {
+        next = commentLines.find((l) => l > cur) ?? commentLines[0];
+      } else {
+        next = [...commentLines].reverse().find((l) => l < cur) ?? commentLines[commentLines.length - 1];
+      }
+      lastCommentLineRef.current = next;
+      codeFileRef.current?.scrollToLine(next);
+    },
+    [commentLines]
+  );
+
+  // ───────────────────────── Multi-file tabs + split view ─────────────────────────
+  // `openFileIds` is the ordered set of files shown as tabs; the active tab is the URL-driven
+  // effectiveFileId. `splitFileId` (when set) shows a second editor pane side-by-side.
+  const [openFileIds, setOpenFileIds] = useState<number[]>([]);
+  const [splitFileId, setSplitFileId] = useState<number | null>(null);
+  // Resizable panels are a desktop affordance; on small screens we stack the columns instead.
+  // `useStableDesktop` (not raw `useBreakpointValue`) so a full-page screenshot's transient 1px
+  // viewport can't flip the layout and remount the editor (which would drop an open annotation popup).
+  const isDesktop = useStableDesktop();
+
+  // Opening / activating a file makes it a tab.
+  useEffect(() => {
+    if (effectiveFileId == null) return;
+    setOpenFileIds((prev) => (prev.includes(effectiveFileId) ? prev : [...prev, effectiveFileId]));
+  }, [effectiveFileId]);
+
+  const openFiles = useMemo(
+    () =>
+      openFileIds
+        .map((id) => submissionFiles.find((f: SubmissionFile) => f.id === id))
+        .filter((f): f is SubmissionFile => !!f),
+    [openFileIds, submissionFiles]
+  );
+
+  const closeTab = useCallback(
+    (id: number) => {
+      setOpenFileIds((prev) => {
+        const idx = prev.indexOf(id);
+        const next = prev.filter((f) => f !== id);
+        // If the active tab was closed, activate a neighbouring tab.
+        if (id === effectiveFileId && next.length > 0) {
+          handleSelectFile(next[Math.min(idx, next.length - 1)]);
+        }
+        return next;
+      });
+      setSplitFileId((s) => (s === id ? null : s));
+    },
+    [effectiveFileId, handleSelectFile]
+  );
+
+  const splitFile = useMemo(
+    () => (splitFileId != null ? (submissionFiles.find((f: SubmissionFile) => f.id === splitFileId) ?? null) : null),
+    [splitFileId, submissionFiles]
+  );
+  const toggleSplit = useCallback(() => {
+    setSplitFileId((s) => (s != null ? null : (effectiveFileId ?? null)));
+  }, [effectiveFileId]);
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  // Global keyboard navigation for grading. Integrates with the app-wide keyboard infra
+  // (hooks/useKeyboardShortcuts): we bail when that handler already acted (`defaultPrevented`, e.g. a
+  // `g`-chord, `?` help, or Shift-toggle) and ignore modifier/Shift combos so we never shadow it. We
+  // also bail inside editable surfaces, overlays, and interactive controls. Up/Down (or j/k) move
+  // between the *visible* files in tree order; n/p (or ]/[) jump between commented lines.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "textarea, input, select, button, a[href], [contenteditable='true'], .monaco-editor, [data-annotation-popup], [role='dialog'], [role='listbox'], [role='menu'], [role='combobox'], [role='button'], [role='tab'], [role='switch'], [role='checkbox'], [role='textbox']"
+        )
+      ) {
+        return;
+      }
+
+      const moveToFile = (delta: 1 | -1) => {
+        const files = visibleEntries.filter((entry) => entry.type === "file" && entry.fileId != null);
+        if (files.length === 0) return;
+        const curIdx = files.findIndex((entry) => entry.fileId === effectiveFileId);
+        let idx = curIdx === -1 ? (delta > 0 ? 0 : files.length - 1) : curIdx + delta;
+        idx = Math.max(0, Math.min(files.length - 1, idx));
+        const nextFile = files[idx];
+        if (nextFile?.fileId != null) handleSelectFile(nextFile.fileId);
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+        case "j":
+          e.preventDefault();
+          moveToFile(1);
+          break;
+        case "ArrowUp":
+        case "k":
+          e.preventDefault();
+          moveToFile(-1);
+          break;
+        case "n":
+        case "]":
+          e.preventDefault();
+          gotoComment(1);
+          break;
+        case "p":
+        case "[":
+          e.preventDefault();
+          gotoComment(-1);
+          break;
+        default:
+          break;
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [visibleEntries, effectiveFileId, handleSelectFile, gotoComment]);
+  // ──────────────────────────────────────────────────────────────────────────────────────
 
   // Scroll to line anchors when hash is present and relevant content is rendered
   useEffect(() => {
@@ -1380,9 +1766,26 @@ export default function FilesView() {
     const key = `${effectiveFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
+    const targetLine = parseLineAnchor(targetId);
+    // A line anchor on a markdown/binary preview can never resolve (no virtual editor, no `<pre id>`),
+    // so skip the retry loop entirely rather than polling for ~3s to no effect.
+    if (targetLine !== null && selectedFile && (isMarkdownFile(selectedFile.name) || selectedFile.is_binary)) {
+      return;
+    }
+
     let attempts = 0;
     const maxAttempts = 60; // up to ~3s at 50ms
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const tryScroll = () => {
+      // For `#L<n>` anchors, prefer the editor's imperative handle: the Monaco editor (default view)
+      // renders lines virtually, so getElementById can't find them. scrollToLine returns false until
+      // the lazily-imported editor has mounted, so we retry. If the handle isn't wired (the classic
+      // StarryNight view exposes no ref), this falls through to the DOM-id lookup, which finds its
+      // `<pre id="L56">`. Non-line anchors always resolve via getElementById.
+      if (targetLine !== null && codeFileRef.current?.scrollToLine(targetLine)) {
+        scrolledTargetsRef.current.add(key);
+        return;
+      }
       const el = document.getElementById(targetId);
       if (el) {
         preciseScrollTo(el);
@@ -1390,11 +1793,14 @@ export default function FilesView() {
         return;
       }
       if (attempts++ < maxAttempts) {
-        setTimeout(tryScroll, 50);
+        timeoutId = setTimeout(tryScroll, 50);
       }
     };
     tryScroll();
-  }, [isSwitching, effectiveFileId, preciseScrollTo]);
+    return () => {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
+  }, [isSwitching, effectiveFileId, selectedFile, preciseScrollTo]);
 
   // Briefly show a loading skeleton when switching files/artifacts
   useEffect(() => {
@@ -1413,52 +1819,232 @@ export default function FilesView() {
     return <NotFound />;
   }
 
-  return (
-    <>
-      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
-        <Box w={"100%"} minW={"100%"}>
-          <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
-          {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
-          )}
+  // Renders the content for a single file (code / markdown / binary). `primary` wires the imperative
+  // ref used by next/prev-comment navigation to the main editor pane only.
+  const renderFileContent = (file: SubmissionFile, primary: boolean): ReactNode => {
+    if (isMarkdownFile(file.name) && !file.is_binary) {
+      return (
+        <MarkdownFilePreview
+          key={file.id}
+          file={file}
+          allFiles={submission.submission_files}
+          onNavigateToFile={handleSelectFile}
+        />
+      );
+    }
+    // Uploaded text files are stored as binary storage objects (is_binary +
+    // storage_key, contents null) but are really text — render them as
+    // source/markdown via TextFileView (which fetches the bytes) rather than a
+    // binary download.
+    if (file.is_binary && isTextLikeFile(file)) {
+      return (
+        <TextFileView
+          key={file.id}
+          file={file}
+          allFiles={submission.submission_files}
+          onNavigateToFile={handleSelectFile}
+        />
+      );
+    }
+    if (file.is_binary) {
+      return <BinaryFilePreview key={file.id} file={file} />;
+    }
+    // Stable key per pane (not per file): keep the Monaco instance mounted across tab switches so it
+    // swaps models in place instead of remounting — remounting caused a white flash between files.
+    return (
+      <CodeFile
+        key={primary ? "code-file-primary" : "code-file-split"}
+        ref={primary ? codeFileRef : undefined}
+        file={file}
+        indexFiles={submission.submission_files}
+        onNavigateToFile={primary ? handleSelectFile : setSplitFileId}
+      />
+    );
+  };
+
+  // A VS Code-style tab strip over the open files. `extra` renders trailing controls (e.g. close-split).
+  const FileTabBar = ({
+    activeId,
+    onSelect,
+    extra
+  }: {
+    activeId: number | null;
+    onSelect: (id: number) => void;
+    extra?: ReactNode;
+  }) => (
+    <Flex
+      bg="bg.subtle"
+      borderBottom="1px solid"
+      borderColor="border.emphasized"
+      alignItems="stretch"
+      overflowX="auto"
+      flexShrink={0}
+      aria-label="Open files"
+    >
+      {openFiles.map((f) => {
+        const isActive = f.id === activeId;
+        const name = f.name.split("/").pop() || f.name;
+        return (
+          <Flex
+            key={f.id}
+            data-tab-file-id={f.id}
+            data-active={isActive ? "true" : undefined}
+            alignItems="center"
+            gap={1}
+            px={3}
+            py={1.5}
+            cursor="pointer"
+            minW="fit-content"
+            bg={isActive ? "bg.default" : "transparent"}
+            borderRight="1px solid"
+            borderColor="border.emphasized"
+            borderBottom={isActive ? "2px solid" : "2px solid transparent"}
+            borderBottomColor={isActive ? "fg.info" : "transparent"}
+            onClick={() => onSelect(f.id)}
+          >
+            <Text fontSize="sm" fontWeight={isActive ? "semibold" : "normal"} lineClamp={1} maxW="180px">
+              {name}
+            </Text>
+            <Icon
+              as={FaTimes}
+              boxSize={2.5}
+              color="fg.muted"
+              _hover={{ color: "fg.default" }}
+              aria-label={`Close ${name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                closeTab(f.id);
+              }}
+            />
+          </Flex>
+        );
+      })}
+      <Box flex="1" />
+      {extra}
+    </Flex>
+  );
+
+  const fileNavigator = (
+    <Box
+      aria-label="File navigator"
+      tabIndex={0}
+      h="100%"
+      display="flex"
+      flexDirection="column"
+      minH={0}
+      outline="none"
+      data-file-navigator=""
+    >
+      <Box flex="1" minH={0} display="flex">
+        {submissionFiles.length > 0 && (
+          <FileTreeSidebar
+            files={submissionFiles}
+            activeFileId={effectiveFileId}
+            onFileSelect={handleSelectFile}
+            collapsed={collapsed}
+            onCollapseChange={onCollapseChange}
+          />
+        )}
+      </Box>
+      {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
+        <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
+      )}
+    </Box>
+  );
+
+  const editorArea = isSwitching ? (
+    <Skeleton height="100%" width="100%" />
+  ) : selectedArtifact ? (
+    <Box data-artifact-id={selectedArtifact.id} h="100%" overflow="auto" scrollMarginTop="80px">
+      {selectedArtifact.data !== null ? (
+        <ArtifactWithComments
+          key={selectedArtifact.id}
+          artifact={selectedArtifact as SubmissionArtifact}
+          reviewAssignmentId={activeReviewAssignmentId}
+          submissionReviewId={finalActiveSubmissionReviewId}
+        />
+      ) : (
+        <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
+      )}
+    </Box>
+  ) : selectedFile ? (
+    <Group orientation="horizontal" style={{ height: "100%" }}>
+      <Panel minSize="25">
+        <Flex direction="column" h="100%" minH={0}>
+          <FileTabBar
+            activeId={effectiveFileId}
+            onSelect={handleSelectFile}
+            extra={
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label={splitFile ? "Close split view" : "Split editor"}
+                title={splitFile ? "Close split view" : "Split editor"}
+                onClick={toggleSplit}
+                m={1}
+              >
+                <Icon as={FaColumns} />
+              </Button>
+            }
+          />
+          <Box flex="1" minH={0} overflow="auto" data-file-id={selectedFile.id} scrollMarginTop="80px">
+            {renderFileContent(selectedFile, true)}
+          </Box>
+        </Flex>
+      </Panel>
+      {splitFile && (
+        <>
+          <PanelSeparator>
+            <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+          </PanelSeparator>
+          <Panel minSize="25">
+            <Flex direction="column" h="100%" minH={0}>
+              <FileTabBar activeId={splitFileId} onSelect={(id) => setSplitFileId(id)} />
+              <Box flex="1" minH={0} overflow="auto">
+                {renderFileContent(splitFile, false)}
+              </Box>
+            </Flex>
+          </Panel>
+        </>
+      )}
+    </Group>
+  ) : (
+    <Text>Select a file or artifact to view.</Text>
+  );
+
+  // Desktop: resizable tree|code columns inside a fixed-height shell (each pane scrolls internally,
+  // so editors fill their pane). Mobile: stack the navigator above the editor and let the page scroll.
+  if (!isDesktop) {
+    return (
+      <Flex direction="column" gap={2}>
+        <PrDiffNotice submission={submission} />
+        <Box maxH="40vh" overflow="auto" border="1px solid" borderColor="border.emphasized" borderRadius="md">
+          {fileNavigator}
         </Box>
-        <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box w={"100%"}>
-          {isSwitching ? (
-            <Skeleton height="70vh" width="100%" />
-          ) : selectedArtifact ? (
-            <Box data-artifact-id={selectedArtifact.id} scrollMarginTop="80px">
-              {selectedArtifact.data !== null ? (
-                <ArtifactWithComments
-                  key={selectedArtifact.id}
-                  artifact={selectedArtifact as SubmissionArtifact}
-                  reviewAssignmentId={activeReviewAssignmentId}
-                  submissionReviewId={finalActiveSubmissionReviewId}
-                />
-              ) : (
-                <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
-              )}
-            </Box>
-          ) : selectedFile ? (
-            <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
-                <MarkdownFilePreview
-                  key={selectedFile.id}
-                  file={selectedFile}
-                  allFiles={submission.submission_files}
-                  onNavigateToFile={handleSelectFile}
-                />
-              ) : selectedFile.is_binary ? (
-                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
-              ) : (
-                <CodeFile key={selectedFile.id} file={selectedFile} />
-              )}
-            </Box>
-          ) : (
-            <Text>Select a file or artifact to view.</Text>
-          )}
-        </Box>
+        <Separator />
+        <Box minH="60vh">{editorArea}</Box>
       </Flex>
-    </>
+    );
+  }
+
+  return (
+    <Flex direction="column" h="100%" minH={0} gap={2}>
+      <PrDiffNotice submission={submission} />
+      <Box flex="1" minH={0}>
+        <Group orientation="horizontal" style={{ height: "100%" }}>
+          <Panel defaultSize="20" minSize="12" maxSize="40">
+            {fileNavigator}
+          </Panel>
+          <PanelSeparator>
+            <Box w="6px" h="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="col-resize" />
+          </PanelSeparator>
+          <Panel minSize="30">
+            <Box h="100%" minW={0} minH={0}>
+              {editorArea}
+            </Box>
+          </Panel>
+        </Group>
+      </Box>
+    </Flex>
   );
 }

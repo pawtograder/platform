@@ -139,7 +139,8 @@ export function YamlRubricToHydratedRubric(
     rubric_parts: YamlPartsToHydratedParts(yaml.parts),
     is_private,
     review_round,
-    cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false
+    cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false,
+    hide_unless_assigned: yaml.hide_unless_assigned ?? false
   };
   return sanitizeHydratedRubricPoints(rubric).rubric;
 }

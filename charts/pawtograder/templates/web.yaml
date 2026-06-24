@@ -1,0 +1,8 @@
+{{- /*
+Stable web channel. The Service+Deployment body lives in
+templates/_web-workload.tpl so extra deployment channels (.Values.channels,
+rendered by templates/web-channels.yaml) reuse the exact same pod spec.
+*/ -}}
+{{- if .Values.web.enabled }}
+{{- include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas) }}
+{{- end }}

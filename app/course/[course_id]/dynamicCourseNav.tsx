@@ -1,7 +1,8 @@
 "use client";
 
 import { TimeZoneModal } from "@/components/TimeZoneModal";
-import { useColorMode } from "@/components/ui/color-mode";
+import { useBranding } from "@/components/branding/branding-provider";
+import Logo from "@/components/ui/logo";
 import {
   DrawerBackdrop,
   DrawerBody,
@@ -14,16 +15,15 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
-import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
-import { FaRobot, FaScroll } from "react-icons/fa";
+import { FaGithub, FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
   FiBarChart,
@@ -154,6 +154,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/feature-flags`
       },
       {
+        name: "GitHub Templates",
+        icon: FaGithub,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/github`
+      },
+      {
         name: "Lab Sections",
         instructors_or_graders_only: true,
         icon: MdOutlineScience,
@@ -255,10 +261,10 @@ export default function DynamicCourseNav() {
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
   const course = useCourse() as CourseWithFeatures;
-  const { colorMode } = useColorMode();
+  const branding = useBranding();
 
-  const isInstructor = enrollment.role === "instructor";
-  const isInstructorOrGrader = enrollment.role === "instructor" || enrollment.role === "grader";
+  const isInstructor = useIsInstructor();
+  const isInstructorOrGrader = useIsGraderOrInstructor();
   /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
   const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 
@@ -306,12 +312,8 @@ export default function DynamicCourseNav() {
           <HStack justifyContent="space-between" alignItems="center">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
-              <NextLink href="/course" aria-label="Pawtograder home">
-                {colorMode === "dark" ? (
-                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
-                ) : (
-                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
-                )}
+              <NextLink href="/course" aria-label={`${branding.name} home`}>
+                <Logo width={30} />
               </NextLink>
               <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
@@ -438,12 +440,8 @@ export default function DynamicCourseNav() {
           <Flex width="100%" alignItems="flex-start" gap={2}>
             <HStack flexShrink={0}>
               <CoursePicker currentCourse={enrollment.classes} />
-              <NextLink href="/course" aria-label="Pawtograder home">
-                {colorMode === "dark" ? (
-                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
-                ) : (
-                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
-                )}
+              <NextLink href="/course" aria-label={`${branding.name} home`}>
+                <Logo width={30} />
               </NextLink>
               <Text fontSize="xl" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>

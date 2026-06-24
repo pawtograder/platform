@@ -18,6 +18,7 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
 import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -296,7 +297,7 @@ const DropBoxAvatar = ({
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
                 >
-                  <Avatar.Image src={avatarLink || undefined} alt="" />
+                  <Avatar.Image src={sanitizeImageSrc(avatarLink)} alt="" />
                   <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                 </Avatar.Root>
                 {isHovered && (
@@ -713,7 +714,7 @@ const SafeTimeZonePreferencesMenu = () => {
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const searchParams = useSearchParams();
-  const { role: enrollment } = useClassProfiles();
+  const { role: enrollment, isViewingAsStudent } = useClassProfiles();
   const gitHubUsername = enrollment.users.github_username;
   const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
@@ -734,7 +735,7 @@ function UserSettingsMenu() {
         <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
           <Avatar.Root size="sm" colorPalette="gray">
             <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-            <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
           </Avatar.Root>
         </IconButton>
       </Drawer.Trigger>
@@ -748,7 +749,7 @@ function UserSettingsMenu() {
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
                       <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
@@ -768,21 +769,34 @@ function UserSettingsMenu() {
                     <CloseButton size="sm" aria-label="Close" />
                   </Drawer.CloseTrigger>
                 </HStack>
-                <ProfileChangesMenu />
-                <NotificationPreferencesMenu />
+                {/* In view-as the drawer renders the masqueraded student's avatar/name,
+                    but these settings all mutate the real instructor's auth user (profile
+                    avatar uploads, notification_preferences keyed on auth.uid(), MCP
+                    tokens, sign-out). Hide them so a click can't quietly clobber the
+                    instructor's settings while the UI pretends to be the student. */}
+                {!isViewingAsStudent && <ProfileChangesMenu />}
+                {!isViewingAsStudent && <NotificationPreferencesMenu />}
                 <SafeTimeZonePreferencesMenu />
-                <MCPTokensMenu />
-                <Button
-                  variant="ghost"
-                  onClick={signOutAction}
-                  width="100%"
-                  textAlign="left"
-                  size="sm"
-                  justifyContent="flex-start"
-                >
-                  <PiSignOut />
-                  Sign out
-                </Button>
+                {!isViewingAsStudent && <MCPTokensMenu />}
+                {!isViewingAsStudent && (
+                  <Button
+                    variant="ghost"
+                    onClick={signOutAction}
+                    width="100%"
+                    textAlign="left"
+                    size="sm"
+                    justifyContent="flex-start"
+                  >
+                    <PiSignOut />
+                    Sign out
+                  </Button>
+                )}
+                {isViewingAsStudent && (
+                  <Text fontSize="xs" color="fg.muted" px={2} pt={2}>
+                    Account, notification, and MCP settings are hidden while previewing as a student. Exit view-as from
+                    the banner above to access them.
+                  </Text>
+                )}
               </VStack>
             </Drawer.Body>
           </Drawer.Content>

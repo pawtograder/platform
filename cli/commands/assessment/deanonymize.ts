@@ -4,8 +4,9 @@
  * student's real identifiers.
  *
  * The --salt value must be identical to the one used in the original export
- * run so that the HMAC tokens match. Because the mapping contains PII
- * (name, email, SIS id) the --i-understand-pii flag is required.
+ * run so that the server can reproduce the same tokens (using the deployment
+ * vault pepper). Because the mapping contains PII (name, email, SIS id) the
+ * --i-understand-pii flag is required.
  *
  * Output CSV columns:
  *   subject_token, name, email, sis_user_id, class_section, lab_section

@@ -1,8 +1,12 @@
 export const dynamic = "force-dynamic";
 
-export const metadata = {
-  title: "Your courses · Pawtograder"
-};
+import { getBranding } from "@/lib/branding";
+
+export async function generateMetadata() {
+  return {
+    title: `Your courses · ${getBranding().name}`
+  };
+}
 
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
@@ -16,6 +20,7 @@ import { signOutAction } from "../actions";
 
 export default async function ProtectedPage() {
   const supabase = await createClient();
+  const branding = getBranding();
 
   const claims = await supabase.auth.getClaims();
 
@@ -54,8 +59,8 @@ export default async function ProtectedPage() {
         borderBottomColor="border.emphasized"
       >
         <Flex width="100%" height="20" alignItems="center" justifyContent={{ base: "space-between" }}>
-          <Box fontSize="2xl" fontWeight="bold">
-            Pawtograder
+          <Box fontSize="2xl" fontWeight="bold" color="colorPalette.fg">
+            {branding.name}
           </Box>
           <Button onClick={signOutAction}>Sign out</Button>
         </Flex>

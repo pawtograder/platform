@@ -1,6 +1,7 @@
 "use client";
 
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import {
   useAssignments,
   useCourse,
@@ -134,10 +135,11 @@ const ASSIGNMENT_STAFF_SUBPAGES: { label: string; path: string; graderOk?: boole
  */
 export function useGlobalSearchIndex(): SearchHit[] {
   const { role } = useClassProfiles();
+  const { filterDiscussionTeaser } = useViewAsStudentDataMask();
   const course = useCourse();
   const courseId = role?.class_id ?? 0;
-  const isInstructor = role?.role === "instructor";
-  const isStaff = isInstructor || role?.role === "grader";
+  const isInstructor = useIsInstructor();
+  const isStaff = useIsGraderOrInstructor();
   const rawFeatures = (course as Partial<CourseWithFeatures> | undefined)?.features;
   const features = React.useMemo(() => (Array.isArray(rawFeatures) ? rawFeatures : []), [rawFeatures]);
 
@@ -250,6 +252,7 @@ export function useGlobalSearchIndex(): SearchHit[] {
       // Only root threads (replies aren't usefully addressable).
       for (const t of threads) {
         if (t.draft) continue;
+        if (!filterDiscussionTeaser(t)) continue;
         const topic = topics.find((tp) => tp.id === t.topic_id);
         out.push({
           id: `discussion:${t.id}`,
@@ -279,5 +282,16 @@ export function useGlobalSearchIndex(): SearchHit[] {
     }
 
     return out;
-  }, [assignments, courseId, features, helpQueues, isInstructor, isStaff, surveys, threads, topics]);
+  }, [
+    assignments,
+    courseId,
+    features,
+    filterDiscussionTeaser,
+    helpQueues,
+    isInstructor,
+    isStaff,
+    surveys,
+    threads,
+    topics
+  ]);
 }

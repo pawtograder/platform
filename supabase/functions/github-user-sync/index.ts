@@ -9,6 +9,7 @@ import {
   UserVisibleError,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
+import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import type {
   GitHubLinkStatus,
   GitHubMembershipStatus,
@@ -179,7 +180,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         if (!assignment.template_repo?.includes("/")) {
           return;
         }
-        const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
+        const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
 
         Sentry.addBreadcrumb({
           category: "github",

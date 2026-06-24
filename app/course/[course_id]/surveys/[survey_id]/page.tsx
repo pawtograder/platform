@@ -26,7 +26,7 @@ export default function SurveyTakingPage() {
   const controller = useCourseController();
 
   // pulls from ClassProfileProvider
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly: isViewingAsStudent } = useClassProfiles();
 
   // Use the survey hook to get the survey with realtime updates
   const survey = useSurvey(survey_id as string);
@@ -225,8 +225,10 @@ export default function SurveyTakingPage() {
     );
   }
 
-  // Check if survey is read-only (submitted and editing not allowed)
-  const isReadOnly = existingResponse?.is_submitted && !survey.allow_response_editing;
+  // Check if survey is read-only (submitted and editing not allowed). An instructor
+  // viewing as a student is also read-only and must not submit/overwrite the student's response.
+  const surveyAlreadySubmitted = existingResponse?.is_submitted && !survey.allow_response_editing;
+  const isReadOnly = surveyAlreadySubmitted || isViewingAsStudent;
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">
@@ -246,7 +248,7 @@ export default function SurveyTakingPage() {
             ← Back to Surveys
           </Button>
 
-          {isReadOnly && (
+          {surveyAlreadySubmitted && (
             <Box
               colorPalette="yellow"
               bg="yellow.subtle"

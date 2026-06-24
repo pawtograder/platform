@@ -412,6 +412,22 @@ export function useActiveSubmissionReview() {
 
   return submissionReview;
 }
+
+/**
+ * The review a grader should apply rubric checks to: the active review when it is itself writable,
+ * otherwise the first writable review (the workspace default). Single source of truth so the rubric
+ * menu's check list and the review a comment is saved to never diverge — applying a check from a
+ * rubric the active (read-only) review doesn't belong to would otherwise mis-attribute the comment.
+ */
+export function useDefaultWritableSubmissionReview() {
+  const activeReview = useActiveSubmissionReview();
+  const writableReviews = useWritableSubmissionReviews();
+  return useMemo(() => {
+    if (activeReview && writableReviews?.some((r) => r.id === activeReview.id)) return activeReview;
+    return writableReviews?.[0];
+  }, [activeReview, writableReviews]);
+}
+
 export function useActiveReviewAssignmentId() {
   const ctx = useContext(SubmissionReviewContext);
   if (!ctx) return undefined;

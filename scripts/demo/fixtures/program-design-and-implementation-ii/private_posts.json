@@ -1,0 +1,90 @@
+[
+  {
+    "topic": "Logistics",
+    "subject": "Suspected MOSS hit on HW3 — three submissions",
+    "body": "MOSS flagged three HW3 submissions with 70%+ structural similarity. Sharing the report here for staff review before we follow up with the students. Submissions are from students in section 02.",
+    "replies": [
+      {
+        "body": "Took a closer look. Two of them have identical variable names and the same off-by-one bug. Probably worth a conversation.",
+        "fromRole": "grader"
+      },
+      {
+        "body": "Agreed. Let's reach out individually and offer a chance to explain before escalating.",
+        "fromRole": "instructor"
+      }
+    ]
+  },
+  {
+    "topic": "Logistics",
+    "subject": "Accommodation request — extended deadlines",
+    "body": "DRC approved 1.5x time on all assignments for one student. Their submissions will be due 1.5x later than the posted due date going forward. Please don't penalize for 'lateness' on the gradebook.",
+    "replies": [
+      { "body": "Got it. Adding a tag on their profile so we don't forget at grading time.", "fromRole": "grader" }
+    ]
+  },
+  {
+    "topic": "Q&A",
+    "subject": "Rubric calibration on recursion HW",
+    "body": "Graders — let's align on partial credit for the recursion HW. If a student's base case is wrong but recursive case is right, I'm thinking 50% on the correctness criterion. Thoughts?",
+    "replies": [
+      {
+        "body": "50% sounds right. What about the reverse — correct base, wrong recursive step?",
+        "fromRole": "grader"
+      },
+      { "body": "Same — 50%. They at least understood part of the structure.", "fromRole": "instructor" },
+      { "body": "Sounds good. Updating the rubric notes.", "fromRole": "grader" }
+    ]
+  },
+  {
+    "topic": "Q&A",
+    "subject": "Student check-in: section 03 seems lost",
+    "body": "Several students in section 03 have skipped multiple labs and their HW2 submissions were nearly empty. Worth a wellness check or scheduling a session?",
+    "replies": [
+      {
+        "body": "Let me reach out individually. I'd rather not make it a public announcement.",
+        "fromRole": "instructor"
+      }
+    ]
+  },
+  {
+    "topic": "Announcements",
+    "subject": "Midterm regrade window policy",
+    "body": "Just confirming: regrade window is 72 hours from the time grades are released. Please decline any requests submitted after that window. Exceptions only for documented emergencies.",
+    "replies": [
+      { "body": "Will do. Should I post this publicly too or keep it staff-only?", "fromRole": "grader" },
+      {
+        "body": "Yes, post a short version on the Announcements topic. Just don't include the internal exception language.",
+        "fromRole": "instructor"
+      }
+    ]
+  },
+  {
+    "topic": "Logistics",
+    "subject": "OH staffing for next week",
+    "body": "Two of us have conflicts during Tuesday OH next week. Can someone swap? Otherwise I'll cancel that slot.",
+    "replies": [
+      { "body": "I can cover Tuesday 2-4pm.", "fromRole": "grader" },
+      { "body": "Thanks. Updating the calendar.", "fromRole": "instructor" }
+    ]
+  },
+  {
+    "topic": "Q&A",
+    "subject": "Question from Paws — possible bug in the autograder",
+    "body": "Paws reported their HW2 submission gets a different score on rerun vs first attempt. I checked the logs and it does look non-deterministic — one of the test cases depends on HashMap iteration order. Pinging here before we tell students.",
+    "replies": [
+      { "body": "Confirmed. Pushed a fix to the grader repo. Should we re-run everyone's HW2?", "fromRole": "grader" },
+      { "body": "Yes, let's re-grade the affected ones. I'll write the announcement.", "fromRole": "instructor" }
+    ]
+  },
+  {
+    "topic": "Logistics",
+    "subject": "Late-token audit",
+    "body": "Three students have submitted regrade-tied refund requests for late tokens. Pulling a quick audit of approvals so we stay consistent.",
+    "replies": [
+      {
+        "body": "Sharing the spreadsheet — looks like we approved 4/5 so far this semester. Last one had a GitHub outage that we can verify.",
+        "fromRole": "grader"
+      }
+    ]
+  }
+]

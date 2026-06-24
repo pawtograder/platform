@@ -1,0 +1,404 @@
+{
+  "uid": "pawtograder-app-business",
+  "title": "Pawtograder · App Business Metrics",
+  "tags": ["pawtograder", "business"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "class_id",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(pawtograder_active_submissions_active_count, class_id)",
+        "refresh": 1,
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Real classes",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "pawtograder_classes_real_classes" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Active submissions (now)",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pawtograder_active_submissions_active_count{class_id=~\"$class_id\"})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Submissions created (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(web_submission_created_total{class_id=~\"$class_id\"}[1h]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Grading actions (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(web_grading_action_total{class_id=~\"$class_id\"}[1h]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Open help requests",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pawtograder_help_queue_depth_open_count{class_id=~\"$class_id\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "In-progress help",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pawtograder_help_queue_depth_in_progress_count{class_id=~\"$class_id\"})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Submissions created / minute (by class)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "class {{class_id}}",
+          "expr": "sum by(class_id)(rate(web_submission_created_total{class_id=~\"$class_id\"}[1m])) * 60"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Grading actions / minute (by kind)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{kind}}",
+          "expr": "sum by(kind)(rate(web_grading_action_total{class_id=~\"$class_id\"}[1m])) * 60"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Active submissions over time (by class)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "class {{class_id}}",
+          "expr": "pawtograder_active_submissions_active_count{class_id=~\"$class_id\"}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Help queue depth (open + in-progress)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "open",
+          "legendFormat": "open class {{class_id}}",
+          "expr": "pawtograder_help_queue_depth_open_count{class_id=~\"$class_id\"}"
+        },
+        {
+          "refId": "ip",
+          "legendFormat": "in-progress class {{class_id}}",
+          "expr": "pawtograder_help_queue_depth_in_progress_count{class_id=~\"$class_id\"}"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Top classes by recent activity (1h)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(20, sum by(class_id)(increase(web_submission_created_total[1h]) + increase(web_grading_action_total[1h])))"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Autograder workflow runs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "collapsed": false
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Workflow runs (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Workflow error rate (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(web_workflow_runs_recent{class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"}), 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "P95 queue duration (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.95\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 44,
+      "type": "stat",
+      "title": "P95 run duration (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.95\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 180 },
+              { "color": "red", "value": 600 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Workflow runs by conclusion (1h windows)",
+      "description": "Each series is a sliding count of completed workflow runs by GitHub conclusion. `success`/`skipped` are the healthy paths; everything else (failure, cancelled, timed_out, neutral, action_required, unknown) is a failure mode.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{conclusion}}",
+          "expr": "sum by(conclusion)(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Workflow error rate over time (1h windows, by class)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "class {{class_id}}",
+          "expr": "sum by(class_id)(web_workflow_runs_recent{class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum by(class_id)(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"}), 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 60,
+      "type": "timeseries",
+      "title": "Workflow queue duration (P50/P95/P99) by class",
+      "description": "Time from workflow_runs.requested_at to in_progress_at. Spikes here mean GitHub Actions runner backlog or grader image pull/start delays.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "p50",
+          "legendFormat": "p50 class {{class_id}}",
+          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.5\"}"
+        },
+        {
+          "refId": "p95",
+          "legendFormat": "p95 class {{class_id}}",
+          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.95\"}"
+        },
+        {
+          "refId": "p99",
+          "legendFormat": "p99 class {{class_id}}",
+          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.99\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 } }
+    },
+    {
+      "id": 61,
+      "type": "timeseries",
+      "title": "Workflow run duration (P50/P95) by class",
+      "description": "Time from in_progress_at to completed_at — actual grader execution.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "p50",
+          "legendFormat": "p50 class {{class_id}}",
+          "expr": "web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.5\"}"
+        },
+        {
+          "refId": "p95",
+          "legendFormat": "p95 class {{class_id}}",
+          "expr": "web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.95\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 } }
+    },
+    {
+      "id": 70,
+      "type": "table",
+      "title": "Top workflow errors in the last 1h",
+      "description": "Aggregated by workflow_run_error.name across class_id.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(15, web_workflow_errors_recent{class_id=~\"$class_id\", window=\"1h\"})"
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentVisibleHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useStudentRoster } from "@/hooks/useCourseController";
 import { Box, Heading, HStack, Input, Stack, Text, Badge, Spinner, Flex } from "@chakra-ui/react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -32,7 +32,7 @@ export default function OfficeHoursSearchPage() {
   const [queueFilter, setQueueFilter] = useState<number | null>(null);
 
   // Get data from hooks
-  const allHelpRequests = useHelpRequests();
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const helpQueues = useHelpQueues();
   const helpRequestStudents = useHelpRequestStudents();
   const studentRoster = useStudentRoster();

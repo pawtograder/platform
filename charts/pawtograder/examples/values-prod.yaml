@@ -1,0 +1,191 @@
+# Production overlay TEMPLATE — copy into your deployment repo and fill in
+# the cluster-specific blanks. Unlike values-staging.yaml this file is not
+# deployed from CI in this repo; it documents what a production install of
+# the chart must look like and encodes the decisions staging deliberately
+# skips.
+#
+# Render-time guard rails (templates/validations.yaml) are armed by
+# `global.environment: production` below: the chart will REFUSE to render
+# with e2e bypasses, secrets.create/autogenerate, seeding, resetOnDrift,
+# floating (-latest) image tags, or an unauthenticated Studio ingress.
+#
+# ── Operator checklist (things a values file can't do for you) ──────────────
+#  [ ] Replicated storage class for postgres (Ceph RBD, EBS, …) — NOT
+#      local-path: node loss must not be data loss.
+#  [ ] Production image builds: the web image bakes NEXT_PUBLIC_SUPABASE_URL
+#      and the cluster's ANON_KEY at build time. Build web/edge/migrations
+#      images against the PROD hostname + prod anon key (release-images.yml
+#      workflow_dispatch with explicit inputs), then pin the tags below.
+#  [ ] OpenBao/ESO paths populated for every bundle you enable
+#      (scripts/setup-openbao-edge-functions.sh) + JWT bundle from
+#      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.
+#  [ ] S3 buckets (storage + backups) with versioning; verify the
+#      backup-verify CronJob goes green after the first nightly backup.
+#  [ ] Alert on: kube_job_status_failed{job_name=~".*backup.*"}, ESO
+#      externalsecret_status_condition, and the Studio ingress cert.
+#  [ ] PriorityClasses created cluster-side if you set them below.
+#  [ ] A documented restore runbook:
+#      pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>
+
+global:
+  environment: production
+  hostname: pawtograder.example.com   # ← your production hostname
+  apiOnSeparateHost: true
+  # Optional but recommended: give the data/gateway tier scheduling priority
+  # over batch work on shared nodes (create the PriorityClass cluster-side).
+  # priorityClassName: pawtograder-prod
+
+# ----- Network isolation -----------------------------------------------------
+# Default-deny ingress + same-release allow + ingress-controller/monitoring
+# namespace allows. Adjust the namespace selectors to your cluster layout.
+networkPolicy:
+  enabled: true
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+
+# ----- Ingress ---------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Coarse per-IP rate limiting at the edge. nginx multiplies limit-rps by
+    # limit-burst-multiplier (default 5) for the burst bucket; tune for your
+    # class sizes — deadline minutes are the design load, not the average.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-connections: "40"
+  tls:
+    enabled: true
+    secretName: pawtograder-prod-tls
+
+# ----- Secrets: ESO-only ------------------------------------------------------
+secrets:
+  create: false        # refused in production anyway — listed for clarity
+  autogenerate: false  # ditto
+  names:
+    jwt: pawtograder-jwt
+    postgres: pawtograder-postgres
+    s3: pawtograder-s3
+    smtp: pawtograder-smtp
+    web: pawtograder-web
+    edgeFunctions: pawtograder-edge-functions
+
+# ----- Postgres: durable, protected ------------------------------------------
+postgres:
+  persistence:
+    storageClass: ""    # ← REPLICATED storage class (not local-path)
+    size: 200Gi
+  # Drains stop at the database until an operator acts — that's the point.
+  pdb:
+    enabled: true
+  resources:
+    requests: { cpu: "2", memory: 8Gi }
+    limits: { cpu: "8", memory: 24Gi }
+
+# ----- Stateless tier ---------------------------------------------------------
+# Chart defaults already give every multi-replica tier: PDB (minAvailable 1),
+# zero-downtime rollouts (maxUnavailable 0), soft node-spread, preStop
+# drains, and baseline security contexts. Pin image tags per release.
+web:
+  replicas: 3
+  image:
+    repository: ghcr.io/pawtograder/web
+    tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
+  e2e:
+    enabled: false
+  envFromSecrets:
+    - pawtograder-github-app
+    - pawtograder-discord
+    - pawtograder-canvas
+    - pawtograder-llm
+    - pawtograder-sentry
+
+edgeFunctions:
+  policy: per_request
+  maxParallelism: 16
+  autoscaling:
+    enabled: true
+    minReplicas: 12
+    maxReplicas: 24
+    targetMemoryUtilizationPercentage: 100
+    targetCPUUtilizationPercentage: 200
+  image:
+    repository: ghcr.io/pawtograder/edge-functions
+    tag: ""             # ← pin per release
+  e2e:
+    enabled: false
+    mockGitHub: false
+  envFromSecrets:
+    - pawtograder-github-app
+    - pawtograder-discord
+    - pawtograder-canvas
+    - pawtograder-llm
+    - pawtograder-sentry
+
+migrations:
+  image:
+    repository: ghcr.io/pawtograder/migrations
+    tag: ""             # ← pin per release
+  resetOnDrift: false   # refused in production anyway
+
+rest:
+  replicas: 3
+realtime:
+  replicas: 3
+auth:
+  replicas: 2
+  enableEmailAutoconfirm: false
+  smtp:
+    enabled: true
+    senderName: "Pawtograder"
+
+# No shared preview Redis in prod — the chart deploys its own (auth on,
+# in-memory; the data is reconstructable rate-limiter/cache state).
+redis:
+  provider: internal
+
+supavisor:
+  enabled: false        # match staging: everything dials postgres directly
+
+# ----- Object storage ----------------------------------------------------------
+storage:
+  backend: s3
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-storage
+    forcePathStyle: true
+
+# ----- Studio: NOT on the public internet --------------------------------------
+# Prefer kubectl port-forward / VPN. If you must expose it, basic-auth is
+# mandatory (the chart refuses to render otherwise) — and pair it with an
+# IP allowlist annotation on the studio ingress.
+studio:
+  ingressEnabled: false
+
+seed:
+  enabled: false        # refused in production anyway
+
+# ----- Backups + verification ---------------------------------------------------
+backup:
+  enabled: true
+  schedule: "0 4 * * *"
+  retentionDays: 30
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-backups
+  verify:
+    enabled: true
+    schedule: "0 6 * * 1"
+
+# ----- Observability -------------------------------------------------------------
+monitoring:
+  enabled: true

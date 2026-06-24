@@ -3,6 +3,15 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -46,11 +55,10 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender, RowSelectionState } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
-import { BsCheck, BsX } from "react-icons/bs";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
 function StudentNameCell({
@@ -295,12 +303,17 @@ function TotalScoreCell({
   );
 }
 export default function AssignmentsTable({
-  tableController: providedTableController
+  tableController: providedTableController,
+  restrictRowIds
 }: {
   tableController?: TableController<"submissions"> | null;
+  /** When set, restrict the table to these view row ids (used by the rubric-report cohort filter). */
+  restrictRowIds?: number[] | null;
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
@@ -310,7 +323,7 @@ export default function AssignmentsTable({
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
-  const [isMarkingAllComplete, setIsMarkingAllComplete] = useState(false);
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   // Get sections and assignment data for default visibility logic
@@ -332,7 +345,7 @@ export default function AssignmentsTable({
       lab_section_name: false,
       late_due_date: false,
       created_at: false,
-      gradername: false,
+      gradername: true,
       checkername: false,
       grading_complete: false
     };
@@ -356,6 +369,17 @@ export default function AssignmentsTable({
 
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
+      {
+        // Hidden, filter-only column used to restrict the table to a rubric-report cohort.
+        // Not in the header/body render allow-list, so it never displays.
+        id: "cohort_membership",
+        accessorFn: (row) => row.id,
+        enableColumnFilter: true,
+        filterFn: (row, _id, value) => {
+          if (value == null) return true;
+          return (value as number[]).includes(row.original.id);
+        }
+      },
       {
         id: "select",
         size: 44,
@@ -553,6 +577,10 @@ export default function AssignmentsTable({
         header: "Autograder Score",
         enableColumnFilter: true,
         cell: (props) => {
+          // No-repo / no-submission assignments have no autograder by convention.
+          if (assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission") {
+            return <Text color="fg.muted">N/A</Text>;
+          }
           return (
             <ScoreLink
               score={props.getValue() as number | null | undefined}
@@ -633,7 +661,7 @@ export default function AssignmentsTable({
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          if (!row.original.gradername) return values.includes("Not assigned");
+          if (!row.original.gradername) return values.includes("Not Graded");
           return values.some((val) => row.original.gradername!.toLowerCase().includes(val.toLowerCase()));
         }
       },
@@ -736,6 +764,7 @@ export default function AssignmentsTable({
     nextPage,
     previousPage,
     setPageSize,
+    setColumnFilters,
     isLoading,
     resetRowSelection
   } = useTableControllerTable({
@@ -758,16 +787,97 @@ export default function AssignmentsTable({
   });
   const isInstructor = classRole.role === "instructor";
 
-  const selectedSubmissionIds = getFilteredRowModel()
-    .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
-    .map((row) => row.original.activesubmissionid as number);
+  // The dashboard view emits one row per group member, so a single group
+  // submission appears as multiple selected rows that share one
+  // activesubmissionid. Dedupe by submission id so the counts, labels, and
+  // success toast reflect distinct submissions rather than group members.
+  const selectedSubmissionIds = Array.from(
+    new Set(
+      getFilteredRowModel()
+        .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
+        .map((row) => row.original.activesubmissionid as number)
+    )
+  );
+  const selectedIncompleteCount = new Set(
+    getFilteredRowModel()
+      .rows.filter(
+        (row) => row.getIsSelected() && row.original.activesubmissionid != null && row.original.completed_at == null
+      )
+      .map((row) => row.original.activesubmissionid as number)
+  ).size;
 
   const selectedCount = selectedSubmissionIds.length;
+
+  const releaseSelectedSubmissionReviews = useCallback(async () => {
+    setIsReleasingAll(true);
+    try {
+      const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
+        p_assignment_id: Number(assignment_id),
+        p_submission_ids: selectedSubmissionIds
+      });
+
+      if (error) {
+        throw new Error(`Failed to release reviews: ${error.message}`);
+      }
+
+      await tableController?.refetchAll();
+      resetRowSelection();
+
+      toaster.success({
+        title: "Success",
+        description:
+          selectedCount === 1
+            ? "1 selected submission review released"
+            : `${selectedCount} selected submission reviews released`
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error releasing grading reviews for selection:", error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+      });
+    } finally {
+      setIsReleasingAll(false);
+    }
+  }, [assignment_id, resetRowSelection, selectedCount, selectedSubmissionIds, supabase, tableController]);
 
   const columnFiltersKey = JSON.stringify(getState().columnFilters);
   useEffect(() => {
     setRowSelection({});
   }, [columnFiltersKey]);
+
+  // Apply / clear the rubric-report cohort restriction as a column filter.
+  useEffect(() => {
+    setColumnFilters((prev) => {
+      const others = prev.filter((f) => f.id !== "cohort_membership");
+      return restrictRowIds == null ? others : [...others, { id: "cohort_membership", value: restrictRowIds }];
+    });
+  }, [restrictRowIds, setColumnFilters]);
+
+  // A `?grading_complete=complete|incomplete` query param is a one-shot deep link
+  // (used by the release-incomplete warning dialogs) that filters the table to the
+  // matching rows. Apply it once and reveal the otherwise-hidden column so the
+  // filter is visible and clearable, then strip the param from the URL so it does
+  // not stick (the user could not clear the filter while the param lingered) and
+  // does not re-apply on later navigations.
+  useEffect(() => {
+    const gradingCompleteParam = searchParams.get("grading_complete");
+    if (!gradingCompleteParam) return;
+    const normalized = gradingCompleteParam.trim().toLowerCase();
+    const filterValue = normalized === "complete" ? "Complete" : normalized === "incomplete" ? "Incomplete" : null;
+    if (filterValue) {
+      setColumnVisibility((prev) => ({ ...prev, grading_complete: true }));
+      setColumnFilters((prev) => {
+        const others = prev.filter((f) => f.id !== "grading_complete");
+        return [...others, { id: "grading_complete", value: [filterValue] }];
+      });
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("grading_complete");
+    const queryString = params.toString();
+    router.replace(`${pathname}${queryString ? `?${queryString}` : ""}`, { scroll: false });
+  }, [searchParams, setColumnFilters, setColumnVisibility, router, pathname]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({
@@ -779,108 +889,129 @@ export default function AssignmentsTable({
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%" gap={0}>
-        {isInstructor && (
-          <HStack alignItems="flex-end" gap={2} w="100%" justifyContent="flex-end">
-            <Button
-              colorPalette="green"
-              variant="subtle"
-              loading={isReleasingAll}
-              disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
-              onClick={async () => {
-                setIsReleasingAll(true);
-                try {
-                  const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
-                    p_assignment_id: Number(assignment_id),
-                    p_submission_ids: selectedSubmissionIds
-                  });
-
-                  if (error) {
-                    throw new Error(`Failed to release reviews: ${error.message}`);
+        {isInstructor &&
+          (selectedCount === 0 ? (
+            <Box w="100%" mb={2}>
+              <Text fontSize="sm" color="fg.muted">
+                Select submissions below to release or unrelease their grading.
+              </Text>
+            </Box>
+          ) : (
+            <HStack alignItems="center" gap={2} w="100%" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" whiteSpace="nowrap">
+                {selectedCount} selected
+              </Text>
+              <Button
+                colorPalette="green"
+                variant="subtle"
+                loading={isReleasingAll}
+                disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
+                onClick={async () => {
+                  if (selectedIncompleteCount > 0) {
+                    setIsReleaseIncompleteWarningOpen(true);
+                    return;
                   }
+                  await releaseSelectedSubmissionReviews();
+                }}
+              >
+                {selectedCount === 0
+                  ? "Release selected submission reviews"
+                  : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
+              </Button>
+              <Button
+                variant="ghost"
+                colorPalette="red"
+                loading={isUnreleasingAll}
+                disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
+                onClick={async () => {
+                  setIsUnreleasingAll(true);
+                  try {
+                    const { error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
+                      p_assignment_id: Number(assignment_id),
+                      p_submission_ids: selectedSubmissionIds
+                    });
 
-                  await tableController?.refetchAll();
-                  resetRowSelection();
+                    if (error) {
+                      throw new Error(`Failed to unrelease reviews: ${error.message}`);
+                    }
 
-                  toaster.success({
-                    title: "Success",
-                    description:
-                      selectedCount === 1
-                        ? "1 selected submission review released"
-                        : `${selectedCount} selected submission reviews released`
-                  });
-                } catch (error) {
-                  // eslint-disable-next-line no-console
-                  console.error("Error releasing grading reviews for selection:", error);
-                  toaster.error({
-                    title: "Error",
-                    description:
-                      error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
-                  });
-                } finally {
-                  setIsReleasingAll(false);
-                }
-              }}
-            >
-              {selectedCount === 0
-                ? "Release selected submission reviews"
-                : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
-            </Button>
-            <Button
-              variant="ghost"
-              colorPalette="red"
-              loading={isUnreleasingAll}
-              disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
-              onClick={async () => {
-                setIsUnreleasingAll(true);
-                try {
-                  const { error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
-                    p_assignment_id: Number(assignment_id),
-                    p_submission_ids: selectedSubmissionIds
-                  });
-
-                  if (error) {
-                    throw new Error(`Failed to unrelease reviews: ${error.message}`);
+                    await tableController?.refetchAll();
+                    resetRowSelection();
+                    toaster.success({
+                      title: "Success",
+                      description:
+                        selectedCount === 1
+                          ? "1 selected submission review unreleased"
+                          : `${selectedCount} selected submission reviews unreleased`
+                    });
+                  } catch (error) {
+                    // eslint-disable-next-line no-console
+                    console.error("Error unreleasing grading reviews for selection:", error);
+                    toaster.error({
+                      title: "Error",
+                      description:
+                        error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
+                    });
+                  } finally {
+                    setIsUnreleasingAll(false);
                   }
-
-                  await tableController?.refetchAll();
-                  resetRowSelection();
-                  toaster.success({
-                    title: "Success",
-                    description:
-                      selectedCount === 1
-                        ? "1 selected submission review unreleased"
-                        : `${selectedCount} selected submission reviews unreleased`
+                }}
+              >
+                {selectedCount === 0
+                  ? "Unrelease selected submission reviews"
+                  : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
+              </Button>
+            </HStack>
+          ))}
+        <DialogRoot
+          open={isReleaseIncompleteWarningOpen}
+          onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Some selected reviews are incomplete</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <Text>
+                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
+                {selectedIncompleteCount === 1 ? "is" : "are"} incomplete. Releasing now will publish those grades
+                anyway.
+              </Text>
+            </DialogBody>
+            <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
+              <DialogActionTrigger asChild>
+                <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                  Cancel
+                </Button>
+              </DialogActionTrigger>
+              <Button
+                variant="outline"
+                w={{ base: "100%", md: "auto" }}
+                whiteSpace="normal"
+                h="auto"
+                onClick={() => {
+                  setIsReleaseIncompleteWarningOpen(false);
+                  router.push(`/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`, {
+                    scroll: false
                   });
-                } catch (error) {
-                  // eslint-disable-next-line no-console
-                  console.error("Error unreleasing grading reviews for selection:", error);
-                  toaster.error({
-                    title: "Error",
-                    description:
-                      error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
-                  });
-                } finally {
-                  setIsUnreleasingAll(false);
-                }
-              }}
-            >
-              {selectedCount === 0
-                ? "Unrelease selected submission reviews"
-                : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
-            </Button>
-            <MarkAllCompleteButton
-              assignment_id={Number(assignment_id)}
-              supabase={supabase}
-              tableController={tableController}
-              isReleasingAll={isReleasingAll}
-              isUnreleasingAll={isUnreleasingAll}
-              isMarkingAllComplete={isMarkingAllComplete}
-              setIsMarkingAllComplete={setIsMarkingAllComplete}
-            />
-            <ExportGradesButton assignment_id={Number(assignment_id)} class_id={Number(course_id)} />
-            <DownloadAllButton />
-          </HStack>
-        )}
+                }}
+              >
+                Review
+              </Button>
+              <Button
+                colorPalette="green"
+                w={{ base: "100%", md: "auto" }}
+                loading={isReleasingAll}
+                onClick={async () => {
+                  await releaseSelectedSubmissionReviews();
+                  setIsReleaseIncompleteWarningOpen(false);
+                }}
+              >
+                Continue anyway
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </DialogRoot>
         {/* Column Visibility Controls */}
         <Box w="100%" p={4} bg="bg.subtle" borderRadius="md" mb={0}>
           <Text fontSize="sm" fontWeight="medium" mb={3}>
@@ -1117,7 +1248,7 @@ export default function AssignmentsTable({
                                       }, new Map())
                                       .values()
                                   ).map((name) => ({ label: name, value: name })),
-                                  { label: "Not assigned", value: "Not assigned" }
+                                  { label: "Not Graded", value: "Not Graded" }
                                 ]}
                                 placeholder="Filter by grader..."
                               />
@@ -1755,156 +1886,6 @@ async function exportGrades({
   }
 }
 
-type EligibilityData = {
-  total_incomplete: number;
-  completable: number;
-  missing_required_checks: number;
-};
-
-function MarkAllCompleteButton({
-  assignment_id,
-  supabase,
-  tableController,
-  isReleasingAll,
-  isUnreleasingAll,
-  isMarkingAllComplete,
-  setIsMarkingAllComplete
-}: {
-  assignment_id: number;
-  supabase: ReturnType<typeof createClient>;
-  tableController: TableController<"submissions"> | null;
-  isReleasingAll: boolean;
-  isUnreleasingAll: boolean;
-  isMarkingAllComplete: boolean;
-  setIsMarkingAllComplete: (v: boolean) => void;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [eligibilityData, setEligibilityData] = useState<EligibilityData | null>(null);
-  const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) {
-      let cancelled = false;
-      const run = async () => {
-        setIsCheckingEligibility(true);
-        setEligibilityData(null);
-        try {
-          const { data, error } = await supabase.rpc("check_grading_completion_eligibility", {
-            p_assignment_id: assignment_id
-          });
-          if (cancelled) return;
-          if (error) {
-            toaster.error({ title: "Error", description: error.message });
-            return;
-          }
-          const row = Array.isArray(data) ? data[0] : null;
-          if (row && typeof row === "object" && "total_incomplete" in row) {
-            setEligibilityData({
-              total_incomplete: Number(row.total_incomplete ?? 0),
-              completable: Number(row.completable ?? 0),
-              missing_required_checks: Number(row.missing_required_checks ?? 0)
-            });
-          } else {
-            setEligibilityData({ total_incomplete: 0, completable: 0, missing_required_checks: 0 });
-          }
-        } finally {
-          if (!cancelled) setIsCheckingEligibility(false);
-        }
-      };
-      run();
-      return () => {
-        cancelled = true;
-      };
-    }
-  }, [isOpen, assignment_id, supabase]);
-
-  const handleConfirm = useCallback(async () => {
-    setIsMarkingAllComplete(true);
-    setIsOpen(false);
-    try {
-      const { data, error } = await supabase.rpc("complete_eligible_grading_reviews", {
-        p_assignment_id: assignment_id
-      });
-      if (error) throw new Error(error.message);
-      await tableController?.refetchAll();
-      const count = typeof data === "number" ? data : 0;
-      toaster.success({
-        title: "Success",
-        description:
-          count > 0 ? `${count} submission review(s) marked as complete` : "No reviews were eligible to mark complete"
-      });
-    } catch (error) {
-      toaster.error({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
-      });
-    } finally {
-      setIsMarkingAllComplete(false);
-    }
-  }, [assignment_id, supabase, tableController, setIsMarkingAllComplete]);
-
-  const canComplete = (eligibilityData?.completable ?? 0) > 0;
-  const isDisabled = isReleasingAll || isUnreleasingAll || isMarkingAllComplete;
-
-  return (
-    <Popover.Root open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
-      <Popover.Trigger asChild>
-        <Button colorPalette="blue" variant="subtle" loading={isMarkingAllComplete} disabled={isDisabled}>
-          Mark All Grading Complete
-        </Button>
-      </Popover.Trigger>
-      <Popover.Positioner>
-        <Popover.Content>
-          <Popover.Arrow>
-            <Popover.ArrowTip />
-          </Popover.Arrow>
-          <Popover.Header>Mark All Grading Complete</Popover.Header>
-          <Popover.Body>
-            {isCheckingEligibility ? (
-              <HStack gap={2}>
-                <Spinner size="sm" />
-                <Text>Checking which submissions can be marked complete...</Text>
-              </HStack>
-            ) : eligibilityData ? (
-              <VStack align="stretch" gap={3}>
-                <Text>
-                  {eligibilityData.total_incomplete === 0
-                    ? "All submission reviews are already complete."
-                    : eligibilityData.completable > 0
-                      ? `${eligibilityData.completable} of ${eligibilityData.total_incomplete} incomplete submission(s) can be marked complete.`
-                      : "No incomplete submissions can be marked complete."}
-                </Text>
-                {eligibilityData.missing_required_checks > 0 && (
-                  <Text color="fg.muted">
-                    {eligibilityData.missing_required_checks} submission(s) have missing required rubric checks.
-                  </Text>
-                )}
-                <HStack justify="flex-end" gap={2}>
-                  <IconButton aria-label="Cancel" variant="ghost" size="sm" onClick={() => setIsOpen(false)}>
-                    <Icon as={BsX} boxSize={5} />
-                  </IconButton>
-                  <IconButton
-                    aria-label="Confirm"
-                    variant="solid"
-                    size="sm"
-                    disabled={!canComplete}
-                    loading={isMarkingAllComplete}
-                    onClick={handleConfirm}
-                  >
-                    <Icon as={BsCheck} boxSize={5} />
-                  </IconButton>
-                </HStack>
-              </VStack>
-            ) : (
-              <Text>Unable to load eligibility.</Text>
-            )}
-          </Popover.Body>
-        </Popover.Content>
-      </Popover.Positioner>
-    </Popover.Root>
-  );
-}
-
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
   const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
@@ -2171,5 +2152,19 @@ function DownloadAllButton() {
     <Button variant="subtle" onClick={handleDownloadAllClick} disabled={isDownloading}>
       {isDownloading ? "Preparing ZIP..." : "Download All Submissions"}
     </Button>
+  );
+}
+
+/**
+ * Assignment-level export/download controls. Rendered in the assignment home page
+ * header so they apply to the whole assignment rather than living in the
+ * submissions table toolbar (where they overflowed the page width).
+ */
+export function AssignmentExportControls({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
+  return (
+    <HStack gap={2}>
+      <ExportGradesButton assignment_id={assignment_id} class_id={class_id} />
+      <DownloadAllButton />
+    </HStack>
   );
 }

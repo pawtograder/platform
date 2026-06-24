@@ -76,7 +76,7 @@ jobs:
         with:
           # Pin to a known-good version. `latest` makes runs non-reproducible —
           # bump deliberately when we want a new CLI.
-          version: 2.92.1
+          version: 2.105.0
 
       - name: Install dependencies
         run: npm ci
@@ -103,6 +103,10 @@ jobs:
           E2E_ENABLE=true
           END_TO_END_SECRET=not-a-secret
           EDGE_FUNCTION_SECRET=some-secret-value
+          # Auth gate for the github-repo-webhook EventBridge envelope. Lets the
+          # webhook-direct e2e (push-no-autograder, pr-webhook-ingest) authenticate
+          # and run in CI; no real GitHub (E2E repos resolve via getRepoToCloneConsideringE2E).
+          EVENTBRIDGE_SECRET=some-eventbridge-secret
           GITHUB_APP_ID=${GITHUB_APP_ID}
           GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
           GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
@@ -264,6 +268,18 @@ jobs:
           # Audit table is partitioned; seed today's partition (and the next 7 days).
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
             "SELECT public.audit_maintain_partitions();"
+
+      # Jest integration tests that hit the local Supabase API directly
+      # (no Next.js / edge-functions needed). Convention: files named
+      # tests/unit/issue*.test.ts gate on RUN_SUPABASE_INTEGRATION_TESTS=true
+      # and self-skip otherwise — set the env var here so they actually run.
+      - name: Run Jest integration tests
+        env:
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_SUPABASE_INTEGRATION_TESTS: "true"
+        run: npx jest --runInBand --testPathPatterns "tests/unit/issue"
 
       - name: Serve Edge Functions
         run: |

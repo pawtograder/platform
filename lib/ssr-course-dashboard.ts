@@ -145,8 +145,32 @@ export async function fetchStudentDashboardBundle(
   supabase: SupabaseClient<Database>,
   courseId: number,
   userId: string,
-  privateProfileId: string
+  privateProfileId: string,
+  isViewingAsStudent: boolean
 ): Promise<StudentDashboardBundle> {
+  // Regrade requests for the "Recent regrade requests" panel. For a real student the
+  // table's SELECT RLS already scopes to their own AND group submissions, so a created_by
+  // filter would wrongly hide regrade requests group-mates filed on a shared submission
+  // (the creation dialog promises group members can see them). In view-as the query runs
+  // under the real instructor (RLS returns the whole class), so there we scope to the
+  // masqueraded student's own requests.
+  let regradeRequestsQuery = supabase
+    .from("submission_regrade_requests")
+    .select(
+      `
+      *,
+      assignments(id, title),
+      submissions!inner(id, ordinal),
+      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
+      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
+      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
+    `
+    )
+    .eq("class_id", courseId);
+  if (isViewingAsStudent) {
+    regradeRequestsQuery = regradeRequestsQuery.eq("created_by", privateProfileId);
+  }
+  const regradeRequestsPromise = regradeRequestsQuery.order("created_at", { ascending: false }).limit(5);
   const [
     { data: course, error: courseError },
     { data: assignments, error: assignmentsError },
@@ -177,31 +201,21 @@ export async function fetchStudentDashboardBundle(
       .eq("status", "published")
       .order("created_at", { ascending: false })
       .limit(100),
+    // Regrade requests (scoping handled above, depends on view-as).
+    regradeRequestsPromise,
+    // Key by private_profile_id rather than user_id so view-as gets the masqueraded
+    // student's sections instead of the real instructor's (which typically have none).
     supabase
-      .from("submission_regrade_requests")
-      .select(
-        `
-      *,
-      assignments(id, title),
-      submissions!inner(id, ordinal),
-      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
-      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
-      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
-    `
-      )
+      .from("user_roles")
+      .select("class_section_id, lab_section_id")
       .eq("class_id", courseId)
-      .order("created_at", { ascending: false })
-      .limit(5),
-    userId
-      ? supabase
-          .from("user_roles")
-          .select("class_section_id, lab_section_id")
-          .eq("class_id", courseId)
-          .eq("user_id", userId)
-          .eq("disabled", false)
-          .single()
-      : Promise.resolve({ data: null, error: null })
+      .eq("private_profile_id", privateProfileId)
+      .eq("disabled", false)
+      .single()
   ]);
+  // userId is unused now that the section lookup keys on private_profile_id; keep the
+  // parameter on the public signature for callers that still derive it from headers.
+  void userId;
 
   const surveysList = (surveysRaw ?? []) as { id: string }[];
   const [

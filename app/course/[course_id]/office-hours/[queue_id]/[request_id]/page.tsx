@@ -4,9 +4,10 @@ import { useParams } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
 import { useEffect, useMemo, useState } from "react";
-import { Box, Flex, Spinner, useBreakpointValue } from "@chakra-ui/react";
+import { Box, Flex, Spinner, Text, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
-import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -77,6 +78,20 @@ export default function RequestDetailPage() {
     };
   }, [request, controller, requestIdNum]);
 
+  // View-as student: if the masqueraded student isn't a member of this (private) request,
+  // `useQueueData` masks it out so `request` stays undefined — but `invalidate` above
+  // populates the cache under the instructor's auth, so getById() is truthy and loadState
+  // never reaches "not_found". That left the page spinning forever. Detect the masked-out
+  // case from the unmasked cached row and render the same placeholder HelpRequestChat uses.
+  const rawRequest = useHelpRequest(requestIdNum);
+  const allHelpRequestStudents = useHelpRequestStudents();
+  const { isMasking, filterHelpRequest } = useViewAsStudentDataMask();
+  const memberProfileIds = useMemo(
+    () => allHelpRequestStudents.filter((s) => s.help_request_id === requestIdNum).map((s) => s.profile_id),
+    [allHelpRequestStudents, requestIdNum]
+  );
+  const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
+
   // Calculate position in queue for active requests
   const position = useMemo(() => {
     if (!request || (request.status !== "open" && request.status !== "in_progress")) {
@@ -86,6 +101,15 @@ export default function RequestDetailPage() {
   }, [request, queueRequests]);
 
   if (!request) {
+    if (hiddenFromMasquerade) {
+      return (
+        <Flex justify="center" align="center" py={12}>
+          <Text fontSize="sm" color="fg.muted">
+            This help request isn&apos;t visible from the student view.
+          </Text>
+        </Flex>
+      );
+    }
     if (loadState === "not_found") {
       return <div>Request not found.</div>;
     }

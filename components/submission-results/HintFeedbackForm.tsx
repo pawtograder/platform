@@ -6,7 +6,7 @@ import * as Sentry from "@sentry/nextjs";
 
 import { GraderResultTestsHintFeedback } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 
 export function HintFeedbackForm({
   testId,
@@ -31,6 +31,7 @@ export function HintFeedbackForm({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const { private_profile_id } = useClassProfiles();
+  const isReadOnly = useIsReadOnly();
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
 
   // Fetch existing feedback on mount
@@ -219,12 +220,20 @@ export function HintFeedbackForm({
               Thank you for helping us improve Feedbot!
             </Text>
           </Box>
-          <Button size="xs" variant="ghost" onClick={() => setIsEditing(true)}>
-            Edit
-          </Button>
+          {!isReadOnly && (
+            <Button size="xs" variant="ghost" onClick={() => setIsEditing(true)}>
+              Edit
+            </Button>
+          )}
         </HStack>
       </Box>
     );
+  }
+
+  // Read-only: an instructor viewing as a student cannot submit/edit hint feedback. Any
+  // existing feedback was rendered read-only above; the input form is suppressed here.
+  if (isReadOnly) {
+    return null;
   }
 
   return (
