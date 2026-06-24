@@ -35,6 +35,27 @@ ALTER TABLE public.lti_context_links
 GRANT UPDATE (section_role, class_section_id, lab_section_id, split_by_member_section)
   ON TABLE public.lti_context_links TO authenticated;
 
+-- Tighten the instructor UPDATE policy so a section target an instructor sets
+-- must belong to the SAME class the context is bound to. Without this, an
+-- instructor could point class_section_id/lab_section_id at a section they
+-- discovered from another class, and buildSectionConfig would resolve it into
+-- the enrollment RPC. (The base policy only checked class ownership.)
+DROP POLICY IF EXISTS "Instructors toggle lti_context_links sync" ON public.lti_context_links;
+CREATE POLICY "Instructors toggle lti_context_links sync" ON public.lti_context_links
+  FOR UPDATE USING (class_id IS NOT NULL AND public.authorizeforclassinstructor(class_id))
+  WITH CHECK (
+    class_id IS NOT NULL
+    AND public.authorizeforclassinstructor(class_id)
+    AND (
+      class_section_id IS NULL
+      OR EXISTS (SELECT 1 FROM public.class_sections cs WHERE cs.id = class_section_id AND cs.class_id = lti_context_links.class_id)
+    )
+    AND (
+      lab_section_id IS NULL
+      OR EXISTS (SELECT 1 FROM public.lab_sections ls WHERE ls.id = lab_section_id AND ls.class_id = lti_context_links.class_id)
+    )
+  );
+
 -------------------------------------------------------------------------------
 -- 2. lti_context_section_map: Canvas section name -> Pawtograder section (docs §3.2)
 -------------------------------------------------------------------------------
@@ -91,6 +112,8 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path TO ''
 AS $$
 DECLARE
   v_row public.lti_context_links;
+  v_old_class_id bigint;
+  v_class_changed boolean;
 BEGIN
   IF NOT public.authorize_for_admin() THEN
     RAISE EXCEPTION 'Access denied: admin role required';
@@ -99,16 +122,33 @@ BEGIN
     RAISE EXCEPTION 'Invalid section_role: %', p_section_role;
   END IF;
 
+  SELECT class_id INTO v_old_class_id FROM public.lti_context_links WHERE id = p_context_link_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Context link % not found', p_context_link_id;
+  END IF;
+  v_class_changed := p_class_id IS DISTINCT FROM v_old_class_id;
+
+  -- When the bound class changes, the existing section targets / name map point
+  -- at the OLD class's sections; clear them so roster sync can't resolve stale
+  -- CRNs into the wrong place. (FK ON DELETE only fires when a section is
+  -- deleted, not on rebind.)
   UPDATE public.lti_context_links
     SET class_id = p_class_id,
-        section_role = COALESCE(p_section_role, section_role),
+        section_role = CASE
+          WHEN v_class_changed THEN COALESCE(p_section_role, 'course_wide')
+          ELSE COALESCE(p_section_role, section_role)
+        END,
+        class_section_id = CASE WHEN v_class_changed THEN NULL ELSE class_section_id END,
+        lab_section_id = CASE WHEN v_class_changed THEN NULL ELSE lab_section_id END,
+        split_by_member_section = CASE WHEN v_class_changed THEN false ELSE split_by_member_section END,
         updated_at = now()
   WHERE id = p_context_link_id
   RETURNING * INTO v_row;
 
-  IF v_row.id IS NULL THEN
-    RAISE EXCEPTION 'Context link % not found', p_context_link_id;
+  IF v_class_changed THEN
+    DELETE FROM public.lti_context_section_map WHERE context_link_id = p_context_link_id;
   END IF;
+
   RETURN v_row;
 END;
 $$;

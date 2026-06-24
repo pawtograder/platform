@@ -13486,17 +13486,17 @@ export type Database = {
       admin_list_lti_contexts: {
         Args: never;
         Returns: {
-          class_id: number;
-          class_name: string;
-          class_section_id: number;
+          class_id: number | null;
+          class_name: string | null;
+          class_section_id: number | null;
           context_id: string;
-          context_label: string;
-          context_title: string;
+          context_label: string | null;
+          context_title: string | null;
           grade_sync_enabled: boolean;
           id: number;
-          lab_section_id: number;
-          last_roster_sync_at: string;
-          last_roster_sync_status: string;
+          lab_section_id: number | null;
+          last_roster_sync_at: string | null;
+          last_roster_sync_status: string | null;
           platform_id: number;
           platform_name: string;
           roster_sync_enabled: boolean;

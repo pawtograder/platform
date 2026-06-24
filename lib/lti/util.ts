@@ -59,7 +59,11 @@ export function surrogateSisId(sub: string): number {
 /** Base projection of an Active NRPS member, sans section CRNs. */
 function baseRosterEntry(m: NrpsMember): Omit<RosterEntry, "class_section_crn" | "lab_section_crn"> {
   const sourced = m.lis_person_sourcedid?.trim();
-  const numericSourced = sourced && /^\d+$/.test(sourced) ? Number(sourced) : undefined;
+  // Only trust a digit-only sourcedid as the SIS id if it survives Number()
+  // without precision loss; otherwise fall back to the surrogate so we never
+  // map the wrong user identity.
+  const parsedSourced = sourced && /^\d+$/.test(sourced) ? Number(sourced) : undefined;
+  const numericSourced = parsedSourced !== undefined && Number.isSafeInteger(parsedSourced) ? parsedSourced : undefined;
   const name =
     m.name?.trim() || [m.given_name, m.family_name].filter(Boolean).join(" ").trim() || m.email?.trim() || null;
   return {

@@ -56,6 +56,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ sections: [...names].sort() });
   } catch (e) {
     Sentry.captureException(e);
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    // Don't leak internal error text to the client; details go to Sentry.
+    return NextResponse.json({ error: "Failed to discover sections" }, { status: 500 });
   }
 }
