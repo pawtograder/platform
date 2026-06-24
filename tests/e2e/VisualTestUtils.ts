@@ -106,16 +106,43 @@ export async function waitForVisualIdle(page: Page) {
 
   // Code files (components/ui/code-file.tsx) render plain text first, then re-render
   // with @wooorm/starry-night syntax highlighting once it loads asynchronously.
-  // Capturing mid-load produces per-glyph diffs across the whole code column. If any
+  // Capturing mid-load is not just a per-glyph color diff: the un-highlighted
+  // fallback collapses to one character per line (the line content has no settled
+  // width yet), which shifts the whole page and yields ~70% full-page diffs. If any
   // code file on the page is still un-highlighted, wait for it to finish before the
-  // screenshot. Bounded + non-fatal: a file with no tokenizable content still flips
-  // the flag to "true", and the catch covers pages without code files.
+  // screenshot. The timeout is generous (30s) because under the full-suite parallel
+  // load several workers import the highlighter at once and a single block can take
+  // well over 10s to tokenize — the old 10s cap let that broken state through.
+  // Bounded + non-fatal: a file with no tokenizable content still flips the flag to
+  // "true", and the catch covers pages without code files / offline highlighter loads.
   const codeFiles = page.locator("[data-syntax-highlighted]");
   if ((await codeFiles.count()) > 0) {
     await expect(page.locator('[data-syntax-highlighted="false"]'))
-      .toHaveCount(0, { timeout: 10_000 })
+      .toHaveCount(0, { timeout: 30_000 })
       .catch(() => {
         // Highlighter import can fail offline; fall through rather than block the scan.
+      });
+  }
+
+  // Monaco editor (components/ui/code-file-monaco.tsx) is the default submission code
+  // viewer. It dynamic-imports behind a skeleton, then mounts, measures, and tokenizes
+  // asynchronously, so a mid-load capture is a blank or half-laid-out pane (the manual-
+  // grading score views raced exactly this). When a Monaco editor is present, wait for
+  // its lines to render AND colorize — Monaco emits `.mtk*` token spans only once
+  // tokenization has run — before capturing. Bounded + non-fatal like the wait above.
+  const monacoEditor = page.locator(".monaco-editor");
+  if ((await monacoEditor.count()) > 0) {
+    await page
+      .waitForFunction(
+        () => {
+          const lines = Array.from(document.querySelectorAll(".monaco-editor .view-lines .view-line"));
+          return lines.length > 0 && lines.some((line) => line.querySelector('span[class*="mtk"]'));
+        },
+        undefined,
+        { timeout: 30_000, polling: 200 }
+      )
+      .catch(() => {
+        // Empty/untokenizable file or Monaco failed to load — proceed rather than block.
       });
   }
 
@@ -143,29 +170,51 @@ export async function stabilizeRubricSidebar(page: Page, rubricName: string | Re
   const rubricRegion = page.getByRole("region", { name: accessibleName }).first();
   await expect(rubricRegion).toBeVisible();
 
-  await rubricRegion.evaluate((element) => {
-    const isScrollable = (candidate: HTMLElement) => {
-      const style = window.getComputedStyle(candidate);
-      const overflowY = style.overflowY;
-      return (
-        (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
-        candidate.scrollHeight > candidate.clientHeight
-      );
-    };
+  // The sidebar's rubric checks (and any sibling rubric section stacked below, e.g. the
+  // informational "Grading Rubric" block) load asynchronously, so a single scroll-to-top
+  // computed against the current layout drifts once that content settles. Observed on
+  // WebKit as the sidebar landing at a different scroll offset run-to-run (the lower
+  // section scrolled into view in some runs but not others), producing multi-hundred-px
+  // diffs. Re-align in a short loop until the region's top sits at the target offset and
+  // stops moving, so late-loading content can no longer shift the capture.
+  const targetOffset = 8;
+  let previousTop: number | null = null;
+  for (let i = 0; i < 12; i++) {
+    const residual = await rubricRegion.evaluate((element, offset) => {
+      const isScrollable = (candidate: HTMLElement) => {
+        const style = window.getComputedStyle(candidate);
+        const overflowY = style.overflowY;
+        return (
+          (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+          candidate.scrollHeight > candidate.clientHeight
+        );
+      };
 
-    let scrollParent: HTMLElement | null = element.parentElement;
-    while (scrollParent && !isScrollable(scrollParent)) {
-      scrollParent = scrollParent.parentElement;
+      let scrollParent: HTMLElement | null = element.parentElement;
+      while (scrollParent && !isScrollable(scrollParent)) {
+        scrollParent = scrollParent.parentElement;
+      }
+
+      const container = scrollParent ?? document.scrollingElement;
+      if (!container) return 0;
+
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const delta = elementRect.top - containerRect.top - offset;
+      container.scrollTop += delta;
+      return delta;
+    }, targetOffset);
+
+    const box = await rubricRegion.boundingBox();
+    const top = box?.y ?? null;
+    // Converged once a pass needs no further scroll AND the region stopped moving
+    // between passes (i.e. content above it has finished settling).
+    if (Math.abs(residual) < 1 && previousTop !== null && top !== null && Math.abs(previousTop - top) < 1) {
+      break;
     }
-
-    const container = scrollParent ?? document.scrollingElement;
-    if (!container) return;
-
-    const containerRect = container.getBoundingClientRect();
-    const elementRect = element.getBoundingClientRect();
-    const offset = 8;
-    container.scrollTop += elementRect.top - containerRect.top - offset;
-  });
+    previousTop = top;
+    await rubricRegion.page().waitForTimeout(100);
+  }
 
   await waitForStableLocator(rubricRegion);
 }
