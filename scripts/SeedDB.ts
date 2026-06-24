@@ -400,7 +400,12 @@ async function runSeeding(config: SeederConfig) {
   const fixedUsers = {
     instructor: process.env.FIXED_INSTRUCTOR_EMAIL || undefined,
     grader: process.env.FIXED_GRADER_EMAIL || undefined,
-    student: process.env.FIXED_STUDENT_EMAIL || undefined
+    student: process.env.FIXED_STUDENT_EMAIL || undefined,
+    // Always seed a site admin (the admin portal needs one and there's no other
+    // way to bootstrap it). Stable default so every dev/preview/e2e DB has a
+    // known admin login (password = TEST_PASSWORD, default "change-it");
+    // override the address with FIXED_ADMIN_EMAIL.
+    admin: process.env.FIXED_ADMIN_EMAIL || "admin@pawtograder.net"
   };
 
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);
@@ -422,11 +427,11 @@ async function runSeeding(config: SeederConfig) {
     .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!);
 
-  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student) {
+  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
     // when operators wire this up for staging / on-call rotations.
     console.log(
-      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"}`
+      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"} admin=${fixedUsers.admin ? "[configured]" : "(none)"}`
     );
     chain = chain.withFixedUsers(fixedUsers);
   }

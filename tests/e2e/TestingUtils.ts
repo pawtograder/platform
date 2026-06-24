@@ -769,7 +769,8 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
 const userIdx = {
   student: 1,
   instructor: 1,
-  grader: 1
+  grader: 1,
+  admin: 1
 };
 export async function createUserInClass({
   role,
@@ -783,7 +784,7 @@ export async function createUserInClass({
   rateLimitManager,
   useMagicLink = false
 }: {
-  role: "student" | "instructor" | "grader";
+  role: "student" | "instructor" | "grader" | "admin";
   class_id: number;
   section_id?: number;
   lab_section_id?: number;
