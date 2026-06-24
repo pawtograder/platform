@@ -153,9 +153,10 @@ if [ "${#drifted[@]}" -gt 0 ]; then
   fi
 
   echo "[migrate] MIGRATIONS_RESET_ON_DRIFT=true — wiping application data and replaying."
-  echo "[migrate] This drops schema public + truncates schema_migrations. Pawtograder"
-  echo "[migrate] tables live in public; auth/storage/realtime stay intact (their"
-  echo "[migrate] services own those schemas)."
+  echo "[migrate] This drops schema public + truncates schema_migrations, and clears"
+  echo "[migrate] the RLS policies our migrations create on storage.objects/buckets."
+  echo "[migrate] Pawtograder tables live in public; the storage/auth/realtime service"
+  echo "[migrate] base tables stay intact (their services own them)."
 
   # We DROP & CREATE public via a single transaction; if a downstream
   # migration fails on replay the operator gets a clear error and the
@@ -172,6 +173,59 @@ CREATE SCHEMA public;
 -- specifically as needed.
 GRANT ALL ON SCHEMA public TO postgres;
 GRANT USAGE, CREATE ON SCHEMA public TO anon, authenticated, service_role;
+
+-- The storage schema is owned by the storage service, so we don't drop it —
+-- but our migrations create RLS policies (and buckets) in it. Those survive the
+-- public reset and then collide on replay ("policy ... already exists" on
+-- storage.objects). Drop every storage policy so phase 3 can recreate them
+-- idempotently; the storage service's own base tables/migrations are untouched.
+DO $reset_storage$
+DECLARE r record;
+BEGIN
+  IF to_regnamespace('storage') IS NOT NULL THEN
+    FOR r IN
+      SELECT policyname, tablename FROM pg_policies WHERE schemaname = 'storage'
+    LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON storage.%I', r.policyname, r.tablename);
+    END LOOP;
+  END IF;
+END
+$reset_storage$;
+
+-- pg_cron is created `WITH SCHEMA pg_catalog` (and the migration that does so is
+-- NOT `IF NOT EXISTS`), so it survives the public reset and replay then errors
+-- "extension pg_cron already exists". Drop it (CASCADE removes its cron.job
+-- rows) so the migration can recreate it. Any other extension our migrations
+-- create uses `IF NOT EXISTS` and is safe to leave in place.
+DROP EXTENSION IF EXISTS pg_cron CASCADE;
+
+-- Our migrations seed vault.secrets (e.g. supabase_project_url,
+-- edge-function-secret, vercel_host, cache_invalidation_secret) via
+-- vault.create_secret, which is unique on name and errors on replay. A fresh
+-- database has an empty vault, so clear it; the migrations + phase 4 below
+-- recreate the secrets they need.
+DELETE FROM vault.secrets;
+
+-- Our migrations create triggers on auth.users / auth.identities (e.g.
+-- create_user_ensure_profiles_and_demo). Those live in the auth schema and
+-- survive the public reset, so replay errors "trigger ... already exists". A
+-- fresh database has no custom triggers there; drop the non-internal ones so
+-- the migrations recreate them.
+DO $reset_auth_triggers$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT t.tgname, c.oid::regclass AS tbl
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'auth' AND c.relname IN ('users', 'identities') AND NOT t.tgisinternal
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %s', r.tgname, r.tbl);
+  END LOOP;
+END
+$reset_auth_triggers$;
+
 -- Wipe the migration history so phase 3 re-applies every file.
 TRUNCATE supabase_migrations.schema_migrations;
 SQL
@@ -208,6 +262,28 @@ SQL
 done
 
 echo "[migrate] done — applied=${applied} skipped=${skipped}"
+
+# ---------------------------------------------------------------------------
+# Phase 3.5 — ensure service_role grants on all public objects
+# ---------------------------------------------------------------------------
+# Supabase's CLI runs migrations as `postgres`, whose ALTER DEFAULT PRIVILEGES
+# auto-grant every new object to the API roles. This runner connects as
+# `supabase_admin`, so objects created here that aren't explicitly granted (and
+# runtime-created ones like audit partitions) end up with NO service_role grant
+# — the server (service_role) then hits "permission denied" (e.g. creating a
+# class writes to class_metrics_totals). Re-assert service_role grants on the
+# whole public schema after applying migrations. service_role is the trusted,
+# server-only role and already bypasses RLS, so this exposes nothing new;
+# anon/authenticated grants stay as the migrations declare them.
+echo "[migrate] re-asserting service_role grants on public"
+psql -v ON_ERROR_STOP=1 <<'SQL'
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+SQL
 
 # ---------------------------------------------------------------------------
 # Phase 4 — environment-specific vault secrets for DB→edge callbacks
