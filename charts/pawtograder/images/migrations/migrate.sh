@@ -264,25 +264,43 @@ done
 echo "[migrate] done — applied=${applied} skipped=${skipped}"
 
 # ---------------------------------------------------------------------------
-# Phase 3.5 — ensure service_role grants on all public objects
+# Phase 3.5 — restore the API-role grants Supabase normally auto-applies
 # ---------------------------------------------------------------------------
 # Supabase's CLI runs migrations as `postgres`, whose ALTER DEFAULT PRIVILEGES
-# auto-grant every new object to the API roles. This runner connects as
-# `supabase_admin`, so objects created here that aren't explicitly granted (and
-# runtime-created ones like audit partitions) end up with NO service_role grant
-# — the server (service_role) then hits "permission denied" (e.g. creating a
-# class writes to class_metrics_totals). Re-assert service_role grants on the
-# whole public schema after applying migrations. service_role is the trusted,
-# server-only role and already bypasses RLS, so this exposes nothing new;
-# anon/authenticated grants stay as the migrations declare them.
-echo "[migrate] re-asserting service_role grants on public"
+# auto-grant every new object to anon/authenticated/service_role. This runner
+# connects as `supabase_admin`, so objects created here that aren't explicitly
+# granted (and runtime-created ones like audit partitions) end up with NO grants
+# — the server (service_role) hits "permission denied" creating a class, and the
+# app (authenticated) hits it reading e.g. user_privileges. Re-assert the grants:
+#
+#   * service_role on EVERYTHING: trusted, server-only, already bypasses RLS, so
+#     this exposes nothing new.
+#   * anon/authenticated only on RLS-ENABLED tables: RLS gates the rows, matching
+#     Supabase's default model. The few intentionally RLS-disabled internal
+#     tables (e.g. class_metrics_totals) are left to their explicit migration
+#     grants so we never expose them wholesale.
+echo "[migrate] re-asserting service_role + API-role grants on public"
 psql -v ON_ERROR_STOP=1 <<'SQL'
-GRANT USAGE ON SCHEMA public TO service_role;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+
+-- anon/authenticated DML on RLS-enabled tables only (RLS enforces row access).
+DO $grant_api$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity
+  LOOP
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO anon, authenticated', r.relname);
+  END LOOP;
+END
+$grant_api$;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
 SQL
 
 # ---------------------------------------------------------------------------
