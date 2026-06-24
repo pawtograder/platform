@@ -226,6 +226,15 @@ BEGIN
 END
 $reset_auth_triggers$;
 
+-- Auth user *data* also lives in the auth schema and survives the public reset.
+-- That orphans every previously-seeded auth.users row (its public.users profile
+-- is gone with the public drop, and create_user_ensure_profiles_and_demo only
+-- fires on new auth inserts so it never backfills). The re-seed then can't
+-- recreate those users (createUser → "email already registered"), and LTI
+-- launches hit the same wall. Clear auth user data so the seed rebuilds a
+-- consistent auth+public set; FKs cascade to identities/sessions/refresh tokens.
+DELETE FROM auth.users;
+
 -- Wipe the migration history so phase 3 re-applies every file.
 TRUNCATE supabase_migrations.schema_migrations;
 SQL
