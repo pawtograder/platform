@@ -170,51 +170,29 @@ export async function stabilizeRubricSidebar(page: Page, rubricName: string | Re
   const rubricRegion = page.getByRole("region", { name: accessibleName }).first();
   await expect(rubricRegion).toBeVisible();
 
-  // The sidebar's rubric checks (and any sibling rubric section stacked below, e.g. the
-  // informational "Grading Rubric" block) load asynchronously, so a single scroll-to-top
-  // computed against the current layout drifts once that content settles. Observed on
-  // WebKit as the sidebar landing at a different scroll offset run-to-run (the lower
-  // section scrolled into view in some runs but not others), producing multi-hundred-px
-  // diffs. Re-align in a short loop until the region's top sits at the target offset and
-  // stops moving, so late-loading content can no longer shift the capture.
-  const targetOffset = 8;
-  let previousTop: number | null = null;
-  for (let i = 0; i < 12; i++) {
-    const residual = await rubricRegion.evaluate((element, offset) => {
-      const isScrollable = (candidate: HTMLElement) => {
-        const style = window.getComputedStyle(candidate);
-        const overflowY = style.overflowY;
-        return (
-          (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
-          candidate.scrollHeight > candidate.clientHeight
-        );
-      };
+  await rubricRegion.evaluate((element) => {
+    const isScrollable = (candidate: HTMLElement) => {
+      const style = window.getComputedStyle(candidate);
+      const overflowY = style.overflowY;
+      return (
+        (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+        candidate.scrollHeight > candidate.clientHeight
+      );
+    };
 
-      let scrollParent: HTMLElement | null = element.parentElement;
-      while (scrollParent && !isScrollable(scrollParent)) {
-        scrollParent = scrollParent.parentElement;
-      }
-
-      const container = scrollParent ?? document.scrollingElement;
-      if (!container) return 0;
-
-      const containerRect = container.getBoundingClientRect();
-      const elementRect = element.getBoundingClientRect();
-      const delta = elementRect.top - containerRect.top - offset;
-      container.scrollTop += delta;
-      return delta;
-    }, targetOffset);
-
-    const box = await rubricRegion.boundingBox();
-    const top = box?.y ?? null;
-    // Converged once a pass needs no further scroll AND the region stopped moving
-    // between passes (i.e. content above it has finished settling).
-    if (Math.abs(residual) < 1 && previousTop !== null && top !== null && Math.abs(previousTop - top) < 1) {
-      break;
+    let scrollParent: HTMLElement | null = element.parentElement;
+    while (scrollParent && !isScrollable(scrollParent)) {
+      scrollParent = scrollParent.parentElement;
     }
-    previousTop = top;
-    await rubricRegion.page().waitForTimeout(100);
-  }
+
+    const container = scrollParent ?? document.scrollingElement;
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const offset = 8;
+    container.scrollTop += elementRect.top - containerRect.top - offset;
+  });
 
   await waitForStableLocator(rubricRegion);
 }
