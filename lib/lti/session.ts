@@ -19,7 +19,9 @@ function isEmailAlreadyRegistered(err: { message?: string; code?: string } | nul
   if (!err) return false;
   if (err.code === "email_exists") return true;
   const msg = (err.message ?? "").toLowerCase();
-  return msg.includes("already registered") || msg.includes("already been registered") || msg.includes("already exists");
+  return (
+    msg.includes("already registered") || msg.includes("already been registered") || msg.includes("already exists")
+  );
 }
 
 /**
