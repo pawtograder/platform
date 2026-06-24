@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, testFunctional as test } from "../global-setup";
 import { addDays } from "date-fns";
 import {
   createAuthenticatedClient,

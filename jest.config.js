@@ -28,7 +28,12 @@ const customJestConfig = {
     "utils/**/*.{ts,tsx}",
     "!**/*.d.ts",
     "!**/node_modules/**"
-  ]
+  ],
+  // Per-flag lcov so Codecov can attribute jest coverage separately from
+  // Playwright-driven server/client coverage. `text-summary` keeps local
+  // runs readable.
+  coverageDirectory: "coverage/jest",
+  coverageReporters: ["lcov", "text-summary"]
 };
 
 module.exports = createJestConfig(customJestConfig);
