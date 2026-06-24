@@ -14,6 +14,14 @@ import type { LtiDb } from "./db";
 
 export class LtiSessionError extends Error {}
 
+/** GoTrue reports a duplicate email via code `email_exists` or a message variant. */
+function isEmailAlreadyRegistered(err: { message?: string; code?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === "email_exists") return true;
+  const msg = (err.message ?? "").toLowerCase();
+  return msg.includes("already registered") || msg.includes("already been registered") || msg.includes("already exists");
+}
+
 /**
  * @param serverClient cookie-bound client (utils/supabase/server) — receives the session
  * @param adminClient  service-role client — user lookup/creation + link minting
@@ -42,20 +50,18 @@ export async function establishSupabaseSession(
       email_confirm: true,
       user_metadata: { name: launch.name ?? null, lti_sub: launch.sub }
     });
-    if (createErr || !created.user) {
+    if (created?.user) {
+      userId = created.user.id;
+    } else if (!isEmailAlreadyRegistered(createErr)) {
       throw new LtiSessionError(`Failed to provision account for ${email}: ${createErr?.message ?? "unknown"}`);
     }
-    userId = created.user.id;
+    // Otherwise the auth user already exists without a matching public.users row
+    // (e.g. a preview DB reset wipes `public` but not `auth`, orphaning prior
+    // auth users). Resolve its id from generateLink below instead of failing.
   }
 
-  // 2. Record the LTI identity -> user mapping.
-  await adminClient
-    .from("lti_users")
-    .update({ user_id: userId })
-    .eq("platform_id", launch.platformId)
-    .eq("sub", launch.sub);
-
-  // 3. Mint a magic-link token and redeem it on the cookie-bound client.
+  // 2. Mint a magic-link token. For an existing user this also returns the user,
+  //    which lets us resolve the id when createUser hit a duplicate email.
   const { data: link, error: linkErr } = await adminClient.auth.admin.generateLink({
     type: "magiclink",
     email
@@ -63,7 +69,19 @@ export async function establishSupabaseSession(
   if (linkErr || !link.properties?.hashed_token) {
     throw new LtiSessionError(`Failed to create sign-in link: ${linkErr?.message ?? "unknown"}`);
   }
+  userId = userId ?? link.user?.id ?? undefined;
+  if (!userId) {
+    throw new LtiSessionError(`Failed to provision account for ${email}: could not resolve user`);
+  }
 
+  // 3. Record the LTI identity -> user mapping.
+  await adminClient
+    .from("lti_users")
+    .update({ user_id: userId })
+    .eq("platform_id", launch.platformId)
+    .eq("sub", launch.sub);
+
+  // 4. Redeem the magic link on the cookie-bound client to write the session.
   const { error: verifyErr } = await serverClient.auth.verifyOtp({
     type: "magiclink",
     token_hash: link.properties.hashed_token

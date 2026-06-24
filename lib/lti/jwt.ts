@@ -11,7 +11,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { LTI_CLAIM, type LtiLaunchContext, ltiRolesToAppRole } from "./types";
 import { ltiAdminClient, type LtiDb } from "./db";
-import { decodeJwtPayload as decodePayload } from "./util";
+import { decodeJwtPayload as decodePayload, ltiClientIdMatches } from "./util";
 
 // Cache one remote JWKS resolver per platform JWKS URL (jose caches the fetch).
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
@@ -41,7 +41,10 @@ async function resolvePlatform(db: LtiDb, iss: string, aud: string | string[]): 
     .select("id, issuer, client_id, jwks_url, enabled")
     .eq("issuer", iss);
   if (error) throw error;
-  const match = (data ?? []).find((p) => auds.includes(p.client_id));
+  // Match tolerantly: a Canvas single-shard install may use the developer key's
+  // local id in the id_token `aud` while registered under its global id (or vice
+  // versa). ltiClientIdMatches bridges only the two forms of the *same* key.
+  const match = (data ?? []).find((p) => auds.some((a) => ltiClientIdMatches(p.client_id, a)));
   if (!match) {
     throw new LtiValidationError(`No registered LTI platform for issuer ${iss} / aud ${auds.join(",")}`);
   }
@@ -78,7 +81,10 @@ export async function verifyLaunchToken(
   try {
     ({ payload } = await jwtVerify(idToken, jwksForUrl(platform.jwks_url), {
       issuer: platform.issuer,
-      audience: platform.client_id,
+      // resolvePlatform already bound `aud` to this registered platform (tolerating
+      // local/global id forms); assert jose against the token's own aud so the
+      // claim is still verified on the signed payload without a form mismatch.
+      audience: unverified.aud as string | string[],
       clockTolerance: 60
     }));
   } catch (e) {
