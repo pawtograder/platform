@@ -26,7 +26,7 @@ separately-provisioned lab — are mandatory.
    case (of which lecture+lab is one instance): several Canvas courses — e.g. each
    lecture section provisioned as its own Canvas course, or cross-listed sections — all
    bind to a single Pawtograder class. Roster sync must union them without cross-dropping,
-   and grade push must route each student's score to the line item in *their* Canvas
+   and grade push must route each student's score to the line item in _their_ Canvas
    course. Binding the set of contexts to a class is an **admin** action.
 5. **Governance / self-serve model:**
    - **Site admins** configure platforms/deployments, bind a context to a Pawtograder
@@ -41,22 +41,22 @@ separately-provisioned lab — are mandatory.
 The data model below already supports independent lecture + lab section assignment; the
 gap is in the LTI roster-sync glue and the absence of a mapping UI / governance layer.
 
-| Capability | Status | Evidence |
-|---|---|---|
-| Lecture sections with SIS CRN | ✅ | `class_sections(name, sis_crn, ...)` — `20250820185937_admin_portal_system.sql:660` |
-| Lab sections with SIS CRN | ✅ | `lab_sections(name, sis_crn, day_of_week, ...)` — `20250712142950_lab-sections.sql:24`, CRN added `20250820185937:691` |
-| Student → both sections | ✅ | `user_roles.class_section_id` + `lab_section_id` — `20250712142950_lab-sections.sql:68` |
-| RPC sets both sections per-member | ✅ | `sis_sync_enrollment(p_class_id, p_roster_data, p_sync_options)` accepts `class_section_crn` + `lab_section_crn` — `20251219183000_sis_sync_atomic.sql:45` |
-| Section-scoped drop (`drop_missing`) | ✅ | drop limited to sync-enabled sections — see §6 |
-| Many contexts → one class (schema) | ✅ | `lti_context_links` unique on `(platform_id, deployment_id, context_id)`, **no** unique on `class_id` — `20260528120000_lti_1_3_integration.sql:93` |
-| Line items per context | ✅ | `lti_line_items` unique on `(context_link_id, assignment_id)` and `(context_link_id, gradebook_column_id)` — `20260528120000:149` — same assignment can have a distinct line item per Canvas course |
-| Roster sync runs per-context | ✅ | `syncContextRoster(link)` / `syncAllRosters()` loops each link — `lib/lti/roster.ts:51,104` |
-| GitHub org bound to class | ✅ | `classes.github_org` (text) — `20250330003141_remote_schema.sql:1021`; edited admin-only via `app/admin/classes/EditClassModal.tsx` |
-| **LTI roster sync sets sections** | ❌ | `class_section_crn`/`lab_section_crn` hardcoded `null` — `lib/lti/util.ts:75`, passed in `lib/lti/roster.ts` |
-| **Context section designation** | ❌ | no column on `lti_context_links` marking lecture vs lab or attaching a section |
-| **Grade push is multi-context-aware** | ❌ | `getGradeContext()` does `.limit(1)` — pushes to one arbitrary context, never routes per student — `lib/lti/grades.ts:38` |
-| **Per-student context membership** | ❌ | `lti_users` is `(platform_id, sub)` global, **no** `context_link_id` — `20260528120000:184`; can't tell which Canvas course a student belongs to |
-| **Mapping / governance UI** | ❌ | `app/course/[course_id]/manage/course/lti/page.tsx` only toggles sync on/off; class link is set by hand in DB |
+| Capability                            | Status | Evidence                                                                                                                                                                                            |
+| ------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lecture sections with SIS CRN         | ✅     | `class_sections(name, sis_crn, ...)` — `20250820185937_admin_portal_system.sql:660`                                                                                                                 |
+| Lab sections with SIS CRN             | ✅     | `lab_sections(name, sis_crn, day_of_week, ...)` — `20250712142950_lab-sections.sql:24`, CRN added `20250820185937:691`                                                                              |
+| Student → both sections               | ✅     | `user_roles.class_section_id` + `lab_section_id` — `20250712142950_lab-sections.sql:68`                                                                                                             |
+| RPC sets both sections per-member     | ✅     | `sis_sync_enrollment(p_class_id, p_roster_data, p_sync_options)` accepts `class_section_crn` + `lab_section_crn` — `20251219183000_sis_sync_atomic.sql:45`                                          |
+| Section-scoped drop (`drop_missing`)  | ✅     | drop limited to sync-enabled sections — see §6                                                                                                                                                      |
+| Many contexts → one class (schema)    | ✅     | `lti_context_links` unique on `(platform_id, deployment_id, context_id)`, **no** unique on `class_id` — `20260528120000_lti_1_3_integration.sql:93`                                                 |
+| Line items per context                | ✅     | `lti_line_items` unique on `(context_link_id, assignment_id)` and `(context_link_id, gradebook_column_id)` — `20260528120000:149` — same assignment can have a distinct line item per Canvas course |
+| Roster sync runs per-context          | ✅     | `syncContextRoster(link)` / `syncAllRosters()` loops each link — `lib/lti/roster.ts:51,104`                                                                                                         |
+| GitHub org bound to class             | ✅     | `classes.github_org` (text) — `20250330003141_remote_schema.sql:1021`; edited admin-only via `app/admin/classes/EditClassModal.tsx`                                                                 |
+| **LTI roster sync sets sections**     | ❌     | `class_section_crn`/`lab_section_crn` hardcoded `null` — `lib/lti/util.ts:75`, passed in `lib/lti/roster.ts`                                                                                        |
+| **Context section designation**       | ❌     | no column on `lti_context_links` marking lecture vs lab or attaching a section                                                                                                                      |
+| **Grade push is multi-context-aware** | ❌     | `getGradeContext()` does `.limit(1)` — pushes to one arbitrary context, never routes per student — `lib/lti/grades.ts:38`                                                                           |
+| **Per-student context membership**    | ❌     | `lti_users` is `(platform_id, sub)` global, **no** `context_link_id` — `20260528120000:184`; can't tell which Canvas course a student belongs to                                                    |
+| **Mapping / governance UI**           | ❌     | `app/course/[course_id]/manage/course/lti/page.tsx` only toggles sync on/off; class link is set by hand in DB                                                                                       |
 
 ### The unlock: per-member sections from Canvas NRPS
 
@@ -137,7 +137,7 @@ instructor's self-serve view starts from a sane default.
 
 - `lti_platforms`, `lti_course_code_rules`, and `classes.github_org` edits: **site admin only** (existing admin pattern).
 - `lti_context_links` and `lti_context_section_map`: **service role + instructor** of the
-  bound `class_id` may read and edit *section mapping / sync toggles only* — never
+  bound `class_id` may read and edit _section mapping / sync toggles only_ — never
   `class_id` rebinding or `github_org`. Enforce the class-rebinding restriction with a
   column-level policy or a `BEFORE UPDATE` trigger that rejects `class_id` changes from
   non-admins.
@@ -166,6 +166,7 @@ In `lib/lti/util.ts` / `lib/lti/roster.ts`:
 ### 5.1 Instructor (`app/course/[course_id]/manage/course/lti/`)
 
 Extend the existing context-link card (today only sync toggles) with:
+
 - **Section role** selector: Lecture / Lab / Course-wide.
 - For context-level mapping: a dropdown to pick the target Pawtograder section.
 - For `split_by_member_section`: a table of Canvas section names (discovered from the
@@ -203,7 +204,7 @@ is **not** disabled. The mechanism we rely on: **each context's sync must enable
 sections it owns.**
 
 > **Open risk (see §9):** the predicate is an AND across both section types. A student
-> enrolled in *both* lecture and lab, who is removed from the lab Canvas roster, will
+> enrolled in _both_ lecture and lab, who is removed from the lab Canvas roster, will
 > **not** be dropped from the lab — because their lecture `class_section_id` is not in the
 > enabled set, failing the AND. This is conservative (never over-drops) but means lab
 > de-enrollment of dual-enrolled students won't propagate. Decide whether that's
@@ -262,12 +263,13 @@ section→context index; iterate students through it.
 > exactly one grade-sync context and no section designation, keep the current
 > push-to-one-context path. Per-student routing only engages when >1 grade-sync context
 > exists. Optionally add a `lti_user_contexts(context_link_id, user_id)` join table
-> (populated from each NRPS sync, which *does* know per-context membership) as a fully
+> (populated from each NRPS sync, which _does_ know per-context membership) as a fully
 > general fallback when section routing is ambiguous.
 
 ## 8. Canvas configuration (Developer Key)
 
 Required before the real-Canvas test:
+
 - Redirect URI → `/api/lti/launch`; OIDC init → `/api/lti/login`; JWKS → `/api/lti/jwks`.
 - **Custom field:** `section_names=$com.instructure.User.sectionNames`.
 - **Enable email release** — `lib/lti/session.ts:26` hard-fails the launch without it.
@@ -278,7 +280,7 @@ Required before the real-Canvas test:
 
 1. **Dual-enrolled drop semantics** (§6) — propagate lab de-enrollment for students who
    remain in lecture, or keep the conservative AND?
-2. **Section name stability** — topology (B) maps by Canvas section *name*; renames in
+2. **Section name stability** — topology (B) maps by Canvas section _name_; renames in
    Canvas break the map until re-mapped. Acceptable with the "unmapped" surfacing, or do
    we need a more stable key (Canvas section id, if obtainable per-member)?
 3. **Course-code matching source** — match on `context_label`, or request a dedicated
@@ -294,6 +296,7 @@ Required before the real-Canvas test:
 ## 10. Phasing
 
 **Phase 1 — required for the real-Canvas test (sections working):**
+
 - §3.1 + §3.2 schema; §4 roster-sync changes; minimal §5.1 instructor mapping UI; §8
   Canvas config. Admin may seed the class link by hand initially.
 - **Deterministic grade-push context selection** (§7.3): even with a single lecture+lab
@@ -302,6 +305,7 @@ Required before the real-Canvas test:
   lands — otherwise grades can post to the wrong Canvas course.
 
 **Phase 2 — multi-context + governance (after the protocol is proven on real Canvas):**
+
 - §7.3 per-student grade-push router; §3.3 course-code rules + launch auto-apply; §5.2
   admin UI (incl. binding multiple contexts to one class); instructor self-serve gating;
   admin/course-code GitHub-org control. Deep Linking remains optional (see
@@ -316,7 +320,7 @@ Required before the real-Canvas test:
   members split correctly; an unmapped Canvas section is reported, not silently enrolled.
 - **Multi-context (§7):** ≥2 lecture-section Canvas courses → one class → union roster, no
   cross-drop; a released grade posts only to the line item of the student's own Canvas
-  course (verify the *other* context's gradebook does not receive it).
+  course (verify the _other_ context's gradebook does not receive it).
 - **Governance:** instructor cannot change `class_id` or `github_org`; admin can; a
   course-code rule auto-pre-binds a fresh context on first launch.
 - Extend `tests/e2e/lti/lti.canvas.spec.ts` (currently launch + roster + AGS) with a
