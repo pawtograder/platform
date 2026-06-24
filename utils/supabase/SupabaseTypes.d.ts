@@ -11693,11 +11693,11 @@ export type Database = {
         Returns: boolean;
       };
       admin_update_class_section: {
-        Args: { p_name: string; p_section_id: number; p_updated_by?: string };
+        Args: { p_name: string; p_section_id: number; p_sis_crn?: number; p_updated_by?: string };
         Returns: boolean;
       };
       admin_update_lab_section: {
-        Args: { p_name: string; p_section_id: number; p_updated_by?: string };
+        Args: { p_name: string; p_section_id: number; p_sis_crn?: number; p_updated_by?: string };
         Returns: boolean;
       };
       apply_late_token_extension: {

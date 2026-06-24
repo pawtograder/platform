@@ -8,7 +8,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { ltiAdminClient } from "@/lib/lti/db";
-import { isInstructorOfClass } from "@/lib/lti/auth";
+import { isInstructorOfClass, isSiteAdmin } from "@/lib/lti/auth";
 import { fetchMemberships, extractSectionNames } from "@/lib/lti/nrps";
 import * as Sentry from "@sentry/nextjs";
 
@@ -40,7 +40,8 @@ export async function POST(request: Request) {
     }
 
     const serverClient = await createClient();
-    if (!(await isInstructorOfClass(serverClient, link.class_id))) {
+    const allowed = (await isInstructorOfClass(serverClient, link.class_id)) || (await isSiteAdmin(serverClient));
+    if (!allowed) {
       return NextResponse.json({ error: "Not authorized for this class" }, { status: 403 });
     }
     if (!link.nrps_url) {

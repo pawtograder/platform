@@ -20,6 +20,24 @@ export function isCronAuthorized(request: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Returns true if the current cookie-session user is a site admin (admin role
+ *  in any class — matches authorize_for_admin()). */
+export async function isSiteAdmin(serverClient: SupabaseClient<Database>): Promise<boolean> {
+  const {
+    data: { user }
+  } = await serverClient.auth.getUser();
+  if (!user) return false;
+  const { data, error } = await serverClient
+    .from("user_roles")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("role", "admin")
+    .or("disabled.is.null,disabled.eq.false")
+    .limit(1);
+  if (error) return false;
+  return (data?.length ?? 0) > 0;
+}
+
 /** Returns true if the current cookie-session user is an instructor of the class. */
 export async function isInstructorOfClass(serverClient: SupabaseClient<Database>, classId: number): Promise<boolean> {
   const {

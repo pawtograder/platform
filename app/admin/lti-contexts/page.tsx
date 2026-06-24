@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Card, Flex, Heading, HStack, NativeSelect, Stack, Table, Text, VStack } from "@chakra-ui/react";
-import { Link2, RefreshCw, Save, X } from "lucide-react";
+import { Link2, Layers, RefreshCw, Save, X } from "lucide-react";
+import SectionMappingEditor from "@/components/lti/SectionMappingEditor";
 
 // Shapes from the admin RPCs (see 20260624000000_lti_section_mapping.sql).
 type LtiContext = {
@@ -37,6 +38,7 @@ export default function LtiContextsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [bind, setBind] = useState<BindState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [mappingId, setMappingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -236,71 +238,104 @@ export default function LtiContextsPage() {
               </Table.Header>
               <Table.Body>
                 {contexts.map((c) => (
-                  <Table.Row key={c.id}>
-                    <Table.Cell>
-                      <Text fontSize="sm">{c.platform_name}</Text>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Text fontWeight="medium">{ctxLabel(c)}</Text>
-                      <Text fontSize="xs" color="fg.muted" fontFamily="mono">
-                        {c.context_id}
-                      </Text>
-                    </Table.Cell>
-                    <Table.Cell>
-                      {c.class_id ? (
-                        <Text fontSize="sm">{c.class_name ?? `#${c.class_id}`}</Text>
-                      ) : (
-                        <Badge colorPalette="orange" variant="outline">
-                          Unbound
-                        </Badge>
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge variant="subtle">{c.section_role}</Badge>
-                      {c.split_by_member_section && (
-                        <Badge ml={1} colorPalette="purple" variant="subtle">
-                          split
-                        </Badge>
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <HStack gap={1}>
-                        <Badge colorPalette={c.roster_sync_enabled ? "green" : "gray"} variant="subtle">
-                          roster
-                        </Badge>
-                        <Badge colorPalette={c.grade_sync_enabled ? "green" : "gray"} variant="subtle">
-                          grades
-                        </Badge>
-                      </HStack>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <HStack gap={2}>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            setBind({ contextLinkId: c.id, classId: c.class_id, sectionRole: c.section_role })
-                          }
-                        >
-                          <HStack gap={1}>
-                            <Link2 size={14} />
-                            <Text>{c.class_id ? "Rebind" : "Bind"}</Text>
-                          </HStack>
-                        </Button>
-                        {c.class_id && (
+                  <Fragment key={c.id}>
+                    <Table.Row>
+                      <Table.Cell>
+                        <Text fontSize="sm">{c.platform_name}</Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text fontWeight="medium">{ctxLabel(c)}</Text>
+                        <Text fontSize="xs" color="fg.muted" fontFamily="mono">
+                          {c.context_id}
+                        </Text>
+                      </Table.Cell>
+                      <Table.Cell>
+                        {c.class_id ? (
+                          <Text fontSize="sm">{c.class_name ?? `#${c.class_id}`}</Text>
+                        ) : (
+                          <Badge colorPalette="orange" variant="outline">
+                            Unbound
+                          </Badge>
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Badge variant="subtle">{c.section_role}</Badge>
+                        {c.split_by_member_section && (
+                          <Badge ml={1} colorPalette="purple" variant="subtle">
+                            split
+                          </Badge>
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <HStack gap={1}>
+                          <Badge colorPalette={c.roster_sync_enabled ? "green" : "gray"} variant="subtle">
+                            roster
+                          </Badge>
+                          <Badge colorPalette={c.grade_sync_enabled ? "green" : "gray"} variant="subtle">
+                            grades
+                          </Badge>
+                        </HStack>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <HStack gap={2}>
                           <Button
                             size="sm"
                             variant="outline"
-                            colorPalette="red"
-                            aria-label={`Unbind ${ctxLabel(c)}`}
-                            onClick={() => unbind(c.id)}
+                            onClick={() =>
+                              setBind({ contextLinkId: c.id, classId: c.class_id, sectionRole: c.section_role })
+                            }
                           >
-                            Unbind
+                            <HStack gap={1}>
+                              <Link2 size={14} />
+                              <Text>{c.class_id ? "Rebind" : "Bind"}</Text>
+                            </HStack>
                           </Button>
-                        )}
-                      </HStack>
-                    </Table.Cell>
-                  </Table.Row>
+                          {c.class_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Map sections for ${ctxLabel(c)}`}
+                              onClick={() => setMappingId((prev) => (prev === c.id ? null : c.id))}
+                            >
+                              <HStack gap={1}>
+                                <Layers size={14} />
+                                <Text>{mappingId === c.id ? "Hide" : "Sections"}</Text>
+                              </HStack>
+                            </Button>
+                          )}
+                          {c.class_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              colorPalette="red"
+                              aria-label={`Unbind ${ctxLabel(c)}`}
+                              onClick={() => unbind(c.id)}
+                            >
+                              Unbind
+                            </Button>
+                          )}
+                        </HStack>
+                      </Table.Cell>
+                    </Table.Row>
+                    {c.class_id && mappingId === c.id && (
+                      <Table.Row>
+                        <Table.Cell colSpan={6} bg="bg.subtle">
+                          <Box p={2}>
+                            <SectionMappingEditor
+                              contextLinkId={c.id}
+                              classId={c.class_id}
+                              sectionRole={c.section_role as "lecture" | "lab" | "course_wide"}
+                              classSectionId={c.class_section_id}
+                              labSectionId={c.lab_section_id}
+                              splitByMemberSection={c.split_by_member_section}
+                              nrpsAvailable
+                              onChanged={load}
+                            />
+                          </Box>
+                        </Table.Cell>
+                      </Table.Row>
+                    )}
+                  </Fragment>
                 ))}
               </Table.Body>
             </Table.Root>

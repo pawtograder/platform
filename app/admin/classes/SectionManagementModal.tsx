@@ -16,6 +16,12 @@ import { MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
 
 type Class = AdminGetClassesResponse[0];
 
+/** Parse a CRN input into a positive integer, or null when blank/invalid. */
+function parseCrn(value: string): number | null {
+  const t = value.trim();
+  return t && /^\d+$/.test(t) ? Number(t) : null;
+}
+
 interface Section {
   section_id: number;
   section_name: string;
@@ -40,8 +46,10 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
   const [isLoading, setIsLoading] = useState(false);
   const [isCreating, setIsCreating] = useState<"class" | "lab" | null>(null);
   const [newSectionName, setNewSectionName] = useState("");
+  const [newSectionCrn, setNewSectionCrn] = useState("");
   const [editingSection, setEditingSection] = useState<Section | null>(null);
   const [editName, setEditName] = useState("");
+  const [editCrn, setEditCrn] = useState("");
 
   const loadSections = useCallback(async () => {
     const supabase = createClient();
@@ -88,7 +96,8 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
 
         const { error } = await supabase.rpc(functionName, {
           p_class_id: class_.id,
-          p_name: newSectionName.trim()
+          p_name: newSectionName.trim(),
+          p_sis_crn: parseCrn(newSectionCrn) ?? undefined
         });
 
         if (error) throw error;
@@ -101,6 +110,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
 
         // Reset form and reload sections
         setNewSectionName("");
+        setNewSectionCrn("");
         setIsCreating(null);
         loadSections();
       } catch (error) {
@@ -112,7 +122,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         });
       }
     },
-    [class_.id, newSectionName, loadSections]
+    [class_.id, newSectionName, newSectionCrn, loadSections]
   );
 
   const handleUpdateSection = useCallback(
@@ -133,20 +143,22 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
 
         const { error } = await supabase.rpc(functionName, {
           p_section_id: section.section_id,
-          p_name: editName.trim()
+          p_name: editName.trim(),
+          p_sis_crn: parseCrn(editCrn) ?? undefined
         });
 
         if (error) throw error;
 
         toaster.create({
           title: "Section Updated",
-          description: `Section has been updated to "${editName}".`,
+          description: `Section "${editName}" updated (CRN ${parseCrn(editCrn) ?? "none"}).`,
           type: "success"
         });
 
         // Reset form and reload sections
         setEditingSection(null);
         setEditName("");
+        setEditCrn("");
         loadSections();
       } catch (error) {
         console.error("Error updating section:", error);
@@ -157,7 +169,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
         });
       }
     },
-    [editName, loadSections]
+    [editName, editCrn, loadSections]
   );
 
   const handleDeleteSection = useCallback(
@@ -204,11 +216,13 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
   const startEdit = (section: Section) => {
     setEditingSection(section);
     setEditName(section.section_name);
+    setEditCrn(section.sis_crn != null ? String(section.sis_crn) : "");
   };
 
   const cancelEdit = () => {
     setEditingSection(null);
     setEditName("");
+    setEditCrn("");
   };
 
   return (
@@ -237,6 +251,13 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                       }
                     }}
                     flex={1}
+                  />
+                  <Input
+                    aria-label="SIS CRN (optional)"
+                    value={newSectionCrn}
+                    onChange={(e) => setNewSectionCrn(e.target.value)}
+                    placeholder="CRN (optional)"
+                    w="140px"
                   />
                   <Button
                     onClick={() => setIsCreating("class")}
@@ -271,6 +292,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                     onClick={() => {
                       setIsCreating(null);
                       setNewSectionName("");
+                      setNewSectionCrn("");
                     }}
                   >
                     Cancel
@@ -295,9 +317,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                     <Table.Row>
                       <Table.ColumnHeader>Section Name</Table.ColumnHeader>
                       <Table.ColumnHeader>Type</Table.ColumnHeader>
-                      <Table.ColumnHeader>Meeting Info</Table.ColumnHeader>
-                      <Table.ColumnHeader>Location</Table.ColumnHeader>
-                      <Table.ColumnHeader>Campus</Table.ColumnHeader>
+                      <Table.ColumnHeader>SIS CRN</Table.ColumnHeader>
                       <Table.ColumnHeader>Members</Table.ColumnHeader>
                       <Table.ColumnHeader>Created</Table.ColumnHeader>
                       <Table.ColumnHeader w="100px">Actions</Table.ColumnHeader>
@@ -337,6 +357,28 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                           </Badge>
                         </Table.Cell>
                         <Table.Cell>
+                          {editingSection?.section_id === section.section_id ? (
+                            <Input
+                              aria-label="SIS CRN"
+                              value={editCrn}
+                              onChange={(e) => setEditCrn(e.target.value)}
+                              placeholder="CRN"
+                              w="120px"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  handleUpdateSection(section);
+                                } else if (e.key === "Escape") {
+                                  cancelEdit();
+                                }
+                              }}
+                            />
+                          ) : (
+                            <Text color={section.sis_crn == null ? "fg.subtle" : undefined}>
+                              {section.sis_crn ?? "—"}
+                            </Text>
+                          )}
+                        </Table.Cell>
+                        <Table.Cell>
                           <HStack gap={1}>
                             <Users size={16} />
                             <Text>{section.member_count}</Text>
@@ -357,7 +399,7 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                                 <MenuItem value="edit" onClick={() => startEdit(section)}>
                                   <HStack>
                                     <Pencil size={16} />
-                                    <Text>Edit Name</Text>
+                                    <Text>Edit name / CRN</Text>
                                   </HStack>
                                 </MenuItem>
                                 <MenuItem
