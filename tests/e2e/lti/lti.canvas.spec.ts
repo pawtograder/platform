@@ -290,11 +290,23 @@ test("section discovery + auto-create + split roster sync place students in thei
     const tpage = await tctx.newPage();
     await canvasLogin(tpage, cfg.teacher.email, cfg.teacher.password);
     await launchTool(tpage);
-    const discRes = await tpage.request.post(`${cfg.toolBaseUrl}/api/lti/context-sections`, {
-      data: { context_link_id: contextLinkId }
-    });
-    const discBody = (await discRes.json()) as { sections?: string[]; error?: string };
-    expect(discRes.ok(), `discover ${discRes.status()}: ${JSON.stringify(discBody)}`).toBeTruthy();
+    // The launch establishes the instructor's tool session asynchronously; under
+    // CI load it isn't always live the instant launchTool's fixed wait returns,
+    // so the endpoint's authz check can briefly 403. Poll until the session is
+    // ready (otherwise this step is flaky).
+    let discBody: { sections?: string[]; error?: string } = {};
+    let discOk = false;
+    let discStatus = 0;
+    for (let i = 0; i < 20 && !discOk; i++) {
+      const discRes = await tpage.request.post(`${cfg.toolBaseUrl}/api/lti/context-sections`, {
+        data: { context_link_id: contextLinkId }
+      });
+      discStatus = discRes.status();
+      discBody = (await discRes.json()) as { sections?: string[]; error?: string };
+      discOk = discRes.ok();
+      if (!discOk) await tpage.waitForTimeout(3000);
+    }
+    expect(discOk, `discover ${discStatus}: ${JSON.stringify(discBody)}`).toBeTruthy();
     for (const name of cfg.sectionNames!) expect(discBody.sections ?? []).toContain(name);
   } finally {
     await tctx.close();
