@@ -16,6 +16,16 @@ Documentation is also a work in progress, and is maintained in the [pawtograder/
 
 See also: [pawtograder/assignment-action](https://github.com/pawtograder/assignment-action), the GitHub Action that grades student assignments in CI and also runs regression testing for grader development.
 
+### Deploying to production
+
+For self-hosting Pawtograder in production — including how to register and wire up
+the **GitHub App** (repo/org automation + sign-in), the recommended **AWS
+EventBridge** webhook ingress, and **Upstash/Redis** for cluster-wide rate
+limiting — see **[DEPLOYMENT.md](./DEPLOYMENT.md)**. The supported production
+target is the Helm chart under [`charts/pawtograder/`](./charts/pawtograder/);
+`docker compose` is for local development only and is **not** tested or supported
+for production.
+
 ## Quick start for local development
 
 The quickest way to get started with development is to use our staging environment as a backend and run the frontend locally. For features requiring database schema changes or to run end-to-end tests, see [Setting up Supabase locally](#setting-up-supabase-locally) below.
