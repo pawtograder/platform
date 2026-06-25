@@ -67,15 +67,15 @@ courses is recommended; you can make it public later if multiple orgs install it
 
 Key fields:
 
-| Field                                                      | Value                                                                                                                                                                 |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **GitHub App name**                                        | e.g. `Pawtograder` (the slug becomes part of install URLs — see `GITHUB_APP_SLUG` below).                                                                             |
-| **Homepage URL**                                           | Your deployment URL, e.g. `https://pawtograder.example.edu`.                                                                                                          |
-| **Callback URL**                                           | `https://<api-host>/auth/v1/callback` (the GoTrue callback — see note below). Add a second callback for the App's own OAuth if you use it.                            |
-| **Request user authorization (OAuth) during installation** | Optional; leave unchecked unless you want install-time auth.                                                                                                          |
-| **Webhook → Active**                                       | **On** (see [Subscribe to events](#3-subscribe-to-webhook-events) and [AWS EventBridge](#aws-eventbridge-webhook-ingress-optional-strongly-recommended) for the URL). |
-| **Webhook → URL**                                          | Either the Edge Function directly, or your EventBridge ingress — see below.                                                                                           |
-| **Webhook → Secret**                                       | A random string. This becomes `GITHUB_WEBHOOK_SECRET`.                                                                                                                |
+| Field                                                      | Value                                                                                                                                                                                         |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **GitHub App name**                                        | e.g. `Pawtograder` (the slug becomes part of install URLs — see `GITHUB_APP_SLUG` below).                                                                                                     |
+| **Homepage URL**                                           | Your deployment URL, e.g. `https://pawtograder.example.edu`.                                                                                                                                  |
+| **Callback URL**                                           | `https://<api-host>/auth/v1/callback` (the GoTrue callback — see note below). Add a second callback for the App's own OAuth if you use it.                                                    |
+| **Request user authorization (OAuth) during installation** | Optional; leave unchecked unless you want install-time auth.                                                                                                                                  |
+| **Webhook → Active**                                       | **On** (see [Subscribe to events](#3-subscribe-to-webhook-events) and [AWS EventBridge](#aws-eventbridge-webhook-ingress-optional-strongly-recommended) for the URL).                         |
+| **Webhook → URL**                                          | Your webhook ingress — see [AWS EventBridge](#aws-eventbridge-webhook-ingress-optional-strongly-recommended) (the Edge Function only accepts the EventBridge envelope, not raw GitHub POSTs). |
+| **Webhook → Secret**                                       | A random string. This becomes `GITHUB_WEBHOOK_SECRET`.                                                                                                                                        |
 
 > **Callback URL for sign-in:** the GoTrue `github` provider's redirect URI
 > depends on your chart's `global.apiOnSeparateHost`. With the default
@@ -170,9 +170,13 @@ GITHUB_WEBHOOK_SECRET
 EVENTBRIDGE_SECRET        # see "AWS EventBridge" below
 ```
 
-Provision it into `pawtograder-edge-functions` (and the OAuth client id/secret
-into `pawtograder-web` for GoTrue) using whichever path the chart README
-describes — OpenBao + ESO is recommended:
+These values are read at runtime by the Edge Functions. How you deliver them
+depends on how you run the functions:
+
+**Kubernetes / Helm (production).** Provision the bundle into
+`pawtograder-edge-functions` (and the OAuth client id/secret into
+`pawtograder-web` for GoTrue) using whichever path the chart README describes —
+OpenBao + ESO is recommended:
 
 ```sh
 scripts/setup-openbao-edge-functions.sh \
@@ -181,15 +185,61 @@ scripts/setup-openbao-edge-functions.sh \
   --from-file .secrets/github-app-production.env
 ```
 
-Then enable GitHub sign-in in your values overlay:
+**Local / self-managed `supabase functions serve`.** The edge runtime reads a
+dotenv file (`supabase functions serve --env-file supabase/functions/.env`).
+Copy the template and fill it in:
 
-```yaml
-auth:
-  external:
-    github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
+```sh
+cp supabase/functions/.example.env supabase/functions/.env
+# then edit supabase/functions/.env:
+#   GITHUB_APP_ID=...
+#   GITHUB_OAUTH_CLIENT_ID=...
+#   GITHUB_OAUTH_CLIENT_SECRET=...
+#   GITHUB_WEBHOOK_SECRET=...
+#   EVENTBRIDGE_SECRET=...
+#   GITHUB_PRIVATE_KEY_STRING="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 ```
 
-### 6. Install the App on each org
+`supabase/functions/.env` is git-ignored — never commit it. As noted above, the
+PEM must be single-lined with literal `\n` escapes (the `--env-file` parser
+rejects multi-line quoted values). This same file is where you'll add the
+Discord, SMTP, Sentry, and Redis vars from the sections below.
+
+### 6. Configure GitHub sign-in (GoTrue) — required
+
+Logging in with GitHub is not optional plumbing; students and staff authenticate
+through it. Enabling it is a two-part job (the chart README covers this under
+"Single sign-on (SSO)"):
+
+1. **Provider (GoTrue).** Enable the `github` external provider and give it the
+   App's OAuth credentials. In the Helm chart:
+
+   ```yaml
+   auth:
+     external:
+       github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
+   ```
+
+   Put `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` in the
+   `pawtograder-web` Secret (same values as the `github-app` bundle). For a
+   non-chart deploy, set the standard GoTrue env vars instead:
+   `GOTRUE_EXTERNAL_GITHUB_ENABLED=true`,
+   `GOTRUE_EXTERNAL_GITHUB_CLIENT_ID`, `GOTRUE_EXTERNAL_GITHUB_SECRET`, and
+   `GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI`.
+
+2. **Redirect/callback URL.** GoTrue's callback must be registered on the GitHub
+   App (the **Callback URL** field from step 1). It is the API gateway origin +
+   `/auth/v1/callback` — with the chart default (`global.apiOnSeparateHost: true`)
+   that's `https://api.<hostname>/auth/v1/callback`; with path-based routing it's
+   `https://<hostname>/auth/v1/callback`. The web app's sign-in button calls
+   `supabase.auth.signInWithOAuth({ provider: "github" })`, so it carries no
+   client secret itself — GoTrue holds the credentials and performs the redirect.
+
+If the provider is enabled but the callback URL doesn't match, sign-in fails with
+an OAuth redirect error; if the callback is registered but the provider is
+disabled, the button errors on click.
+
+### 7. Install the App on each org
 
 Each course's GitHub org must have the App installed. Instructors do this from
 within Pawtograder (the app surfaces an install deep-link when it detects the App
@@ -201,9 +251,9 @@ the repositories/org it should manage.
 
 ## AWS EventBridge webhook ingress (optional, strongly recommended)
 
-GitHub can POST webhooks straight at the `github-repo-webhook` Edge Function. In
-production we **strongly recommend** routing them through **Amazon EventBridge**
-instead.
+In production we **strongly recommend** routing GitHub's webhook deliveries
+through **Amazon EventBridge** before they reach the `github-repo-webhook` Edge
+Function.
 
 **Why:** EventBridge decouples GitHub's delivery from your Edge Function's
 availability. It buffers and retries deliveries (with backoff and a dead-letter
@@ -213,21 +263,40 @@ that fails while your function is briefly unavailable depends solely on GitHub's
 limited redelivery window; an EventBridge-fronted one survives much longer
 outages.
 
-**How it authenticates.** The Edge Function does not verify GitHub's HMAC on the
-EventBridge path; instead it requires an `Authorization` header equal to
-`EVENTBRIDGE_SECRET`. The EventBridge **API destination** is configured with a
-connection that injects exactly that header. (GitHub itself can't set an
-arbitrary `Authorization` header, which is precisely why this is an
-EventBridge-only ingress.) See
-[`supabase/functions/github-repo-webhook/index.ts`](./supabase/functions/github-repo-webhook/index.ts)
-(`Deno.env.get("EVENTBRIDGE_SECRET")`).
+**How authentication works — two distinct secrets.** They guard different hops:
+
+- `GITHUB_WEBHOOK_SECRET` is the secret you set on the **GitHub App's webhook**.
+  GitHub signs every delivery with it (`X-Hub-Signature-256`). Verify that
+  signature at your **ingress** (the API Gateway / Lambda that receives GitHub's
+  POST and republishes it onto the event bus) before trusting the payload.
+- `EVENTBRIDGE_SECRET` guards the **last hop into the Edge Function**. The
+  function's entry handler does **not** re-verify the GitHub HMAC — it dispatches
+  the EventBridge envelope via `eventHandler.receive()` (no signature check) and
+  instead rejects any request whose `Authorization` header isn't exactly
+  `EVENTBRIDGE_SECRET`. The EventBridge **API destination** injects that header.
+  See
+  [`supabase/functions/github-repo-webhook/index.ts`](./supabase/functions/github-repo-webhook/index.ts)
+  (the `Authorization !== EVENTBRIDGE_SECRET` gate and `eventHandler.receive`).
+
+Because the function authenticates the **envelope** (not a raw GitHub payload),
+you cannot point the GitHub App's webhook URL straight at the Edge Function — the
+request would lack the `Authorization` header and wouldn't carry the
+EventBridge `detail-type` / `detail` envelope the handler reads. The ingress (or
+EventBridge) is what produces both.
+
+> **The `|| "secret"` literal default** in `github-repo-webhook/index.ts` (and
+> `GitHubWrapper.ts`) is a convenience fallback for local/dev only — set a real
+> `GITHUB_WEBHOOK_SECRET` (matching the GitHub App's webhook secret) and a real
+> `EVENTBRIDGE_SECRET` in production. For local dev/CI both are just shared
+> constants — see `.github/workflows/deploy.yml`
+> (`EVENTBRIDGE_SECRET=some-eventbridge-secret`).
 
 **Wiring (high level):**
 
-1. Create a GitHub **partner event source** in EventBridge (AWS Console →
-   EventBridge → Partner event sources → GitHub), or push GitHub webhooks into a
-   custom event bus via API Gateway/Lambda if you prefer. Associate it with an
-   event bus.
+1. Stand up an **ingress** that receives GitHub's webhook POST, verifies
+   `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET`, and publishes the event
+   onto an EventBridge bus — e.g. API Gateway + Lambda, or a GitHub **partner
+   event source** (AWS Console → EventBridge → Partner event sources → GitHub).
 2. Create an **API destination** pointing at your Edge Function URL
    (`https://<api-host>/functions/v1/github-repo-webhook`), with a **connection**
    whose authorization adds the header `Authorization: <EVENTBRIDGE_SECRET>`.
@@ -235,12 +304,7 @@ EventBridge-only ingress.) See
    destination. Attach a **dead-letter queue** (SQS) and a retry policy.
 4. Set `EVENTBRIDGE_SECRET` (a random string) in the `github-app` bundle so the
    Edge Function and the EventBridge connection agree.
-5. Point the GitHub App's **Webhook URL** at the ingress that feeds the bus.
-
-> If you skip EventBridge, point the App's webhook URL directly at the Edge
-> Function and still set `EVENTBRIDGE_SECRET` (the function gates on it
-> regardless). For local dev/CI the value is just a shared constant — see
-> `.github/workflows/deploy.yml` (`EVENTBRIDGE_SECRET=some-eventbridge-secret`).
+5. Point the GitHub App's **Webhook URL** at the ingress from step 1.
 
 ---
 
@@ -278,35 +342,198 @@ only for single-instance or dev).
   and set `REDIS_URL` to its in-cluster address.
 
 The same Upstash variables also enable distributed rate limiting for the Discord
-webhook path — see the Discord section in [README.md](./README.md).
+webhook path — see [Discord notifications](#discord-notifications) below.
+
+---
+
+## Email (SMTP)
+
+Pawtograder sends email through **two independent SMTP configurations** — they are
+separate on purpose and use different variable names:
+
+### 1. GoTrue (authentication email)
+
+Signup confirmation, magic-link, and password-recovery mail. Configured on the
+**auth** service. In the Helm chart, enable `auth.smtp.enabled=true` and provide
+the `pawtograder-smtp` Secret:
+
+| Var                | Meaning                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `SMTP_HOST`        | SMTP server hostname.                                         |
+| `SMTP_PORT`        | Port (e.g. `587`).                                            |
+| `SMTP_USER`        | SMTP username.                                                |
+| `SMTP_PASS`        | SMTP password (**note: `SMTP_PASS`, not `SMTP_PASSWORD`**).   |
+| `SMTP_ADMIN_EMAIL` | The `From:` address (e.g. `noreply@pawtograder.example.edu`). |
+
+See the chart README ("Deploying staging" → SMTP) for the exact Secret/OpenBao
+shape.
+
+### 2. In-app notifications (Edge Functions)
+
+Help-request, regrade, and other in-app notification emails are sent by the
+`notification-queue-processor` Edge Function
+([`supabase/functions/notification-queue-processor/index.ts`](./supabase/functions/notification-queue-processor/index.ts)).
+This uses the edge-functions `smtp` bundle (its own variable names):
+
+| Var             | Meaning                                                                    |
+| --------------- | -------------------------------------------------------------------------- |
+| `SMTP_HOST`     | SMTP server hostname. If unset/empty, notification email is skipped.       |
+| `SMTP_PORT`     | Port; defaults to `465` (TLS).                                             |
+| `SMTP_USER`     | SMTP username.                                                             |
+| `SMTP_PASSWORD` | SMTP password (**note: `SMTP_PASSWORD` here, vs `SMTP_PASS` for GoTrue**). |
+| `SMTP_FROM`     | `From:` address — sent as `Pawtograder <SMTP_FROM>`.                       |
+| `SMTP_REPLY_TO` | Default `Reply-To:` address.                                               |
+
+```sh
+scripts/setup-openbao-edge-functions.sh \
+  --env production --bundle smtp \
+  --from-file .secrets/smtp-production.env
+```
+
+(Locally these go in `supabase/functions/.env`; port `54325` targets the
+Supabase Inbucket mail catcher.)
+
+---
+
+## Discord notifications
+
+The Discord bot integration lets staff receive real-time notifications about help
+requests and regrade requests in Discord channels. The bot automatically creates
+channels for assignments, labs, and office-hours queues, and posts notifications
+when requests are created or updated. It is **optional** — skip this section if
+you don't use Discord.
+
+### Prerequisites
+
+1. **Discord Application**: create one at the [Discord Developer Portal](https://discord.com/developers/applications).
+2. **Discord Bot**: add a bot user and note the bot token.
+3. **OAuth2**: configure an OAuth2 redirect URI in the application settings.
+
+### Environment variables
+
+Discord touches three places (the variable names below are what the current code
+actually reads — verified against `app/api/discord/*`, `discord-async-worker`, and
+the chart's `auth.yaml`):
+
+**Web app** (`pawtograder-web` Secret / `.env.local`):
+
+- `DISCORD_PUBLIC_KEY` — the application's public key; verifies signatures on the
+  `/api/discord/interactions` endpoint. Hex-encoded.
+- `DISCORD_WEBHOOK_PUBLIC_KEY` — the webhook's public key; verifies ed25519
+  signatures on `/api/discord/webhook`. Hex-encoded, with or without `0x`.
+
+**GoTrue** (account linking — "Connect Discord" uses Supabase's `discord` OAuth
+provider, the same mechanism as GitHub sign-in):
+
+```yaml
+auth:
+  external:
+    discord: { enabled: true } # reads DISCORD_OAUTH_CLIENT_ID / _SECRET
+```
+
+Put `DISCORD_OAUTH_CLIENT_ID` / `DISCORD_OAUTH_CLIENT_SECRET` in the
+`pawtograder-web` Secret. GoTrue's redirect URI is the API gateway origin +
+`/auth/v1/callback` (same rule as GitHub above) — that is the URL to register as
+the Discord application's OAuth2 redirect.
+
+**Edge Functions** (`discord-async-worker`; `discord` bundle):
+
+- `DISCORD_BOT_TOKEN` — bot token (Bot section of the Developer Portal).
+- `DISCORD_APPLICATION_ID` — the application ID.
+- (Optional) `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` — distributed
+  rate limiting; falls back to a local limiter if unset (see
+  [Redis / Upstash](#redis--upstash-for-rate-limiting-optional-strongly-recommended)).
+
+### Discord application configuration
+
+1. **Create the application** — note the Application ID
+   (`DISCORD_APPLICATION_ID`) and, under General Information, the **Public Key**
+   (`DISCORD_PUBLIC_KEY`).
+2. **Create the bot user** — reset/copy the token (`DISCORD_BOT_TOKEN`). Enable
+   the **Server Members Intent** privileged gateway intent if you use user
+   mentions.
+3. **Configure OAuth2** — copy the Client ID / Client Secret into
+   `DISCORD_OAUTH_CLIENT_ID` / `DISCORD_OAUTH_CLIENT_SECRET`, and under
+   **Redirects** register GoTrue's callback (not an app route):
+   - Separate API host (default): `https://api.<your-domain>/auth/v1/callback`
+   - Path-based routing: `https://<your-domain>/auth/v1/callback`
+4. **Bot permissions** when inviting the bot to a server: Manage Channels, Send
+   Messages, Read Message History, Mention Everyone, Manage Roles, and
+   (optional) Use External Emojis / Add Reactions. Generate an invite via the
+   OAuth2 URL Generator, or:
+
+   ```text
+   https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=268896336&scope=bot
+   ```
+
+5. **Configure the webhook** (for automatic role assignment) under the
+   application's Webhooks section. Set the URL to:
+
+   - Local: `http://localhost:3000/api/discord/webhook` (use ngrok or similar)
+   - Production: `https://<your-domain>/api/discord/webhook`
+
+     Copy the webhook's **public key** into `DISCORD_WEBHOOK_PUBLIC_KEY`.
+
+### Per-class setup (instructors)
+
+1. **Link Discord account** (staff): on the course page, click "Connect Discord"
+   to link via OAuth (lets the system @-mention you).
+2. **Configure the server**: at `/course/[course_id]/manage/discord`, enter your
+   Discord Server ID (right-click server → Copy Server ID; requires Developer
+   Mode), optionally a Channel Group ID, then save.
+3. **Enable Developer Mode** in Discord (Settings → Advanced) to copy IDs.
+
+### How it works
+
+Once configured, the bot auto-creates channels for assignments/labs/queues,
+posts help requests with live status updates, posts regrade requests to
+`#regrades` (@-mentioning the grader), updates messages as status changes, shows
+resolution feedback, and escalates appealed regrades to instructors. The
+`discord-async-worker` Edge Function processes Discord API calls asynchronously
+with rate limiting and retries; the `/api/discord/webhook` Next.js route verifies
+ed25519 signatures and triggers role assignment.
+
+---
+
+## Error reporting (Sentry / self-hosted Bugsink)
+
+Pawtograder reports errors through the Sentry SDK, but the client is configured
+for a **Sentry-compatible** backend and the web app is wired specifically for
+[**Bugsink**](https://www.bugsink.com/) — a lightweight, single-container,
+self-hostable error tracker. If you have only minimal resources, **self-hosting
+Bugsink is the recommended option** (it speaks the Sentry DSN protocol, so the
+same SDK config works against either).
+
+Two surfaces, two variables:
+
+- **Web app (build-time).** `NEXT_PUBLIC_BUGSINK_DSN` (and
+  `NEXT_PUBLIC_BUGSINK_HOST`) are `NEXT_PUBLIC_*` vars, so they are **baked into
+  the web image at build time** — pass them as `docker build --build-arg`s, not
+  runtime env. When the DSN is unset the Sentry webpack integration is skipped
+  entirely (fine for local dev). The client posts through a `/api/tunnel` route
+  and runs with no Sentry integrations (Bugsink doesn't support them).
+- **Edge Functions (runtime).** `SENTRY_DSN` (and optional `SENTRY_DEBUG`) are
+  read at runtime from the `sentry` bundle:
+
+  ```sh
+  scripts/setup-openbao-edge-functions.sh \
+    --env production --bundle sentry \
+    --from-file .secrets/sentry-production.env
+  ```
+
+`SENTRY_RELEASE` / `SENTRY_ENVIRONMENT` are optional on both surfaces for tagging
+releases and environments. Leave everything unset to disable error reporting.
 
 ---
 
 ## Other integrations
 
-These are configured the same way (a bundle of env vars provisioned into the web
-and/or edge-functions Secret). See [`scripts/setup-openbao-edge-functions.sh --list`](./scripts/setup-openbao-edge-functions.sh)
+These are configured the same way — a bundle of env vars provisioned into the web
+and/or edge-functions Secret. See
+[`scripts/setup-openbao-edge-functions.sh --list`](./scripts/setup-openbao-edge-functions.sh)
 for the full set and the [chart README](./charts/pawtograder/README.md) for how
 they're mounted:
 
-- **Discord** notifications — full setup walkthrough in [README.md](./README.md) ("Discord Bot Setup").
 - **AWS Chime** (office-hours video) — `aws-chime` bundle.
 - **Canvas / SIS** roster sync — `canvas` / `sis` bundles.
-- **SMTP** (GoTrue mail) — `smtp` bundle.
 - **LLM / MCP** hints — `mcp` bundle.
-- **Sentry** error reporting — `sentry` bundle.
-
----
-
-## Checklist
-
-- [ ] Helm chart deployed per [`charts/pawtograder/README.md`](./charts/pawtograder/README.md) (NOT docker compose).
-- [ ] GitHub App registered with the permissions and events above.
-- [ ] App private key, webhook secret, app id, OAuth client id/secret in the `github-app` bundle.
-- [ ] GitHub sign-in enabled (`auth.external.github.enabled: true`) with OAuth creds in `pawtograder-web`.
-- [ ] App installed on each course org.
-- [ ] (Recommended) EventBridge ingress wired, `EVENTBRIDGE_SECRET` set on both sides.
-- [ ] (Recommended) Upstash/Redis configured for cluster-wide rate limiting.
-- [ ] Production values reviewed against [`PRODUCTION-READINESS.md`](./charts/pawtograder/PRODUCTION-READINESS.md) (note deferred items: Postgres HA, WAL/PITR).
-      </content>
-      </invoke>
