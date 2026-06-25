@@ -631,6 +631,129 @@ ed25519 signatures and triggers role assignment.
 
 ---
 
+## LTI 1.3 (Canvas and other LMSs)
+
+Pawtograder can integrate with an LMS as an **LTI 1.3 tool**, giving you three
+things: **SSO launch** (students/staff click a link in Canvas and land in
+Pawtograder, signed in), **NRPS roster sync** (pull the LMS roster — including
+per-section placement — into a Pawtograder class), and **AGS grade passback**
+(push Pawtograder grades back into the LMS gradebook). It is **optional** and
+independent of the GitHub-based sign-in above — skip this section if you don't
+use an LMS. (This is distinct from the REST-token "Canvas / SIS" sync in
+[Other integrations](#other-integrations); LTI needs no LMS API token.)
+
+Pawtograder is the **tool**; the LMS is the **platform**. Setup is symmetric:
+register the tool in the LMS, register the LMS in Pawtograder, then link each LMS
+course to a Pawtograder class.
+
+### 1. Tool secrets
+
+LTI reads four env vars from the **`pawtograder-web`** Secret (the launch/NRPS/AGS
+logic all runs in the Next.js app, not the Edge Functions):
+
+| Var                         | Meaning                                                                                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LTI_KEY_ENCRYPTION_SECRET` | **32-byte, base64-encoded** key. Encrypts the tool's RSA signing keys at rest (AES-256-GCM) in the `lti_tool_keys` table. Generate with `openssl rand -base64 32`.                                                |
+| `LTI_TOOL_ISSUER`           | The tool's **public base URL** (e.g. `https://pawtograder.example.edu`). Used to build the OIDC `redirect_uri` and JWKS references. Falls back to `X-Forwarded-*` if unset, but set it explicitly behind a proxy. |
+| `LTI_STATE_SECRET`          | Signs the OIDC `state` (CSRF) token. Falls back to `LTI_KEY_ENCRYPTION_SECRET` if unset.                                                                                                                          |
+| `LTI_CRON_SHARED_SECRET`    | Shared secret that authenticates the scheduled roster-sync / grade-push calls (see step 5).                                                                                                                       |
+
+The tool's **signing keypair is generated automatically** on first use and stored
+encrypted; the public half is served as a JWKS at **`/api/lti/jwks`** (include
+retired keys so in-flight assertions still verify). You do not manage these keys
+by hand — only `LTI_KEY_ENCRYPTION_SECRET` must be stable (rotating it orphans
+existing keys).
+
+The tool exposes three endpoints the LMS calls: `/api/lti/login` (OIDC
+third-party login init), `/api/lti/launch` (the `redirect_uri` / launch), and
+`/api/lti/jwks` (public keys).
+
+### 2. Register Pawtograder in the LMS (Canvas LTI Developer Key)
+
+In Canvas: **Admin → Developer Keys → + Developer Key → + LTI Key**. Configure:
+
+| Field                          | Value                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Target Link / redirect URI** | `https://<tool-host>/api/lti/launch`                                                                                                                                                                                                                                                                                             |
+| **OpenID Connect init URL**    | `https://<tool-host>/api/lti/login`                                                                                                                                                                                                                                                                                              |
+| **JWK Method**                 | **Public JWK URL** → `https://<tool-host>/api/lti/jwks`                                                                                                                                                                                                                                                                          |
+| **Privacy level**              | **Public** — launches must include the user's **name and email**; Pawtograder bridges the LTI identity to a session by email. (Canvas defaults to "Anonymous", which omits both.)                                                                                                                                                |
+| **Scopes**                     | NRPS membership (`…/lti-nrps/scope/contextmembership.readonly`) + AGS line item, score, and result.readonly (`…/lti-ags/scope/lineitem`, `…/score`, `…/result.readonly`).                                                                                                                                                        |
+| **Custom field**               | `section_names=$com.instructure.User.sectionNames` — Canvas substitutes each member's sections into the NRPS response so the roster sync can place students into the right lecture/lab section (see [`docs/lti-section-mapping.md`](./docs/lti-section-mapping.md)).                                                             |
+| **Placement**                  | `course_navigation` with **Target Link URI** = the launch URL and **window target `_blank`**. Pawtograder is a full app (its pages send `X-Frame-Options: DENY`), so the launch must open top-level, not inside Canvas's course iframe — this also keeps the OIDC flow first-party so launch session cookies aren't third-party. |
+
+Then **enable** the key (state **On**) and note its **Client ID**. Finally
+**deploy** the tool to the account/courses (Settings → Apps, or per-course) so the
+nav link appears.
+
+### 3. Register the LMS in Pawtograder (platform)
+
+A **platform admin** adds the LMS at **Admin → LTI Platforms**
+(`/admin/lti-platforms`), or via the `admin_upsert_lti_platform` RPC. Provide:
+
+| Field            | Canvas value                                                              |
+| ---------------- | ------------------------------------------------------------------------- |
+| `issuer`         | `https://canvas.instructure.com` (Canvas Cloud) — the `iss` Canvas sends. |
+| `client_id`      | The Developer Key's **Client ID** from step 2.                            |
+| `auth_login_url` | `https://<canvas-host>/api/lti/authorize_redirect`                        |
+| `token_url`      | `https://<canvas-host>/login/oauth2/token`                                |
+| `jwks_url`       | `https://<canvas-host>/api/lti/security/jwks`                             |
+
+> **Canvas `client_id` — local vs. global id.** Canvas Cloud (and any sharded
+> install) uses the developer key's **global** id everywhere. A self-hosted
+> **single-shard** Canvas, however, sends the key's **local** id in the OIDC
+> login `client_id` while using the **global** id (local + `10^13`) as the
+> id_token `aud`. Pawtograder tolerates either form (it matches a registered
+> `client_id` against both), so register whichever the Developer Keys page shows —
+> but if launches fail with "No enabled LTI platform" or "No registered LTI
+> platform … / aud …", check that the registered `client_id` is one of those two
+> forms of the same key.
+
+### 4. Link courses and map sections
+
+Linking an LMS course to a Pawtograder class is governed:
+
+1. **Admin binds** the LMS context (captured on first launch) to a Pawtograder
+   class at **Admin → LTI Contexts** (`/admin/lti-contexts`). Contexts appear
+   here only after someone has launched from that LMS course at least once.
+2. **Instructor maps sections** at **`/course/<id>/manage/course/lti`**: choose
+   whether the context is course-wide, a lecture section, or split per member
+   section, and map LMS sections to Pawtograder sections (with "Discover
+   sections" / "Auto-create from Canvas"). Section placement requires the target
+   Pawtograder sections to have a SIS CRN. Full model: [`docs/lti-section-mapping.md`](./docs/lti-section-mapping.md).
+
+### 5. Schedule roster sync (and grade push)
+
+Roster sync runs on a schedule via **pg_cron → `/api/lti/sync-roster`**. The
+migration creates an hourly job (`lti-roster-sync`, at `:45`) that calls
+`trigger_lti_roster_sync()`, which POSTs to the tool. It **no-ops unless two
+database settings are configured** — set them once per deployment:
+
+```sql
+ALTER DATABASE postgres SET app.settings.app_url = 'https://<tool-host>';
+ALTER DATABASE postgres SET app.settings.lti_cron_secret = '<LTI_CRON_SHARED_SECRET>';
+```
+
+`app.settings.lti_cron_secret` must equal the tool's `LTI_CRON_SHARED_SECRET`;
+the endpoint rejects calls whose `x-lti-cron-secret` header doesn't match. Only
+contexts with **roster sync enabled** (instructor toggle) are synced. Grade
+passback uses the same secret at **`/api/lti/push-grades`** (triggered for
+`grade_sync_enabled` contexts). You can also invoke either endpoint manually:
+
+```sh
+curl -X POST https://<tool-host>/api/lti/sync-roster \
+  -H "x-lti-cron-secret: $LTI_CRON_SHARED_SECRET" \
+  -H "content-type: application/json" -d '{"all": true}'
+```
+
+> **First sync is a bootstrap step.** A newly bound class has no enrolled
+> instructor yet, and the instructor UI (where roster sync is enabled/triggered)
+> requires enrollment — so the _first_ sync for a class must come from the
+> scheduled/cron path (or the manual `curl` above). After that, instructors
+> self-serve.
+
+---
+
 ## Error reporting (Sentry / self-hosted Bugsink)
 
 Pawtograder reports errors through the Sentry SDK, but the client is configured
