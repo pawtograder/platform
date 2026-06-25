@@ -282,20 +282,38 @@ toolchains, and network access to internal services. **We suggest
 — a Kubernetes operator that autoscales ephemeral self-hosted runners — which can
 run in the same cluster as the Helm deployment. **Standing up runners is out of
 scope for this guide** (see the ARC docs); what is in scope is the two
-Pawtograder-side settings that must match your runners:
+`grade.yml` settings that must match your deployment. The
+[stock template `grade.yml`](https://github.com/pawtograder/template-assignment-handout/blob/main/.github/workflows/grade.yml)
+ships with Khoury's values:
 
-1. **`runs-on` in `grade.yml`.** The grading workflow's `runs-on:` must target
-   your runners' labels (e.g. `runs-on: [self-hosted, pawtograder]`) instead of
-   `ubuntu-latest`. Set it in your **template repos** so every new assignment
-   inherits it (see [Default template repositories](#default-template-repositories-admin)).
-2. **The action's API destination.** `grade.yml` points the
-   `pawtograder/assignment-action` step at the Pawtograder backend. For a
-   self-hosted deployment this must be **your** Edge Functions base URL
-   (`https://<api-host>/functions/v1`), not the hosted `pawtograder.com`. Set it
-   in the template repos alongside `runs-on`.
+```yaml
+jobs:
+  grade:
+    runs-on: khoury-course-runners # (1) change to your runner labels
+    steps:
+      - name: Collect Submission and Run Grader
+        uses: pawtograder/assignment-action@v3
+        with:
+          grading_server: "https://api.pawtograder.com" # (2) change to your API host
+          action_ref: "${{ github.action_ref }}"
+          action_repository: "${{ github.action_repository }}"
+```
 
-Because both live in `grade.yml`, the admin "Edit template repo files" editor
-below is the easiest place to set them.
+1. **`runs-on`** must target your runners' labels (e.g. `self-hosted` or an ARC
+   runner-set name) instead of `khoury-course-runners`.
+2. **`grading_server`** is the API destination — set it to your deployment's
+   **API gateway origin** (the same host as the GoTrue callback:
+   `https://api.<hostname>` by default, or `https://<hostname>` with path-based
+   routing), **not** `https://api.pawtograder.com`. The action appends the Edge
+   Function path itself, so give it the host root, not a `/functions/v1` path.
+
+Set both in your **template repos** so every new assignment inherits them (see
+[Default template repositories](#default-template-repositories-admin)) — the
+admin "Edit template repo files" editor below is the easiest place to do it.
+
+> Students must not edit `grade.yml`: Pawtograder hashes it against the handout's
+> copy when registering a submission and rejects tampered workflows, so these two
+> values are fixed by you in the template, not per student.
 
 ---
 
