@@ -81,7 +81,9 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
         course_slug: membership.classes!.slug!,
         org: membership.classes!.github_org!,
         repo: repository.repository,
-        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        githubUsernames: remaining_members
+          .map((m) => m.profiles?.user_roles?.users?.github_username)
+          .filter((u): u is string => !!u),
         debug_id: `assignment-group-leave-${membership.assignment_group_id}`
       });
     }

@@ -11947,6 +11947,10 @@ export type Database = {
         };
         Returns: number;
       };
+      enqueue_sync_repo_permissions_for_repo: {
+        Args: { p_repo_id: number };
+        Returns: undefined;
+      };
       evaluate_error_pin_rule: {
         Args: {
           p_grader_result_id: number;

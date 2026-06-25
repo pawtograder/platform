@@ -1019,6 +1019,34 @@ export async function processEnvelope(
           });
           throw e;
         }
+
+        // Group repos are created with an empty collaborator list (members are added separately),
+        // and an earlier not-ready permission sync may have been requeued/DLQ'd before the repo
+        // became ready. Now that the repo is marked GitHub-ready, re-derive its intended members
+        // from the DB and enqueue a fresh permission sync so they reliably get write access.
+        try {
+          let repoId: number | null = envelope.repo_id ?? null;
+          if (!repoId && envelope.class_id) {
+            const { data: repoRow } = await adminSupabase
+              .from("repositories")
+              .select("id")
+              .eq("class_id", envelope.class_id)
+              .eq("repository", `${org}/${repoName}`)
+              .maybeSingle();
+            repoId = repoRow?.id ?? null;
+          }
+          if (repoId) {
+            const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
+              p_repo_id: repoId
+            });
+            if (resyncError) throw resyncError;
+          }
+        } catch (e) {
+          // Non-fatal: the repo is created and ready. A missed resync is recoverable via other sync
+          // paths, so log and continue rather than failing (and retrying) the whole create_repo job.
+          Sentry.captureException(e, scope);
+        }
+
         recordMetric(
           adminSupabase,
           {

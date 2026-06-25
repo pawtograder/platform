@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
+import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -18,7 +19,9 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
   );
   const { data, error } = await adminSupabase
     .from("assignment_group_join_request")
-    .select("*, assignment_groups(*, assignments(*), assignment_groups_members(*))")
+    .select(
+      "*, assignment_groups(*, assignments(*), assignment_groups_members(*), classes(github_org, slug), repositories(*))"
+    )
     .eq("id", join_request_id)
     .eq("assignment_groups.class_id", course_id)
     .single();
@@ -86,6 +89,32 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
   if (deactivateError) {
     console.error(deactivateError);
     throw new Error("Failed to deactivate submissions");
+  }
+
+  //Sync repo permissions so the newly-approved member gets write access to the group's repo.
+  //Mirrors the invitation-accept path in assignment-group-join. Without this, students who join
+  //via request-and-approval are added to the group but never granted access to the group repo.
+  const group = data.assignment_groups;
+  const repository = group.repositories?.[0]?.repository;
+  if (group.classes?.github_org && repository) {
+    const { data: members, error: members_error } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
+      .eq("assignment_group_id", group.id);
+    if (members_error) {
+      console.error(members_error);
+      throw new Error("Failed to get group members");
+    }
+    await enqueueSyncRepoPermissions({
+      class_id: course_id,
+      course_slug: group.classes.slug!,
+      org: group.classes.github_org,
+      repo: repository,
+      githubUsernames: members
+        .map((m) => m.profiles?.user_roles?.users?.github_username)
+        .filter((u): u is string => !!u),
+      debug_id: `approve-request-${group.id}`
+    });
   }
 
   return {
