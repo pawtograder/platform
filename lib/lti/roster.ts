@@ -113,7 +113,10 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
   let result: RosterSyncResult;
   try {
     const cfg = await buildSectionConfig(link, db);
-    const membership = await fetchMemberships(link.platform_id, link.nrps_url, db);
+    // Pass context_id as the rlid so Canvas includes per-member section_names
+    // (see fetchMemberships); for a nav launch the resource link id is the
+    // context's opaque id, which is what we store as context_id.
+    const membership = await fetchMemberships(link.platform_id, link.nrps_url, db, link.context_id);
     const { roster, unmapped } = mapRoster(membership.members, cfg);
     await upsertLtiUsers(link.platform_id, roster, db);
 

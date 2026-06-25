@@ -18,7 +18,7 @@ import fs from "fs";
 import path from "path";
 import { createAdminClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { createClass, createAssignmentsAndGradebookColumns } from "../TestingUtils";
+import { createClass, createAssignmentsAndGradebookColumns, createUserInClass } from "../TestingUtils";
 import { visualScreenshot } from "../VisualTestUtils";
 
 type CanvasConfig = {
@@ -32,6 +32,10 @@ type CanvasConfig = {
   canvasAssignmentId: string;
   teacher: { email: string; password: string };
   students: { email: string; password: string }[];
+  /** Distinct Canvas course section names the seed created. */
+  sectionNames?: string[];
+  /** Map of student email -> the Canvas section name they were enrolled in. */
+  studentSections?: Record<string, string>;
   canvasAdminToken: string;
   ltiCronSecret?: string;
 };
@@ -252,4 +256,109 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   await page.goto(`${cfg.canvasBaseUrl}/courses/${cfg.canvasCourseId}/gradebook`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(4000);
   await visualScreenshot(page, "lti-03-canvas-gradebook");
+});
+
+test("section discovery + auto-create + split roster sync place students in their Canvas sections", async ({
+  browser,
+  request
+}) => {
+  test.setTimeout(180_000);
+  // Needs >= 2 Canvas sections with students to exercise split mapping.
+  expect(cfg.sectionNames?.length ?? 0, "seed must create >= 2 Canvas sections").toBeGreaterThanOrEqual(2);
+
+  // The context link captured at launch (bound to pawClassId in step 1).
+  const { data: link } = await supabase
+    .from("lti_context_links")
+    .select("id")
+    .eq("platform_id", platformId)
+    .eq("deployment_id", cfg.deploymentId)
+    .single();
+  const contextLinkId = link!.id;
+
+  // Treat this context as lab sections, split per member section.
+  await supabase
+    .from("lti_context_links")
+    .update({ section_role: "lab", split_by_member_section: true, roster_sync_enabled: true })
+    .eq("id", contextLinkId);
+
+  // (a) Discovery: the live NRPS fetch must surface the Canvas section names.
+  // This is the regression guard for the `rlid` fix — without it Canvas omits
+  // the per-member `message[]`/`section_names` entirely and discovery is empty.
+  // The endpoint requires an instructor/admin session, so launch the teacher.
+  const tctx = await browser.newContext();
+  try {
+    const tpage = await tctx.newPage();
+    await canvasLogin(tpage, cfg.teacher.email, cfg.teacher.password);
+    await launchTool(tpage);
+    const discRes = await tpage.request.post(`${cfg.toolBaseUrl}/api/lti/context-sections`, {
+      data: { context_link_id: contextLinkId }
+    });
+    const discBody = (await discRes.json()) as { sections?: string[]; error?: string };
+    expect(discRes.ok(), `discover ${discRes.status()}: ${JSON.stringify(discBody)}`).toBeTruthy();
+    for (const name of cfg.sectionNames!) expect(discBody.sections ?? []).toContain(name);
+  } finally {
+    await tctx.close();
+  }
+
+  // (b) Auto-create: an admin creates Pawtograder sections from the Canvas
+  // section names and maps them (admin-only RPC).
+  const admin = await createUserInClass({ role: "admin", class_id: pawClassId });
+  const { data: created, error: acErr } = await supabase.rpc("admin_create_lti_sections_from_canvas", {
+    p_context_link_id: contextLinkId,
+    p_section_names: cfg.sectionNames!,
+    p_created_by: admin.user_id
+  });
+  expect(acErr, JSON.stringify(acErr)).toBeNull();
+  expect((created ?? []).length).toBe(cfg.sectionNames!.length);
+  for (const row of created ?? []) {
+    expect(row.section_type).toBe("lab");
+    expect(Number(row.sis_crn)).toBeGreaterThan(0);
+  }
+  const { data: maps } = await supabase
+    .from("lti_context_section_map")
+    .select("canvas_section_name, lab_section_id")
+    .eq("context_link_id", contextLinkId);
+  const nameToLabSection = new Map((maps ?? []).map((m) => [m.canvas_section_name, m.lab_section_id]));
+  for (const name of cfg.sectionNames!) expect(nameToLabSection.get(name), `mapping for ${name}`).toBeTruthy();
+
+  // (c) Re-sync the roster; students should now land in the lab section that
+  // maps to their Canvas section.
+  const syncRes = await request.post(`${cfg.toolBaseUrl}/api/lti/sync-roster`, {
+    headers: { "x-lti-cron-secret": cronSecret },
+    data: { all: true }
+  });
+  const syncJson = (await syncRes.json()) as { results?: { status: string; message: string }[] };
+  expect(syncRes.ok(), `sync ${syncRes.status()}`).toBeTruthy();
+  for (const r of syncJson.results ?? []) expect(r.status, r.message).toBe("success");
+
+  // (d) Each student is placed in the lab section mapped from their Canvas
+  // section — whether they already have an account (user_roles) or were invited.
+  for (const student of cfg.students) {
+    const canvasSection = cfg.studentSections?.[student.email];
+    expect(canvasSection, `seed should record a section for ${student.email}`).toBeTruthy();
+    const expectedLabSectionId = nameToLabSection.get(canvasSection!);
+    expect(expectedLabSectionId, `mapped lab section for ${canvasSection}`).toBeTruthy();
+
+    const { data: sUser } = await supabase.from("users").select("user_id").eq("email", student.email).maybeSingle();
+    let actual: number | null | undefined;
+    if (sUser) {
+      const { data: role } = await supabase
+        .from("user_roles")
+        .select("lab_section_id")
+        .eq("class_id", pawClassId)
+        .eq("user_id", sUser.user_id)
+        .maybeSingle();
+      actual = role?.lab_section_id;
+    }
+    if (actual == null) {
+      const { data: invite } = await supabase
+        .from("invitations")
+        .select("lab_section_id")
+        .eq("class_id", pawClassId)
+        .eq("email", student.email)
+        .maybeSingle();
+      actual = invite?.lab_section_id;
+    }
+    expect(actual, `${student.email} should be in the lab section for ${canvasSection}`).toBe(expectedLabSectionId);
+  }
 });

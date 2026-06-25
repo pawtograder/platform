@@ -14,13 +14,30 @@ import { parseNextLink } from "./util";
 
 const MEMBERSHIP_MEDIA = "application/vnd.ims.lti-nrps.v2.membershipcontainer+json";
 
-/** Fetch every member of a context, transparently following pagination. */
+/** Add the `rlid` query param to the memberships URL (pagination links keep it). */
+function withRlid(membershipsUrl: string, rlid: string): string {
+  const url = new URL(membershipsUrl);
+  url.searchParams.set("rlid", rlid);
+  return url.toString();
+}
+
+/**
+ * Fetch every member of a context, transparently following pagination.
+ *
+ * `rlid` (a resource link id) is required for Canvas to include each member's
+ * `message[]` array — which is where the per-member custom claims (e.g.
+ * `section_names`) live. Without it Canvas returns the roster with no message
+ * data at all, so section-aware sync/discovery silently sees zero sections. For
+ * a course-navigation launch the resource link id equals the context's opaque
+ * id (== our stored `context_id`), and Canvas returns the full roster for it.
+ */
 export async function fetchMemberships(
   platformId: number,
   membershipsUrl: string,
-  db: LtiDb = ltiAdminClient()
+  db: LtiDb = ltiAdminClient(),
+  rlid?: string
 ): Promise<NrpsMembershipResponse> {
-  let url: string | undefined = membershipsUrl;
+  let url: string | undefined = rlid ? withRlid(membershipsUrl, rlid) : membershipsUrl;
   let context: NrpsMembershipResponse["context"] | undefined;
   let id = membershipsUrl;
   const members: NrpsMember[] = [];

@@ -29,6 +29,13 @@ student_emails = ENV.fetch("PG_STUDENT_EMAILS", "student1.e2e@example.com,studen
 password      = ENV.fetch("PG_USER_PASSWORD", "pawtograder-e2e")
 assignment_name = ENV.fetch("PG_ASSIGNMENT_NAME", "E2E Assignment 1")
 assignment_points = ENV.fetch("PG_ASSIGNMENT_POINTS", "100").to_i
+# Named course sections so the LTI section-mapping flow (NRPS section_names ->
+# Pawtograder sections) has something to discover. Students are distributed
+# round-robin across them and enrolled ONLY in their named section (not the
+# course default), so each member's $com.instructure.User.sectionNames is
+# exactly one known name.
+section_names = ENV.fetch("PG_SECTION_NAMES", "E2E Section A,E2E Section B")
+                 .split(",").map(&:strip).reject(&:empty?)
 
 # --- find-or-create a user with a login (pseudonym) + active email channel ----
 def upsert_user(account, name, email, password)
@@ -68,13 +75,19 @@ unless course.enrollments.where(user_id: teacher.id, type: "TeacherEnrollment").
   course.enroll_user(teacher, "TeacherEnrollment", enrollment_state: "active")
 end
 
-# --- students ----------------------------------------------------------------
+# --- sections (idempotent by name) -------------------------------------------
+sections = section_names.map do |name|
+  course.course_sections.where(name: name).first || course.course_sections.create!(name: name)
+end
+
+# --- students (round-robin across the named sections) ------------------------
 students = student_emails.each_with_index.map do |email, i|
   s = upsert_user(account, "E2E Student #{i + 1}", email, password)
+  section = sections[i % sections.length]
   unless course.enrollments.where(user_id: s.id, type: "StudentEnrollment").active.exists?
-    course.enroll_user(s, "StudentEnrollment", enrollment_state: "active")
+    course.enroll_user(s, "StudentEnrollment", enrollment_state: "active", section: section)
   end
-  [email, s]
+  [email, s, section]
 end
 
 # --- assignment (published, online submission, gradable) ---------------------
@@ -101,9 +114,11 @@ puts "COURSE_LTI_CONTEXT_ID=#{lti_context_id}"
 puts "TEACHER_EMAIL=#{teacher_email}"
 puts "TEACHER_PASSWORD=#{password}"
 puts "TEACHER_USER_ID=#{teacher.id}"
-students.each do |email, s|
+puts "SECTION_NAMES=#{section_names.join("|")}"
+students.each do |email, s, section|
   puts "STUDENT_EMAIL=#{email}"
   puts "STUDENT_USER_ID=#{s.id}"
+  puts "STUDENT_SECTION=#{email}|#{section.name}"
 end
 puts "ASSIGNMENT_ID=#{assignment.id}"
 puts "ASSIGNMENT_POINTS=#{assignment_points}"

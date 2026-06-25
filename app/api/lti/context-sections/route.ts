@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const db = ltiAdminClient();
     const { data: link, error } = await db
       .from("lti_context_links")
-      .select("id, class_id, platform_id, nrps_url")
+      .select("id, class_id, platform_id, context_id, nrps_url")
       .eq("id", contextLinkId)
       .maybeSingle();
     if (error) throw error;
@@ -48,7 +48,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No NRPS membership URL captured for this context" }, { status: 400 });
     }
 
-    const membership = await fetchMemberships(link.platform_id, link.nrps_url, db);
+    // rlid=context_id makes Canvas include per-member section_names (see fetchMemberships).
+    const membership = await fetchMemberships(link.platform_id, link.nrps_url, db, link.context_id);
     const names = new Set<string>();
     for (const m of membership.members) {
       if (m.status && m.status !== "Active") continue;
