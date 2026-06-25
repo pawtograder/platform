@@ -106,16 +106,43 @@ export async function waitForVisualIdle(page: Page) {
 
   // Code files (components/ui/code-file.tsx) render plain text first, then re-render
   // with @wooorm/starry-night syntax highlighting once it loads asynchronously.
-  // Capturing mid-load produces per-glyph diffs across the whole code column. If any
+  // Capturing mid-load is not just a per-glyph color diff: the un-highlighted
+  // fallback collapses to one character per line (the line content has no settled
+  // width yet), which shifts the whole page and yields ~70% full-page diffs. If any
   // code file on the page is still un-highlighted, wait for it to finish before the
-  // screenshot. Bounded + non-fatal: a file with no tokenizable content still flips
-  // the flag to "true", and the catch covers pages without code files.
+  // screenshot. The timeout is generous (30s) because under the full-suite parallel
+  // load several workers import the highlighter at once and a single block can take
+  // well over 10s to tokenize — the old 10s cap let that broken state through.
+  // Bounded + non-fatal: a file with no tokenizable content still flips the flag to
+  // "true", and the catch covers pages without code files / offline highlighter loads.
   const codeFiles = page.locator("[data-syntax-highlighted]");
   if ((await codeFiles.count()) > 0) {
     await expect(page.locator('[data-syntax-highlighted="false"]'))
-      .toHaveCount(0, { timeout: 10_000 })
+      .toHaveCount(0, { timeout: 30_000 })
       .catch(() => {
         // Highlighter import can fail offline; fall through rather than block the scan.
+      });
+  }
+
+  // Monaco editor (components/ui/code-file-monaco.tsx) is the default submission code
+  // viewer. It dynamic-imports behind a skeleton, then mounts, measures, and tokenizes
+  // asynchronously, so a mid-load capture is a blank or half-laid-out pane (the manual-
+  // grading score views raced exactly this). When a Monaco editor is present, wait for
+  // its lines to render AND colorize — Monaco emits `.mtk*` token spans only once
+  // tokenization has run — before capturing. Bounded + non-fatal like the wait above.
+  const monacoEditor = page.locator(".monaco-editor");
+  if ((await monacoEditor.count()) > 0) {
+    await page
+      .waitForFunction(
+        () => {
+          const lines = Array.from(document.querySelectorAll(".monaco-editor .view-lines .view-line"));
+          return lines.length > 0 && lines.some((line) => line.querySelector('span[class*="mtk"]'));
+        },
+        undefined,
+        { timeout: 30_000, polling: 200 }
+      )
+      .catch(() => {
+        // Empty/untokenizable file or Monaco failed to load — proceed rather than block.
       });
   }
 
