@@ -316,8 +316,22 @@ jobs:
           # Cache image lives in the in-cluster registry (auth seeded into
           # the runner's ~/.docker/config.json by the gha-runner-scale-set
           # init container — see k8s/apps/arc/values-pawtograder-ci.yaml).
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
+          #
+          # Per-branch scoping: every preview build used to read AND write the
+          # single shared `:latest` tag, so concurrent PRs clobbered each
+          # other's layers and missed the cache they should have hit. Now each
+          # preview gets its own `:pr-<id>` cache (stable across that PR's
+          # sync pushes), with `:latest` as a warm fallback for a branch's
+          # first build. We still write `:latest` (mode=max) so the shared
+          # baseline stays fresh for new branches — but active builds read
+          # their own scoped tag first, so cross-branch writes to `:latest`
+          # no longer cause misses on layers a branch already has.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
 
   build-edge-functions:
     needs: meta
@@ -339,8 +353,13 @@ jobs:
           file: charts/pawtograder/images/edge-functions/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
 
   build-migrations:
     needs: meta
@@ -362,8 +381,13 @@ jobs:
           file: charts/pawtograder/images/migrations/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
   # build-seeder — Node + TS sources + node_modules + psql. Used only by
@@ -390,8 +414,13 @@ jobs:
           file: charts/pawtograder/images/seeder/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/seeder:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
   # deploy — helm install/upgrade against ripley
