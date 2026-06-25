@@ -77,3 +77,10 @@ axe-debug/
 # Host-generated Deno lockfile — not committed; its version can differ from
 # the edge-runtime image Deno and crash the worker at boot (see .dockerignore).
 supabase/functions/deno.lock
+
+# design-sync (claude.ai/design sync) — staged scripts, build output, machine state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
