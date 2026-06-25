@@ -239,6 +239,23 @@ If the provider is enabled but the callback URL doesn't match, sign-in fails wit
 an OAuth redirect error; if the callback is registered but the provider is
 disabled, the button errors on click.
 
+**Local stack (`npx supabase start`).** GoTrue is configured from
+`supabase/config.toml`, not env/Helm values. Add a provider block and read the
+secret from your `.env` (the CLI expands `env(...)`):
+
+```toml
+[auth.external.github]
+enabled = true
+client_id = "env(GITHUB_OAUTH_CLIENT_ID)"
+secret = "env(GITHUB_OAUTH_CLIENT_SECRET)"
+# Local GoTrue callback (the API gateway runs on 54321):
+redirect_uri = "http://127.0.0.1:54321/auth/v1/callback"
+```
+
+Register that `redirect_uri` on the GitHub App, restart the stack
+(`npx supabase stop && npx supabase start`) to pick up config changes, and the
+same block shape works for `[auth.external.discord]`.
+
 ### 7. Install the App on each org
 
 Each course's GitHub org must have the App installed. Instructors do this from
@@ -246,6 +263,75 @@ within Pawtograder (the app surfaces an install deep-link when it detects the Ap
 isn't installed on an org), or directly via
 `https://github.com/apps/<GITHUB_APP_SLUG>/installations/new`. Grant it access to
 the repositories/org it should manage.
+
+---
+
+## GitHub Actions runners for grading
+
+Autograding runs **in GitHub Actions** inside each student repo: a
+`.github/workflows/grade.yml` workflow invokes the
+[`pawtograder/assignment-action`](https://github.com/pawtograder/assignment-action),
+which clones the grader, runs the tests, and posts results back to Pawtograder's
+Edge Functions (authenticated by the job's GitHub OIDC token, validated in
+`autograder-create-submission`).
+
+**You must provide runners with enough capacity for your grading load.** Standard
+GitHub-hosted runners work, but most institutions self-host for cost, custom
+toolchains, and network access to internal services. **We suggest
+[Actions Runner Controller (ARC)](https://github.com/actions/actions-runner-controller)**
+— a Kubernetes operator that autoscales ephemeral self-hosted runners — which can
+run in the same cluster as the Helm deployment. **Standing up runners is out of
+scope for this guide** (see the ARC docs); what is in scope is the two
+Pawtograder-side settings that must match your runners:
+
+1. **`runs-on` in `grade.yml`.** The grading workflow's `runs-on:` must target
+   your runners' labels (e.g. `runs-on: [self-hosted, pawtograder]`) instead of
+   `ubuntu-latest`. Set it in your **template repos** so every new assignment
+   inherits it (see [Default template repositories](#default-template-repositories-admin)).
+2. **The action's API destination.** `grade.yml` points the
+   `pawtograder/assignment-action` step at the Pawtograder backend. For a
+   self-hosted deployment this must be **your** Edge Functions base URL
+   (`https://<api-host>/functions/v1`), not the hosted `pawtograder.com`. Set it
+   in the template repos alongside `runs-on`.
+
+Because both live in `grade.yml`, the admin "Edit template repo files" editor
+below is the easiest place to set them.
+
+---
+
+## Default template repositories (admin)
+
+New assignment repos are created from **template repositories**. Out of the box
+these are hardcoded to `pawtograder/template-assignment-handout` and
+`pawtograder/template-assignment-grader` — which live in the upstream
+`pawtograder` org your deployment can't push to. **Self-hosted deployments must
+point these at templates in their own GitHub org.**
+
+A **platform admin** sets the org-wide defaults through the app's admin UI:
+
+1. Go to **Admin → GitHub Orgs** (`/admin/github-orgs`).
+2. Click the org name to open `/admin/github-orgs/<org>`.
+3. Under **"Default template repositories"** ("Used for new assignment repos in
+   classes that don't override them"), fill in:
+
+   - **Default handout template repository** — `your-org/template-assignment-handout`
+   - **Default solution (grader) template repository** — `your-org/template-assignment-grader`
+
+   (Values must be exactly `owner/repo`.) Click **Save defaults**.
+
+Resolution order when creating an assignment repo is: per-class override
+(`classes.handout_template_repo` / `solution_template_repo`, set by instructors)
+→ org default (`github_orgs.default_handout_template_repo` /
+`default_solution_template_repo`, set here) → the hardcoded `pawtograder/*`
+fallback. Defaults persist via the `admin_upsert_github_org` RPC (global-admin
+only) into the `github_orgs` table.
+
+**Edit the template files in place.** The same page has an **"Edit template repo
+files"** card (tabs: _Handout template_ / _Solution template_) with a live-validated
+editor for each template's **`.github/workflows/grade.yml`** and
+**`pawtograder.yml`**. This is where you set the grading workflow's
+[`runs-on` and API destination](#github-actions-runners-for-grading). (Editing
+requires at least one course in the org, to authorize GitHub access.)
 
 ---
 
@@ -392,6 +478,38 @@ scripts/setup-openbao-edge-functions.sh \
 
 (Locally these go in `supabase/functions/.env`; port `54325` targets the
 Supabase Inbucket mail catcher.)
+
+### Local stack (`npx supabase start`)
+
+The local stack ships **Inbucket**, a built-in mail catcher — no real SMTP needed
+for dev. Mail GoTrue would send is captured and viewable at
+`http://localhost:54324`; `supabase/config.toml` already enables it:
+
+```toml
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+```
+
+- **GoTrue auth mail** is caught by Inbucket automatically. To send through a
+  real provider instead, fill in the `[auth.email.smtp]` block in
+  `supabase/config.toml` (`host`, `port`, `user`, `pass`, `admin_email`,
+  `sender_name`) and restart the stack.
+- **In-app notifications** are sent by the Edge Function, so point its
+  `supabase/functions/.env` at Inbucket to see them locally:
+
+  ```sh
+  SMTP_HOST=host.docker.internal
+  SMTP_PORT=54325
+  SMTP_USER=test
+  SMTP_PASSWORD=test
+  SMTP_FROM=noreply@pawtograder.local
+  SMTP_REPLY_TO=support@pawtograder.local
+  ```
+
+  (`SMTP_PORT=54325` is the sentinel the function uses to recognize the local
+  Inbucket catcher; see `supabase/functions/.example.env`.)
 
 ---
 
