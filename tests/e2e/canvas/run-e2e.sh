@@ -71,7 +71,11 @@ fi
 if [ "${SKIP_SUPABASE:-}" != "1" ]; then
   if ! docker ps --format '{{.Names}}' | grep -q "supabase_db_"; then
     log "Starting local Supabase"
-    npx supabase start
+    # Exclude the analytics stack (logflare + its vector log shipper): the tests
+    # don't use it, and those containers repeatedly fail their health check on
+    # the e2e runner ("supabase_analytics/vector container is not ready:
+    # unhealthy"), aborting `supabase start` before any test runs.
+    npx supabase start -x logflare,vector
   else
     log "Supabase already running"
   fi
