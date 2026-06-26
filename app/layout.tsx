@@ -1,5 +1,5 @@
 import { Provider } from "@/components/ui/provider";
-import { Theme, ClientOnly } from "@chakra-ui/react";
+import { Theme, ClientOnly, Box } from "@chakra-ui/react";
 import { GeistSans } from "geist/font/sans";
 import { headers } from "next/headers";
 import "./globals.css";
@@ -49,6 +49,26 @@ export default async function RootLayout({
         <Provider nonce={nonce}>
           <BrandingProvider branding={branding}>
             <Theme colorPalette={branding.colorPalette}>
+              {/* CANARY SMOKE TEST MARKER — obvious, global, presentational only.
+                  This branch exists solely to prove channel A/B routing; the
+                  banner makes the canary build unmistakable vs stable. Do not merge. */}
+              <Box
+                position="fixed"
+                top="0"
+                left="0"
+                right="0"
+                zIndex="2147483647"
+                bg="pink.600"
+                color="white"
+                textAlign="center"
+                fontWeight="bold"
+                fontSize="sm"
+                py="1"
+                px="2"
+              >
+                🐤 CANARY BUILD — channel: {process.env.NEXT_PUBLIC_PAWTOGRADER_CHANNEL || "stable"} — test deployment,
+                not production
+              </Box>
               <SkipNav />
               <ClientOnly>
                 <Toaster />
