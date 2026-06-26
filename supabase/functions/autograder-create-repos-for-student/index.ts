@@ -321,17 +321,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           level: "info"
         });
 
-        let inviteSucceeded = false;
+        // reinviteToOrgTeam returns true when it dispatched a fresh org invite (the user is now a
+        // PENDING member) and false when the user is already an active org/team member (in which case
+        // it has already marked the role org-confirmed). Track the intended github_org_confirmed value
+        // so we don't clobber an already-confirmed member back to unconfirmed. null => leave the row
+        // untouched (fatal error), so the student stays eligible for the invitation_date IS NULL backstop.
+        let orgConfirmed: boolean | null = null;
         try {
-          await reinviteToOrgTeam(c.classes.github_org!, c.classes.slug! + "-students", githubUsername!);
-          inviteSucceeded = true;
+          const inviteSent = await reinviteToOrgTeam(
+            c.classes.github_org!,
+            c.classes.slug! + "-students",
+            githubUsername!
+          );
+          // fresh invite dispatched => pending (false); already a member => confirmed (true).
+          orgConfirmed = !inviteSent;
         } catch (error) {
           // Check if this is a non-fatal error (HTTP 422 - pending invite)
           const isNonFatalError = error && typeof error === "object" && "status" in error && error.status === 422;
 
           if (isNonFatalError) {
-            // A pending invite already exists (HTTP 422) — treat as invited so we still persist invitation_date.
-            inviteSucceeded = true;
+            // A pending invite already exists (HTTP 422) — a sent invite awaiting acceptance: pending.
+            orgConfirmed = false;
             console.log(`Non-fatal error inviting user ${githubUsername} to org ${c.classes.github_org}: ${error}`);
             Sentry.addBreadcrumb({
               category: "autograder-create-repos-for-student",
@@ -340,7 +350,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               data: { error: error.message || String(error) }
             });
           } else {
-            // Log fatal errors to Sentry
+            // Fatal error: leave user_roles untouched so the student stays eligible for automatic
+            // re-invite (autograder-sync-student-team filters on invitation_date IS NULL).
             console.error(`Fatal error inviting user ${githubUsername} to org ${c.classes.github_org}:`, error);
             Sentry.captureException(error, {
               tags: {
@@ -355,19 +366,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             });
           }
         }
-        // We just determined this user is NOT in the org, so mark them unconfirmed. Only persist
-        // invitation_date when the invite was actually sent or already pending — on a fatal failure
-        // leave it NULL so autograder-sync-student-team (which filters on invitation_date IS NULL)
-        // retries the invite instead of permanently skipping the student.
-        await adminSupabase
-          .from("user_roles")
-          .update(
-            inviteSucceeded
-              ? { github_org_confirmed: false, invitation_date: new Date().toISOString() }
-              : { github_org_confirmed: false }
-          )
-          .eq("class_id", c.class_id)
-          .eq("user_id", userId);
+        // Persist only when we invited or confirmed membership. Stamp invitation_date in both cases
+        // (an invite was sent, or the user is already a member) so the student isn't re-picked by the
+        // invitation_date IS NULL backstop; a fatal failure leaves the row untouched for retry.
+        if (orgConfirmed !== null) {
+          await adminSupabase
+            .from("user_roles")
+            .update({ github_org_confirmed: orgConfirmed, invitation_date: new Date().toISOString() })
+            .eq("class_id", c.class_id)
+            .eq("user_id", userId);
+        }
       })
   );
 

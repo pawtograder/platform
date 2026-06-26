@@ -94,27 +94,35 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
   //Sync repo permissions so the newly-approved member gets write access to the group's repo.
   //Mirrors the invitation-accept path in assignment-group-join. Without this, students who join
   //via request-and-approval are added to the group but never granted access to the group repo.
+  //Best-effort: the approval (member insert, request status, submission deactivation) has already
+  //committed, so a failure here must NOT fail the request — surfacing an error would report a false
+  //failure for a committed approval and a retry could hit the full-group / duplicate-member paths.
+  //Log it instead; the worker's other sync paths (and the org-confirm re-sync) reconcile later.
   const group = data.assignment_groups;
   const repository = group.repositories?.[0]?.repository;
   if (group.classes?.github_org && repository) {
-    const { data: members, error: members_error } = await adminSupabase
-      .from("assignment_groups_members")
-      .select("profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
-      .eq("assignment_group_id", group.id);
-    if (members_error) {
-      console.error(members_error);
-      throw new Error("Failed to get group members");
+    try {
+      const { data: members, error: members_error } = await adminSupabase
+        .from("assignment_groups_members")
+        .select("profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
+        .eq("assignment_group_id", group.id);
+      if (members_error) {
+        throw members_error;
+      }
+      await enqueueSyncRepoPermissions({
+        class_id: course_id,
+        course_slug: group.classes.slug!,
+        org: group.classes.github_org,
+        repo: repository,
+        githubUsernames: members
+          .map((m) => m.profiles?.user_roles?.users?.github_username)
+          .filter((u): u is string => !!u),
+        debug_id: `approve-request-${group.id}`
+      });
+    } catch (syncError) {
+      console.error("Failed to enqueue repo permission sync after group approval:", syncError);
+      Sentry.captureException(syncError, scope);
     }
-    await enqueueSyncRepoPermissions({
-      class_id: course_id,
-      course_slug: group.classes.slug!,
-      org: group.classes.github_org,
-      repo: repository,
-      githubUsernames: members
-        .map((m) => m.profiles?.user_roles?.users?.github_username)
-        .filter((u): u is string => !!u),
-      debug_id: `approve-request-${group.id}`
-    });
   }
 
   return {

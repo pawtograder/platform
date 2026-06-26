@@ -74,16 +74,17 @@ begin
       and u.github_username <> '';
   end if;
 
-  if v_usernames is not null and array_length(v_usernames, 1) > 0 then
-    perform public.enqueue_github_sync_repo_permissions(
-      v_class_id,
-      v_github_org,
-      split_part(v_repository, '/', 2),
-      v_course_slug,
-      v_usernames,
-      'post-create-resync-' || p_repo_id::text
-    );
-  end if;
+  -- Enqueue even when the intended list is empty so the worker can reconcile (revoke) stale
+  -- collaborators rather than leaving them with stale write access. v_usernames is already
+  -- coalesced to '{}' above, so it is never null. Mirrors publish_assignment_group_changes Phase 3.
+  perform public.enqueue_github_sync_repo_permissions(
+    v_class_id,
+    v_github_org,
+    split_part(v_repository, '/', 2),
+    v_course_slug,
+    v_usernames,
+    'post-create-resync-' || p_repo_id::text
+  );
 end;
 $$;
 
@@ -334,7 +335,9 @@ BEGIN
         AND u.github_username IS NOT NULL
         AND u.github_username <> '';
 
-      IF v_github_org IS NOT NULL AND array_length(v_usernames, 1) > 0 THEN
+      -- Enqueue even when v_usernames is empty so the worker reconciles (revokes) stale access on
+      -- repos whose membership changed; v_usernames is coalesced to '{}' above, never null.
+      IF v_github_org IS NOT NULL THEN
         PERFORM enqueue_github_sync_repo_permissions(
           p_class_id,
           v_github_org,
