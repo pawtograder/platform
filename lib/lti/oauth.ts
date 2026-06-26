@@ -14,7 +14,10 @@ import { ltiAdminClient, type LtiDb } from "./db";
 const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
 type TokenCacheEntry = { token: string; expiresAt: number };
-// keyed by `${platformId}:${sortedScopes}`
+// Keyed by `${platformId}:${client_id}:${token_url}:${sortedScopes}` so editing a
+// platform's client_id/token_url (admin_upsert_lti_platform reuses the row id)
+// can't return a bearer minted under the OLD credentials until it expires —
+// which would 401 every push/sync for up to an hour on a long-running server.
 const tokenCache = new Map<string, TokenCacheEntry>();
 
 type PlatformAuth = { id: number; client_id: string; auth_login_url: string; token_url: string };
@@ -39,12 +42,15 @@ export async function getServiceAccessToken(
   db: LtiDb = ltiAdminClient()
 ): Promise<string> {
   const scopeStr = [...scopes].sort().join(" ");
-  const cacheKey = `${platformId}:${scopeStr}`;
-  const cached = tokenCache.get(cacheKey);
   const now = Date.now();
+
+  // Load the platform first so the cache key reflects its CURRENT credentials;
+  // a stale key would hand back a token signed for an old client_id/token_url.
+  const platform = await loadPlatform(db, platformId);
+  const cacheKey = `${platformId}:${platform.client_id}:${platform.token_url}:${scopeStr}`;
+  const cached = tokenCache.get(cacheKey);
   if (cached && cached.expiresAt > now + 30_000) return cached.token;
 
-  const platform = await loadPlatform(db, platformId);
   const signing = await getCurrentSigningKey(db);
 
   const assertion = await new SignJWT({})

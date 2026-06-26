@@ -18,9 +18,13 @@
 # and downstream runs will keep skipping the (now-edited) file forever.
 #
 # Behaviour on drift:
-#   MIGRATIONS_RESET_ON_DRIFT=true   reset the application data and
-#                                    replay everything from scratch (only
-#                                    safe for ephemeral previews / dev).
+#   MIGRATIONS_RESET_ON_DRIFT=true   reset the application data and replay
+#                                    everything from scratch. NOT the default,
+#                                    must be set explicitly, AND only honored
+#                                    when MIGRATIONS_ENVIRONMENT is an ephemeral
+#                                    tier (dev | preview) — otherwise refused so
+#                                    a durable env can never be wiped here, even
+#                                    if the flag leaks onto it.
 #   anything else                    fail loudly with the drifted versions
 #                                    listed. Operator must intervene
 #                                    (rename the migration to a fresh
@@ -37,9 +41,16 @@ export PGHOST PGUSER PGDATABASE PGPASSWORD
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
 RESET_ON_DRIFT="${MIGRATIONS_RESET_ON_DRIFT:-false}"
+# Deployment tier. The destructive drift reset is permitted ONLY on ephemeral
+# tiers (dev / preview); migrate.sh re-checks this at runtime so a stray
+# RESET_ON_DRIFT=true on a durable env (set directly on the Job, bypassing the
+# Helm render guard in templates/validations.yaml) still can't wipe it.
+MIGRATIONS_ENVIRONMENT="${MIGRATIONS_ENVIRONMENT:-}"
+RESET_ALLOWED_TIERS="dev preview"
 
 echo "[migrate] target=${PGUSER}@${PGHOST}:${PGPORT:-5432}/${PGDATABASE}"
 echo "[migrate] source=${MIGRATIONS_DIR}"
+echo "[migrate] environment=${MIGRATIONS_ENVIRONMENT:-<unset>}"
 echo "[migrate] reset_on_drift=${RESET_ON_DRIFT}"
 
 # Bootstrap the schema_migrations table. file_hash is added as a nullable
@@ -144,19 +155,36 @@ if [ "${#drifted[@]}" -gt 0 ]; then
     echo "[migrate]        migration(s) no longer matches what was applied to the" >&2
     echo "[migrate]        database. Either:" >&2
     echo "[migrate]          (a) revert the edit and rename it to a fresh timestamp," >&2
-    echo "[migrate]          (b) set MIGRATIONS_RESET_ON_DRIFT=true to wipe + replay" >&2
-    echo "[migrate]              (PREVIEW / DEV ONLY — destroys all application data)," >&2
+    echo "[migrate]          (b) on an ephemeral dev/preview env, set" >&2
+    echo "[migrate]              MIGRATIONS_RESET_ON_DRIFT=true to wipe + replay" >&2
+    echo "[migrate]              (DEV / PREVIEW ONLY — destroys all application data)," >&2
     echo "[migrate]          (c) accept the drift manually:" >&2
     echo "[migrate]              UPDATE supabase_migrations.schema_migrations" >&2
     echo "[migrate]              SET file_hash='<new-sha>' WHERE version='<version>';" >&2
     exit 1
   fi
 
-  echo "[migrate] MIGRATIONS_RESET_ON_DRIFT=true — wiping application data and replaying."
+  # Defense in depth: the reset below wipes schema public AND auth.users +
+  # vault.secrets. Permit it ONLY on an ephemeral tier, even with the flag set,
+  # so a misconfigured durable env (staging/production) can never be wiped here.
+  case " ${RESET_ALLOWED_TIERS} " in
+    *" ${MIGRATIONS_ENVIRONMENT} "*) ;;
+    *)
+      echo "[migrate] ERROR: MIGRATIONS_RESET_ON_DRIFT=true but MIGRATIONS_ENVIRONMENT=${MIGRATIONS_ENVIRONMENT:-<unset>}." >&2
+      echo "[migrate]        The drift reset DESTROYS ALL DATA (schema public, auth.users," >&2
+      echo "[migrate]        vault.secrets) and is permitted only on an ephemeral tier" >&2
+      echo "[migrate]        (MIGRATIONS_ENVIRONMENT one of: ${RESET_ALLOWED_TIERS}). Refusing." >&2
+      exit 1
+      ;;
+  esac
+
+  echo "[migrate] MIGRATIONS_RESET_ON_DRIFT=true (tier=${MIGRATIONS_ENVIRONMENT}) — wiping application data and replaying."
   echo "[migrate] This drops schema public + truncates schema_migrations, and clears"
   echo "[migrate] the RLS policies our migrations create on storage.objects/buckets."
   echo "[migrate] Pawtograder tables live in public; the storage/auth/realtime service"
-  echo "[migrate] base tables stay intact (their services own them)."
+  echo "[migrate] base tables (schemas) stay intact, but auth.users DATA and vault.secrets"
+  echo "[migrate] ARE cleared below so the re-seed rebuilds a consistent auth+public set —"
+  echo "[migrate] every user must re-launch/re-invite or be re-seeded after this reset."
 
   # We DROP & CREATE public via a single transaction; if a downstream
   # migration fails on replay the operator gets a clear error and the

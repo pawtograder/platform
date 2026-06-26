@@ -31,6 +31,13 @@ export async function POST(request: Request) {
       const results = await syncAllRosters(db);
       return NextResponse.json({ mode: "cron", count: results.length, results });
     }
+    // A cron call that presents a secret which doesn't match: surface the
+    // misconfiguration as 401 instead of silently falling through to UI mode and
+    // returning a confusing 400 (the symptom when app.settings.lti_cron_secret
+    // and LTI_CRON_SHARED_SECRET drift apart and auto-sync "just stops").
+    if (request.headers.get("x-lti-cron-secret")) {
+      return NextResponse.json({ error: "Invalid cron secret" }, { status: 401 });
+    }
 
     // --- UI mode: instructor syncing a single class ---
     const classId = Number(body.class_id);

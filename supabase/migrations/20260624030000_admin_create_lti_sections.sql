@@ -93,6 +93,14 @@ BEGIN
             END IF;
         ELSE
             v_new_id := v_existing_id;
+            -- A reused same-name section is only a usable sync target if it has a
+            -- CRN (roster sync resolves the map to sections via sis_crn). Reusing
+            -- a CRN-less section would map the Canvas name to a section that
+            -- silently places no one, with no error or unmapped-name warning.
+            -- Fail loudly so the admin gives the section a CRN (or renames it).
+            IF v_crn IS NULL THEN
+                RAISE EXCEPTION 'Section "%" already exists without a SIS CRN; give it a CRN before mapping it to a Canvas section (it would otherwise sync no students)', v_trimmed;
+            END IF;
         END IF;
 
         -- Map the Canvas section name -> section (idempotent on re-run). Done as

@@ -42,9 +42,15 @@ export async function establishSupabaseSession(
   }
 
   // 1. Resolve existing Pawtograder user by email, else create an auth user.
+  // Match case-insensitively but LITERALLY: `email` is already lowercased, and
+  // stored emails can differ in case, so look up both the lowercased and raw
+  // forms via `.in()` (exact match). NOT `.ilike()`, whose LIKE metacharacters
+  // (notably `_`, valid in email local-parts) would match a *different*
+  // account and silently sign the launcher into the wrong user.
   let userId: string | undefined;
-  const { data: existingUser } = await adminClient.from("users").select("user_id").ilike("email", email).maybeSingle();
-  userId = existingUser?.user_id;
+  const emailVariants = [...new Set([email, launch.email!.trim()])];
+  const { data: existingUsers } = await adminClient.from("users").select("user_id, email").in("email", emailVariants);
+  userId = (existingUsers ?? []).find((u) => u.email?.toLowerCase() === email)?.user_id ?? existingUsers?.[0]?.user_id;
 
   if (!userId) {
     const { data: created, error: createErr } = await adminClient.auth.admin.createUser({

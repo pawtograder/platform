@@ -401,13 +401,11 @@ async function runSeeding(config: SeederConfig) {
     instructor: process.env.FIXED_INSTRUCTOR_EMAIL || undefined,
     grader: process.env.FIXED_GRADER_EMAIL || undefined,
     student: process.env.FIXED_STUDENT_EMAIL || undefined,
-    // Always seed a site admin (the admin portal needs one and there's no other
-    // way to bootstrap it). Stable default so every dev/preview/e2e DB has a
-    // known admin login; the account uses the same seeding secret as the other
-    // fixed users (password = TEST_PASSWORD), so a deployed seed is no more
-    // exposed than its fixed instructor/grader/student accounts. Override the
-    // address with FIXED_ADMIN_EMAIL.
-    admin: process.env.FIXED_ADMIN_EMAIL || "admin@pawtograder.net"
+    // Opt-in like the other fixed users: set FIXED_ADMIN_EMAIL to seed a known
+    // site-admin login for the admin portal. Left unset, no admin is created, so
+    // a deployment that doesn't ask for one never gets an always-on, full-site
+    // admin account on the shared seed password.
+    admin: process.env.FIXED_ADMIN_EMAIL || undefined
   };
 
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);

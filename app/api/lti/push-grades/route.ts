@@ -45,6 +45,11 @@ export async function POST(request: Request) {
     }
 
     if (!isCronAuthorized(request)) {
+      // A cron call with a mismatched secret: surface it as 401 rather than
+      // letting it fall through to the (sessionless) instructor check and 403.
+      if (request.headers.get("x-lti-cron-secret")) {
+        return NextResponse.json({ error: "Invalid cron secret" }, { status: 401 });
+      }
       const serverClient = await createClient();
       if (!(await isInstructorOfClass(serverClient, classId))) {
         return NextResponse.json({ error: "Not authorized for this class" }, { status: 403 });

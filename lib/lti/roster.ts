@@ -81,6 +81,20 @@ async function upsertLtiUsers(platformId: number, roster: RosterEntry[], db: Lti
   }
 }
 
+/**
+ * Decide whether a single context's roster sync may drop class-wide missing
+ * members. The shared `sis_sync_enrollment` RPC's drop candidates are class-wide
+ * (not scoped to this context's sections), so a per-context sync may only drop
+ * when it is the SOLE linked context — otherwise it would disable students owned
+ * by sibling contexts. Fail safe: a count query error or a null count (we can't
+ * prove sole-context) returns false (don't drop).
+ */
+export function canDropMissing(linkedContextCount: number | null | undefined, countError: unknown): boolean {
+  if (countError) return false;
+  if (linkedContextCount == null) return false;
+  return linkedContextCount <= 1;
+}
+
 /** Resolve a context link's section configuration into CRNs the RPC understands.
  *  A mapped Pawtograder section is only usable if it has a non-null `sis_crn`. */
 export async function buildSectionConfig(link: ContextLinkRow, db: LtiDb): Promise<SectionConfig> {
@@ -144,12 +158,11 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
     // candidates are class-wide (not scoped to this context's sections), so
     // dropping here would disable students owned by sibling contexts — for ANY
     // section role, not just course_wide. Only drop when this is the sole context.
-    let dropMissing = true;
-    const { count: linkedContexts } = await db
+    const { count: linkedContexts, error: countErr } = await db
       .from("lti_context_links")
       .select("id", { count: "exact", head: true })
       .eq("class_id", link.class_id);
-    if ((linkedContexts ?? 1) > 1) dropMissing = false;
+    const dropMissing = canDropMissing(linkedContexts, countErr);
 
     // Each context owns only the section dimension(s) its role implies; tell the
     // RPC to leave the other dimension untouched so a lecture sync can't wipe the

@@ -117,7 +117,10 @@ export async function syncAssignmentGrades(
     .single();
   if (cErr) throw cErr;
 
-  const scoreMaximum = column.max_score ?? assignment.total_points ?? 100;
+  // Use `||` (not `??`) so a 0-point column/assignment falls back to a positive
+  // maximum: Canvas computes scoreGiven*(points_possible/scoreMaximum) and
+  // rejects the whole push on a scoreMaximum of 0 (division by zero).
+  const scoreMaximum = column.max_score || assignment.total_points || 100;
   const resourceId = `pawtograder_assignment_${assignment.id}`;
 
   // 1. Ensure the line item exists.
