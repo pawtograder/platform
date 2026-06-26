@@ -163,10 +163,14 @@ BEGIN
       AND (
         -- release/unrelease transition (unrelease => retraction)
         orr.released IS DISTINCT FROM nr.released
-        -- a released grade's value/excused state changed
+        -- a released grade's EFFECTIVE value (score_override ?? score) or excused
+        -- state changed. Compare the effective value, not raw score, because the
+        -- gradebook recalc routinely rewrites a released row's `score` to NULL
+        -- while score_override is unchanged; comparing raw score would re-enqueue
+        -- (and fire a drain HTTP kick) on every recalc even though nothing the
+        -- reconcile pushes (coalesce(score_override, score)) actually changed.
         OR (nr.released AND (
-              orr.score IS DISTINCT FROM nr.score
-           OR orr.score_override IS DISTINCT FROM nr.score_override
+              COALESCE(nr.score_override, nr.score) IS DISTINCT FROM COALESCE(orr.score_override, orr.score)
            OR orr.is_excused IS DISTINCT FROM nr.is_excused
         ))
       )

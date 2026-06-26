@@ -28,7 +28,7 @@ jest.mock("@/lib/lti/db", () => ({
   })
 }));
 
-import { syncAssignmentGrades } from "@/lib/lti/grades";
+import { syncAssignmentGrades, drainGradeSyncQueue } from "@/lib/lti/grades";
 import { ensureLineItem, publishScore, retractScore } from "@/lib/lti/ags";
 
 const ensureLineItemMock = ensureLineItem as jest.Mock;
@@ -43,6 +43,8 @@ type Fixtures = Record<string, TableResult>;
  *  like .single()/.maybeSingle()) resolves to that table's fixture. */
 function makeFakeDb(fixtures: Fixtures) {
   const upserts: Array<{ table: string; rows: unknown }> = [];
+  const deletes: Array<{ table: string; filters: Record<string, unknown> }> = [];
+  const rpcCalls: Array<{ fn: string; args: unknown }> = [];
   const from = (table: string) => {
     const result: TableResult = fixtures[table] ?? { data: null, error: null };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,6 +55,7 @@ function makeFakeDb(fixtures: Fixtures) {
     builder.in = chain;
     builder.not = chain;
     builder.order = chain;
+    builder.limit = chain;
     builder.single = chain;
     builder.maybeSingle = chain;
     builder.update = chain;
@@ -60,12 +63,41 @@ function makeFakeDb(fixtures: Fixtures) {
       upserts.push({ table, rows });
       return builder;
     };
+    // Delete records the eq() filters it was given, so a test can assert e.g.
+    // the drain delete is guarded by enqueued_at.
+    builder.delete = () => {
+      const filters: Record<string, unknown> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const del: any = {};
+      del.eq = (col: string, val: unknown) => {
+        filters[col] = val;
+        return del;
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      del.then = (resolve: any, reject: any) => {
+        deletes.push({ table, filters });
+        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+      };
+      return del;
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     builder.then = (resolve: any, reject: any) =>
       Promise.resolve({ data: result.data, error: result.error ?? null }).then(resolve, reject);
     return builder;
   };
-  return { db: { from } as unknown as Parameters<typeof syncAssignmentGrades>[2], upserts };
+  // lti_upsert_line_item returns the line item id; default to 1 (override via the
+  // `__line_item_id` fixture). The reconcile compares prev.line_item_id to this.
+  const rpc = (fn: string, args: unknown) => {
+    rpcCalls.push({ fn, args });
+    const id = (fixtures.__line_item_id?.data as number | undefined) ?? 1;
+    return Promise.resolve({ data: id, error: null });
+  };
+  return {
+    db: { from, rpc } as unknown as Parameters<typeof syncAssignmentGrades>[2],
+    upserts,
+    deletes,
+    rpcCalls
+  };
 }
 
 /** A baseline happy-path fixture set; tests override individual tables. */
@@ -213,7 +245,16 @@ describe("syncAssignmentGrades — reconcile against prior sync state", () => {
           data: [{ student_id: "p1", score: 40, score_override: null, released: true, is_excused: false }]
         },
         lti_grade_sync_state: {
-          data: [{ student_profile_id: "p1", lti_user_sub: "sub-1", synced_score: 40, status: "synced", attempts: 1 }]
+          data: [
+            {
+              student_profile_id: "p1",
+              lti_user_sub: "sub-1",
+              synced_score: 40,
+              line_item_id: 1,
+              status: "synced",
+              attempts: 1
+            }
+          ]
         }
       })
     );
@@ -221,6 +262,62 @@ describe("syncAssignmentGrades — reconcile against prior sync state", () => {
     expect(result.pushed).toBe(0);
     expect(result.skipped).toBe(1);
     expect(publishScoreMock).not.toHaveBeenCalled();
+  });
+
+  test("re-publishes a synced score when the column max changed (Canvas re-scales)", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        // current max is 50; the prior push recorded a line item with max 25.
+        gradebook_columns: { data: { id: 7, max_score: 50 } },
+        lti_line_items: { data: { id: 1, score_maximum: 25 } },
+        gradebook_column_students: {
+          data: [{ student_id: "p1", score: 40, score_override: null, released: true, is_excused: false }]
+        },
+        lti_grade_sync_state: {
+          data: [
+            {
+              student_profile_id: "p1",
+              lti_user_sub: "sub-1",
+              synced_score: 40,
+              line_item_id: 1,
+              status: "synced",
+              attempts: 1
+            }
+          ]
+        }
+      })
+    );
+    const result = await syncAssignmentGrades(100, 5, db);
+    expect(result.pushed).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(publishScoreMock.mock.calls[0][2].scoreMaximum).toBe(50);
+  });
+
+  test("re-publishes a synced score when the prior push targeted a different line item", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        gradebook_column_students: {
+          data: [{ student_id: "p1", score: 40, score_override: null, released: true, is_excused: false }]
+        },
+        // prior sync targeted line item 99; the current push resolves to id 1, so
+        // the student must be re-published to the new line item, not skipped.
+        lti_grade_sync_state: {
+          data: [
+            {
+              student_profile_id: "p1",
+              lti_user_sub: "sub-1",
+              synced_score: 40,
+              line_item_id: 99,
+              status: "synced",
+              attempts: 1
+            }
+          ]
+        }
+      })
+    );
+    const result = await syncAssignmentGrades(100, 5, db);
+    expect(result.pushed).toBe(1);
+    expect(result.skipped).toBe(0);
   });
 
   test("a previously-synced grade that is no longer released is retracted", async () => {
@@ -334,5 +431,28 @@ describe("syncAssignmentGrades — context selection", () => {
       })
     );
     await expect(syncAssignmentGrades(100, 5, db)).rejects.toThrow(/no gradebook column/i);
+  });
+});
+
+describe("drainGradeSyncQueue — concurrency-safe dequeue", () => {
+  test("deletes the queue row guarded by the enqueued_at it read", async () => {
+    const { db, deletes } = makeFakeDb(
+      baseFixtures({
+        lti_grade_sync_queue: {
+          data: [{ class_id: 100, assignment_id: 5, enqueued_at: "2026-06-26T00:00:00.000Z" }]
+        }
+      })
+    );
+    await drainGradeSyncQueue(db);
+    const queueDeletes = deletes.filter((d) => d.table === "lti_grade_sync_queue");
+    expect(queueDeletes).toHaveLength(1);
+    // The delete must carry the enqueued_at it read, so a re-enqueue mid-sync
+    // (which bumps enqueued_at) is NOT clobbered — that work survives for the
+    // next drain instead of being silently dropped.
+    expect(queueDeletes[0].filters).toEqual({
+      class_id: 100,
+      assignment_id: 5,
+      enqueued_at: "2026-06-26T00:00:00.000Z"
+    });
   });
 });

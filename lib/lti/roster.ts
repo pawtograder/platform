@@ -98,38 +98,60 @@ export function canDropMissing(linkedContextCount: number | null | undefined, co
 /** Resolve a context link's section configuration into CRNs the RPC understands.
  *  A mapped Pawtograder section is only usable if it has a non-null `sis_crn`. */
 export async function buildSectionConfig(link: ContextLinkRow, db: LtiDb): Promise<SectionConfig> {
-  const crnForClassSection = async (id: number | null): Promise<number | null> => {
-    if (!id) return null;
-    const { data } = await db.from("class_sections").select("sis_crn").eq("id", id).maybeSingle();
-    return data?.sis_crn ?? null;
-  };
-  const crnForLabSection = async (id: number | null): Promise<number | null> => {
-    if (!id) return null;
-    const { data } = await db.from("lab_sections").select("sis_crn").eq("id", id).maybeSingle();
-    return data?.sis_crn ?? null;
-  };
-
-  const nameMap: SectionConfig["nameMap"] = new Map();
+  // Load the per-member section map first (topology B) so we know every section
+  // id we need to resolve, then batch the id -> sis_crn lookups into one query
+  // per table instead of a serialized single-row SELECT per section.
+  let mapRows: Array<{ canvas_section_name: string; class_section_id: number | null; lab_section_id: number | null }> =
+    [];
   if (link.split_by_member_section) {
-    const { data: rows } = await db
+    const { data } = await db
       .from("lti_context_section_map")
       .select("canvas_section_name, class_section_id, lab_section_id")
       .eq("context_link_id", link.id);
-    for (const r of rows ?? []) {
-      nameMap.set(r.canvas_section_name, {
-        classSectionCrn: await crnForClassSection(r.class_section_id),
-        labSectionCrn: await crnForLabSection(r.lab_section_id)
-      });
-    }
+    mapRows = data ?? [];
+  }
+
+  const classSectionIds = uniqueIds([link.class_section_id, ...mapRows.map((r) => r.class_section_id)]);
+  const labSectionIds = uniqueIds([link.lab_section_id, ...mapRows.map((r) => r.lab_section_id)]);
+
+  const crnByClassSection = await crnMap(db, "class_sections", classSectionIds);
+  const crnByLabSection = await crnMap(db, "lab_sections", labSectionIds);
+  const classCrn = (id: number | null) => (id != null ? (crnByClassSection.get(id) ?? null) : null);
+  const labCrn = (id: number | null) => (id != null ? (crnByLabSection.get(id) ?? null) : null);
+
+  const nameMap: SectionConfig["nameMap"] = new Map();
+  for (const r of mapRows) {
+    nameMap.set(r.canvas_section_name, {
+      classSectionCrn: classCrn(r.class_section_id),
+      labSectionCrn: labCrn(r.lab_section_id)
+    });
   }
 
   return {
     sectionRole: link.section_role,
-    classSectionCrn: await crnForClassSection(link.class_section_id),
-    labSectionCrn: await crnForLabSection(link.lab_section_id),
+    classSectionCrn: classCrn(link.class_section_id),
+    labSectionCrn: labCrn(link.lab_section_id),
     splitByMemberSection: link.split_by_member_section,
     nameMap
   };
+}
+
+/** Unique, non-null ids from a list (preserves the batched-lookup contract). */
+function uniqueIds(ids: Array<number | null>): number[] {
+  return [...new Set(ids.filter((id): id is number => id != null))];
+}
+
+/** Batch-resolve section id -> sis_crn for one section table. */
+async function crnMap(
+  db: LtiDb,
+  table: "class_sections" | "lab_sections",
+  ids: number[]
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (ids.length === 0) return out;
+  const { data } = await db.from(table).select("id, sis_crn").in("id", ids);
+  for (const row of data ?? []) if (row.sis_crn != null) out.set(row.id, row.sis_crn);
+  return out;
 }
 
 /** Sync a single linked context. Throws only on unexpected failures; recorded

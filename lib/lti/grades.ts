@@ -43,6 +43,7 @@ type SyncStateRow = {
   student_profile_id: string;
   lti_user_sub: string | null;
   synced_score: number | null;
+  line_item_id: number | null;
   status: "synced" | "retracted" | "failed" | "no_identity";
   attempts: number;
 };
@@ -138,24 +139,34 @@ export async function syncAssignmentGrades(
 
   // 2. Record the mapping. NB: last_pushed_at is set at the END (after the run),
   // so it reflects an actual reconcile rather than just an attempt.
-  const { data: lineItemRow, error: liErr } = await db
+  //
+  // Read the PRIOR score_maximum first (the upsert below overwrites it): when the
+  // column max changes, a student's scoreGiven is re-scaled by the platform, so
+  // unchanged scores must be re-published rather than skipped (see the skip below).
+  const { data: priorLineItem } = await db
     .from("lti_line_items")
-    .upsert(
-      {
-        context_link_id: ctx.id,
-        class_id: classId,
-        assignment_id: assignment.id,
-        gradebook_column_id: assignment.gradebook_column_id,
-        line_item_url: lineItemUrl,
-        label: assignment.title,
-        score_maximum: scoreMaximum
-      },
-      { onConflict: "context_link_id,assignment_id" }
-    )
-    .select("id")
-    .single();
+    .select("score_maximum")
+    .eq("context_link_id", ctx.id)
+    .eq("assignment_id", assignment.id)
+    .maybeSingle();
+  const prevMax = priorLineItem?.score_maximum ?? null;
+  const maxChanged = prevMax !== null && prevMax !== scoreMaximum;
+
+  // Upsert via RPC so the (context_link_id, assignment_id) and
+  // (context_link_id, gradebook_column_id) unique constraints are resolved
+  // atomically — a PostgREST upsert can only declare one arbiter and would abort
+  // the push if a gradebook column was reassigned between assignments.
+  const { data: lineItemId, error: liErr } = await db.rpc("lti_upsert_line_item", {
+    p_context_link_id: ctx.id,
+    p_class_id: classId,
+    p_assignment_id: assignment.id,
+    p_gradebook_column_id: assignment.gradebook_column_id,
+    p_line_item_url: lineItemUrl,
+    p_label: assignment.title,
+    p_score_maximum: scoreMaximum
+  });
   if (liErr) throw liErr;
-  const lineItemId = lineItemRow.id;
+  if (lineItemId == null) throw new Error("lti_upsert_line_item returned no id");
 
   // 3. Load ALL grades for the column (not just released) so we can also detect
   // ones that must be retracted, plus the prior sync state for diffing.
@@ -170,7 +181,7 @@ export async function syncAssignmentGrades(
 
   const { data: stateData } = await db
     .from("lti_grade_sync_state")
-    .select("student_profile_id, lti_user_sub, synced_score, status, attempts")
+    .select("student_profile_id, lti_user_sub, synced_score, line_item_id, status, attempts")
     .eq("assignment_id", assignment.id);
   const prevByProfile = new Map<string, SyncStateRow>();
   for (const s of (stateData ?? []) as SyncStateRow[]) prevByProfile.set(s.student_profile_id, s);
@@ -232,8 +243,18 @@ export async function syncAssignmentGrades(
         });
         return;
       }
-      // Already in sync? Skip the network round-trip.
-      if (prev?.status === "synced" && prev.synced_score === finalScore && prev.lti_user_sub === sub) {
+      // Already in sync? Skip the network round-trip. We must also be synced to
+      // the SAME line item (prev.line_item_id === lineItemId): if the selected
+      // grade-sync context changed, the student is synced to a different line
+      // item and must be re-published to the current one. And if the column max
+      // changed (maxChanged), re-publish so the platform re-scales.
+      if (
+        prev?.status === "synced" &&
+        prev.synced_score === finalScore &&
+        prev.lti_user_sub === sub &&
+        prev.line_item_id === lineItemId &&
+        !maxChanged
+      ) {
         result.skipped += 1;
         return;
       }
@@ -334,7 +355,7 @@ export type DrainItemResult = {
 export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
   const { data: queue } = await db
     .from("lti_grade_sync_queue")
-    .select("class_id, assignment_id")
+    .select("class_id, assignment_id, enqueued_at")
     .order("enqueued_at", { ascending: true })
     .limit(limit);
 
@@ -346,11 +367,18 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
     } catch (e) {
       out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
     } finally {
+      // Delete only if the row hasn't been re-enqueued since we read it. The
+      // enqueue trigger bumps enqueued_at (ON CONFLICT DO UPDATE), so a grade
+      // change that landed WHILE this assignment was syncing leaves a newer
+      // enqueued_at; matching on it means that delete affects 0 rows, the row
+      // survives, and the next drain (or safety-net cron) reprocesses it. Without
+      // this guard the re-enqueued work would be silently dropped.
       await db
         .from("lti_grade_sync_queue")
         .delete()
         .eq("class_id", item.class_id)
-        .eq("assignment_id", item.assignment_id);
+        .eq("assignment_id", item.assignment_id)
+        .eq("enqueued_at", item.enqueued_at);
     }
   }
   return out;

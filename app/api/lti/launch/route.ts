@@ -71,11 +71,16 @@ export async function POST(request: Request) {
     // successful launch look broken (see resolveLaunchRedirect).
     let enrolled = false;
     if (persisted.classId) {
+      // Exclude disabled roles (a roster-dropped student keeps a user_roles row
+      // with disabled = true). Treat NULL as enabled, matching lib/lti/auth.ts.
+      // Otherwise a dropped student is sent into the course and the layout
+      // bounces them to '/', making the launch look broken.
       const { count } = await db
         .from("user_roles")
         .select("id", { count: "exact", head: true })
         .eq("class_id", persisted.classId)
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .or("disabled.is.null,disabled.eq.false");
       enrolled = (count ?? 0) > 0;
     }
 

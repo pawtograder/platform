@@ -13272,6 +13272,18 @@ export type Database = {
       };
       lti_grade_drain_safety_net: { Args: never; Returns: undefined };
       lti_kick_grade_drain: { Args: never; Returns: undefined };
+      lti_upsert_line_item: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_context_link_id: number;
+          p_gradebook_column_id: number;
+          p_label: string;
+          p_line_item_url: string;
+          p_score_maximum: number;
+        };
+        Returns: number;
+      };
       mark_discord_invite_used: {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
