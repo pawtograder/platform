@@ -149,7 +149,7 @@ export default function CourseLtiPage() {
         if (!res.ok) throw new Error(json.error ?? "Push failed");
         toaster.create({
           title: "Grades pushed",
-          description: `${json.pushed} pushed, ${json.skipped} skipped, ${json.failures?.length ?? 0} failed`,
+          description: `${json.pushed} pushed, ${json.retracted ?? 0} retracted, ${json.skipped} skipped, ${json.failures?.length ?? 0} failed`,
           type: json.failures?.length ? "warning" : "success"
         });
       } catch (error) {

@@ -10,6 +10,7 @@ import { AGS_SCOPE, type AgsLineItem, type AgsScore } from "./types";
 import { getServiceAccessToken } from "./oauth";
 import { ltiAdminClient, type LtiDb } from "./db";
 import { appendPath } from "./util";
+import * as Sentry from "@sentry/nextjs";
 
 const LINE_ITEM_MEDIA = "application/vnd.ims.lis.v2.lineitem+json";
 const LINE_ITEM_CONTAINER_MEDIA = "application/vnd.ims.lis.v2.lineitemcontainer+json";
@@ -61,8 +62,13 @@ export async function ensureLineItem(
       const items = (await existing.json()) as AgsLineItem[];
       const found = items.find((i) => i.resourceId === lineItem.resourceId && i.id);
       if (found?.id) {
-        // Keep label/max in sync.
-        await updateLineItem(platformId, found.id, lineItem, db).catch(() => undefined);
+        // Keep label/max in sync. A drift here is non-fatal for the push, but we
+        // surface it rather than swallow it silently so the stale label/max on
+        // the platform is observable.
+        await updateLineItem(platformId, found.id, lineItem, db).catch((e) => {
+          Sentry.captureException(e);
+          console.error(`[lti] failed to update line item ${found.id}: ${(e as Error).message}`);
+        });
         return { id: found.id, created: false };
       }
     }
@@ -122,4 +128,26 @@ export async function publishScore(
   if (!res.ok) {
     throw new Error(`Failed to publish score (${res.status}): ${await res.text().catch(() => "")}`);
   }
+}
+
+/**
+ * Retract (clear) a previously-published score. AGS has no explicit delete, so we
+ * post a score with no `scoreGiven` and `gradingProgress: "NotReady"` /
+ * `activityProgress: "Initialized"` — Canvas (and AGS-compliant platforms) clear
+ * the gradebook cell when `scoreGiven` is omitted. Used when a grade is
+ * un-released, excused, or nulled after having been synced.
+ */
+export async function retractScore(
+  platformId: number,
+  lineItemUrl: string,
+  userId: string,
+  db: LtiDb = ltiAdminClient()
+): Promise<void> {
+  const score: AgsScore = {
+    userId,
+    timestamp: new Date().toISOString(),
+    activityProgress: "Initialized",
+    gradingProgress: "NotReady"
+  };
+  await publishScore(platformId, lineItemUrl, score, db);
 }

@@ -1,23 +1,32 @@
 /**
- * Assignment + grade push via AGS.
+ * Assignment + grade sync via AGS.
  *
  * For an assignment we:
  *   1. ensure a line item exists on the platform (creating/updating it), keyed by
  *      a stable resourceId so the operation is idempotent,
  *   2. record the mapping in `lti_line_items`,
- *   3. publish each released student score, mapping Pawtograder profiles to the
- *      student's LTI `sub` via `user_roles` + `lti_users`.
+ *   3. reconcile each student's released score against what we last sent
+ *      (`lti_grade_sync_state`): publish new/changed scores, retract scores that
+ *      are no longer released/graded, and skip ones that are already in sync.
+ *
+ * The reconcile is incremental and self-correcting: re-running it is cheap (only
+ * changed students hit the platform) and it converges the LMS gradebook to the
+ * current Pawtograder state, including clearing stale grades.
  */
 import "server-only";
-import { AGS_SCOPE, type AgsScore } from "./types";
-import { ensureLineItem, publishScore } from "./ags";
+import { type AgsScore } from "./types";
+import { ensureLineItem, publishScore, retractScore } from "./ags";
 import { ltiAdminClient, type LtiDb } from "./db";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+
+type GradeSyncStateInsert = Database["public"]["Tables"]["lti_grade_sync_state"]["Insert"];
 
 export type GradePushResult = {
   assignmentId: number;
   classId: number;
   lineItemUrl: string;
   pushed: number;
+  retracted: number;
   skipped: number;
   failures: Array<{ studentId: string; reason: string }>;
 };
@@ -30,6 +39,14 @@ type ContextForGrades = {
   section_role: "lecture" | "lab" | "course_wide";
 };
 
+type SyncStateRow = {
+  student_profile_id: string;
+  lti_user_sub: string | null;
+  synced_score: number | null;
+  status: "synced" | "retracted" | "failed" | "no_identity";
+  attempts: number;
+};
+
 /**
  * Pick the context to push grades into. With a single AGS context this is the
  * one (today's behavior). With several (lecture+lab, cross-listed sections), we
@@ -37,9 +54,9 @@ type ContextForGrades = {
  * rather than the old `.limit(1)` which could pick the lab context and post to
  * the wrong Canvas course.
  *
- * TODO(phase2): per-student section→context routing (docs §7.3) — route each
- * student's score to the line item of the Canvas course that owns *their*
- * section, instead of a single class-wide context.
+ * TODO(phase2): per-student section→context routing (docs/lti-section-mapping.md
+ * §7.3) — route each student's score to the line item of the Canvas course that
+ * owns *their* section, instead of a single class-wide context.
  */
 async function getGradeContext(classId: number, db: LtiDb): Promise<ContextForGrades> {
   const { data, error } = await db
@@ -57,17 +74,29 @@ async function getGradeContext(classId: number, db: LtiDb): Promise<ContextForGr
   return contexts.find((c) => c.section_role === "lecture") ?? contexts[0];
 }
 
-/** Push a single assignment's grades to the platform gradebook. */
-export async function pushAssignmentGrades(
+/** Run `worker` over `items` with at most `limit` in flight at once. */
+async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      await worker(items[idx]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/**
+ * Reconcile a single assignment's grades to the platform gradebook. Publishes
+ * released scores, retracts grades that are no longer released/graded, and skips
+ * ones already in sync. Records the per-student outcome in `lti_grade_sync_state`.
+ */
+export async function syncAssignmentGrades(
   classId: number,
   assignmentId: number,
   db: LtiDb = ltiAdminClient()
 ): Promise<GradePushResult> {
   const ctx = await getGradeContext(classId, db);
-  if (!(ctx.ags_scopes ?? []).includes(AGS_SCOPE.score)) {
-    // Not fatal: some platforms grant scopes lazily. Warn via thrown context only
-    // if the push itself fails; proceed optimistically.
-  }
 
   // Assignment + its gradebook column.
   const { data: assignment, error: aErr } = await db
@@ -104,22 +133,29 @@ export async function pushAssignmentGrades(
     db
   );
 
-  // 2. Record the mapping.
-  await db.from("lti_line_items").upsert(
-    {
-      context_link_id: ctx.id,
-      class_id: classId,
-      assignment_id: assignment.id,
-      gradebook_column_id: assignment.gradebook_column_id,
-      line_item_url: lineItemUrl,
-      label: assignment.title,
-      score_maximum: scoreMaximum,
-      last_pushed_at: new Date().toISOString()
-    },
-    { onConflict: "context_link_id,assignment_id" }
-  );
+  // 2. Record the mapping. NB: last_pushed_at is set at the END (after the run),
+  // so it reflects an actual reconcile rather than just an attempt.
+  const { data: lineItemRow, error: liErr } = await db
+    .from("lti_line_items")
+    .upsert(
+      {
+        context_link_id: ctx.id,
+        class_id: classId,
+        assignment_id: assignment.id,
+        gradebook_column_id: assignment.gradebook_column_id,
+        line_item_url: lineItemUrl,
+        label: assignment.title,
+        score_maximum: scoreMaximum
+      },
+      { onConflict: "context_link_id,assignment_id" }
+    )
+    .select("id")
+    .single();
+  if (liErr) throw liErr;
+  const lineItemId = lineItemRow.id;
 
-  // 3. Collect released grades.
+  // 3. Load ALL grades for the column (not just released) so we can also detect
+  // ones that must be retracted, plus the prior sync state for diffing.
   const { data: grades, error: gErr } = await db
     .from("gradebook_column_students")
     .select("student_id, score, score_override, released, is_excused")
@@ -127,9 +163,18 @@ export async function pushAssignmentGrades(
     .eq("class_id", classId)
     .eq("is_private", true);
   if (gErr) throw gErr;
+  const rows = grades ?? [];
 
-  // Map private_profile_id -> user_id -> lti sub.
-  const profileIds = (grades ?? []).map((g) => g.student_id);
+  const { data: stateData } = await db
+    .from("lti_grade_sync_state")
+    .select("student_profile_id, lti_user_sub, synced_score, status, attempts")
+    .eq("assignment_id", assignment.id);
+  const prevByProfile = new Map<string, SyncStateRow>();
+  for (const s of (stateData ?? []) as SyncStateRow[]) prevByProfile.set(s.student_profile_id, s);
+
+  // Map private_profile_id -> lti sub (via user_roles, with an email fallback so
+  // roster-synced students who never launched the tool still resolve).
+  const profileIds = rows.map((g) => g.student_id);
   const subByProfile = await resolveSubsByProfile(classId, ctx.platform_id, profileIds, db);
 
   const result: GradePushResult = {
@@ -137,40 +182,175 @@ export async function pushAssignmentGrades(
     classId,
     lineItemUrl,
     pushed: 0,
+    retracted: 0,
     skipped: 0,
     failures: []
   };
   const now = new Date().toISOString();
+  const stateRows: GradeSyncStateInsert[] = [];
 
-  for (const g of grades ?? []) {
+  await runPool(rows, 8, async (g) => {
     const finalScore = g.score_override ?? g.score;
-    if (!g.released || finalScore === null || g.is_excused) {
-      result.skipped += 1;
-      continue;
-    }
+    const shouldHaveScore = g.released && !g.is_excused && finalScore !== null;
     const sub = subByProfile.get(g.student_id);
-    if (!sub) {
-      result.skipped += 1;
-      result.failures.push({ studentId: g.student_id, reason: "No LTI identity mapped for student" });
-      continue;
+    const prev = prevByProfile.get(g.student_id);
+    const baseAttempts = prev?.attempts ?? 0;
+
+    // Keep keys uniform across every row: a bulk upsert with mismatched object
+    // keys is rejected by PostgREST ("All object keys must match").
+    const pushState = (extra: {
+      lti_user_sub: string | null;
+      synced_score: number | null;
+      status: "synced" | "retracted" | "failed" | "no_identity";
+      error: string | null;
+      attempts: number;
+      synced_at?: string | null;
+    }) =>
+      stateRows.push({
+        class_id: classId,
+        assignment_id: assignment.id,
+        line_item_id: lineItemId,
+        student_profile_id: g.student_id,
+        last_attempt_at: now,
+        synced_at: null,
+        ...extra
+      });
+
+    if (shouldHaveScore) {
+      if (!sub) {
+        result.skipped += 1;
+        result.failures.push({ studentId: g.student_id, reason: "No LTI identity mapped for student" });
+        pushState({
+          lti_user_sub: null,
+          synced_score: null,
+          status: "no_identity",
+          error: "No LTI identity mapped for student",
+          attempts: baseAttempts + 1
+        });
+        return;
+      }
+      // Already in sync? Skip the network round-trip.
+      if (prev?.status === "synced" && prev.synced_score === finalScore && prev.lti_user_sub === sub) {
+        result.skipped += 1;
+        return;
+      }
+      const score: AgsScore = {
+        userId: sub,
+        scoreGiven: finalScore as number,
+        scoreMaximum,
+        timestamp: now,
+        activityProgress: "Completed",
+        gradingProgress: "FullyGraded"
+      };
+      try {
+        await publishScore(ctx.platform_id, lineItemUrl, score, db);
+        result.pushed += 1;
+        pushState({
+          lti_user_sub: sub,
+          synced_score: finalScore,
+          status: "synced",
+          error: null,
+          attempts: baseAttempts + 1,
+          synced_at: now
+        });
+      } catch (e) {
+        result.failures.push({ studentId: g.student_id, reason: (e as Error).message });
+        pushState({
+          lti_user_sub: sub,
+          synced_score: prev?.synced_score ?? null,
+          status: "failed",
+          error: (e as Error).message,
+          attempts: baseAttempts + 1
+        });
+      }
+      return;
     }
-    const score: AgsScore = {
-      userId: sub,
-      scoreGiven: finalScore,
-      scoreMaximum,
-      timestamp: now,
-      activityProgress: "Completed",
-      gradingProgress: "FullyGraded"
-    };
-    try {
-      await publishScore(ctx.platform_id, lineItemUrl, score, db);
-      result.pushed += 1;
-    } catch (e) {
-      result.failures.push({ studentId: g.student_id, reason: (e as Error).message });
+
+    // Should NOT have a score. Retract only if we previously published one.
+    if (prev?.status === "synced" && prev.synced_score !== null) {
+      const retractSub = sub ?? prev.lti_user_sub;
+      if (!retractSub) {
+        result.skipped += 1;
+        return;
+      }
+      try {
+        await retractScore(ctx.platform_id, lineItemUrl, retractSub, db);
+        result.retracted += 1;
+        pushState({
+          lti_user_sub: retractSub,
+          synced_score: null,
+          status: "retracted",
+          error: null,
+          attempts: baseAttempts + 1,
+          synced_at: now
+        });
+      } catch (e) {
+        result.failures.push({ studentId: g.student_id, reason: `retract failed: ${(e as Error).message}` });
+        pushState({
+          lti_user_sub: retractSub,
+          synced_score: prev.synced_score,
+          status: "failed",
+          error: (e as Error).message,
+          attempts: baseAttempts + 1
+        });
+      }
+      return;
     }
+
+    // Nothing to do (never synced and not releasable).
+    result.skipped += 1;
+  });
+
+  if (stateRows.length > 0) {
+    await db.from("lti_grade_sync_state").upsert(stateRows, { onConflict: "assignment_id,student_profile_id" });
   }
 
+  await db.from("lti_line_items").update({ last_pushed_at: new Date().toISOString() }).eq("id", lineItemId);
+
   return result;
+}
+
+/** Back-compat alias for the previous name. */
+export const pushAssignmentGrades = syncAssignmentGrades;
+
+export type DrainItemResult = {
+  classId: number;
+  assignmentId: number;
+  ok: boolean;
+  result?: GradePushResult;
+  error?: string;
+};
+
+/**
+ * Process the on-release work queue: reconcile each enqueued assignment, then
+ * remove its queue row. The row is removed whether the reconcile succeeds or
+ * throws, so a persistent error (e.g. grade sync disabled) can't make the
+ * safety-net cron re-kick forever — durable per-student failures live in
+ * `lti_grade_sync_state` and the trigger re-enqueues on the next grade change.
+ */
+export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
+  const { data: queue } = await db
+    .from("lti_grade_sync_queue")
+    .select("class_id, assignment_id")
+    .order("enqueued_at", { ascending: true })
+    .limit(limit);
+
+  const out: DrainItemResult[] = [];
+  for (const item of queue ?? []) {
+    try {
+      const result = await syncAssignmentGrades(item.class_id, item.assignment_id, db);
+      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: true, result });
+    } catch (e) {
+      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
+    } finally {
+      await db
+        .from("lti_grade_sync_queue")
+        .delete()
+        .eq("class_id", item.class_id)
+        .eq("assignment_id", item.assignment_id);
+    }
+  }
+  return out;
 }
 
 async function resolveSubsByProfile(
@@ -192,19 +372,46 @@ async function resolveSubsByProfile(
     if (r.private_profile_id && r.user_id) userIdByProfile.set(r.private_profile_id, r.user_id);
   }
 
-  const userIds = [...userIdByProfile.values()];
+  const userIds = [...new Set(userIdByProfile.values())];
   if (userIds.length === 0) return out;
 
-  const { data: ltiUsers } = await db
+  // Email of each user, for the fallback path.
+  const { data: users } = await db.from("users").select("user_id, email").in("user_id", userIds);
+  const emailByUserId = new Map<string, string>();
+  const emailForms = new Set<string>();
+  for (const u of users ?? []) {
+    if (u.user_id && u.email) {
+      emailByUserId.set(u.user_id, u.email.toLowerCase());
+      emailForms.add(u.email);
+      emailForms.add(u.email.toLowerCase());
+    }
+  }
+
+  // Resolve sub by user_id (launched students) and by email (roster-synced but
+  // never-launched students, whose lti_users row may have a null user_id).
+  const subByUserId = new Map<string, string>();
+  const subByEmailLower = new Map<string, string>();
+  const { data: byUser } = await db
     .from("lti_users")
-    .select("user_id, sub")
+    .select("user_id, sub, email")
     .eq("platform_id", platformId)
     .in("user_id", userIds);
-  const subByUserId = new Map<string, string>();
-  for (const lu of ltiUsers ?? []) if (lu.user_id) subByUserId.set(lu.user_id, lu.sub);
+  for (const lu of byUser ?? []) {
+    if (lu.user_id) subByUserId.set(lu.user_id, lu.sub);
+    if (lu.email) subByEmailLower.set(lu.email.toLowerCase(), lu.sub);
+  }
+  if (emailForms.size > 0) {
+    const { data: byEmail } = await db
+      .from("lti_users")
+      .select("sub, email")
+      .eq("platform_id", platformId)
+      .in("email", [...emailForms]);
+    for (const lu of byEmail ?? []) if (lu.email) subByEmailLower.set(lu.email.toLowerCase(), lu.sub);
+  }
 
   for (const [profileId, userId] of userIdByProfile.entries()) {
-    const sub = subByUserId.get(userId);
+    const email = emailByUserId.get(userId);
+    const sub = subByUserId.get(userId) ?? (email ? subByEmailLower.get(email) : undefined);
     if (sub) out.set(profileId, sub);
   }
   return out;

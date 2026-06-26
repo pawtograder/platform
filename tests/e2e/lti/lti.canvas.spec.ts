@@ -379,6 +379,131 @@ test("AGS: grade update lands in Canvas; unreleased and null grades are not push
   expect(empty.pushed, `null grade must not push: ${JSON.stringify(empty)}`).toBe(0);
 });
 
+test("AGS: releasing a grade enqueues it; drain syncs it; unreleasing retracts it in Canvas", async ({
+  page,
+  request
+}) => {
+  test.setTimeout(240_000);
+  const student = cfg.students[0];
+  const auth = { Authorization: `Bearer ${cfg.canvasAdminToken}` };
+
+  const { data: sUser } = await supabase.from("users").select("user_id").eq("email", student.email).single();
+  const { data: sRole } = await supabase
+    .from("user_roles")
+    .select("private_profile_id")
+    .eq("class_id", pawClassId)
+    .eq("user_id", sUser!.user_id)
+    .single();
+  const studentId = sRole!.private_profile_id as string;
+
+  const gradeRowId = async (columnId: number): Promise<number> => {
+    const { data: row } = await supabase
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("gradebook_column_id", columnId)
+      .eq("student_id", studentId)
+      .eq("is_private", true)
+      .maybeSingle();
+    expect(row?.id, `gradebook row for column ${columnId}`).toBeTruthy();
+    return row!.id;
+  };
+
+  const canvasScore = async (title: string): Promise<number | null | undefined> => {
+    const aRes = await request.get(
+      `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/assignments?search_term=${encodeURIComponent(title)}&per_page=100`,
+      { headers: auth }
+    );
+    const a = ((await aRes.json()) as Array<{ id: number; name: string }>).find((x) => x.name === title);
+    if (!a) return undefined;
+    const subRes = await request.get(
+      `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/assignments/${a.id}/submissions?per_page=100`,
+      { headers: auth }
+    );
+    const subs = (await subRes.json()) as Array<{ score: number | null }>;
+    return subs.map((s) => s.score).find((s) => s !== null) ?? null;
+  };
+
+  const drain = async () => {
+    const res = await request.post(`${cfg.toolBaseUrl}/api/lti/push-grades`, {
+      headers: { "x-lti-cron-secret": cronSecret },
+      data: { drain: true }
+    });
+    const body = await res.json();
+    expect(res.ok(), `drain ${res.status()}: ${JSON.stringify(body)}`).toBeTruthy();
+    return body;
+  };
+
+  const id1 = await gradeRowId(gradebookColumnId);
+
+  // (1) ENQUEUE: the on-release DB trigger should enqueue the assignment when a
+  // private grade row is released (the HTTP drain-kick may no-op locally if
+  // app_url/pg_net are unset, but the enqueue itself runs in-txn regardless).
+  await supabase.from("lti_grade_sync_queue").delete().eq("class_id", pawClassId);
+  const { error: relErr } = await supabase
+    .from("gradebook_column_students")
+    .update({ score_override: 81, released: true })
+    .eq("id", id1);
+  expect(relErr).toBeNull();
+  let queued = false;
+  for (let i = 0; i < 10 && !queued; i++) {
+    const { data } = await supabase
+      .from("lti_grade_sync_queue")
+      .select("assignment_id")
+      .eq("class_id", pawClassId)
+      .eq("assignment_id", pawAssignmentId);
+    queued = (data ?? []).length > 0;
+    if (!queued) await page.waitForTimeout(500);
+  }
+  expect(queued, "releasing a grade should enqueue the assignment").toBeTruthy();
+
+  // (2) DRAIN: process the queue. Canvas reflects 81, the queue row is removed,
+  // and per-student state records the synced value.
+  await drain();
+  let landed = false;
+  for (let i = 0; i < 40 && !landed; i++) {
+    landed = Number(await canvasScore(pawAssignmentTitle)) === 81;
+    if (!landed) await page.waitForTimeout(3000);
+  }
+  expect(landed, "drain should push the released score (81) to Canvas").toBeTruthy();
+  const { data: qAfter } = await supabase
+    .from("lti_grade_sync_queue")
+    .select("assignment_id")
+    .eq("class_id", pawClassId)
+    .eq("assignment_id", pawAssignmentId);
+  expect((qAfter ?? []).length, "queue row removed after a successful drain").toBe(0);
+  const { data: st1 } = await supabase
+    .from("lti_grade_sync_state")
+    .select("status, synced_score")
+    .eq("assignment_id", pawAssignmentId)
+    .eq("student_profile_id", studentId)
+    .maybeSingle();
+  expect(st1?.status, "state should be synced after drain").toBe("synced");
+  expect(Number(st1?.synced_score)).toBe(81);
+
+  // (3) RETRACT: unreleasing a previously-synced grade should clear it in Canvas
+  // and record a 'retracted' state, rather than leaving the stale value behind.
+  const { error: unrelErr } = await supabase
+    .from("gradebook_column_students")
+    .update({ released: false })
+    .eq("id", id1);
+  expect(unrelErr).toBeNull();
+  await drain();
+  let cleared = false;
+  for (let i = 0; i < 40 && !cleared; i++) {
+    cleared = (await canvasScore(pawAssignmentTitle)) === null;
+    if (!cleared) await page.waitForTimeout(3000);
+  }
+  expect(cleared, "unreleasing a synced grade should clear the Canvas score").toBeTruthy();
+  const { data: st2 } = await supabase
+    .from("lti_grade_sync_state")
+    .select("status, synced_score")
+    .eq("assignment_id", pawAssignmentId)
+    .eq("student_profile_id", studentId)
+    .maybeSingle();
+  expect(st2?.status, "state should be retracted after unrelease").toBe("retracted");
+  expect(st2?.synced_score, "retracted state clears the synced score").toBeNull();
+});
+
 test("section discovery + auto-create + split roster sync place students in their Canvas sections", async ({
   browser,
   request
