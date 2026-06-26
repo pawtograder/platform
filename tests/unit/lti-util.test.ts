@@ -25,6 +25,17 @@ describe("ltiRolesToAppRole", () => {
     expect(ltiRolesToAppRole([LTI_ROLE.teachingAssistant])).toBe("grader");
     expect(ltiRolesToAppRole([LTI_ROLE.contentDeveloper])).toBe("grader");
   });
+  test("maps a Canvas TA (sub-role + co-sent base Instructor) to grader, not instructor", () => {
+    // Canvas (substitutions_helper) sends a TA as the sub-role AND the base role.
+    expect(
+      ltiRolesToAppRole([
+        "http://purl.imsglobal.org/vocab/lis/v2/membership/instructor#TeachingAssistant",
+        "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"
+      ])
+    ).toBe("grader");
+    // A plain instructor (no grader sub-role) still maps to instructor.
+    expect(ltiRolesToAppRole(["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"])).toBe("instructor");
+  });
   test("defaults to student", () => {
     expect(ltiRolesToAppRole([LTI_ROLE.learner])).toBe("student");
     expect(ltiRolesToAppRole([])).toBe("student");

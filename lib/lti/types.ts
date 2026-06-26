@@ -64,10 +64,25 @@ export type AppRole = "instructor" | "grader" | "student";
  * is merely a Learner. So we match the bare short form or the full
  * context-membership URN exactly, never an arbitrary `#`-suffix. */
 export function ltiRolesToAppRole(roles: string[] | undefined): AppRole {
+  const list = roles ?? [];
   const MEMBERSHIP_NS = "http://purl.imsglobal.org/vocab/lis/v2/membership#";
-  const has = (needle: string) => (roles ?? []).some((r) => r === needle || r === `${MEMBERSHIP_NS}${needle}`);
+  const has = (needle: string) => list.some((r) => r === needle || r === `${MEMBERSHIP_NS}${needle}`);
+  // A TA/grader is a context SUB-role: Canvas sends e.g.
+  // ".../membership/Instructor#TeachingAssistant" ALONGSIDE the base
+  // "#Instructor" role. Detect the grader sub-role first so a TA maps to grader
+  // rather than being granted full instructor by the co-sent Instructor role.
+  // The sub-role pattern (/membership/<Role>#<SubRole>) keeps this a context
+  // role — institution/system roles use a different namespace and never match.
+  const hasSubrole = (sub: string) => list.some((r) => new RegExp(`/membership/[A-Za-z]+#${sub}$`).test(r));
+  if (
+    has("TeachingAssistant") ||
+    has("ContentDeveloper") ||
+    hasSubrole("TeachingAssistant") ||
+    hasSubrole("ContentDeveloper")
+  ) {
+    return "grader";
+  }
   if (has("Instructor")) return "instructor";
-  if (has("TeachingAssistant") || has("ContentDeveloper")) return "grader";
   return "student";
 }
 
