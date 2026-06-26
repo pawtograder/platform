@@ -36,6 +36,8 @@ assignment_points = ENV.fetch("PG_ASSIGNMENT_POINTS", "100").to_i
 # exactly one known name.
 section_names = ENV.fetch("PG_SECTION_NAMES", "E2E Section A,E2E Section B")
                  .split(",").map(&:strip).reject(&:empty?)
+# A TA so the e2e can assert LTI role mapping (Canvas TA -> Pawtograder grader).
+ta_email = ENV.fetch("PG_TA_EMAIL", "ta.e2e@example.com")
 
 # --- find-or-create a user with a login (pseudonym) + active email channel ----
 def upsert_user(account, name, email, password)
@@ -90,6 +92,12 @@ students = student_emails.each_with_index.map do |email, i|
   [email, s, section]
 end
 
+# --- TA (TeachingAssistant -> grader role mapping) ---------------------------
+ta = upsert_user(account, "E2E TA", ta_email, password)
+unless course.enrollments.where(user_id: ta.id, type: "TaEnrollment").active.exists?
+  course.enroll_user(ta, "TaEnrollment", enrollment_state: "active", section: sections.first)
+end
+
 # --- assignment (published, online submission, gradable) ---------------------
 assignment = course.assignments.where(title: assignment_name).first
 assignment ||= course.assignments.create!(
@@ -114,6 +122,8 @@ puts "COURSE_LTI_CONTEXT_ID=#{lti_context_id}"
 puts "TEACHER_EMAIL=#{teacher_email}"
 puts "TEACHER_PASSWORD=#{password}"
 puts "TEACHER_USER_ID=#{teacher.id}"
+puts "TA_EMAIL=#{ta_email}"
+puts "TA_USER_ID=#{ta.id}"
 puts "SECTION_NAMES=#{section_names.join("|")}"
 students.each do |email, s, section|
   puts "STUDENT_EMAIL=#{email}"

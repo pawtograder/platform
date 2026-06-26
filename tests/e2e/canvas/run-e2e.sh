@@ -126,6 +126,7 @@ echo "$SEED"
 getv() { echo "$SEED" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
 COURSE_ID="$(getv COURSE_ID)"; ASSIGNMENT_ID="$(getv ASSIGNMENT_ID)"
 TEACHER_EMAIL="$(getv TEACHER_EMAIL)"; TEACHER_PASSWORD="$(getv TEACHER_PASSWORD)"
+TA_EMAIL="$(getv TA_EMAIL)"
 mapfile -t STUDENT_EMAILS < <(echo "$SEED" | grep -E '^STUDENT_EMAIL=' | cut -d= -f2-)
 SECTION_NAMES_PIPE="$(getv SECTION_NAMES)"   # "Section A|Section B"
 mapfile -t STUDENT_SECTION_LINES < <(echo "$SEED" | grep -E '^STUDENT_SECTION=' | cut -d= -f2-)  # each "email|section"
@@ -154,7 +155,7 @@ CANVAS_ISSUER="$ISSUER" CANVAS_CLIENT_ID="$CLIENT_ID" CANVAS_BASE_URL="$CANVAS_B
   npx tsx tests/e2e/lti/register-platform.ts
 
 # --- 6. Capture context for the spec + run Playwright -----------------------
-export CANVAS_BASE_URL TOOL_BASE_URL ISSUER CLIENT_ID DEPLOYMENT_ID TOOL_ID COURSE_ID ASSIGNMENT_ID TEACHER_EMAIL TEACHER_PASSWORD CANVAS_ADMIN_TOKEN OUT_JSON
+export CANVAS_BASE_URL TOOL_BASE_URL ISSUER CLIENT_ID DEPLOYMENT_ID TOOL_ID COURSE_ID ASSIGNMENT_ID TEACHER_EMAIL TEACHER_PASSWORD TA_EMAIL CANVAS_ADMIN_TOKEN OUT_JSON
 export STUDENT_EMAILS_CSV="$(IFS=,; echo "${STUDENT_EMAILS[*]}")"
 export SECTION_NAMES_CSV="$(echo "$SECTION_NAMES_PIPE" | tr '|' ',')"
 # Newline-joined "email|section" pairs (section names may contain spaces).
@@ -173,6 +174,7 @@ const out={
   canvasToolId: process.env.TOOL_ID,
   canvasAssignmentId: process.env.ASSIGNMENT_ID,
   teacher: { email: process.env.TEACHER_EMAIL, password: process.env.TEACHER_PASSWORD },
+  ta: process.env.TA_EMAIL ? { email: process.env.TA_EMAIL, password: process.env.TEACHER_PASSWORD } : undefined,
   students: (process.env.STUDENT_EMAILS_CSV||"").split(",").filter(Boolean).map(email=>({ email, password: process.env.TEACHER_PASSWORD })),
   sectionNames: (process.env.SECTION_NAMES_CSV||"").split(",").filter(Boolean),
   studentSections: Object.fromEntries(

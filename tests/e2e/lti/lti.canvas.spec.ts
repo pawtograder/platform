@@ -31,6 +31,8 @@ type CanvasConfig = {
   canvasToolId: string;
   canvasAssignmentId: string;
   teacher: { email: string; password: string };
+  /** A Canvas TA (TeachingAssistant) — for asserting LTI role mapping → grader. */
+  ta?: { email: string; password: string };
   students: { email: string; password: string }[];
   /** Distinct Canvas course section names the seed created. */
   sectionNames?: string[];
@@ -52,6 +54,10 @@ let pawClassId: number;
 let pawAssignmentId: number;
 let pawAssignmentTitle: string;
 let gradebookColumnId: number;
+// A second assignment/column, used to exercise grade gating (unreleased/null)
+// independently of the first assignment's pushed grade.
+let pawAssignment2Id: number;
+let gradebookColumn2Id: number;
 let platformId: number;
 
 test.describe.configure({ mode: "serial" });
@@ -69,6 +75,8 @@ test.beforeAll(async () => {
   pawAssignmentId = assignments[0].id as number;
   pawAssignmentTitle = assignments[0].title as string;
   gradebookColumnId = assignments[0].gradebook_column_id as number;
+  pawAssignment2Id = assignments[1].id as number;
+  gradebookColumn2Id = assignments[1].gradebook_column_id as number;
 
   const { data: platform } = await supabase
     .from("lti_platforms")
@@ -152,6 +160,35 @@ test("NRPS roster sync enrolls the Canvas roster into the class", async ({ page,
   const inviteEmails = (invites ?? []).map((i) => i.email);
   const rosterEmails = new Set([...enrolledEmails, ...inviteEmails]);
   for (const s of cfg.students) expect([...rosterEmails]).toContain(s.email);
+
+  // Role mapping: a Canvas TA (TeachingAssistant) becomes a Pawtograder grader.
+  if (cfg.ta) {
+    const taEnrollRole = (roles ?? []).find(
+      (r) => (r.users as { email: string } | null)?.email === cfg.ta!.email
+    )?.role;
+    const taInviteRole = (invites ?? []).find((i) => i.email === cfg.ta!.email)?.role;
+    expect(taEnrollRole ?? taInviteRole, `TA ${cfg.ta.email} should map to grader`).toBe("grader");
+  }
+
+  // Idempotency: a second sync of the same roster must not create duplicate
+  // enrollments or invitations.
+  const beforeRoles = (roles ?? []).length;
+  const beforeInvites = (invites ?? []).length;
+  const res2 = await request.post(`${cfg.toolBaseUrl}/api/lti/sync-roster`, {
+    headers: { "x-lti-cron-secret": cronSecret },
+    data: { all: true }
+  });
+  expect(res2.ok(), `re-sync ${res2.status()}`).toBeTruthy();
+  const { count: afterRoles } = await supabase
+    .from("user_roles")
+    .select("id", { count: "exact", head: true })
+    .eq("class_id", pawClassId);
+  const { count: afterInvites } = await supabase
+    .from("invitations")
+    .select("id", { count: "exact", head: true })
+    .eq("class_id", pawClassId);
+  expect(afterRoles, "re-sync should not add user_roles").toBe(beforeRoles);
+  expect(afterInvites, "re-sync should not add invitations").toBe(beforeInvites);
 
   // Show the synced roster in the management UI (teacher session from step 1).
   await page.goto(`${cfg.toolBaseUrl}/course/${pawClassId}/manage/course/lti`, { waitUntil: "domcontentloaded" });
@@ -256,6 +293,90 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   await page.goto(`${cfg.canvasBaseUrl}/courses/${cfg.canvasCourseId}/gradebook`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(4000);
   await visualScreenshot(page, "lti-03-canvas-gradebook");
+});
+
+test("AGS: grade update lands in Canvas; unreleased and null grades are not pushed", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const student = cfg.students[0];
+  const auth = { Authorization: `Bearer ${cfg.canvasAdminToken}` };
+
+  // The launched student (enrolled in the previous step) and their private profile.
+  const { data: sUser } = await supabase.from("users").select("user_id").eq("email", student.email).single();
+  const { data: sRole } = await supabase
+    .from("user_roles")
+    .select("private_profile_id")
+    .eq("class_id", pawClassId)
+    .eq("user_id", sUser!.user_id)
+    .single();
+  const studentId = sRole!.private_profile_id as string;
+
+  // Set a grade on a column for this student (by row id), waiting for the
+  // enrollment-created gradebook row to exist.
+  const setGrade = async (columnId: number, patch: Record<string, unknown>) => {
+    let rowId: number | undefined;
+    for (let i = 0; i < 15 && !rowId; i++) {
+      const { data: row } = await supabase
+        .from("gradebook_column_students")
+        .select("id")
+        .eq("gradebook_column_id", columnId)
+        .eq("student_id", studentId)
+        .eq("is_private", true)
+        .maybeSingle();
+      rowId = row?.id;
+      if (!rowId) await page.waitForTimeout(2000);
+    }
+    expect(rowId, `gradebook row for column ${columnId}`).toBeTruthy();
+    const { error } = await supabase.from("gradebook_column_students").update(patch).eq("id", rowId!);
+    expect(error).toBeNull();
+  };
+
+  const pushGrades = async (assignmentId: number) => {
+    const res = await request.post(`${cfg.toolBaseUrl}/api/lti/push-grades`, {
+      headers: { "x-lti-cron-secret": cronSecret },
+      data: { class_id: pawClassId, assignment_id: assignmentId }
+    });
+    const body = await res.json();
+    expect(res.ok(), `push-grades ${res.status()}: ${JSON.stringify(body)}`).toBeTruthy();
+    return body as { pushed: number };
+  };
+
+  // This student's Canvas submission score for an assignment (by title).
+  const canvasScore = async (title: string): Promise<number | null | undefined> => {
+    const aRes = await request.get(
+      `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/assignments?search_term=${encodeURIComponent(title)}&per_page=100`,
+      { headers: auth }
+    );
+    const a = ((await aRes.json()) as Array<{ id: number; name: string }>).find((x) => x.name === title);
+    if (!a) return undefined;
+    const subRes = await request.get(
+      `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/assignments/${a.id}/submissions?per_page=100`,
+      { headers: auth }
+    );
+    const subs = (await subRes.json()) as Array<{ score: number | null }>;
+    return subs.map((s) => s.score).find((s) => s !== null) ?? null;
+  };
+
+  // (1) UPDATE: change the released score (88 from the previous step) to 73 and
+  // confirm Canvas reflects the new value.
+  await setGrade(gradebookColumnId, { score_override: 73, released: true });
+  const up = await pushGrades(pawAssignmentId);
+  expect(up.pushed, "the released grade should push").toBeGreaterThanOrEqual(1);
+  let updated = false;
+  for (let i = 0; i < 40 && !updated; i++) {
+    updated = Number(await canvasScore(pawAssignmentTitle)) === 73;
+    if (!updated) await page.waitForTimeout(3000);
+  }
+  expect(updated, "Canvas submission score should update to 73").toBeTruthy();
+
+  // (2) RELEASE-GATING: an unreleased grade (on the second column) must not push.
+  await setGrade(gradebookColumn2Id, { score_override: 95, released: false });
+  const gated = await pushGrades(pawAssignment2Id);
+  expect(gated.pushed, `unreleased grade must not push: ${JSON.stringify(gated)}`).toBe(0);
+
+  // (3) NULL: a released but empty grade must not push either.
+  await setGrade(gradebookColumn2Id, { score_override: null, score: null, released: true });
+  const empty = await pushGrades(pawAssignment2Id);
+  expect(empty.pushed, `null grade must not push: ${JSON.stringify(empty)}`).toBe(0);
 });
 
 test("section discovery + auto-create + split roster sync place students in their Canvas sections", async ({
@@ -373,4 +494,128 @@ test("section discovery + auto-create + split roster sync place students in thei
     }
     expect(actual, `${student.email} should be in the lab section for ${canvasSection}`).toBe(expectedLabSectionId);
   }
+});
+
+test("topology A: a context-level lecture section enrolls all students into that one section", async ({ request }) => {
+  test.setTimeout(120_000);
+  const { data: link } = await supabase
+    .from("lti_context_links")
+    .select("id")
+    .eq("platform_id", platformId)
+    .eq("deployment_id", cfg.deploymentId)
+    .single();
+  const contextLinkId = link!.id;
+
+  // A lecture section with a CRN (only CRN-bearing sections are sync targets).
+  const crn = 880000 + Math.floor(Math.random() * 100000);
+  const { data: section, error: secErr } = await supabase
+    .from("class_sections")
+    .insert({ class_id: pawClassId, name: "E2E Lecture", sis_crn: crn })
+    .select("id")
+    .single();
+  expect(secErr, JSON.stringify(secErr)).toBeNull();
+  const lectureSectionId = section!.id as number;
+
+  // Bind the context as a single lecture section (topology A; no split).
+  await supabase
+    .from("lti_context_links")
+    .update({
+      section_role: "lecture",
+      split_by_member_section: false,
+      class_section_id: lectureSectionId,
+      lab_section_id: null,
+      roster_sync_enabled: true
+    })
+    .eq("id", contextLinkId);
+
+  const res = await request.post(`${cfg.toolBaseUrl}/api/lti/sync-roster`, {
+    headers: { "x-lti-cron-secret": cronSecret },
+    data: { all: true }
+  });
+  const body = (await res.json()) as { results?: { status: string; message: string }[] };
+  expect(res.ok(), `sync ${res.status()}`).toBeTruthy();
+  for (const r of body.results ?? []) expect(r.status, r.message).toBe("success");
+
+  // Every student lands in that one lecture section (enrolled or invited).
+  for (const student of cfg.students) {
+    const { data: u } = await supabase.from("users").select("user_id").eq("email", student.email).maybeSingle();
+    let actual: number | null | undefined;
+    if (u) {
+      const { data: role } = await supabase
+        .from("user_roles")
+        .select("class_section_id")
+        .eq("class_id", pawClassId)
+        .eq("user_id", u.user_id)
+        .maybeSingle();
+      actual = role?.class_section_id;
+    }
+    if (actual == null) {
+      const { data: inv } = await supabase
+        .from("invitations")
+        .select("class_section_id")
+        .eq("class_id", pawClassId)
+        .eq("email", student.email)
+        .maybeSingle();
+      actual = inv?.class_section_id;
+    }
+    expect(actual, `${student.email} should be in the lecture section`).toBe(lectureSectionId);
+  }
+});
+
+// MUST RUN LAST: this mutates the shared Canvas roster (removes a student).
+test("roster drop: removing a Canvas enrollment drops the member on re-sync", async ({ request }) => {
+  test.setTimeout(120_000);
+  const auth = { Authorization: `Bearer ${cfg.canvasAdminToken}` };
+  // The last student never launches, so they're an invited (sis-managed) member —
+  // the cleanest drop signal is invitations.status -> 'dropped'.
+  const target = cfg.students[cfg.students.length - 1].email;
+
+  // Find the Canvas user + their student enrollment, then delete it.
+  const uRes = await request.get(
+    `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/users?search_term=${encodeURIComponent(target)}&per_page=100`,
+    { headers: auth }
+  );
+  const cUser = ((await uRes.json()) as Array<{ id: number }>)[0];
+  expect(cUser?.id, `Canvas user for ${target}`).toBeTruthy();
+  const eRes = await request.get(
+    `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/enrollments?user_id=${cUser.id}&per_page=100`,
+    { headers: auth }
+  );
+  const enr = ((await eRes.json()) as Array<{ id: number; type: string }>).find((e) => e.type === "StudentEnrollment");
+  expect(enr?.id, `enrollment for ${target}`).toBeTruthy();
+  const dRes = await request.delete(
+    `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/enrollments/${enr!.id}?task=delete`,
+    { headers: auth }
+  );
+  expect(dRes.ok(), `delete enrollment ${dRes.status()}`).toBeTruthy();
+
+  // Re-sync; the now-absent sis-managed member is dropped.
+  const res = await request.post(`${cfg.toolBaseUrl}/api/lti/sync-roster`, {
+    headers: { "x-lti-cron-secret": cronSecret },
+    data: { all: true }
+  });
+  expect(res.ok(), `sync ${res.status()}`).toBeTruthy();
+
+  // Their invitation is marked dropped (or, if they had an enrollment, disabled).
+  const { data: inv } = await supabase
+    .from("invitations")
+    .select("status")
+    .eq("class_id", pawClassId)
+    .eq("email", target)
+    .maybeSingle();
+  const { data: u } = await supabase.from("users").select("user_id").eq("email", target).maybeSingle();
+  let roleDisabled: boolean | null | undefined;
+  if (u) {
+    const { data: role } = await supabase
+      .from("user_roles")
+      .select("disabled")
+      .eq("class_id", pawClassId)
+      .eq("user_id", u.user_id)
+      .maybeSingle();
+    roleDisabled = role?.disabled;
+  }
+  expect(
+    inv?.status === "dropped" || roleDisabled === true,
+    `${target} should be dropped/disabled (invitation=${inv?.status}, disabled=${roleDisabled})`
+  ).toBeTruthy();
 });
