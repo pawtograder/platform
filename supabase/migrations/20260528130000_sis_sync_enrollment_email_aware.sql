@@ -26,6 +26,12 @@ AS $$
 DECLARE
   v_result jsonb;
   v_drop_missing boolean := COALESCE((p_sync_options ->> 'drop_missing')::boolean, true);
+  -- Which section dimension(s) this sync owns. SIS syncs provide a full roster
+  -- (both class + lab) so both default true. A per-context LTI sync owns only the
+  -- dimension implied by its section_role; the unmanaged dimension is preserved
+  -- so a lecture sync can't wipe the lab section a lab context assigned, and v.v.
+  v_manage_class boolean := COALESCE((p_sync_options ->> 'manage_class_sections')::boolean, true);
+  v_manage_lab boolean := COALESCE((p_sync_options ->> 'manage_lab_sections')::boolean, true);
   v_admin_user_id uuid;
   v_section_updates jsonb := COALESCE(p_sync_options -> 'section_updates', '[]'::jsonb);
   v_invitations_dropped integer := 0;
@@ -233,19 +239,22 @@ BEGIN
       IF v_is_manual THEN
         UPDATE public.user_roles
         SET canvas_id = rec.sis_user_id::numeric, role = v_new_role,
-            class_section_id = rec.incoming_class_section_id, lab_section_id = rec.incoming_lab_section_id,
+            class_section_id = CASE WHEN v_manage_class THEN rec.incoming_class_section_id ELSE class_section_id END,
+            lab_section_id = CASE WHEN v_manage_lab THEN rec.incoming_lab_section_id ELSE lab_section_id END,
             disabled = false
         WHERE id = rec.user_role_id;
         UPDATE tmp_change_counts SET enrollments_adopted = enrollments_adopted + 1 WHERE true;
       ELSE
         UPDATE public.user_roles
-        SET role = v_new_role, class_section_id = rec.incoming_class_section_id,
-            lab_section_id = rec.incoming_lab_section_id, disabled = false
+        SET role = v_new_role,
+            class_section_id = CASE WHEN v_manage_class THEN rec.incoming_class_section_id ELSE class_section_id END,
+            lab_section_id = CASE WHEN v_manage_lab THEN rec.incoming_lab_section_id ELSE lab_section_id END,
+            disabled = false
         WHERE id = rec.user_role_id
           AND (
             role IS DISTINCT FROM v_new_role OR
-            class_section_id IS DISTINCT FROM rec.incoming_class_section_id OR
-            lab_section_id IS DISTINCT FROM rec.incoming_lab_section_id OR
+            (v_manage_class AND class_section_id IS DISTINCT FROM rec.incoming_class_section_id) OR
+            (v_manage_lab AND lab_section_id IS DISTINCT FROM rec.incoming_lab_section_id) OR
             disabled = true
           );
         GET DIAGNOSTICS v_rows = ROW_COUNT;
@@ -260,7 +269,8 @@ BEGIN
 
       UPDATE public.invitations i
       SET sis_managed = true, role = v_new_role,
-          class_section_id = rec.incoming_class_section_id, lab_section_id = rec.incoming_lab_section_id,
+          class_section_id = CASE WHEN v_manage_class THEN rec.incoming_class_section_id ELSE i.class_section_id END,
+          lab_section_id = CASE WHEN v_manage_lab THEN rec.incoming_lab_section_id ELSE i.lab_section_id END,
           status = CASE WHEN i.status = 'dropped' THEN 'pending' ELSE i.status END,
           updated_at = now()
       WHERE i.class_id = p_class_id AND i.sis_user_id = rec.sis_user_id
@@ -288,7 +298,8 @@ BEGIN
       IF FOUND THEN
         UPDATE public.invitations i
         SET sis_managed = true, role = rec.role, name = COALESCE(rec.name, i.name),
-            class_section_id = rec.class_section_id, lab_section_id = rec.lab_section_id,
+            class_section_id = CASE WHEN v_manage_class THEN rec.class_section_id ELSE i.class_section_id END,
+            lab_section_id = CASE WHEN v_manage_lab THEN rec.lab_section_id ELSE i.lab_section_id END,
             status = CASE WHEN i.status = 'dropped' THEN 'pending' ELSE i.status END,
             updated_at = now()
         WHERE i.id = v_existing_inv.id AND i.status IN ('pending', 'dropped');
@@ -368,7 +379,14 @@ END;
 $$;
 
 
+-- Service-role only: every caller (LTI roster sync in lib/lti/roster.ts, the SIS
+-- importer in supabase/functions/course-import-sis) invokes this through the
+-- service-role admin client. Granting EXECUTE to `authenticated` would let any
+-- instructor call it directly with a hand-crafted roster (the internal
+-- authorize* check only scopes WHICH class, not the roster contents) and
+-- mass-disable enrollments or self-promote via role precedence. Keep it locked
+-- to service_role/postgres exactly as the prior definition did.
 REVOKE ALL ON FUNCTION public.sis_sync_enrollment(bigint, jsonb, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sis_sync_enrollment(bigint, jsonb, jsonb) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.sis_sync_enrollment(bigint, jsonb, jsonb) TO service_role;
 GRANT EXECUTE ON FUNCTION public.sis_sync_enrollment(bigint, jsonb, jsonb) TO postgres;
-GRANT EXECUTE ON FUNCTION public.sis_sync_enrollment(bigint, jsonb, jsonb) TO authenticated;

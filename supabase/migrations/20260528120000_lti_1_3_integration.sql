@@ -123,6 +123,11 @@ ALTER TABLE "public"."lti_context_links" ENABLE ROW LEVEL SECURITY;
 -- able to repoint those (SSRF / token exfiltration), so grant them only the two
 -- sync toggles; service_role (the launch/sync endpoints) manages the rest.
 GRANT SELECT ON TABLE "public"."lti_context_links" TO "authenticated";
+-- Revoke any table-WIDE write privilege first (Supabase default privileges grant
+-- ALL to authenticated on new tables) so the column-level grant below is the real
+-- ceiling. Without this, the column grant is decorative and an instructor could
+-- repoint nrps_url/ags_lineitems_url (SSRF + service-token exfiltration).
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE "public"."lti_context_links" FROM "authenticated";
 GRANT UPDATE ("roster_sync_enabled", "grade_sync_enabled") ON TABLE "public"."lti_context_links" TO "authenticated";
 GRANT ALL ON TABLE "public"."lti_context_links" TO "service_role";
 

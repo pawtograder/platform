@@ -140,8 +140,8 @@ describe("extractSectionNames", () => {
 
 describe("resolveMemberSections / mapRoster", () => {
   const member = (over: Partial<NrpsMember>): NrpsMember => ({ user_id: "sub-1", roles: [LTI_ROLE.learner], ...over });
-  const withNames = (names: string[]): NrpsMember =>
-    member({ message: [{ [LTI_CLAIM.custom]: { section_names: JSON.stringify(names) } }] });
+  const withNames = (names: string[], userId = "sub-1"): NrpsMember =>
+    member({ user_id: userId, message: [{ [LTI_CLAIM.custom]: { section_names: JSON.stringify(names) } }] });
 
   test("course_wide assigns no sections (regression)", () => {
     const r = resolveMemberSections(member({}), COURSE_WIDE_CONFIG);
@@ -192,10 +192,33 @@ describe("resolveMemberSections / mapRoster", () => {
     expect(unmapped.lab_section_crn).toBeNull();
     expect(unmapped.unmappedNames).toEqual(["L99"]);
 
-    const { roster, unmapped: allUnmapped } = mapRoster([withNames(["L05"]), withNames(["L99"])], cfg);
+    // Two distinct members (distinct user_id → distinct surrogate sis_user_id).
+    const { roster, unmapped: allUnmapped } = mapRoster(
+      [withNames(["L05"], "sub-a"), withNames(["L99"], "sub-b")],
+      cfg
+    );
     expect(roster[0].lab_section_crn).toBe(22222);
     expect(roster[1].lab_section_crn).toBeNull();
     expect(allUnmapped).toEqual(["L99"]);
+  });
+
+  test("de-dups members that collapse to the same sis_user_id, unioning section CRNs", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lab",
+      classSectionCrn: null,
+      labSectionCrn: null,
+      splitByMemberSection: true,
+      nameMap: new Map([
+        ["L05", { classSectionCrn: null, labSectionCrn: 22222 }],
+        ["LEC1", { classSectionCrn: 11111, labSectionCrn: null }]
+      ])
+    };
+    // Same user_id → same surrogate sis_user_id; the RPC's temp table is keyed on
+    // sis_user_id (PRIMARY KEY), so these MUST collapse to one row or the sync aborts.
+    const { roster } = mapRoster([withNames(["L05"], "dup"), withNames(["LEC1"], "dup")], cfg);
+    expect(roster).toHaveLength(1);
+    expect(roster[0].lab_section_crn).toBe(22222);
+    expect(roster[0].class_section_crn).toBe(11111);
   });
 
   test("split: a member in two sections maps the known one and reports the other", () => {

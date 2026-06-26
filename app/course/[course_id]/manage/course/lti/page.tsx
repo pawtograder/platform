@@ -108,8 +108,22 @@ export default function CourseLtiPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Sync failed");
-      const total = (json.results ?? []).reduce((s: number, r: { memberCount: number }) => s + r.memberCount, 0);
-      toaster.create({ title: "Roster synced", description: `${total} members processed`, type: "success" });
+      // The route returns HTTP 200 even when individual contexts fail (each is
+      // caught and reported as status:"error"); surface those instead of always
+      // claiming success.
+      const results: Array<{ memberCount: number; status: string; message: string }> = json.results ?? [];
+      const failed = results.filter((r) => r.status === "error");
+      const total = results.reduce((s, r) => s + r.memberCount, 0);
+      if (failed.length > 0) {
+        const allFailed = failed.length === results.length;
+        toaster.create({
+          title: allFailed ? "Roster sync failed" : "Roster partially synced",
+          description: `${total} members processed; ${failed.length} context(s) failed: ${failed.map((r) => r.message).join("; ")}`,
+          type: allFailed ? "error" : "warning"
+        });
+      } else {
+        toaster.create({ title: "Roster synced", description: `${total} members processed`, type: "success" });
+      }
       load();
     } catch (error) {
       toaster.create({

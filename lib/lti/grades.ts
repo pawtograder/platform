@@ -46,12 +46,13 @@ async function getGradeContext(classId: number, db: LtiDb): Promise<ContextForGr
     .from("lti_context_links")
     .select("id, platform_id, ags_lineitems_url, ags_scopes, section_role")
     .eq("class_id", classId)
+    .eq("grade_sync_enabled", true)
     .not("ags_lineitems_url", "is", null)
     .order("id", { ascending: true });
   if (error) throw error;
   const contexts = (data ?? []) as ContextForGrades[];
   if (contexts.length === 0) {
-    throw new Error("This class has no LTI context with an AGS line items endpoint");
+    throw new Error("This class has no LTI context with grade sync enabled and an AGS line items endpoint");
   }
   return contexts.find((c) => c.section_role === "lecture") ?? contexts[0];
 }

@@ -298,14 +298,30 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
 
 -- anon/authenticated DML on RLS-enabled tables only (RLS enforces row access).
+--
+-- EXCEPTION: tables with deliberate COLUMN-level grants (e.g. lti_context_links
+-- grants instructors UPDATE only on the sync-toggle/section columns, NOT
+-- nrps_url/ags_lineitems_url — repointing those is SSRF + service-token
+-- exfiltration). A blanket table-level GRANT UPDATE would silently widen those
+-- to every column. For such tables restore only RLS-gated SELECT and leave their
+-- migration-defined column grants intact; everything else gets full DML.
+-- A column-level grant is detectable via a non-null pg_attribute.attacl.
 DO $grant_api$
-DECLARE r record;
+DECLARE r record; has_col_grant boolean;
 BEGIN
   FOR r IN
-    SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity
   LOOP
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO anon, authenticated', r.relname);
+    SELECT EXISTS (
+      SELECT 1 FROM pg_attribute a
+      WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+    ) INTO has_col_grant;
+    IF has_col_grant THEN
+      EXECUTE format('GRANT SELECT ON public.%I TO anon, authenticated', r.relname);
+    ELSE
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO anon, authenticated', r.relname);
+    END IF;
   END LOOP;
 END
 $grant_api$;

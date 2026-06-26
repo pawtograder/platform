@@ -32,9 +32,14 @@ DECLARE
 BEGIN
     SET LOCAL search_path = pg_catalog, public;
 
-    IF NOT public.authorize_for_admin(p_created_by) THEN
+    -- Authorize the actual caller (auth.uid()), never a caller-supplied UUID:
+    -- this function is SECURITY DEFINER and granted to `authenticated`, so a
+    -- parameter-based check would let any logged-in user pass an admin's UUID
+    -- and escalate. Bind p_created_by to the caller so audit can't be spoofed.
+    IF NOT public.authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
+    p_created_by := auth.uid();
 
     SELECT l.class_id, l.section_role
       INTO v_class_id, v_section_role

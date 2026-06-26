@@ -9,7 +9,7 @@
  *  5. project the validated claims into an LtiLaunchContext
  */
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
-import { LTI_CLAIM, type LtiLaunchContext, ltiRolesToAppRole } from "./types";
+import { LTI_CLAIM, LTI_MESSAGE_TYPE, type LtiLaunchContext, ltiRolesToAppRole } from "./types";
 import { ltiAdminClient, type LtiDb } from "./db";
 import { decodeJwtPayload as decodePayload, ltiClientIdMatches } from "./util";
 
@@ -95,6 +95,13 @@ export async function verifyLaunchToken(
   const version = asString(payload[LTI_CLAIM.version]);
   if (version !== "1.3.0") {
     throw new LtiValidationError(`Unsupported LTI version: ${version ?? "(none)"}`);
+  }
+  // This endpoint handles resource-link launches only. Reject any other
+  // message_type (e.g. LtiDeepLinkingRequest) rather than projecting it as a
+  // resource link and silently mishandling it — deep linking has no flow here.
+  const messageType = asString(payload[LTI_CLAIM.messageType]);
+  if (messageType !== LTI_MESSAGE_TYPE.resourceLinkRequest) {
+    throw new LtiValidationError(`Unsupported LTI message_type: ${messageType ?? "(none)"}`);
   }
   const deploymentId = asString(payload[LTI_CLAIM.deploymentId]);
   if (!deploymentId) throw new LtiValidationError("id_token missing deployment_id");

@@ -64,9 +64,22 @@ export async function POST(request: Request) {
     const persisted = await persistLaunch(launch, db);
 
     const serverClient = await createClient();
-    await establishSupabaseSession(launch, serverClient, db);
+    const { userId } = await establishSupabaseSession(launch, serverClient, db);
 
-    const target = resolveLaunchRedirect(persisted.classId, launch);
+    // Only send the user into the course if they're actually enrolled — the
+    // course layout bounces role-less users back to '/', which would make a
+    // successful launch look broken (see resolveLaunchRedirect).
+    let enrolled = false;
+    if (persisted.classId) {
+      const { count } = await db
+        .from("user_roles")
+        .select("id", { count: "exact", head: true })
+        .eq("class_id", persisted.classId)
+        .eq("user_id", userId);
+      enrolled = (count ?? 0) > 0;
+    }
+
+    const target = resolveLaunchRedirect(persisted.classId, launch, enrolled);
     const res = NextResponse.redirect(`${toolBaseUrl(request)}${target}`, { status: 302 });
     res.headers.set("Cache-Control", "no-store");
     res.cookies.delete({ name: STATE_COOKIE, path: "/api/lti" });

@@ -42,8 +42,17 @@ export async function fetchMemberships(
   let id = membershipsUrl;
   const members: NrpsMember[] = [];
   let guard = 0;
+  // Page cap as a runaway guard. If we hit it with pages still remaining, FAIL
+  // rather than return a partial roster: a roster sync with drop_missing=true
+  // would treat every uncrawled member as "missing" and mass-disable them.
+  const MAX_PAGES = 100;
 
-  while (url && guard < 100) {
+  while (url) {
+    if (guard >= MAX_PAGES) {
+      throw new Error(
+        `NRPS membership exceeded ${MAX_PAGES} pages; refusing to sync a partial roster (would drop real members).`
+      );
+    }
     guard += 1;
     const token = await getServiceAccessToken(platformId, [NRPS_SCOPE], db);
     const res = await fetch(url, {

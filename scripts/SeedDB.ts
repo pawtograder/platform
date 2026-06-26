@@ -403,8 +403,10 @@ async function runSeeding(config: SeederConfig) {
     student: process.env.FIXED_STUDENT_EMAIL || undefined,
     // Always seed a site admin (the admin portal needs one and there's no other
     // way to bootstrap it). Stable default so every dev/preview/e2e DB has a
-    // known admin login (password = TEST_PASSWORD, default "change-it");
-    // override the address with FIXED_ADMIN_EMAIL.
+    // known admin login; the account uses the same seeding secret as the other
+    // fixed users (password = TEST_PASSWORD), so a deployed seed is no more
+    // exposed than its fixed instructor/grader/student accounts. Override the
+    // address with FIXED_ADMIN_EMAIL.
     admin: process.env.FIXED_ADMIN_EMAIL || "admin@pawtograder.net"
   };
 

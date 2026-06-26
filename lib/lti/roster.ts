@@ -47,19 +47,38 @@ async function upsertLtiUsers(platformId: number, roster: RosterEntry[], db: Lti
   const emails = roster.map((r) => r.email).filter((e): e is string => !!e);
   const emailToUserId = new Map<string, string>();
   if (emails.length > 0) {
-    const { data: users } = await db.from("users").select("user_id, email").in("email", emails);
+    // Canvas emails can differ in case from what we stored; `.in()` is
+    // case-sensitive, so look up both the raw and lowercased forms, then key the
+    // map by lowercased email for a case-insensitive match.
+    const lookup = [...new Set(emails.flatMap((e) => [e, e.toLowerCase()]))];
+    const { data: users } = await db.from("users").select("user_id, email").in("email", lookup);
     for (const u of users ?? []) if (u.email) emailToUserId.set(u.email.toLowerCase(), u.user_id);
   }
 
-  const rows = roster.map((r) => ({
+  // Upsert identity fields WITHOUT user_id, so a previously-established link
+  // (set on launch by establishSupabaseSession) is never clobbered to NULL when
+  // the email lookup misses — a NULL'd link silently drops the student's grade
+  // push ("No LTI identity mapped").
+  const identityRows = roster.map((r) => ({
     platform_id: platformId,
     sub: r.sub,
     email: r.email,
     name: r.name,
-    lis_person_sourcedid: r.lis_person_sourcedid,
-    user_id: r.email ? (emailToUserId.get(r.email.toLowerCase()) ?? null) : null
+    lis_person_sourcedid: r.lis_person_sourcedid
   }));
-  await db.from("lti_users").upsert(rows, { onConflict: "platform_id,sub" });
+  await db.from("lti_users").upsert(identityRows, { onConflict: "platform_id,sub" });
+
+  // Link only members we positively resolved to a user_id (never write NULL).
+  const linkRows = roster
+    .map((r) => ({
+      platform_id: platformId,
+      sub: r.sub,
+      user_id: r.email ? (emailToUserId.get(r.email.toLowerCase()) ?? null) : null
+    }))
+    .filter((r): r is { platform_id: number; sub: string; user_id: string } => !!r.user_id);
+  if (linkRows.length > 0) {
+    await db.from("lti_users").upsert(linkRows, { onConflict: "platform_id,sub" });
+  }
 }
 
 /** Resolve a context link's section configuration into CRNs the RPC understands.
@@ -120,17 +139,23 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
     const { roster, unmapped } = mapRoster(membership.members, cfg);
     await upsertLtiUsers(link.platform_id, roster, db);
 
-    // Cross-drop guard (docs §7.2): a `course_wide` context in a class with >1
-    // linked context can't safely drop — its sync set spans the whole class,
-    // incl. members owned by sibling contexts. Disable dropping for that case.
+    // Cross-drop guard (docs §7.2): whenever a class has >1 linked context, any
+    // single context's roster is only a SUBSET of the class. The RPC's drop
+    // candidates are class-wide (not scoped to this context's sections), so
+    // dropping here would disable students owned by sibling contexts — for ANY
+    // section role, not just course_wide. Only drop when this is the sole context.
     let dropMissing = true;
-    if (cfg.sectionRole === "course_wide") {
-      const { count } = await db
-        .from("lti_context_links")
-        .select("id", { count: "exact", head: true })
-        .eq("class_id", link.class_id);
-      if ((count ?? 1) > 1) dropMissing = false;
-    }
+    const { count: linkedContexts } = await db
+      .from("lti_context_links")
+      .select("id", { count: "exact", head: true })
+      .eq("class_id", link.class_id);
+    if ((linkedContexts ?? 1) > 1) dropMissing = false;
+
+    // Each context owns only the section dimension(s) its role implies; tell the
+    // RPC to leave the other dimension untouched so a lecture sync can't wipe the
+    // lab section a lab context assigned (and vice versa). course_wide owns none.
+    const manageClassSections = cfg.sectionRole === "lecture" || cfg.splitByMemberSection;
+    const manageLabSections = cfg.sectionRole === "lab" || cfg.splitByMemberSection;
 
     const { error } = await db.rpc("sis_sync_enrollment", {
       p_class_id: link.class_id,
@@ -142,7 +167,11 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
         class_section_crn: r.class_section_crn,
         lab_section_crn: r.lab_section_crn
       })) as never,
-      p_sync_options: { drop_missing: dropMissing } as never
+      p_sync_options: {
+        drop_missing: dropMissing,
+        manage_class_sections: manageClassSections,
+        manage_lab_sections: manageLabSections
+      } as never
     });
     if (error) throw error;
 

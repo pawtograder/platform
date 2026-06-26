@@ -95,14 +95,25 @@ export async function establishSupabaseSession(
   return { userId };
 }
 
-/** Where to send the user after a successful launch. */
-export function resolveLaunchRedirect(classId: number | null | undefined, launch: LtiLaunchContext): string {
-  // Allow the platform to deep-link a specific assignment via a custom param.
-  const assignmentId = launch.custom?.assignment_id || launch.custom?.pawtograder_assignment_id;
-  if (classId && assignmentId && /^\d+$/.test(assignmentId)) {
-    return `/course/${classId}/assignments/${assignmentId}`;
+/** Where to send the user after a successful launch.
+ *  `enrolled` guards against sending a user into /course/{classId} when they have
+ *  no user_role there: the course layout redirects role-less users back to '/',
+ *  so the launch would appear to work yet silently bounce. Land them on the home
+ *  page with a hint instead. */
+export function resolveLaunchRedirect(
+  classId: number | null | undefined,
+  launch: LtiLaunchContext,
+  enrolled = true
+): string {
+  if (classId && enrolled) {
+    // Allow the platform to deep-link a specific assignment via a custom param.
+    const assignmentId = launch.custom?.assignment_id || launch.custom?.pawtograder_assignment_id;
+    if (assignmentId && /^\d+$/.test(assignmentId)) {
+      return `/course/${classId}/assignments/${assignmentId}`;
+    }
+    return `/course/${classId}`;
   }
-  if (classId) return `/course/${classId}`;
-  // Not yet linked to a class: drop the user on their course list with a hint.
+  // Not linked to a class, or launched before a roster sync enrolled this user:
+  // drop them on the home page with a hint rather than a course that bounces.
   return `/?lti_unlinked=1`;
 }

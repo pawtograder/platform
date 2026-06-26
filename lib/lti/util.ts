@@ -86,10 +86,16 @@ export function surrogateSisId(sub: string): number {
 function baseRosterEntry(m: NrpsMember): Omit<RosterEntry, "class_section_crn" | "lab_section_crn"> {
   const sourced = m.lis_person_sourcedid?.trim();
   // Only trust a digit-only sourcedid as the SIS id if it survives Number()
-  // without precision loss; otherwise fall back to the surrogate so we never
-  // map the wrong user identity.
+  // without precision loss AND fits in a Postgres int4 — sis_sync_enrollment
+  // casts sis_user_id to `integer`, so a 10+ digit institutional id (> 2^31-1)
+  // would throw "integer out of range" and abort the whole sync. Otherwise fall
+  // back to the bounded surrogate so we never map the wrong identity or overflow.
+  const INT4_MAX = 2_147_483_647;
   const parsedSourced = sourced && /^\d+$/.test(sourced) ? Number(sourced) : undefined;
-  const numericSourced = parsedSourced !== undefined && Number.isSafeInteger(parsedSourced) ? parsedSourced : undefined;
+  const numericSourced =
+    parsedSourced !== undefined && Number.isSafeInteger(parsedSourced) && parsedSourced <= INT4_MAX
+      ? parsedSourced
+      : undefined;
   const name =
     m.name?.trim() || [m.given_name, m.family_name].filter(Boolean).join(" ").trim() || m.email?.trim() || null;
   return {
@@ -198,15 +204,28 @@ export function resolveMemberSections(
 /** Project Active NRPS members into roster entries with section CRNs resolved per
  *  `cfg`, plus the set of unmapped Canvas section names encountered (topology B). */
 export function mapRoster(members: NrpsMember[], cfg: SectionConfig): { roster: RosterEntry[]; unmapped: string[] } {
-  const roster: RosterEntry[] = [];
+  // De-dup by sis_user_id (insertion order preserved). sis_sync_enrollment keys
+  // its temp roster table on sis_user_id (PRIMARY KEY), so two members collapsing
+  // to the same id — a surrogate FNV-1a collision, a surrogate colliding with a
+  // numeric sourcedid, or NRPS listing a member twice — would raise a duplicate
+  // key error and abort the entire roster sync. Keep the first identity and union
+  // any section CRNs the duplicates resolved.
+  const bySisId = new Map<number, RosterEntry>();
   const unmapped = new Set<string>();
   for (const m of members) {
     if (m.status && m.status !== "Active") continue;
     const { class_section_crn, lab_section_crn, unmappedNames } = resolveMemberSections(m, cfg);
     for (const n of unmappedNames) unmapped.add(n);
-    roster.push({ ...baseRosterEntry(m), class_section_crn, lab_section_crn });
+    const entry: RosterEntry = { ...baseRosterEntry(m), class_section_crn, lab_section_crn };
+    const existing = bySisId.get(entry.sis_user_id);
+    if (existing) {
+      existing.class_section_crn = existing.class_section_crn ?? entry.class_section_crn;
+      existing.lab_section_crn = existing.lab_section_crn ?? entry.lab_section_crn;
+      continue;
+    }
+    bySisId.set(entry.sis_user_id, entry);
   }
-  return { roster, unmapped: [...unmapped] };
+  return { roster: [...bySisId.values()], unmapped: [...unmapped] };
 }
 
 /** Legacy course-wide projection (no section assignment). Kept for callers/tests

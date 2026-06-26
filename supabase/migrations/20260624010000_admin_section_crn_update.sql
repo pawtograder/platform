@@ -19,7 +19,10 @@ RETURNS boolean AS $$
 BEGIN
     SET LOCAL search_path = pg_catalog, public;
 
-    IF NOT authorize_for_admin(p_updated_by) THEN
+    -- Authorize the actual caller (auth.uid()), never a caller-supplied UUID:
+    -- this is SECURITY DEFINER and granted to `authenticated`, so a
+    -- parameter-based check would let any logged-in user pass an admin's UUID.
+    IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
     IF p_name IS NULL OR trim(p_name) = '' THEN
@@ -49,7 +52,10 @@ RETURNS boolean AS $$
 BEGIN
     SET LOCAL search_path = pg_catalog, public;
 
-    IF NOT authorize_for_admin(p_updated_by) THEN
+    -- Authorize the actual caller (auth.uid()), never a caller-supplied UUID:
+    -- this is SECURITY DEFINER and granted to `authenticated`, so a
+    -- parameter-based check would let any logged-in user pass an admin's UUID.
+    IF NOT authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
     IF p_name IS NULL OR trim(p_name) = '' THEN
