@@ -5942,28 +5942,28 @@ export type Database = {
           {
             foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: false;
+            isOneToOne: true;
             referencedRelation: "assignment_overview";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: false;
+            isOneToOne: true;
             referencedRelation: "assignments";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: false;
+            isOneToOne: true;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: false;
+            isOneToOne: true;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },

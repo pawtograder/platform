@@ -61,11 +61,17 @@ CREATE TRIGGER "lti_grade_sync_state_touch" BEFORE UPDATE ON "public"."lti_grade
 -------------------------------------------------------------------------------
 -- 2. Coalesced work queue (one row per assignment needing a sync)
 -------------------------------------------------------------------------------
+-- One row per assignment needing a (re)sync. PK is assignment_id ALONE (not a
+-- composite over class_id+assignment_id): a queue keyed by exactly its two FK
+-- columns is treated by PostgREST as a join table, inferring a spurious
+-- many-to-many between classes and assignments that makes existing
+-- `assignments(...classes(...))` embeds ambiguous (PGRST201). assignment_id is
+-- already unique per assignment, so it suffices; class_id is carried for the
+-- drain but kept out of the key.
 CREATE TABLE IF NOT EXISTS "public"."lti_grade_sync_queue" (
+    "assignment_id" bigint PRIMARY KEY REFERENCES "public"."assignments"("id") ON DELETE CASCADE,
     "class_id" bigint NOT NULL REFERENCES "public"."classes"("id") ON DELETE CASCADE,
-    "assignment_id" bigint NOT NULL REFERENCES "public"."assignments"("id") ON DELETE CASCADE,
-    "enqueued_at" timestamp with time zone DEFAULT now() NOT NULL,
-    PRIMARY KEY ("class_id", "assignment_id")
+    "enqueued_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 
 ALTER TABLE "public"."lti_grade_sync_queue" ENABLE ROW LEVEL SECURITY;
@@ -133,7 +139,7 @@ BEGIN
         SELECT 1 FROM public.lti_context_links l
         WHERE l.class_id = nr.class_id AND l.grade_sync_enabled
       )
-    ON CONFLICT (class_id, assignment_id) DO UPDATE SET enqueued_at = now();
+    ON CONFLICT (assignment_id) DO UPDATE SET enqueued_at = now();
     GET DIAGNOSTICS n = ROW_COUNT;
     IF n > 0 THEN
         PERFORM public.lti_kick_grade_drain();
@@ -174,7 +180,7 @@ BEGIN
            OR orr.is_excused IS DISTINCT FROM nr.is_excused
         ))
       )
-    ON CONFLICT (class_id, assignment_id) DO UPDATE SET enqueued_at = now();
+    ON CONFLICT (assignment_id) DO UPDATE SET enqueued_at = now();
     GET DIAGNOSTICS n = ROW_COUNT;
     IF n > 0 THEN
         PERFORM public.lti_kick_grade_drain();
