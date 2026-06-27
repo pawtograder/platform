@@ -53,13 +53,14 @@ export default async function RootLayout({
                   This branch exists solely to prove channel A/B routing; the
                   banner makes the canary build unmistakable vs stable. Do not merge. */}
               <Box
+                colorPalette="pink"
                 position="fixed"
                 top="0"
                 left="0"
                 right="0"
                 zIndex="2147483647"
-                bg="pink.600"
-                color="white"
+                bg="colorPalette.solid"
+                color="colorPalette.contrast"
                 textAlign="center"
                 fontWeight="bold"
                 fontSize="sm"
