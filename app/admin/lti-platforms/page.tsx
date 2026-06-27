@@ -72,7 +72,10 @@ export default function LtiPlatformsPage() {
     setSaving(true);
     try {
       const { error } = await supabase.rpc("admin_upsert_lti_platform", {
-        p_id: edit.id ?? null,
+        // A null p_id signals "create" to the RPC. supabase's type generator
+        // (pinned CLI 2.105) emits the bigint arg as non-null `number`, so assert
+        // the null the function accepts rather than fight the generated type.
+        p_id: (edit.id ?? null) as number,
         p_name: edit.name ?? "",
         p_issuer: edit.issuer ?? "",
         p_client_id: edit.client_id ?? "",
