@@ -1036,12 +1036,16 @@ export async function processEnvelope(
           if (repoLookupError) throw repoLookupError;
           resyncRepoId = repoRow?.id ?? null;
         }
-        if (resyncRepoId) {
-          const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
-            p_repo_id: resyncRepoId
-          });
-          if (resyncError) throw resyncError;
+        // We just marked this repo is_github_ready, so its row must exist. An unresolved id here means
+        // the handoff is broken, so fail loudly (retry/DLQ) rather than silently skipping the resync
+        // and leaving members locked out.
+        if (!resyncRepoId) {
+          throw new Error(`Could not resolve repository id for ${org}/${repoName} to enqueue permission resync`);
         }
+        const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
+          p_repo_id: resyncRepoId
+        });
+        if (resyncError) throw resyncError;
 
         recordMetric(
           adminSupabase,
