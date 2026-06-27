@@ -157,7 +157,12 @@ jobs:
             reset_supabase
             for attempt in $(seq 1 5); do
               echo "=== supabase start attempt ${attempt}/5 ==="
-              if npx supabase start; then
+              # Exclude analytics (Logflare) + vector: the tests do not use the
+              # logs UI, and these two containers are flaky to bring up healthy on
+              # CI runners — they intermittently report "unhealthy" and fail the
+              # whole start (and thus every retry). Skipping them keeps the schema,
+              # auth, storage, realtime, and edge-runtime services the suite needs.
+              if npx supabase start -x analytics,vector; then
                 echo 0 > "${RUN_TMP}/supabase-start.exitcode"
                 exit 0
               fi
