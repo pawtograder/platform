@@ -340,6 +340,15 @@ BEGIN
   FOR r IN
     SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity
+      -- Service-internal LTI tables: writes are reserved to service_role by their
+      -- own migrations (lti_nonces grants `authenticated` NOTHING; the grade-sync
+      -- and identity tables grant only SELECT). A blanket anon+authenticated DML
+      -- grant here would silently WIDEN those — handing `anon` write access to the
+      -- OIDC replay-nonce table, where any later RLS gap becomes directly
+      -- exploitable. Skip them so their explicit migration grants remain the ceiling.
+      AND c.relname <> ALL (ARRAY[
+        'lti_nonces', 'lti_users', 'lti_grade_sync_state', 'lti_grade_sync_queue'
+      ])
   LOOP
     SELECT EXISTS (
       SELECT 1 FROM pg_attribute a

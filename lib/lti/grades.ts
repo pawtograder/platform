@@ -42,7 +42,8 @@ type ContextForGrades = {
 type SyncStateRow = {
   student_profile_id: string;
   lti_user_sub: string | null;
-  synced_score: number | null;
+  // numeric column → PostgREST returns a string; coerce with toNumber before use.
+  synced_score: number | string | null;
   line_item_id: number | null;
   status: "synced" | "retracted" | "failed" | "no_identity";
   attempts: number;
@@ -73,6 +74,20 @@ async function getGradeContext(classId: number, db: LtiDb): Promise<ContextForGr
     throw new Error("This class has no LTI context with grade sync enabled and an AGS line items endpoint");
   }
   return contexts.find((c) => c.section_role === "lecture") ?? contexts[0];
+}
+
+/**
+ * Coerce a Postgres `numeric` value to a JS number. PostgREST serializes
+ * `numeric` columns as JSON STRINGS (to preserve arbitrary precision), so
+ * `score`/`score_override`/`max_score`/`synced_score` arrive as e.g. "90", not
+ * 90. Left uncoerced they break AGS payloads (scoreGiven must be a JSON number,
+ * not "90") and idempotency comparisons ("90" === 90 is always false → endless
+ * re-pushes). Returns null for null/undefined/non-finite.
+ */
+function toNumber(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Run `worker` over `items` with at most `limit` in flight at once. */
@@ -118,10 +133,12 @@ export async function syncAssignmentGrades(
     .single();
   if (cErr) throw cErr;
 
-  // Use `||` (not `??`) so a 0-point column/assignment falls back to a positive
-  // maximum: Canvas computes scoreGiven*(points_possible/scoreMaximum) and
-  // rejects the whole push on a scoreMaximum of 0 (division by zero).
-  const scoreMaximum = column.max_score || assignment.total_points || 100;
+  // Coerce first (numeric → number), THEN fall back with `||` so a 0-point
+  // column/assignment lands on a positive maximum: Canvas computes
+  // scoreGiven*(points_possible/scoreMaximum) and rejects the whole push on a
+  // scoreMaximum of 0 (division by zero). Coercing first also avoids the trap
+  // where the string "0" is truthy and would skip the fallback.
+  const scoreMaximum = toNumber(column.max_score) || toNumber(assignment.total_points) || 100;
   const resourceId = `pawtograder_assignment_${assignment.id}`;
 
   // 1. Ensure the line item exists.
@@ -149,7 +166,7 @@ export async function syncAssignmentGrades(
     .eq("context_link_id", ctx.id)
     .eq("assignment_id", assignment.id)
     .maybeSingle();
-  const prevMax = priorLineItem?.score_maximum ?? null;
+  const prevMax = toNumber(priorLineItem?.score_maximum);
   const maxChanged = prevMax !== null && prevMax !== scoreMaximum;
 
   // Upsert via RPC so the (context_link_id, assignment_id) and
@@ -204,7 +221,7 @@ export async function syncAssignmentGrades(
   const stateRows: GradeSyncStateInsert[] = [];
 
   await runPool(rows, 8, async (g) => {
-    const finalScore = g.score_override ?? g.score;
+    const finalScore = toNumber(g.score_override ?? g.score);
     const shouldHaveScore = g.released && !g.is_excused && finalScore !== null;
     const sub = subByProfile.get(g.student_id);
     const prev = prevByProfile.get(g.student_id);
@@ -250,7 +267,7 @@ export async function syncAssignmentGrades(
       // changed (maxChanged), re-publish so the platform re-scales.
       if (
         prev?.status === "synced" &&
-        prev.synced_score === finalScore &&
+        toNumber(prev.synced_score) === finalScore &&
         prev.lti_user_sub === sub &&
         prev.line_item_id === lineItemId &&
         !maxChanged
@@ -260,7 +277,8 @@ export async function syncAssignmentGrades(
       }
       const score: AgsScore = {
         userId: sub,
-        scoreGiven: finalScore as number,
+        // Non-null here: shouldHaveScore already required finalScore !== null.
+        scoreGiven: finalScore!,
         scoreMaximum,
         timestamp: now,
         activityProgress: "Completed",
@@ -281,7 +299,7 @@ export async function syncAssignmentGrades(
         result.failures.push({ studentId: g.student_id, reason: (e as Error).message });
         pushState({
           lti_user_sub: sub,
-          synced_score: prev?.synced_score ?? null,
+          synced_score: toNumber(prev?.synced_score),
           status: "failed",
           error: (e as Error).message,
           attempts: baseAttempts + 1
@@ -312,7 +330,7 @@ export async function syncAssignmentGrades(
         result.failures.push({ studentId: g.student_id, reason: `retract failed: ${(e as Error).message}` });
         pushState({
           lti_user_sub: retractSub,
-          synced_score: prev.synced_score,
+          synced_score: toNumber(prev.synced_score),
           status: "failed",
           error: (e as Error).message,
           attempts: baseAttempts + 1
@@ -347,10 +365,14 @@ export type DrainItemResult = {
 
 /**
  * Process the on-release work queue: reconcile each enqueued assignment, then
- * remove its queue row. The row is removed whether the reconcile succeeds or
- * throws, so a persistent error (e.g. grade sync disabled) can't make the
- * safety-net cron re-kick forever — durable per-student failures live in
- * `lti_grade_sync_state` and the trigger re-enqueues on the next grade change.
+ * remove its queue row ONLY on success. An assignment-level failure (token mint,
+ * ensureLineItem, a transient platform error, a momentarily-missing grade-sync
+ * context) throws BEFORE the per-student loop writes any durable
+ * `lti_grade_sync_state`, so dropping the row on failure would silently lose the
+ * whole assignment's grade push until an unrelated future grade edit re-enqueues
+ * it. Instead we leave a failed row queued so the safety-net cron retries; the
+ * reconcile is idempotent, so the retry is safe. (Per-student failures inside a
+ * successful reconcile are recorded in `lti_grade_sync_state`, not re-queued.)
  */
 export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
   const { data: queue } = await db
@@ -364,21 +386,22 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
     try {
       const result = await syncAssignmentGrades(item.class_id, item.assignment_id, db);
       out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: true, result });
-    } catch (e) {
-      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
-    } finally {
-      // Delete only if the row hasn't been re-enqueued since we read it. The
-      // enqueue trigger bumps enqueued_at (ON CONFLICT DO UPDATE), so a grade
-      // change that landed WHILE this assignment was syncing leaves a newer
-      // enqueued_at; matching on it means that delete affects 0 rows, the row
-      // survives, and the next drain (or safety-net cron) reprocesses it. Without
-      // this guard the re-enqueued work would be silently dropped.
+
+      // Delete only on success, and only if the row hasn't been re-enqueued since
+      // we read it. The enqueue trigger bumps enqueued_at (ON CONFLICT DO UPDATE),
+      // so a grade change that landed WHILE this assignment was syncing leaves a
+      // newer enqueued_at; matching on it means that delete affects 0 rows, the
+      // row survives, and the next drain reprocesses it. Without this guard the
+      // re-enqueued work would be silently dropped.
       await db
         .from("lti_grade_sync_queue")
         .delete()
         .eq("class_id", item.class_id)
         .eq("assignment_id", item.assignment_id)
         .eq("enqueued_at", item.enqueued_at);
+    } catch (e) {
+      // Leave the row queued (do NOT delete) so the safety-net cron retries.
+      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
     }
   }
   return out;

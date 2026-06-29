@@ -180,10 +180,17 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
     // candidates are class-wide (not scoped to this context's sections), so
     // dropping here would disable students owned by sibling contexts — for ANY
     // section role, not just course_wide. Only drop when this is the sole context.
+    //
+    // Count ONLY roster-sync-eligible contexts (roster_sync_enabled + nrps_url),
+    // the exact set syncAllRosters/syncContextRoster actually drive. Counting every
+    // link would let a leftover sync-disabled / nrps-less / stale duplicate row
+    // push the count to >=2, so the sole ACTIVE roster could never converge.
     const { count: linkedContexts, error: countErr } = await db
       .from("lti_context_links")
       .select("id", { count: "exact", head: true })
-      .eq("class_id", link.class_id);
+      .eq("class_id", link.class_id)
+      .eq("roster_sync_enabled", true)
+      .not("nrps_url", "is", null);
     const dropMissing = canDropMissing(linkedContexts, countErr);
 
     // Each context owns only the section dimension(s) its role implies; tell the

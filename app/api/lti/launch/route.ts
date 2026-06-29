@@ -84,15 +84,38 @@ export async function POST(request: Request) {
       enrolled = (count ?? 0) > 0;
     }
 
-    const target = resolveLaunchRedirect(persisted.classId, launch, enrolled);
+    // Deep-link to an assignment only after verifying the platform-supplied id
+    // actually belongs to THIS class — `custom` claims are platform-controlled
+    // and could otherwise point the user at another class's assignment.
+    let deepLinkAssignmentId: number | null = null;
+    if (persisted.classId && enrolled) {
+      const rawAssignmentId = launch.custom?.assignment_id || launch.custom?.pawtograder_assignment_id;
+      if (rawAssignmentId && /^\d+$/.test(rawAssignmentId)) {
+        const { data: assignment } = await db
+          .from("assignments")
+          .select("id")
+          .eq("id", Number(rawAssignmentId))
+          .eq("class_id", persisted.classId)
+          .maybeSingle();
+        if (assignment) deepLinkAssignmentId = assignment.id;
+      }
+    }
+
+    const target = resolveLaunchRedirect(persisted.classId, enrolled, deepLinkAssignmentId);
     const res = NextResponse.redirect(`${toolBaseUrl(request)}${target}`, { status: 302 });
     res.headers.set("Cache-Control", "no-store");
     res.cookies.delete({ name: STATE_COOKIE, path: "/api/lti" });
     return res;
   } catch (e) {
     if (e instanceof LtiValidationError) {
+      // Log the detail server-side, but DON'T reflect it to the browser: the
+      // message can echo platform-controlled iss/aud/claim values, an info-
+      // disclosure / platform-enumeration surface. Show a generic message.
       console.warn("[lti] launch validation failed:", e.message);
-      return errorPage(`Security validation failed: ${e.message}`, 401);
+      return errorPage(
+        "Security validation of this LMS launch failed. Please start again from your LMS; if it keeps happening, contact your course administrator.",
+        401
+      );
     }
     if (e instanceof LtiSessionError) {
       console.warn("[lti] launch session bridge failed:", e.message);

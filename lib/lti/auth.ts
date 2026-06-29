@@ -38,20 +38,14 @@ export async function isSiteAdmin(serverClient: SupabaseClient<Database>): Promi
   return (data?.length ?? 0) > 0;
 }
 
-/** Returns true if the current cookie-session user is an instructor of the class. */
+/** Returns true if the current cookie-session user is an instructor of the class
+ *  (or a site admin). Delegates to the canonical authz gates the rest of the app
+ *  uses — authorizeforclassinstructor()/authorize_for_admin() — rather than a
+ *  hand-rolled user_roles query that can silently drift from them. */
 export async function isInstructorOfClass(serverClient: SupabaseClient<Database>, classId: number): Promise<boolean> {
-  const {
-    data: { user }
-  } = await serverClient.auth.getUser();
-  if (!user) return false;
-  const { data, error } = await serverClient
-    .from("user_roles")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("class_id", classId)
-    .in("role", ["instructor", "admin"])
-    .or("disabled.is.null,disabled.eq.false")
-    .limit(1);
-  if (error) return false;
-  return (data?.length ?? 0) > 0;
+  const [instructor, admin] = await Promise.all([
+    serverClient.rpc("authorizeforclassinstructor", { class__id: classId }),
+    serverClient.rpc("authorize_for_admin", {})
+  ]);
+  return instructor.data === true || admin.data === true;
 }

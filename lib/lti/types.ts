@@ -95,6 +95,9 @@ export type LtiLaunchContext = {
   sub: string;
   name?: string;
   email?: string;
+  /** OIDC `email_verified` claim, when the platform sends it. Used to gate
+   *  adoption of a pre-existing account by email (see establishSupabaseSession). */
+  emailVerified?: boolean;
   lisPersonSourcedId?: string;
   roles: string[];
   appRole: AppRole;

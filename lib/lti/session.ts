@@ -41,17 +41,55 @@ export async function establishSupabaseSession(
     );
   }
 
-  // 1. Resolve existing Pawtograder user by email, else create an auth user.
-  // Match case-insensitively but LITERALLY: `email` is already lowercased, and
-  // stored emails can differ in case, so look up both the lowercased and raw
-  // forms via `.in()` (exact match). NOT `.ilike()`, whose LIKE metacharacters
-  // (notably `_`, valid in email local-parts) would match a *different*
-  // account and silently sign the launcher into the wrong user.
+  // 1. Resolve the user. Prefer the authoritative per-platform identity binding
+  //    (platform_id, sub) -> user_id, recorded by a prior verified launch. This
+  //    lets returning users sign in WITHOUT ever touching the email-matching
+  //    path below, so the email-adoption guard only applies to first-time links.
   let userId: string | undefined;
-  const emailVariants = [...new Set([email, launch.email!.trim()])];
-  const { data: existingUsers } = await adminClient.from("users").select("user_id, email").in("email", emailVariants);
-  userId = (existingUsers ?? []).find((u) => u.email?.toLowerCase() === email)?.user_id ?? existingUsers?.[0]?.user_id;
+  const { data: binding } = await adminClient
+    .from("lti_users")
+    .select("user_id")
+    .eq("platform_id", launch.platformId)
+    .eq("sub", launch.sub)
+    .maybeSingle();
+  if (binding?.user_id) userId = binding.user_id;
 
+  // 2. No binding yet (first launch for this identity). Match an existing account
+  //    by email — but only ADOPT a pre-existing account with positive evidence the
+  //    launcher actually owns it. The `email` claim is asserted by a (possibly
+  //    user-configurable or self-hosted) LMS, so signing into a pre-existing
+  //    account on email alone is account takeover. Guard the adoption:
+  //      - refuse if the launch explicitly marks the email unverified, and
+  //      - require the target account to have a CONFIRMED email, so an attacker
+  //        can't squat a victim's address via an unconfirmed self-signup and then
+  //        get silently signed into it by launching.
+  //    Match case-insensitively but LITERALLY via `.in()` (exact match), NOT
+  //    `.ilike()`, whose LIKE metacharacters (e.g. `_`, valid in local-parts)
+  //    would match a different account.
+  if (!userId) {
+    const emailVariants = [...new Set([email, launch.email!.trim()])];
+    const { data: existingUsers } = await adminClient.from("users").select("user_id, email").in("email", emailVariants);
+    const candidate =
+      (existingUsers ?? []).find((u) => u.email?.toLowerCase() === email)?.user_id ?? existingUsers?.[0]?.user_id;
+    if (candidate) {
+      if (launch.emailVerified === false) {
+        throw new LtiSessionError(
+          "Your LMS reported your email address as unverified, so Pawtograder can't sign you into the existing " +
+            "account with this email. Ask your administrator to enable verified email release for the Pawtograder LTI tool."
+        );
+      }
+      const { data: authUser } = await adminClient.auth.admin.getUserById(candidate);
+      if (!authUser?.user?.email_confirmed_at) {
+        throw new LtiSessionError(
+          "An account with your email address already exists but its email has not been confirmed, so Pawtograder " +
+            "can't safely sign you into it from an LMS launch. Confirm that account's email, or contact your administrator."
+        );
+      }
+      userId = candidate;
+    }
+  }
+
+  // 3. Still no match: provision a fresh auth user for this email.
   if (!userId) {
     const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
       email,
@@ -68,7 +106,7 @@ export async function establishSupabaseSession(
     // auth users). Resolve its id from generateLink below instead of failing.
   }
 
-  // 2. Mint a magic-link token. For an existing user this also returns the user,
+  // 4. Mint a magic-link token. For an existing user this also returns the user,
   //    which lets us resolve the id when createUser hit a duplicate email.
   const { data: link, error: linkErr } = await adminClient.auth.admin.generateLink({
     type: "magiclink",
@@ -77,19 +115,23 @@ export async function establishSupabaseSession(
   if (linkErr || !link.properties?.hashed_token) {
     throw new LtiSessionError(`Failed to create sign-in link: ${linkErr?.message ?? "unknown"}`);
   }
-  userId = userId ?? link.user?.id ?? undefined;
+  // The session is established AS the auth user this magic link belongs to, so
+  // that id is authoritative for the returned userId (which the caller uses for
+  // the enrollment check). Prefer it over any earlier-resolved id, which could be
+  // a stale/duplicate public.users row whose user_id diverges from auth.users.
+  userId = link.user?.id ?? userId;
   if (!userId) {
     throw new LtiSessionError(`Failed to provision account for ${email}: could not resolve user`);
   }
 
-  // 3. Record the LTI identity -> user mapping.
+  // 5. Record the LTI identity -> user mapping.
   await adminClient
     .from("lti_users")
     .update({ user_id: userId })
     .eq("platform_id", launch.platformId)
     .eq("sub", launch.sub);
 
-  // 4. Redeem the magic link on the cookie-bound client to write the session.
+  // 6. Redeem the magic link on the cookie-bound client to write the session.
   const { error: verifyErr } = await serverClient.auth.verifyOtp({
     type: "magiclink",
     token_hash: link.properties.hashed_token
@@ -108,14 +150,15 @@ export async function establishSupabaseSession(
  *  page with a hint instead. */
 export function resolveLaunchRedirect(
   classId: number | null | undefined,
-  launch: LtiLaunchContext,
-  enrolled = true
+  enrolled = true,
+  deepLinkAssignmentId?: number | null
 ): string {
   if (classId && enrolled) {
-    // Allow the platform to deep-link a specific assignment via a custom param.
-    const assignmentId = launch.custom?.assignment_id || launch.custom?.pawtograder_assignment_id;
-    if (assignmentId && /^\d+$/.test(assignmentId)) {
-      return `/course/${classId}/assignments/${assignmentId}`;
+    // Deep-link a specific assignment when the caller resolved one. The id MUST be
+    // validated against `classId` by the caller (it comes from a platform-controlled
+    // custom claim), so we never redirect into another class's assignment here.
+    if (deepLinkAssignmentId != null) {
+      return `/course/${classId}/assignments/${deepLinkAssignmentId}`;
     }
     return `/course/${classId}`;
   }

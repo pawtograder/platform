@@ -156,14 +156,26 @@ BEGIN
   -- user_id) to avoid setting the same surrogate sis_user_id on multiple rows
   -- (which would trip UNIQUE(users.sis_user_id) and abort the whole sync).
   -- Never overwrites an existing sis_user_id; skips surrogates already in use.
+  --
+  -- SECURITY: only adopt accounts whose email is CONFIRMED in auth.users. The
+  -- roster email is platform-asserted; matching on email alone could adopt the
+  -- WRONG account into the course (a recycled institutional alias, or — where
+  -- self-signup is enabled — an attacker who registered with the victim's email),
+  -- granting it the member's roster role. Requiring a confirmed email means an
+  -- attacker can't squat a victim's address via an unconfirmed signup; legitimate
+  -- LTI-launch and self-signup accounts have a confirmed email and still link.
   UPDATE public.users u
   SET sis_user_id = r.sis_user_id
   FROM tmp_sis_roster_resolved r
   WHERE r.email IS NOT NULL
     AND u.sis_user_id IS NULL
     AND lower(u.email) = r.email
+    AND EXISTS (
+      SELECT 1 FROM auth.users au WHERE au.id = u.user_id AND au.email_confirmed_at IS NOT NULL
+    )
     AND u.user_id = (
       SELECT u2.user_id FROM public.users u2
+      JOIN auth.users au2 ON au2.id = u2.user_id AND au2.email_confirmed_at IS NOT NULL
       WHERE u2.sis_user_id IS NULL AND lower(u2.email) = r.email
       ORDER BY u2.user_id
       LIMIT 1

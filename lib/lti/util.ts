@@ -177,8 +177,8 @@ export function resolveMemberSections(
   cfg: SectionConfig
 ): { class_section_crn: number | null; lab_section_crn: number | null; unmappedNames: string[] } {
   if (cfg.splitByMemberSection) {
-    let classCrn: number | null = null;
-    let labCrn: number | null = null;
+    const classCrns = new Set<number>();
+    const labCrns = new Set<number>();
     const unmappedNames: string[] = [];
     for (const name of extractSectionNames(member)) {
       const hit = cfg.nameMap.get(name);
@@ -186,10 +186,15 @@ export function resolveMemberSections(
         unmappedNames.push(name);
         continue;
       }
-      if (classCrn === null && hit.classSectionCrn !== null) classCrn = hit.classSectionCrn;
-      if (labCrn === null && hit.labSectionCrn !== null) labCrn = hit.labSectionCrn;
+      if (hit.classSectionCrn !== null) classCrns.add(hit.classSectionCrn);
+      if (hit.labSectionCrn !== null) labCrns.add(hit.labSectionCrn);
     }
-    return { class_section_crn: classCrn, lab_section_crn: labCrn, unmappedNames };
+    // A member co-enrolled in multiple mapped Canvas sections can resolve to more
+    // than one Pawtograder section. Pick DETERMINISTICALLY (lowest CRN) rather
+    // than whichever name Canvas happened to list first, so the placement can't
+    // silently flap between syncs when the platform reorders section_names.
+    const pick = (s: Set<number>) => (s.size > 0 ? Math.min(...s) : null);
+    return { class_section_crn: pick(classCrns), lab_section_crn: pick(labCrns), unmappedNames };
   }
   // Topology A / course_wide: the whole context maps to one section (or none).
   if (cfg.sectionRole === "lecture") {

@@ -143,6 +143,7 @@ function projectClaims(
     sub,
     name: asString(payload.name),
     email: asString(payload.email),
+    emailVerified: typeof payload.email_verified === "boolean" ? payload.email_verified : undefined,
     lisPersonSourcedId: asString(lis?.person_sourcedid),
     roles,
     appRole: ltiRolesToAppRole(roles),
