@@ -1,0 +1,33 @@
+{
+  "comment": "design-sync build tsconfig. baseUrl is the repo root (one level up). Exact mock rules MUST precede the @/* wildcard — the path plugin matches in declaration order, first hit wins. These aliases swap the app's data-layer modules for offline mocks so the grading components render without Supabase/Refine/Next.",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "paths": {
+      "@/hooks/useClassProfiles": ["./.design-sync/mocks/useClassProfiles.ts"],
+      "@/hooks/useSubmission": ["./.design-sync/mocks/useSubmission.ts"],
+      "@/hooks/useSubmissionReview": ["./.design-sync/mocks/useSubmissionReview.ts"],
+      "@/hooks/useAssignment": ["./.design-sync/mocks/useAssignment.ts"],
+      "@/hooks/useCourseController": ["./.design-sync/mocks/useCourseController.ts"],
+      "@/hooks/useUserProfiles": ["./.design-sync/mocks/useUserProfiles.ts"],
+      "@/hooks/useRubricVisibility": ["./.design-sync/mocks/useRubricVisibility.ts"],
+      "@/hooks/useRubricAnnotationActions": ["./.design-sync/mocks/useRubricAnnotationActions.ts"],
+      "@/hooks/useNextIncompleteReview": ["./.design-sync/mocks/useNextIncompleteReview.ts"],
+      "@/hooks/useMentions": ["./.design-sync/mocks/useMentions.ts"],
+      "@/lib/TableController": ["./.design-sync/mocks/TableController.ts"],
+      "@/utils/supabase/client": ["./.design-sync/mocks/supabase-client.ts"],
+      "@refinedev/core": ["./.design-sync/mocks/refine.ts"],
+      "next/navigation": ["./.design-sync/mocks/next-navigation.ts"],
+      "next/dynamic": ["./.design-sync/mocks/next-dynamic.ts"],
+      "next/image": ["./.design-sync/mocks/next-image.ts"],
+      "@/hooks/useUserPreferences": ["./.design-sync/mocks/useUserPreferences.ts"],
+      "@/hooks/useSubmissionFileSymbols": ["./.design-sync/mocks/useSubmissionFileSymbols.ts"],
+      "@monaco-editor/react": ["./.design-sync/mocks/stub-empty.ts"],
+      "monaco-editor": ["./.design-sync/mocks/stub-empty.ts"],
+      "monaco-yaml": ["./.design-sync/mocks/stub-empty.ts"],
+      "@sentry/nextjs": ["./.design-sync/mocks/stub-empty.ts"],
+      "path": ["./.design-sync/mocks/path.ts"],
+      "@/global-setup": ["./tests/global-setup"],
+      "@/*": ["./*"]
+    }
+  }
+}
