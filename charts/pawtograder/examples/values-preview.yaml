@@ -163,8 +163,8 @@ edgeFunctions:
   # invariant (mm/page_table_check.c:143) and crashed the whole node ~once
   # per day. Guaranteed QoS pins oom_score_adj near 0, breaking the loop.
   resources:
-    requests: { cpu: "2",    memory: "2Gi" }
-    limits:   { cpu: "2",    memory: "2Gi" }
+    requests: { cpu: "2",    memory: "6Gi" }
+    limits:   { cpu: "2",    memory: "6Gi" }
   # END_TO_END_SECRET / EDGE_FUNCTION_SECRET come from the chart-rendered
   # pawtograder-e2e secret (templates/secrets.yaml when secrets.create=true
   # AND edgeFunctions.e2e.enabled=true).
