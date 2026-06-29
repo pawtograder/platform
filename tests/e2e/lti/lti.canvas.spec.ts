@@ -295,6 +295,53 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   await visualScreenshot(page, "lti-03-canvas-gradebook");
 });
 
+test("a returning student's re-launch reuses the same account (stable identity binding, no duplicate/takeover)", async ({
+  browser
+}) => {
+  // Guards the launch→session bridge (lib/lti/session.ts): a returning user must
+  // resolve via the (platform_id, sub) identity binding and sign back into their
+  // EXISTING account — never a fresh/duplicate account, and never an email-match
+  // takeover of a different one. (The email-adoption gate itself is unit-tested in
+  // tests/unit/lti-session.test.ts; the cross-class deep-link guard is covered by
+  // resolveLaunchRedirect there — the Canvas seed can't inject custom.assignment_id.)
+  test.setTimeout(120_000);
+  const student = cfg.students[0];
+
+  // The student already launched + was adopted in the previous step.
+  const { data: sUser } = await supabase.from("users").select("user_id").eq("email", student.email).single();
+  expect(sUser?.user_id).toBeTruthy();
+  const { data: bindingBefore } = await supabase
+    .from("lti_users")
+    .select("sub, user_id")
+    .eq("platform_id", platformId)
+    .eq("user_id", sUser!.user_id)
+    .single();
+  expect(bindingBefore?.user_id).toBe(sUser!.user_id);
+
+  // Launch again from Canvas in a fresh browser context.
+  const ctx = await browser.newContext();
+  const studentPage = await ctx.newPage();
+  await canvasLogin(studentPage, student.email, student.password);
+  await launchTool(studentPage);
+  await ctx.close();
+
+  // The (platform_id, sub) binding still resolves to the SAME user.
+  const { data: bindingAfter } = await supabase
+    .from("lti_users")
+    .select("user_id")
+    .eq("platform_id", platformId)
+    .eq("sub", bindingBefore!.sub)
+    .single();
+  expect(bindingAfter?.user_id).toBe(sUser!.user_id);
+
+  // Exactly one Pawtograder account carries this email (no duplicate provisioned).
+  const { count } = await supabase
+    .from("users")
+    .select("user_id", { count: "exact", head: true })
+    .eq("email", student.email);
+  expect(count).toBe(1);
+});
+
 test("AGS: grade update lands in Canvas; unreleased and null grades are not pushed", async ({ page, request }) => {
   test.setTimeout(240_000);
   const student = cfg.students[0];

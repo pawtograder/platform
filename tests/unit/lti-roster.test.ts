@@ -13,7 +13,11 @@
 jest.mock("@/lib/lti/db", () => ({ ltiAdminClient: jest.fn() }));
 jest.mock("@/lib/lti/nrps", () => ({ fetchMemberships: jest.fn(), mapRoster: jest.fn() }));
 
-import { canDropMissing, buildSectionConfig, type ContextLinkRow } from "@/lib/lti/roster";
+import { canDropMissing, buildSectionConfig, syncContextRoster, type ContextLinkRow } from "@/lib/lti/roster";
+import { fetchMemberships, mapRoster } from "@/lib/lti/nrps";
+
+const fetchMembershipsMock = fetchMemberships as jest.Mock;
+const mapRosterMock = mapRoster as jest.Mock;
 
 describe("canDropMissing", () => {
   test("drops when this is the sole linked context", () => {
@@ -121,5 +125,90 @@ describe("buildSectionConfig — batched CRN resolution", () => {
     expect(cfg.labSectionCrn).toBeNull(); // link.lab_section_id = null
     expect(cfg.nameMap.get("Sec A")).toEqual({ classSectionCrn: 1111, labSectionCrn: 3333 });
     expect(cfg.nameMap.get("Sec B")).toEqual({ classSectionCrn: 2222, labSectionCrn: 4444 });
+  });
+});
+
+describe("syncContextRoster — cross-drop guard counts only sync-eligible contexts", () => {
+  /** A course_wide link with no sections, so buildSectionConfig/upsertLtiUsers issue
+   *  no queries and the only lti_context_links read is the cross-drop count query. */
+  const link: ContextLinkRow = {
+    id: 1,
+    platform_id: 10,
+    class_id: 100,
+    context_id: "ctx",
+    nrps_url: "https://canvas.test/nrps",
+    roster_sync_enabled: true,
+    section_role: "course_wide",
+    class_section_id: null,
+    lab_section_id: null,
+    split_by_member_section: false
+  };
+
+  /** Fake db: records the cross-drop COUNT query's filters and the sis_sync_enrollment
+   *  rpc args; the count select resolves to `eligibleCount`. */
+  function makeContextDb(eligibleCount: number) {
+    const countFilters: Record<string, unknown> = {};
+    const rpcCalls: Array<{ fn: string; args: unknown }> = [];
+    const from = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const b: any = { _isCount: false, _update: undefined };
+      b.select = (_col: string, opts?: { count?: string; head?: boolean }) => {
+        if (opts && (opts.count || opts.head)) b._isCount = true;
+        return b;
+      };
+      b.eq = (col: string, val: unknown) => {
+        if (b._isCount) countFilters[col] = val;
+        return b;
+      };
+      b.not = (col: string, op: string, val: unknown) => {
+        if (b._isCount) countFilters[col] = `${op}.${val}`;
+        return b;
+      };
+      b.in = () => b;
+      b.update = (payload: unknown) => {
+        b._update = payload;
+        return b;
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      b.then = (resolve: any, reject: any) => {
+        const out = b._isCount ? { count: eligibleCount, error: null } : { data: null, error: null };
+        return Promise.resolve(out).then(resolve, reject);
+      };
+      return b;
+    };
+    const rpc = async (fn: string, args: unknown) => {
+      rpcCalls.push({ fn, args });
+      return { data: {}, error: null };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { db: { from, rpc } as any, countFilters, rpcCalls };
+  }
+
+  beforeEach(() => {
+    fetchMembershipsMock.mockReset().mockResolvedValue({ members: [] });
+    mapRosterMock.mockReset().mockReturnValue({ roster: [], unmapped: [] });
+  });
+
+  test("the count query filters to roster_sync_enabled + non-null nrps_url (not every link on the class)", async () => {
+    const { db, countFilters } = makeContextDb(1);
+    await syncContextRoster(link, db);
+    expect(countFilters.class_id).toBe(100);
+    expect(countFilters.roster_sync_enabled).toBe(true);
+    // .not("nrps_url", "is", null) → recorded as the operator+value
+    expect(countFilters.nrps_url).toBe("is.null");
+  });
+
+  test("drops missing members when this is the sole ELIGIBLE context (count = 1)", async () => {
+    const { db, rpcCalls } = makeContextDb(1);
+    await syncContextRoster(link, db);
+    const sync = rpcCalls.find((c) => c.fn === "sis_sync_enrollment");
+    expect((sync?.args as { p_sync_options: { drop_missing: boolean } }).p_sync_options.drop_missing).toBe(true);
+  });
+
+  test("does NOT drop when more than one eligible context exists (count = 2)", async () => {
+    const { db, rpcCalls } = makeContextDb(2);
+    await syncContextRoster(link, db);
+    const sync = rpcCalls.find((c) => c.fn === "sis_sync_enrollment");
+    expect((sync?.args as { p_sync_options: { drop_missing: boolean } }).p_sync_options.drop_missing).toBe(false);
   });
 });

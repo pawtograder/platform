@@ -233,6 +233,26 @@ describe("resolveMemberSections / mapRoster", () => {
     expect(r.lab_section_crn).toBe(22222);
     expect(r.unmappedNames).toEqual(["L99"]);
   });
+
+  test("split: a member mapped to TWO distinct sections resolves DETERMINISTICALLY (lowest CRN), regardless of name order", () => {
+    const cfg: SectionConfig = {
+      sectionRole: "lab",
+      classSectionCrn: null,
+      labSectionCrn: null,
+      splitByMemberSection: true,
+      nameMap: new Map([
+        ["L05", { classSectionCrn: null, labSectionCrn: 22222 }],
+        ["L06", { classSectionCrn: null, labSectionCrn: 11111 }]
+      ])
+    };
+    // Whichever order Canvas lists the section names in, the placement must be the
+    // same (lowest CRN) so a co-enrolled member's section can't flap between syncs.
+    const a = resolveMemberSections(withNames(["L05", "L06"]), cfg);
+    const b = resolveMemberSections(withNames(["L06", "L05"]), cfg);
+    expect(a.lab_section_crn).toBe(11111);
+    expect(b.lab_section_crn).toBe(11111);
+    expect(a).toEqual(b);
+  });
 });
 
 describe("ltiClientIdMatches", () => {

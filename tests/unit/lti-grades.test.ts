@@ -455,4 +455,87 @@ describe("drainGradeSyncQueue — concurrency-safe dequeue", () => {
       enqueued_at: "2026-06-26T00:00:00.000Z"
     });
   });
+
+  test("KEEPS the queue row when the assignment-level sync throws (so the cron retries)", async () => {
+    // An assignment-level failure (here: no grade-sync context) throws BEFORE the
+    // per-student loop writes any durable lti_grade_sync_state. Deleting the row
+    // would silently lose the whole assignment's grade push; it must survive.
+    const { db, deletes } = makeFakeDb(
+      baseFixtures({
+        lti_grade_sync_queue: {
+          data: [{ class_id: 100, assignment_id: 5, enqueued_at: "2026-06-26T00:00:00.000Z" }]
+        },
+        lti_context_links: { data: [] } // getGradeContext throws → syncAssignmentGrades throws
+      })
+    );
+    const out = await drainGradeSyncQueue(db);
+    expect(out[0].ok).toBe(false);
+    expect(deletes.filter((d) => d.table === "lti_grade_sync_queue")).toHaveLength(0);
+  });
+});
+
+describe("syncAssignmentGrades — numeric columns serialized as strings (PostgREST)", () => {
+  // Postgres `numeric` columns (score, score_override, max_score, synced_score)
+  // arrive over PostgREST as JSON STRINGS, not numbers. Left uncoerced they break
+  // the AGS payload (scoreGiven must be a JSON number) and idempotency comparisons.
+  // These fixtures use strings on purpose — the production reality the fix handles.
+  test("a string score/max coerces to numbers in the AGS payload", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        gradebook_columns: { data: { id: 7, max_score: "50" } },
+        gradebook_column_students: {
+          data: [{ student_id: "p1", score: "40", score_override: null, released: true, is_excused: false }]
+        }
+      })
+    );
+    const result = await syncAssignmentGrades(100, 5, db);
+    expect(result.pushed).toBe(1);
+    const score = publishScoreMock.mock.calls[0][2];
+    expect(score.scoreGiven).toBe(40);
+    expect(typeof score.scoreGiven).toBe("number");
+    expect(score.scoreMaximum).toBe(50);
+    expect(typeof score.scoreMaximum).toBe("number");
+  });
+
+  test("a string-valued prior synced_score equal to the current score is SKIPPED (no redundant re-push)", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        gradebook_column_students: {
+          data: [{ student_id: "p1", score: "40", score_override: null, released: true, is_excused: false }]
+        },
+        lti_grade_sync_state: {
+          data: [
+            {
+              student_profile_id: "p1",
+              lti_user_sub: "sub-1",
+              synced_score: "40",
+              line_item_id: 1,
+              status: "synced",
+              attempts: 1
+            }
+          ]
+        }
+      })
+    );
+    const result = await syncAssignmentGrades(100, 5, db);
+    expect(result.skipped).toBe(1);
+    expect(result.pushed).toBe(0);
+    expect(publishScoreMock).not.toHaveBeenCalled();
+  });
+
+  test('a string "0" max falls back to a positive scoreMaximum (not treated as truthy)', async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        assignments: {
+          data: { id: 5, class_id: 100, title: "Survey", slug: "survey", total_points: "0", gradebook_column_id: 7 }
+        },
+        gradebook_columns: { data: { id: 7, max_score: "0" } },
+        gradebook_column_students: {
+          data: [{ student_id: "p1", score: "1", score_override: null, released: true, is_excused: false }]
+        }
+      })
+    );
+    await syncAssignmentGrades(100, 5, db);
+    expect(publishScoreMock.mock.calls[0][2].scoreMaximum).toBe(100);
+  });
 });

@@ -259,6 +259,10 @@ export type SimulatedSISRosterEntry = {
   role: "student" | "grader" | "instructor";
   class_section_crn?: number | null;
   lab_section_crn?: number | null;
+  // Optional email — the LTI roster-sync path carries it so sis_sync_enrollment can
+  // link a roster member to an existing (email-confirmed) account. Omitted by the
+  // classic SIS path. Passed straight through into p_roster_data.
+  email?: string | null;
 };
 
 export type SISSyncEnrollmentResult = {
