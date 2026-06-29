@@ -1021,31 +1021,47 @@ export async function processEnvelope(
         }
 
         // Group repos are created with an empty collaborator list (members are added separately), so
-        // this enqueue is the guaranteed handoff from is_github_ready=true to member access. A failure
-        // here must re-queue the whole job rather than silently strand members: createRepo and the
-        // is_github_ready update are both idempotent (see the catch above), so the retry is safe, and
-        // a persistent failure surfaces via the retry/DLQ path instead of being swallowed.
+        // this enqueue is the guaranteed handoff from is_github_ready=true to member access.
+        // Individual repos already had their owner granted by the inline syncRepoPermissions above, so
+        // we must NOT resync them here: enqueue_sync_repo_permissions_for_repo re-derives the owner
+        // filtered on github_org_confirmed=true, which would REVOKE an owner who is in the org but not
+        // yet DB-confirmed from the repo we just granted them. So resolve the repo row's
+        // assignment_group_id and only resync group repos.
         let resyncRepoId: number | null = envelope.repo_id ?? null;
-        if (!resyncRepoId && envelope.class_id) {
+        let resyncGroupId: number | null = null;
+        if (resyncRepoId) {
           const { data: repoRow, error: repoLookupError } = await adminSupabase
             .from("repositories")
-            .select("id")
+            .select("assignment_group_id")
+            .eq("id", resyncRepoId)
+            .maybeSingle();
+          if (repoLookupError) throw repoLookupError;
+          resyncGroupId = repoRow?.assignment_group_id ?? null;
+        } else if (envelope.class_id) {
+          const { data: repoRow, error: repoLookupError } = await adminSupabase
+            .from("repositories")
+            .select("id, assignment_group_id")
             .eq("class_id", envelope.class_id)
             .eq("repository", `${org}/${repoName}`)
             .maybeSingle();
           if (repoLookupError) throw repoLookupError;
           resyncRepoId = repoRow?.id ?? null;
+          resyncGroupId = repoRow?.assignment_group_id ?? null;
         }
-        // We just marked this repo is_github_ready, so its row must exist. An unresolved id here means
-        // the handoff is broken, so fail loudly (retry/DLQ) rather than silently skipping the resync
-        // and leaving members locked out.
-        if (!resyncRepoId) {
-          throw new Error(`Could not resolve repository id for ${org}/${repoName} to enqueue permission resync`);
+        // Only group repos need the post-create resync. A failure for a group repo must re-queue the
+        // whole job rather than silently strand members: createRepo and the is_github_ready update are
+        // both idempotent (see the catch above), so the retry is safe. We just marked this repo
+        // is_github_ready, so its row must exist; an unresolved id for a group repo means the handoff
+        // is broken, so fail loudly (retry/DLQ) rather than silently leaving members locked out.
+        if (resyncGroupId != null) {
+          if (!resyncRepoId) {
+            throw new Error(`Could not resolve repository id for ${org}/${repoName} to enqueue permission resync`);
+          }
+          const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
+            p_repo_id: resyncRepoId
+          });
+          if (resyncError) throw resyncError;
         }
-        const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
-          p_repo_id: resyncRepoId
-        });
-        if (resyncError) throw resyncError;
 
         recordMetric(
           adminSupabase,
