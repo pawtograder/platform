@@ -1,0 +1,21 @@
+production:
+  url: redis://redis
+  connect_timeout: 0.5
+  circuit_breaker:
+    error_threshold: 1
+    error_timeout: 2
+
+development:
+  url: redis://redis
+  connect_timeout: 0.5
+  circuit_breaker:
+    error_threshold: 1
+    error_timeout: 2
+
+test:
+  # only tests that are exercising the integration with redis require redis to run.
+  # warning: the redis database will get cleared before each test, so if you
+  # use this server for anything else, make sure to set aside a database id for
+  # these tests to use.
+  url: redis://redis/<%= ENV.fetch('PARALLEL_INDEX', '1') %>
+  connect_timeout: 0.5

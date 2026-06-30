@@ -120,6 +120,11 @@ spec:
             # See values.yaml `migrations.resetOnDrift` for semantics.
             - name: MIGRATIONS_RESET_ON_DRIFT
               value: {{ .Values.migrations.resetOnDrift | default false | quote }}
+            # Deployment tier, so migrate.sh can independently refuse the
+            # destructive drift reset on a durable env even if RESET_ON_DRIFT is
+            # somehow set — defense in depth behind templates/validations.yaml.
+            - name: MIGRATIONS_ENVIRONMENT
+              value: {{ .Values.global.environment | default "dev" | quote }}
             # DB→edge callback wiring. migrate.sh Phase 4 rewrites the vault
             # `supabase_project_url` / `edge-function-secret` (seeded with local
             # dev defaults by the gradebook migration) so pg_cron / triggers can

@@ -126,6 +126,30 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   SIS Sync
                 </Link>
                 <Link
+                  href="/admin/lti-platforms"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  LTI Platforms
+                </Link>
+                <Link
+                  href="/admin/lti-contexts"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  LTI Contexts
+                </Link>
+                <Link
                   href="/admin/notifications"
                   color="blue.600"
                   _hover={{ color: "blue.800" }}

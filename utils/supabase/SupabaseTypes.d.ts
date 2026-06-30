@@ -1814,10 +1814,12 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
+          lti_context_id: string | null;
           meeting_location: string | null;
           meeting_times: string | null;
           name: string;
           sis_crn: number | null;
+          updated_at: string;
         };
         Insert: {
           campus?: string | null;
@@ -1826,10 +1828,12 @@ export type Database = {
           class_id: number;
           created_at?: string;
           id?: number;
+          lti_context_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name: string;
           sis_crn?: number | null;
+          updated_at?: string;
         };
         Update: {
           campus?: string | null;
@@ -1838,10 +1842,12 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           id?: number;
+          lti_context_id?: string | null;
           meeting_location?: string | null;
           meeting_times?: string | null;
           name?: string;
           sis_crn?: number | null;
+          updated_at?: string;
         };
         Relationships: [
           {
@@ -5724,6 +5730,573 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
+      lti_context_links: {
+        Row: {
+          ags_lineitems_url: string | null;
+          ags_scopes: string[] | null;
+          class_id: number | null;
+          class_section_id: number | null;
+          context_id: string;
+          context_label: string | null;
+          context_title: string | null;
+          created_at: string;
+          deployment_id: string;
+          grade_sync_enabled: boolean;
+          id: number;
+          lab_section_id: number | null;
+          last_roster_sync_at: string | null;
+          last_roster_sync_message: string | null;
+          last_roster_sync_status: string | null;
+          nrps_url: string | null;
+          platform_id: number;
+          roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
+          updated_at: string;
+        };
+        Insert: {
+          ags_lineitems_url?: string | null;
+          ags_scopes?: string[] | null;
+          class_id?: number | null;
+          class_section_id?: number | null;
+          context_id: string;
+          context_label?: string | null;
+          context_title?: string | null;
+          created_at?: string;
+          deployment_id: string;
+          grade_sync_enabled?: boolean;
+          id?: number;
+          lab_section_id?: number | null;
+          last_roster_sync_at?: string | null;
+          last_roster_sync_message?: string | null;
+          last_roster_sync_status?: string | null;
+          nrps_url?: string | null;
+          platform_id: number;
+          roster_sync_enabled?: boolean;
+          section_role?: string;
+          split_by_member_section?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          ags_lineitems_url?: string | null;
+          ags_scopes?: string[] | null;
+          class_id?: number | null;
+          class_section_id?: number | null;
+          context_id?: string;
+          context_label?: string | null;
+          context_title?: string | null;
+          created_at?: string;
+          deployment_id?: string;
+          grade_sync_enabled?: boolean;
+          id?: number;
+          lab_section_id?: number | null;
+          last_roster_sync_at?: string | null;
+          last_roster_sync_message?: string | null;
+          last_roster_sync_status?: string | null;
+          nrps_url?: string | null;
+          platform_id?: number;
+          roster_sync_enabled?: boolean;
+          section_role?: string;
+          split_by_member_section?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_context_links_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_links_class_section_id_fkey";
+            columns: ["class_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_links_deployment_fkey";
+            columns: ["platform_id", "deployment_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_deployments";
+            referencedColumns: ["platform_id", "deployment_id"];
+          },
+          {
+            foreignKeyName: "lti_context_links_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_links_platform_id_fkey";
+            columns: ["platform_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_platforms";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_context_section_map: {
+        Row: {
+          canvas_section_name: string;
+          class_section_id: number | null;
+          context_link_id: number;
+          created_at: string;
+          id: number;
+          lab_section_id: number | null;
+        };
+        Insert: {
+          canvas_section_name: string;
+          class_section_id?: number | null;
+          context_link_id: number;
+          created_at?: string;
+          id?: never;
+          lab_section_id?: number | null;
+        };
+        Update: {
+          canvas_section_name?: string;
+          class_section_id?: number | null;
+          context_link_id?: number;
+          created_at?: string;
+          id?: never;
+          lab_section_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_context_section_map_class_section_id_fkey";
+            columns: ["class_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_section_map_context_link_id_fkey";
+            columns: ["context_link_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_context_links";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_context_section_map_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_deployments: {
+        Row: {
+          created_at: string;
+          deployment_id: string;
+          id: number;
+          name: string | null;
+          platform_id: number;
+        };
+        Insert: {
+          created_at?: string;
+          deployment_id: string;
+          id?: number;
+          name?: string | null;
+          platform_id: number;
+        };
+        Update: {
+          created_at?: string;
+          deployment_id?: string;
+          id?: number;
+          name?: string | null;
+          platform_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_deployments_platform_id_fkey";
+            columns: ["platform_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_platforms";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_grade_sync_queue: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          enqueued_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          enqueued_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          enqueued_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_queue_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_queue_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_grade_sync_state: {
+        Row: {
+          assignment_id: number;
+          attempts: number;
+          class_id: number;
+          created_at: string;
+          error: string | null;
+          id: number;
+          last_attempt_at: string | null;
+          line_item_id: number | null;
+          lti_user_sub: string | null;
+          status: string;
+          student_profile_id: string;
+          synced_at: string | null;
+          synced_score: number | null;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          attempts?: number;
+          class_id: number;
+          created_at?: string;
+          error?: string | null;
+          id?: number;
+          last_attempt_at?: string | null;
+          line_item_id?: number | null;
+          lti_user_sub?: string | null;
+          status: string;
+          student_profile_id: string;
+          synced_at?: string | null;
+          synced_score?: number | null;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          attempts?: number;
+          class_id?: number;
+          created_at?: string;
+          error?: string | null;
+          id?: number;
+          last_attempt_at?: string | null;
+          line_item_id?: number | null;
+          lti_user_sub?: string | null;
+          status?: string;
+          student_profile_id?: string;
+          synced_at?: string | null;
+          synced_score?: number | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_grade_sync_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_state_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_state_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_grade_sync_state_line_item_id_fkey";
+            columns: ["line_item_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_line_items";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_line_items: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number;
+          context_link_id: number;
+          created_at: string;
+          gradebook_column_id: number | null;
+          id: number;
+          label: string | null;
+          last_pushed_at: string | null;
+          line_item_url: string;
+          score_maximum: number | null;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id?: number | null;
+          class_id: number;
+          context_link_id: number;
+          created_at?: string;
+          gradebook_column_id?: number | null;
+          id?: number;
+          label?: string | null;
+          last_pushed_at?: string | null;
+          line_item_url: string;
+          score_maximum?: number | null;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number | null;
+          class_id?: number;
+          context_link_id?: number;
+          created_at?: string;
+          gradebook_column_id?: number | null;
+          id?: number;
+          label?: string | null;
+          last_pushed_at?: string | null;
+          line_item_url?: string;
+          score_maximum?: number | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_context_link_id_fkey";
+            columns: ["context_link_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_context_links";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_line_items_gradebook_column_id_fkey";
+            columns: ["gradebook_column_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_columns";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      lti_nonces: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          nonce: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at: string;
+          nonce: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          nonce?: string;
+        };
+        Relationships: [];
+      };
+      lti_platforms: {
+        Row: {
+          auth_login_url: string;
+          client_id: string;
+          created_at: string;
+          enabled: boolean;
+          id: number;
+          issuer: string;
+          jwks_url: string;
+          name: string;
+          token_url: string;
+          updated_at: string;
+        };
+        Insert: {
+          auth_login_url: string;
+          client_id: string;
+          created_at?: string;
+          enabled?: boolean;
+          id?: number;
+          issuer: string;
+          jwks_url: string;
+          name: string;
+          token_url: string;
+          updated_at?: string;
+        };
+        Update: {
+          auth_login_url?: string;
+          client_id?: string;
+          created_at?: string;
+          enabled?: boolean;
+          id?: number;
+          issuer?: string;
+          jwks_url?: string;
+          name?: string;
+          token_url?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      lti_tool_keys: {
+        Row: {
+          alg: string;
+          created_at: string;
+          id: number;
+          kid: string;
+          private_key_pem_encrypted: string;
+          public_jwk: Json;
+          retired_at: string | null;
+        };
+        Insert: {
+          alg?: string;
+          created_at?: string;
+          id?: number;
+          kid: string;
+          private_key_pem_encrypted: string;
+          public_jwk: Json;
+          retired_at?: string | null;
+        };
+        Update: {
+          alg?: string;
+          created_at?: string;
+          id?: number;
+          kid?: string;
+          private_key_pem_encrypted?: string;
+          public_jwk?: Json;
+          retired_at?: string | null;
+        };
+        Relationships: [];
+      };
+      lti_users: {
+        Row: {
+          created_at: string;
+          email: string | null;
+          id: number;
+          lis_person_sourcedid: string | null;
+          name: string | null;
+          platform_id: number;
+          sub: string;
+          updated_at: string;
+          user_id: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          email?: string | null;
+          id?: number;
+          lis_person_sourcedid?: string | null;
+          name?: string | null;
+          platform_id: number;
+          sub: string;
+          updated_at?: string;
+          user_id?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          email?: string | null;
+          id?: number;
+          lis_person_sourcedid?: string | null;
+          name?: string | null;
+          platform_id?: number;
+          sub?: string;
+          updated_at?: string;
+          user_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "lti_users_platform_id_fkey";
+            columns: ["platform_id"];
+            isOneToOne: false;
+            referencedRelation: "lti_platforms";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "lti_users_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -11073,6 +11646,42 @@ export type Database = {
         };
         Returns: undefined;
       };
+      admin_bind_lti_context: {
+        Args: {
+          p_class_id?: number;
+          p_context_link_id: number;
+          p_section_role?: string;
+        };
+        Returns: {
+          ags_lineitems_url: string | null;
+          ags_scopes: string[] | null;
+          class_id: number | null;
+          class_section_id: number | null;
+          context_id: string;
+          context_label: string | null;
+          context_title: string | null;
+          created_at: string;
+          deployment_id: string;
+          grade_sync_enabled: boolean;
+          id: number;
+          lab_section_id: number | null;
+          last_roster_sync_at: string | null;
+          last_roster_sync_message: string | null;
+          last_roster_sync_status: string | null;
+          nrps_url: string | null;
+          platform_id: number;
+          roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
+          updated_at: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "lti_context_links";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
       admin_bulk_set_user_roles_disabled: {
         Args: {
           p_admin_user_id?: string;
@@ -11123,6 +11732,20 @@ export type Database = {
         };
         Returns: number;
       };
+      admin_create_lti_sections_from_canvas: {
+        Args: {
+          p_context_link_id: number;
+          p_created_by?: string;
+          p_section_names: string[];
+        };
+        Returns: {
+          canvas_section_name: string;
+          created: boolean;
+          section_id: number;
+          section_type: string;
+          sis_crn: number;
+        }[];
+      };
       admin_delete_class: {
         Args: { p_class_id: number; p_deleted_by?: string };
         Returns: boolean;
@@ -11134,6 +11757,11 @@ export type Database = {
       admin_delete_lab_section: {
         Args: { p_deleted_by?: string; p_section_id: number };
         Returns: boolean;
+      };
+      admin_delete_lti_platform: { Args: { p_id: number }; Returns: undefined };
+      admin_enter_course_as_instructor: {
+        Args: { p_class_id: number };
+        Returns: undefined;
       };
       admin_get_class_sections: {
         Args: { p_class_id: number };
@@ -11150,10 +11778,6 @@ export type Database = {
           updated_at: string;
         }[];
       };
-      admin_enter_course_as_instructor: {
-        Args: { p_class_id: number };
-        Returns: undefined;
-      };
       admin_get_classes: {
         Args: never;
         Returns: {
@@ -11166,31 +11790,6 @@ export type Database = {
           instructor_count: number;
           name: string;
           student_count: number;
-          term: number;
-        }[];
-      };
-      admin_get_github_orgs: {
-        Args: never;
-        Returns: {
-          course_count: number;
-          created_at: string | null;
-          default_handout_template_repo: string;
-          default_solution_template_repo: string;
-          is_configured: boolean;
-          org_name: string;
-          updated_at: string | null;
-        }[];
-      };
-      admin_get_org_courses: {
-        Args: { p_org_name: string };
-        Returns: {
-          archived: boolean;
-          effective_handout_template_repo: string;
-          effective_solution_template_repo: string;
-          handout_template_repo: string | null;
-          id: number;
-          name: string;
-          solution_template_repo: string | null;
           term: number;
         }[];
       };
@@ -11208,6 +11807,31 @@ export type Database = {
           user_role_id: number;
         }[];
       };
+      admin_get_github_orgs: {
+        Args: never;
+        Returns: {
+          course_count: number;
+          created_at: string;
+          default_handout_template_repo: string;
+          default_solution_template_repo: string;
+          is_configured: boolean;
+          org_name: string;
+          updated_at: string;
+        }[];
+      };
+      admin_get_org_courses: {
+        Args: { p_org_name: string };
+        Returns: {
+          archived: boolean;
+          effective_handout_template_repo: string;
+          effective_solution_template_repo: string;
+          handout_template_repo: string;
+          id: number;
+          name: string;
+          solution_template_repo: string;
+          term: number;
+        }[];
+      };
       admin_get_sis_sync_status: {
         Args: never;
         Returns: {
@@ -11222,6 +11846,27 @@ export type Database = {
           sync_enabled: boolean;
           term: number;
           total_invitations: number;
+        }[];
+      };
+      admin_list_lti_contexts: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          class_name: string;
+          class_section_id: number;
+          context_id: string;
+          context_label: string;
+          context_title: string;
+          grade_sync_enabled: boolean;
+          id: number;
+          lab_section_id: number;
+          last_roster_sync_at: string;
+          last_roster_sync_status: string;
+          platform_id: number;
+          platform_name: string;
+          roster_sync_enabled: boolean;
+          section_role: string;
+          split_by_member_section: boolean;
         }[];
       };
       admin_lookup_user_by_email: {
@@ -11274,12 +11919,56 @@ export type Database = {
         Returns: boolean;
       };
       admin_update_class_section: {
-        Args: { p_name: string; p_section_id: number; p_updated_by?: string };
+        Args: {
+          p_name: string;
+          p_section_id: number;
+          p_sis_crn?: number;
+          p_updated_by?: string;
+        };
         Returns: boolean;
       };
       admin_update_lab_section: {
-        Args: { p_name: string; p_section_id: number; p_updated_by?: string };
+        Args: {
+          p_name: string;
+          p_section_id: number;
+          p_sis_crn?: number;
+          p_updated_by?: string;
+        };
         Returns: boolean;
+      };
+      admin_upsert_github_org: {
+        Args: { p_handout?: string; p_org_name: string; p_solution?: string };
+        Returns: undefined;
+      };
+      admin_upsert_lti_platform: {
+        Args: {
+          p_auth_login_url: string;
+          p_client_id: string;
+          p_enabled?: boolean;
+          p_id: number;
+          p_issuer: string;
+          p_jwks_url: string;
+          p_name: string;
+          p_token_url: string;
+        };
+        Returns: {
+          auth_login_url: string;
+          client_id: string;
+          created_at: string;
+          enabled: boolean;
+          id: number;
+          issuer: string;
+          jwks_url: string;
+          name: string;
+          token_url: string;
+          updated_at: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "lti_platforms";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
       };
       apply_late_token_extension: {
         Args: {
@@ -12581,6 +13270,24 @@ export type Database = {
         };
         Returns: undefined;
       };
+      lti_consume_nonce: {
+        Args: { p_nonce: string; p_ttl_seconds?: number };
+        Returns: boolean;
+      };
+      lti_grade_drain_safety_net: { Args: never; Returns: undefined };
+      lti_kick_grade_drain: { Args: never; Returns: undefined };
+      lti_upsert_line_item: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_context_link_id: number;
+          p_gradebook_column_id: number;
+          p_label: string;
+          p_line_item_url: string;
+          p_score_maximum: number;
+        };
+        Returns: number;
+      };
       mark_discord_invite_used: {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
@@ -12776,6 +13483,13 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: undefined;
       };
+      resolve_class_template_repos: {
+        Args: { p_class_id: number };
+        Returns: {
+          handout_template_repo: string;
+          solution_template_repo: string;
+        }[];
+      };
       safe_broadcast: {
         Args: {
           p_channel: string;
@@ -12796,6 +13510,10 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      set_class_template_overrides: {
+        Args: { p_class_id: number; p_handout?: string; p_solution?: string };
+        Returns: undefined;
       };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };
@@ -12886,6 +13604,7 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: Json;
       };
+      trigger_lti_roster_sync: { Args: never; Returns: undefined };
       trigger_sis_sync: { Args: { p_class_id?: number }; Returns: Json };
       unregister_realtime_subscription: {
         Args: { p_channel: string; p_client_id: string };
@@ -13000,21 +13719,6 @@ export type Database = {
           relname: string;
           severity: string;
         }[];
-      };
-      admin_upsert_github_org: {
-        Args: { p_org_name: string; p_handout?: string | null; p_solution?: string | null };
-        Returns: undefined;
-      };
-      resolve_class_template_repos: {
-        Args: { p_class_id: number };
-        Returns: {
-          handout_template_repo: string;
-          solution_template_repo: string;
-        }[];
-      };
-      set_class_template_overrides: {
-        Args: { p_class_id: number; p_handout?: string | null; p_solution?: string | null };
-        Returns: undefined;
       };
     };
     Enums: {

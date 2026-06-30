@@ -7,8 +7,10 @@ keyed off global.environment (dev | preview | staging | production):
                  gauges + multiplies DB load); Studio ingress without an
                  auth layer (full DB control behind a bare URL).
   staging+prod — secrets.create (plaintext key material in helm release
-                 history); migrations.resetOnDrift (drops schema public —
-                 destroys all application data; these envs hold durable data).
+                 history); migrations.resetOnDrift (wipes schema public +
+                 auth.users + vault.secrets and replays from scratch —
+                 destroys ALL data; only ephemeral dev/preview may opt in,
+                 and migrate.sh independently re-checks the tier at runtime).
   production   — e2e bypasses (privileged test paths), secrets.autogenerate
                  (non-recoverable keys), seed.enabled (demo data), floating
                  image tags (irreproducible deploys).

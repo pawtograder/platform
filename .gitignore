@@ -74,6 +74,9 @@ axe-debug/
 /.build.done
 /screenshot-diff-report.json
 
+# Canvas LTI e2e captured secrets/IDs (generated at runtime)
+tests/e2e/lti/.canvas-e2e.json
+playwright-report-canvas/
 # Host-generated Deno lockfile — not committed; its version can differ from
 # the edge-runtime image Deno and crash the worker at boot (see .dockerignore).
 supabase/functions/deno.lock
