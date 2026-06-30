@@ -1,7 +1,9 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
 import type {
   Assignment,
   AssignmentDueDateException,
@@ -111,15 +113,119 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
 export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
   const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
 
-  const { data: userRole } = await client
+  const { data: userRoles } = await client
     .from("user_roles")
     .select("role, class_id, public_profile_id, private_profile_id")
     .eq("class_id", course_id)
     .eq("user_id", user_id)
+    .eq("disabled", false);
+
+  if (!userRoles || userRoles.length === 0) {
+    return undefined;
+  }
+
+  // A user may hold more than one non-disabled role in a class — the unique index is on
+  // (user_id, role, class_id), not (user_id, class_id), so e.g. student + grader can coexist.
+  // Resolve to the highest-privilege role (matching the enrollment upgrade logic) instead of
+  // calling `.single()`, which 406s on >1 (and on 0) rows and would lock the user out of a
+  // course they belong to.
+  const roleHierarchy: ReadonlyArray<UserRoleData["role"]> = ["instructor", "grader", "student"];
+  const rank = (role: UserRoleData["role"]) => {
+    const idx = roleHierarchy.indexOf(role);
+    return idx === -1 ? roleHierarchy.length : idx;
+  };
+  return [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0];
+}
+
+export type EffectiveCourseIdentity = UserRoleData & {
+  /** True when real staff are viewing the course as a student. */
+  isViewingAs: boolean;
+  /** The viewer's actual role in the course (unchanged by view-as). */
+  realRole: Database["public"]["Enums"]["app_role"];
+  /** The target private profile id when viewing as, otherwise null. */
+  viewAsProfileId: string | null;
+};
+
+/**
+ * Resolve the "effective" identity for a course, accounting for the staff
+ * "view as student" cookie. When the real user is an instructor for the course and the
+ * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
+ * role/profile ids are the student's (so server-branching pages render the student view
+ * scoped to that student). Staff can also view their own test-assignment submissions as
+ * a synthetic student. Otherwise the viewer's real identity is returned unchanged.
+ *
+ * Auth/RLS identity is unaffected — the override is purely presentation/scoping. UI read-only
+ * gates prevent writes while RLS remains the backstop for cross-profile data access.
+ */
+export async function getEffectiveCourseIdentity(
+  course_id: number,
+  user_id: string
+): Promise<EffectiveCourseIdentity | undefined> {
+  const realRole = await getUserRolesForCourse(course_id, user_id);
+  if (!realRole) {
+    return undefined;
+  }
+
+  const base: EffectiveCourseIdentity = {
+    ...realRole,
+    isViewingAs: false,
+    realRole: realRole.role,
+    viewAsProfileId: null
+  };
+
+  const isStaff = realRole.role === "instructor" || realRole.role === "grader";
+  if (!isStaff) {
+    return base;
+  }
+
+  const cookieStore = await cookies();
+  const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
+  if (!targetProfileId) {
+    return base;
+  }
+
+  if (targetProfileId === realRole.private_profile_id) {
+    return {
+      role: "student",
+      class_id: realRole.class_id,
+      public_profile_id: realRole.public_profile_id,
+      private_profile_id: realRole.private_profile_id,
+      isViewingAs: true,
+      realRole: realRole.role,
+      viewAsProfileId: realRole.private_profile_id
+    };
+  }
+
+  if (realRole.role !== "instructor") {
+    return base;
+  }
+
+  const client = await createClientWithCaching({
+    revalidate: 60,
+    tags: [`user_roles:${course_id}:view_as`]
+  });
+  const { data: targetRole } = await client
+    .from("user_roles")
+    .select("role, class_id, public_profile_id, private_profile_id")
+    .eq("class_id", course_id)
+    .eq("private_profile_id", targetProfileId)
+    .eq("role", "student")
     .eq("disabled", false)
     .single();
 
-  return userRole || undefined;
+  if (!targetRole) {
+    return base;
+  }
+
+  return {
+    role: "student",
+    class_id: targetRole.class_id,
+    public_profile_id: targetRole.public_profile_id,
+    private_profile_id: targetRole.private_profile_id,
+    isViewingAs: true,
+    realRole: realRole.role,
+    viewAsProfileId: targetRole.private_profile_id
+  };
 }
 
 export async function getCourse(course_id: number) {

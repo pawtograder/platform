@@ -5,11 +5,13 @@ import { useIndexedTableControllerValue, useTableControllerTableValues } from "@
 import type { DiscussionTopicFollower } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionTopics } from "./useCourseController";
 
 export function useDiscussionTopicFollowStatus(topicId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
+  const isReadOnly = useIsReadOnly();
   const topics = useDiscussionTopics();
 
   const topic = useMemo(() => topics?.find((t) => t.id === topicId), [topics, topicId]);
@@ -23,12 +25,16 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
   const cur = useIndexedTableControllerValue(controller.discussionTopicFollowers, "topic_id", topicId);
 
   const status = useMemo(() => {
+    // In view-as mode the override row belongs to the masquerading instructor — show the
+    // topic's default state instead so the follow star doesn't reflect the wrong identity.
+    if (isReadOnly) return !!topic?.default_follow;
     if (cur) return !!cur.following;
     return !!topic?.default_follow;
-  }, [cur, topic?.default_follow]);
+  }, [cur, topic?.default_follow, isReadOnly]);
 
   const setTopicFollowStatus = useCallback(
     async (next: boolean) => {
+      if (isReadOnly) return;
       if (!user?.id) {
         toaster.error({
           title: "Error",
@@ -71,10 +77,12 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
         console.error("Failed to update topic follow:", error);
       }
     },
-    [controller.courseId, controller.discussionTopicFollowers, cur, topic, topicId, user?.id]
+    [controller.courseId, controller.discussionTopicFollowers, cur, topic, topicId, user?.id, isReadOnly]
   );
 
-  return { topic, status, setTopicFollowStatus, override: cur ?? null };
+  // In view-as mode `cur` is the masquerading instructor's override row; don't expose it to
+  // consumers (mirrors `status`/`useFollowedDiscussionTopicIds` ignoring overrides here).
+  return { topic, status, setTopicFollowStatus, override: isReadOnly ? null : (cur ?? null) };
 }
 
 /**
@@ -86,6 +94,7 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
  */
 export function useFollowedDiscussionTopicIds() {
   const controller = useCourseController();
+  const isReadOnly = useIsReadOnly();
   const topics = useDiscussionTopics();
   const rows = useTableControllerTableValues(controller.discussionTopicFollowers) ?? [];
 
@@ -96,13 +105,17 @@ export function useFollowedDiscussionTopicIds() {
       if (t.default_follow) set.add(t.id);
     }
 
-    for (const row of rows) {
-      if (row.following) set.add(row.topic_id);
-      else set.delete(row.topic_id);
+    // In view-as mode the override rows belong to the masquerading instructor; ignore them
+    // so the "My Feed" surface reflects topic defaults rather than the instructor's picks.
+    if (!isReadOnly) {
+      for (const row of rows) {
+        if (row.following) set.add(row.topic_id);
+        else set.delete(row.topic_id);
+      }
     }
 
     return set;
-  }, [rows, topics]);
+  }, [rows, topics, isReadOnly]);
 }
 
 /**
@@ -111,6 +124,7 @@ export function useFollowedDiscussionTopicIds() {
 export function useTopicFollowActions() {
   const controller = useCourseController();
   const { user } = useAuthState();
+  const isReadOnly = useIsReadOnly();
   const topics = useDiscussionTopics();
   const rows = useTableControllerTableValues(controller.discussionTopicFollowers);
 
@@ -129,6 +143,7 @@ export function useTopicFollowActions() {
 
   const setTopicFollowStatusForId = useCallback(
     async (topicId: number, next: boolean) => {
+      if (isReadOnly) return;
       if (!user?.id) {
         toaster.error({
           title: "Error",
@@ -171,7 +186,7 @@ export function useTopicFollowActions() {
         console.error("Failed to update topic follow:", error);
       }
     },
-    [controller.courseId, controller.discussionTopicFollowers, overrideByTopicId, topicById, user?.id]
+    [controller.courseId, controller.discussionTopicFollowers, overrideByTopicId, topicById, user?.id, isReadOnly]
   );
 
   return { setTopicFollowStatusForId };

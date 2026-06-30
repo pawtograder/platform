@@ -1,0 +1,135 @@
+{{- if eq (.Values.redis.provider | default "external") "internal" }}
+{{- $r := .Values.redis.internal -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: pawtograder-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: {{ $r.service.port | default 6379 }}
+      targetPort: redis
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
+{{- if $r.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pawtograder-redis-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $r.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $r.persistence.size | default "8Gi" | quote }}
+{{- end }}
+---
+# Single-replica Redis. This is an ephemeral-by-default cache + rate-limiter +
+# webhook-dedup store (provider=internal); it is NOT highly available. Losing it
+# is not data loss — the limiter/cache/dedup state rebuilds — so we keep one
+# replica and a Recreate strategy (never two writers on the PVC).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pawtograder-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "redis") | nindent 8 }}
+      annotations:
+        # Roll the pod when the password rotates (REDIS_URL/REDIS_PASSWORD change).
+        checksum/secret: {{ include (print $.Template.BasePath "/redis-secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: redis
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" $r.image) }}
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          args:
+            - redis-server
+            - --maxmemory
+            - {{ $r.maxmemory | default "768mb" | quote }}
+            - --maxmemory-policy
+            - {{ $r.maxmemoryPolicy | default "allkeys-lru" | quote }}
+            {{- if $r.auth.enabled }}
+            # Password interpolated from the env var below (k8s expands $(VAR)).
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            {{- end }}
+            {{- if $r.persistence.enabled }}
+            - --dir
+            - /data
+            - --appendonly
+            - "yes"
+            {{- else }}
+            # Pure in-memory: disable RDB snapshots and AOF.
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            {{- end }}
+          {{- if $r.auth.enabled }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-redis
+                  key: REDIS_PASSWORD
+          {{- end }}
+          ports:
+            - name: redis
+              containerPort: {{ $r.service.port | default 6379 }}
+          # TCP probes avoid putting the password on the probe command line.
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+          {{- if $r.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- if $r.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pawtograder-redis-data
+      {{- end }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" $r)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" $r)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

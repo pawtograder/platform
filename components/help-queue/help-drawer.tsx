@@ -18,7 +18,7 @@ import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } 
 import {
   useHelpQueueAssignments,
   useHelpQueues,
-  useHelpRequests,
+  useStudentVisibleHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
 import { Accordion, Badge, Box, Button, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
@@ -43,7 +43,9 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
 
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
+  // Student-visible variant so the "N open" badge doesn't count private peer requests in
+  // view-as; no-op when not masquerading.
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const helpRequestStudents = useHelpRequestStudents();
   const threads = useDiscussionThreadTeasers();
   const topics = useDiscussionTopics();

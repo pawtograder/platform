@@ -3,9 +3,13 @@
 import { useParams } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
-import { useMemo, useState } from "react";
-import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
+import { useEffect, useMemo, useState } from "react";
+import { Box, Flex, Spinner, Text, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
+import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
+
+type LoadState = "pending" | "loaded" | "not_found" | "error";
 
 export default function RequestDetailPage() {
   const { queue_id, course_id, request_id } = useParams();
@@ -18,11 +22,75 @@ export default function RequestDetailPage() {
     queueId: Number(queue_id)
   });
 
+  const requestIdNum = Number(request_id);
+
   // Find the specific request - could be from user's requests or queue requests
   const request = useMemo(() => {
-    const requestIdNum = Number(request_id);
     return userRequests.find((req) => req.id === requestIdNum) || queueRequests.find((req) => req.id === requestIdNum);
-  }, [userRequests, queueRequests, request_id]);
+  }, [userRequests, queueRequests, requestIdNum]);
+
+  // The realtime-backed help_requests controller is populated by an
+  // initial query plus realtime INSERT broadcasts. If a user lands here
+  // via a deep link, a freshly-created request whose realtime broadcast
+  // hasn't arrived yet, or a navigation that races the initial query,
+  // `request` is undefined and we used to render a flat "Request not
+  // found." — which is wrong for the loading case and surfaces as an
+  // e2e flake. Distinguish "not yet loaded" from "definitively missing"
+  // by issuing a one-shot single-row fetch on mount; only flip to
+  // not_found once that fetch has resolved and the row is still absent.
+  // The fetch writes through the controller's cache, so the existing
+  // useQueueData / useHelpRequests hooks pick it up via their normal
+  // notification path.
+  const controller = useOfficeHoursController();
+  const [loadState, setLoadState] = useState<LoadState>(request ? "loaded" : "pending");
+  useEffect(() => {
+    if (request) {
+      setLoadState("loaded");
+      return;
+    }
+    let cancelled = false;
+    setLoadState("pending");
+    controller.helpRequests
+      .invalidate(requestIdNum)
+      .then(() => {
+        if (cancelled) return;
+        // `invalidate` resolves successfully both when the row was found
+        // (and added to cache — `useQueueData` will pick it up via its
+        // listener and the effect will re-run with `request` truthy)
+        // AND when the row was not found (single() returned data:null
+        // without an explicit error, e.g. RLS filtered it out). Only
+        // flip to "not_found" if the row really isn't in cache; never
+        // flip a transient "not_found" between the cache write and the
+        // re-render, which would cause a flash of the error state.
+        if (!controller.helpRequests.getById(requestIdNum).data) {
+          setLoadState("not_found");
+        }
+      })
+      .catch(() => {
+        // Distinct from "not_found": this fires when the REST round-trip
+        // itself fails (network blip, auth glitch, 5xx). Rendering
+        // "Request not found." in those cases is misleading — the row
+        // may very well exist, we just couldn't fetch it.
+        if (!cancelled) setLoadState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [request, controller, requestIdNum]);
+
+  // View-as student: if the masqueraded student isn't a member of this (private) request,
+  // `useQueueData` masks it out so `request` stays undefined — but `invalidate` above
+  // populates the cache under the instructor's auth, so getById() is truthy and loadState
+  // never reaches "not_found". That left the page spinning forever. Detect the masked-out
+  // case from the unmasked cached row and render the same placeholder HelpRequestChat uses.
+  const rawRequest = useHelpRequest(requestIdNum);
+  const allHelpRequestStudents = useHelpRequestStudents();
+  const { isMasking, filterHelpRequest } = useViewAsStudentDataMask();
+  const memberProfileIds = useMemo(
+    () => allHelpRequestStudents.filter((s) => s.help_request_id === requestIdNum).map((s) => s.profile_id),
+    [allHelpRequestStudents, requestIdNum]
+  );
+  const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
 
   // Calculate position in queue for active requests
   const position = useMemo(() => {
@@ -33,7 +101,26 @@ export default function RequestDetailPage() {
   }, [request, queueRequests]);
 
   if (!request) {
-    return <div>Request not found.</div>;
+    if (hiddenFromMasquerade) {
+      return (
+        <Flex justify="center" align="center" py={12}>
+          <Text fontSize="sm" color="fg.muted">
+            This help request isn&apos;t visible from the student view.
+          </Text>
+        </Flex>
+      );
+    }
+    if (loadState === "not_found") {
+      return <div>Request not found.</div>;
+    }
+    if (loadState === "error") {
+      return <div>Unable to load this request right now. Please try again in a moment.</div>;
+    }
+    return (
+      <Flex justify="center" align="center" py={12}>
+        <Spinner />
+      </Flex>
+    );
   }
 
   return (

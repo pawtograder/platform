@@ -119,8 +119,18 @@ function AnchoredRegradeRequestRow({ request }: { request: RegradeRequest }) {
             </Text>
           </HStack>
           <HStack gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
-            <Text>Created {formatRelative(new Date(request.created_at), new Date())}</Text>
-            <Text>Updated {formatRelative(new Date(request.last_updated_at), new Date())}</Text>
+            <Text>
+              Created{" "}
+              <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+                {formatRelative(new Date(request.created_at), new Date())}
+              </Text>
+            </Text>
+            <Text>
+              Updated{" "}
+              <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+                {formatRelative(new Date(request.last_updated_at), new Date())}
+              </Text>
+            </Text>
           </HStack>
         </VStack>
         <ChakraLink href={`#regrade-request-${request.id}`} fontSize="sm" colorPalette="blue">

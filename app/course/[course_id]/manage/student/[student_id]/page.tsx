@@ -17,12 +17,13 @@ import {
 } from "@/lib/TableController";
 import type { Assignment, AssignmentGroupWithMembersAndMentor, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { Badge, Box, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Badge, Box, Button, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaBookOpen, FaChalkboardTeacher, FaUsers } from "react-icons/fa";
+import { FaBookOpen, FaChalkboardTeacher, FaEye, FaUsers } from "react-icons/fa";
 import { MdOutlineScience } from "react-icons/md";
 
 type HelpRequest = {
@@ -99,6 +100,7 @@ export default function StudentPage() {
   const router = useRouter();
   const controller = useCourseController();
   const { client, gradebookColumns, assignmentGroupsWithMembers } = controller;
+  const { realRole, isViewingAsStudent, enterViewAs } = useClassProfiles();
   const [studentSummary, setStudentSummary] = useState<StudentSummary | null>(null);
   const columns = useTableControllerTableValues(gradebookColumns);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -254,29 +256,50 @@ export default function StudentPage() {
     return list;
   }, [studentSummary, columnsById]);
 
+  const canEnterViewAs =
+    realRole === "instructor" &&
+    !isViewingAsStudent &&
+    !isDroppedStudent &&
+    studentRoleForPage?.role === "student" &&
+    !studentRoleForPage?.disabled;
+
   return (
     <VStack align="stretch" gap={6} px={{ base: 2, md: 4 }} py={4} role="region" aria-label="Student Summary">
-      <HStack justify="flex-start" w="full">
-        <Heading size="lg">Student Summary</Heading>
-        {isDroppedStudent && (
-          <Text color="fg.inverted" bg="bg.inverted">
-            (Dropped)
-          </Text>
-        )}
-        <Box minW={{ base: "240px", md: "320px" }}>
-          <ChakraReactSelect
-            aria-label="Select student"
-            isClearable={false}
+      <HStack justify="space-between" w="full" align="center" wrap="wrap" gap={3}>
+        <HStack gap={3} align="center" wrap="wrap">
+          <Heading size="lg">Student Summary</Heading>
+          {isDroppedStudent && (
+            <Text color="fg.inverted" bg="bg.inverted">
+              (Dropped)
+            </Text>
+          )}
+          <Box minW={{ base: "240px", md: "320px" }}>
+            <ChakraReactSelect
+              aria-label="Select student"
+              isClearable={false}
+              size="sm"
+              value={studentProfile ? { label: studentProfile.name || "Student", value: studentProfile.id } : undefined}
+              options={allStudents.map((s) => ({ label: s.name || `User ${s.id}`, value: s.id }))}
+              onChange={(opt) => {
+                const nextId = (opt as OptionBase & { value: string })?.value;
+                if (!nextId) return;
+                router.push(`/course/${course_id}/manage/student/${nextId}`);
+              }}
+            />
+          </Box>
+        </HStack>
+        {canEnterViewAs && (
+          <Button
+            aria-label="View as this student"
+            colorPalette="orange"
+            variant="solid"
             size="sm"
-            value={studentProfile ? { label: studentProfile.name || "Student", value: studentProfile.id } : undefined}
-            options={allStudents.map((s) => ({ label: s.name || `User ${s.id}`, value: s.id }))}
-            onChange={(opt) => {
-              const nextId = (opt as OptionBase & { value: string })?.value;
-              if (!nextId) return;
-              router.push(`/course/${course_id}/manage/student/${nextId}`);
-            }}
-          />
-        </Box>
+            onClick={() => enterViewAs(student_id as string)}
+          >
+            <FaEye />
+            View as this student
+          </Button>
+        )}
       </HStack>
 
       {studentEmail && (

@@ -25,7 +25,8 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
     is_private: hydrated.is_private,
     review_round: hydrated.review_round,
     created_at: hydrated.created_at,
-    cap_score_to_assignment_points: hydrated.cap_score_to_assignment_points ?? false
+    cap_score_to_assignment_points: hydrated.cap_score_to_assignment_points ?? false,
+    hide_unless_assigned: hydrated.hide_unless_assigned ?? false
   };
 
   const parts: RubricPart[] = [];

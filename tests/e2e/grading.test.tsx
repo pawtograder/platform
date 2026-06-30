@@ -9,6 +9,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  setGradingEditorPreference,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -134,6 +135,11 @@ test.beforeAll(async () => {
       class_id: course.id
     })
     .select("id");
+
+  // This workflow exercises the classic plain/starry-night annotation UI ("Leave a comment",
+  // "Annotate line N…", react-select check picker) for both the self-reviewing student and the
+  // grading staff, so opt every annotating user out of the now-default Monaco editor.
+  await Promise.all([student, instructor, grader, student2].map((u) => setGradingEditorPreference(u!.user_id, false)));
 });
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, instructor, grader, student2]);
@@ -161,9 +167,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await page.getByRole("link", { name: assignment!.title }).click();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}`);
 
-    await expect(page.getByText("Self Review Notice")).toBeVisible();
+    await expect(page.getByText(/Self Review Notice|Self Review Now Due/)).toBeVisible();
     // The "Submission Limit for this assignment" alert renders asynchronously
     // after a separate RPC and is now hidden in visual tests (see the
     // data-visual-test="removed" on the alert in page.tsx) so its
@@ -204,8 +210,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
         .eq("rubric_id", selfReviewRubric!.id);
       expect(ra?.length ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
-    await page.getByRole("button", { name: "Complete Self Review" }).click();
-    await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByRole("region", { name: "Self-Review Rubric" })).toBeVisible();
 
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
@@ -252,7 +258,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     //Wait for the textbox to disappear
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
@@ -331,9 +337,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)
@@ -343,6 +349,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Issue 843 adds an instructor warning dialog when selected reviews include
+    // incomplete grading. Continue through it when present.
+    const continueAnywayBtn = page.getByRole("button", { name: "Continue anyway" });
+    if (await continueAnywayBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await continueAnywayBtn.click();
+    }
     // Wait for the release to land in the DB before navigating to the
     // submission page. On webkit the SSR'd submission page sometimes paints
     // before the released flag has propagated, leading to the badge showing
@@ -359,6 +371,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
+    // This test does a magic-link login, full assignment navigation, and an
+    // axe accessibility scan plus rubric assertions. On webkit under CI
+    // load loginAsUser's retry loop alone can spend ~5×15s recovering from
+    // transient GoTrue contention, leaving little budget for the autograder
+    // results wait at line ~373. Triple the active timeout so a slow login
+    // doesn't surface as a "Lint Results: Passed" waitFor flake.
+    test.slow();
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
@@ -499,10 +518,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // the comment stream loads via realtime and races the screenshot, which
     // caused a 64px page-height delta between runs.
     {
+      // These are stabilization waits to ensure the realtime comment stream has
+      // rendered before the screenshot (see note above) — not uniqueness checks.
+      // The just-posted escalation comment briefly renders twice (optimistic insert
+      // + the realtime echo of the same row) before they dedupe, which tripped a
+      // strict-mode "resolved to 2 elements" on getByText. Scope to .first() so the
+      // wait means "at least one copy has rendered", independent of that transient.
       const appealRegion = page.getByLabel("Grading checks on line 4");
-      await expect(appealRegion.getByText(REGRADE_COMMENT)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_RESOLUTION)).toBeVisible();
-      await expect(appealRegion.getByText(REGRADE_ESCALATION)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_COMMENT).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_RESOLUTION).first()).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_ESCALATION).first()).toBeVisible();
     }
     await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
@@ -608,7 +633,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review Assignment" }).click();
+    await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
   });
 });

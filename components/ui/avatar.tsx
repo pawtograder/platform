@@ -3,6 +3,7 @@
 import type { GroupProps, SlotRecipeProps } from "@chakra-ui/react";
 import { Avatar as ChakraAvatar, Group } from "@chakra-ui/react";
 import * as React from "react";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 
 type ImageProps = React.ImgHTMLAttributes<HTMLImageElement>;
 
@@ -29,7 +30,7 @@ export const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(function Ava
       <AvatarFallback name={name} icon={icon}>
         {fallback}
       </AvatarFallback>
-      <ChakraAvatar.Image src={src} srcSet={srcSet} loading={loading} alt={alt ?? ""} />
+      <ChakraAvatar.Image src={sanitizeImageSrc(src)} srcSet={srcSet} loading={loading} alt={alt ?? ""} />
       {children}
     </ChakraAvatar.Root>
   );

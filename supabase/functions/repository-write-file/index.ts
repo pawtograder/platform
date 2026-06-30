@@ -1,0 +1,144 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import * as github from "../_shared/GitHubWrapper.ts";
+import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+
+/**
+ * Allowlist of file paths that instructors may edit via this function.
+ * Only pawtograder.yml and GitHub Actions workflow files are permitted —
+ * this function must never be a general-purpose repo write endpoint.
+ *
+ * Returns the canonical (normalised) path when allowed, or null when not. Callers must use the
+ * returned value for rate-limiting and the GitHub write so validation, throttling, and the
+ * actual write all operate on the same path (e.g. `///pawtograder.yml` can't validate as one
+ * path but write/throttle as another).
+ */
+function normaliseAllowedPath(path: string): string | null {
+  // Normalise: strip leading slash, reject traversal sequences.
+  const normalised = path.replace(/^\/+/, "");
+  if (normalised.includes("..") || normalised.includes("\0")) return null;
+
+  // pawtograder.yml at repo root only.
+  if (normalised === "pawtograder.yml" || normalised === "pawtograder.yaml") return normalised;
+
+  // GitHub Actions workflow files: .github/workflows/<name>.yml|yaml
+  if (/^\.github\/workflows\/[^/]+\.ya?ml$/.test(normalised)) return normalised;
+
+  return null;
+}
+
+// Rate limiting storage: Map<fileKey, timestamp[]>
+const rateLimitStore = new Map<string, number[]>();
+const RATE_LIMIT_MAX_REQUESTS = 3;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+
+function cleanupOldEntries(timestamps: number[], currentTime: number): number[] {
+  return timestamps.filter((timestamp) => currentTime - timestamp < RATE_LIMIT_WINDOW_MS);
+}
+
+function checkRateLimit(orgName: string, repoName: string, path: string): void {
+  const fileKey = `${orgName}/${repoName}:${path}`;
+  const currentTime = Date.now();
+
+  // Get existing timestamps for this file
+  let timestamps = rateLimitStore.get(fileKey) || [];
+
+  // Clean up old entries
+  timestamps = cleanupOldEntries(timestamps, currentTime);
+
+  // Check if rate limit is exceeded
+  if (timestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
+    throw new UserVisibleError(
+      `Rate limit exceeded: File ${path} in ${orgName}/${repoName} has been written ${RATE_LIMIT_MAX_REQUESTS} times within the last minute. Please wait before trying again.`,
+      429
+    );
+  }
+
+  // Add current timestamp
+  timestamps.push(currentTime);
+  rateLimitStore.set(fileKey, timestamps);
+
+  // Cleanup old entries from the store periodically
+  if (Math.random() < 0.1) {
+    // 10% chance to clean up on each request
+    for (const [key, ts] of rateLimitStore.entries()) {
+      const cleanedTs = cleanupOldEntries(ts, currentTime);
+      if (cleanedTs.length === 0) {
+        rateLimitStore.delete(key);
+      } else {
+        rateLimitStore.set(key, cleanedTs);
+      }
+    }
+  }
+}
+
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  const { courseId, orgName, repoName, path, content, message, sha } =
+    (await req.json()) as FunctionTypes.WriteFileRequest;
+  scope?.setTag("function", "repository-write-file");
+  scope?.setTag("courseId", courseId.toString());
+  scope?.setTag("orgName", orgName);
+  scope?.setTag("repoName", repoName);
+  scope?.setTag("path", path);
+
+  const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+  const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+  // Surface a real (retryable) lookup failure instead of letting a null `data` fall through
+  // to a misleading "...associated with undefined" 403 below.
+  if (courseOrgName.error) {
+    throw new UserVisibleError(
+      `Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`,
+      500
+    );
+  }
+  // NOTE: this only checks the course's github_org, not that repoName belongs to this course.
+  // A shared org means an instructor of one course could target another course's repo. Scoping
+  // writes to repos the course actually owns needs a repo->course ownership model — tracked as
+  // a follow-up. See PR #831 discussion.
+  if (courseOrgName.data?.github_org !== orgName) {
+    throw new UserVisibleError(
+      `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`,
+      403
+    );
+  }
+
+  if (!message || message.trim() === "") {
+    throw new UserVisibleError("A commit message is required", 400);
+  }
+
+  // Enforce path allowlist — only pawtograder.yml and .github/workflows/*.yml are editable.
+  // Use the canonical path returned here for everything downstream.
+  const normalisedPath = normaliseAllowedPath(path);
+  if (!normalisedPath) {
+    throw new UserVisibleError(
+      `Writing to '${path}' is not permitted. Only pawtograder.yml and .github/workflows/*.yml files may be edited.`,
+      403
+    );
+  }
+
+  // Check rate limit before making the GitHub API call
+  checkRateLimit(orgName, repoName, normalisedPath);
+
+  try {
+    return await github.writeFileToRepo(orgName + "/" + repoName, normalisedPath, content, message, sha, scope);
+  } catch (error) {
+    scope?.setTag("write_file_error", JSON.stringify(error));
+    const status =
+      error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+    // Surface a conflict so the client can re-fetch and retry. GitHub returns 409 for a stale
+    // sha, and 422 when a create (no sha) races an already-existing file. Both mean the
+    // client's view is out of date; RepoFileEditor.handleSave reloads on this exact message.
+    if (status === 409 || status === 422) {
+      throw new UserVisibleError(
+        `The file ${normalisedPath} changed since you loaded it. Please re-open the editor to get the latest version.`,
+        409
+      );
+    }
+    throw error;
+  }
+}
+
+Deno.serve(async (req) => {
+  return await wrapRequestHandler(req, handleRequest);
+});

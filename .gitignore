@@ -59,3 +59,21 @@ playwright/.auth
 .direnv
 data
 axe-debug/
+
+# Claude Code local session state
+.claude/
+
+# Local E2E artifacts: per-run logs, completion sentinels, collected
+# screenshots, and the diff report from scripts/e2e-*.sh. Regenerated on
+# every run, never tracked.
+/logs/
+/screenshots/
+/screenshots-*/
+/sweep-results-*/
+/.e2e-*.done
+/.build.done
+/screenshot-diff-report.json
+
+# Host-generated Deno lockfile — not committed; its version can differ from
+# the edge-runtime image Deno and crash the worker at boot (see .dockerignore).
+supabase/functions/deno.lock

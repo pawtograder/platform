@@ -585,28 +585,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   try {
     //Resolve the action SHA
     let action_sha: string | undefined = undefined;
-    try {
-      action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
-    } catch (e) {
-      console.error(e);
-      const rt = detectRateLimitType(e);
-      if (rt.type) {
-        // Log rate limit errors with proper fingerprinting to prevent notification storms
-        Sentry.withScope((errorScope) => {
-          errorScope.setFingerprint(["github-rate-limit", rt.type!, "submit-feedback", "resolveRef"]);
-          errorScope.setTag("rate_limit_type", rt.type);
-          errorScope.setTag("github_api_method", "resolveRef");
-          if (rt.installationId) {
-            errorScope.setContext("rate_limit_installation", {
-              installation_id: rt.installationId,
-              note: "Installation ID excluded from fingerprint to prevent notification storms"
-            });
-          }
-          Sentry.captureException(e, errorScope);
-        });
-        console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
-      } else {
-        Sentry.captureException(e, scope);
+    const e2eMockGithub = isE2ERun && Deno.env.get("E2E_MOCK_GITHUB") === "true";
+    if (e2eMockGithub) {
+      // Skip GitHub roundtrip during E2E load tests
+      action_sha = "e2e-mock-action-sha";
+    } else {
+      try {
+        action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
+      } catch (e) {
+        console.error(e);
+        const rt = detectRateLimitType(e);
+        if (rt.type) {
+          // Log rate limit errors with proper fingerprinting to prevent notification storms
+          Sentry.withScope((errorScope) => {
+            errorScope.setFingerprint(["github-rate-limit", rt.type!, "submit-feedback", "resolveRef"]);
+            errorScope.setTag("rate_limit_type", rt.type);
+            errorScope.setTag("github_api_method", "resolveRef");
+            if (rt.installationId) {
+              errorScope.setContext("rate_limit_installation", {
+                installation_id: rt.installationId,
+                note: "Installation ID excluded from fingerprint to prevent notification storms"
+              });
+            }
+            Sentry.captureException(e, errorScope);
+          });
+          console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+        } else {
+          Sentry.captureException(e, scope);
+        }
       }
     }
     const score =

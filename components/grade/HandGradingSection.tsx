@@ -12,7 +12,7 @@ import {
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import { useRubricCheckInstances, useSubmission, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
-import { maxPointsForCriterion } from "@/lib/rubric/points";
+import { earnedPointsForCriterion, maxPointsForCriterion } from "@/lib/rubric/points";
 import type {
   HydratedRubricCheck,
   RegradeRequest,
@@ -285,10 +285,11 @@ function CheckRow({
 
 /**
  * One criterion block: header with name and earned/max, then a row per check. Earned points are
- * rolled up from the applied points across the criterion's checks, mirroring the recompute logic
- * in 20250522235254_fix-compute-grades-negative-score.sql:
- *   - additive:     min(sum of applied points, total_points)
- *   - non-additive: max(total_points - sum of applied deductions, 0)
+ * rolled up from the applied points across the criterion's checks via earnedPointsForCriterion,
+ * mirroring the per-criterion score branches in _submission_review_recompute_scores:
+ *   - deduction-only: max(-sum of applied deductions, -total_points)  (a non-positive penalty)
+ *   - additive:       min(sum of applied points, total_points)
+ *   - non-additive:   max(total_points - sum of applied deductions, 0)
  * Renders nothing (but keeps child hooks mounted) when no checks are visible to the current user.
  */
 function CriterionBlock({
@@ -322,7 +323,6 @@ function CriterionBlock({
     []
   );
 
-  const totalPoints = criteria.total_points ?? 0;
   const max = useMemo(
     () =>
       maxPointsForCriterion({
@@ -338,9 +338,19 @@ function CriterionBlock({
   const appliedTotal = useMemo(() => Object.values(checkState).reduce((acc, s) => acc + s.appliedSum, 0), [checkState]);
   const anyVisible = useMemo(() => Object.values(checkState).some((s) => s.visible), [checkState]);
 
-  // Earned: additive caps the sum at total_points; non-additive / deduction-only subtracts the
-  // applied deductions from total_points, floored at 0.
-  const earned = criteria.is_additive ? Math.min(appliedTotal, totalPoints) : Math.max(totalPoints - appliedTotal, 0);
+  // Earned points this criterion contributes, by mode (see earnedPointsForCriterion):
+  // additive caps the applied sum at total_points; non-additive subtracts applied deductions from
+  // total_points (floored at 0); deduction-only contributes a non-positive penalty. Folding
+  // deduction-only into the non-additive branch (the prior bug) reported total_points - applied as
+  // "earned", which both inflated the criterion line and let the rolled-up earned exceed the max.
+  const earned = earnedPointsForCriterion(
+    {
+      is_additive: criteria.is_additive,
+      is_deduction_only: criteria.is_deduction_only,
+      total_points: criteria.total_points
+    },
+    appliedTotal
+  );
 
   // Bubble criterion-level visibility + score up to the section header / emptiness check.
   useEffect(() => {

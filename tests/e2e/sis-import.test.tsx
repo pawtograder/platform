@@ -18,7 +18,7 @@ test.describe("SIS Import (RPC)", () => {
     const course = await createClass({ name: "E2E SIS Import - No Account" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [11111], lab_section_crns: [22222] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     await simulateSISSync({
       class_id: course.id,
@@ -50,7 +50,7 @@ test.describe("SIS Import (RPC)", () => {
       lab_section_crns: [22222, 22223]
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create invitation via sync
     await simulateSISSync({
@@ -103,7 +103,7 @@ test.describe("SIS Import (RPC)", () => {
       lab_section_crns: [82222]
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     const { error: inviteErr } = await supabase.rpc("create_invitation", {
       p_class_id: course.id,
@@ -149,7 +149,7 @@ test.describe("SIS Import (RPC)", () => {
       useMagicLink: true,
       name: "Role Upgrade Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Adopt as student
@@ -187,7 +187,7 @@ test.describe("SIS Import (RPC)", () => {
       { role: "student", class_id: otherCourse.id, useMagicLink: true, name: "Existing Account Student" }
     ]);
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(existingStudent.user_id, sis_user_id);
 
     await simulateSISSync({
@@ -226,7 +226,7 @@ test.describe("SIS Import (RPC)", () => {
       useMagicLink: true,
       name: "Drop Readd Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // First sync: adopt + set sections
@@ -275,7 +275,7 @@ test.describe("SIS Import (RPC)", () => {
       name: "Manual Then SIS Student"
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Put them in an arbitrary manual section first (not SIS sections)
@@ -319,7 +319,7 @@ test.describe("SIS Import (RPC)", () => {
       useMagicLink: true,
       name: "Manual Only Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     let state = await getEnrollmentState(course.id, sis_user_id);
@@ -346,7 +346,7 @@ test.describe("SIS Import (RPC)", () => {
       useMagicLink: true,
       name: "Opt Out Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // First sync: adopt into SIS-managed and assign sections
@@ -389,7 +389,7 @@ test.describe("SIS Import (RPC)", () => {
     const course = await createClass({ name: "E2E SIS Import - Atomic Rollback" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [], lab_section_crns: [12345] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     const { error } = await supabase.rpc("sis_sync_enrollment", {
       p_class_id: course.id,
@@ -435,7 +435,7 @@ test.describe("SIS Import (RPC)", () => {
       useMagicLink: true,
       name: "Disabled Section Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // First sync: adopt and assign to the SIS-managed class section
@@ -470,7 +470,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [33333], lab_section_crns: [] });
 
     // User 1: will get invitation
-    const sis_user_id_1 = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id_1 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     // User 2: will get enrollment
     const student = await createUserInClass({
       role: "student",
@@ -478,7 +478,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "No Drop Student"
     });
-    const sis_user_id_2 = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id_2 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id_2);
 
     // Initial sync: create invitation for user 1, adopt user 2
@@ -630,7 +630,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Bad CRN" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [77777], lab_section_crns: [] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Sync with a CRN that doesn't exist
     await simulateSISSync({
@@ -658,7 +658,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       lab_section_crns: [88889]
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     await simulateSISSync({
       class_id: course.id,
@@ -698,9 +698,9 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "Mixed Student 2"
     });
-    const sis_id_1 = Math.floor(1_000_000_000 + Math.random() * 100_000);
-    const sis_id_2 = Math.floor(1_000_000_000 + Math.random() * 100_000);
-    const sis_id_new = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_id_1 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
+    const sis_id_2 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
+    const sis_id_new = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     await setUserSisId(student1.user_id, sis_id_1);
     await setUserSisId(student2.user_id, sis_id_2);
@@ -744,7 +744,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Non-SIS Invite No Drop" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [20001], lab_section_crns: [] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create manual (non-SIS) invitation
     await supabase.rpc("create_invitation", {
@@ -778,9 +778,9 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Counts Verification" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [30001], lab_section_crns: [] });
 
-    const sis_id_existing = Math.floor(1_000_000_000 + Math.random() * 100_000);
-    const sis_id_new1 = Math.floor(1_000_000_000 + Math.random() * 100_000);
-    const sis_id_new2 = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_id_existing = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
+    const sis_id_new1 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
+    const sis_id_new2 = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create existing student
     const existingStudent = await createUserInClass({
@@ -823,7 +823,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "Disabled Lab Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Adopt into SIS
@@ -854,7 +854,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Invitation Role Upgrade" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [50001], lab_section_crns: [] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create as student
     await simulateSISSync({
@@ -888,7 +888,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "Reenable Count Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Adopt, drop, then re-add
@@ -937,7 +937,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Invitation Link Disable" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [80001], lab_section_crns: [] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create invitation via SIS sync
     await simulateSISSync({
@@ -1000,7 +1000,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "Student to Instructor"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Initial sync as student
@@ -1030,7 +1030,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       lab_section_crns: [11002]
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     await simulateSISSync({
       class_id: course.id,
@@ -1061,7 +1061,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       lab_section_crns: []
     });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create invitation in section 1
     await simulateSISSync({
@@ -1104,7 +1104,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       useMagicLink: true,
       name: "Multi Course Student"
     });
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
     await setUserSisId(student.user_id, sis_user_id);
 
     // Adopt in course 1
@@ -1146,7 +1146,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     const course = await createClass({ name: "E2E SIS - Name Update" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [14001], lab_section_crns: [] });
 
-    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
+    const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 1_000_000_000);
 
     // Create invitation with original name
     await simulateSISSync({

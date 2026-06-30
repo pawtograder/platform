@@ -810,7 +810,12 @@ function LabSectionsTable() {
     async (id: number) => {
       setIsDeleting(true);
       try {
-        await controller.labSections.delete(id);
+        // lab_sections is hard-deleted: the table has no `deleted_at` column, and
+        // its foreign keys are designed for it (lab_section_meetings/lab_section_leaders
+        // cascade, user_roles.lab_section_id is set null). Using the soft-delete
+        // delete() here issued an `UPDATE ... SET deleted_at` against a non-existent
+        // column, which always errored and left the section undeletable.
+        await controller.labSections.hardDelete(id);
         toaster.success({
           title: "Lab section deleted successfully"
         });
@@ -959,12 +964,17 @@ function LabSectionsTable() {
         cell: ({ row }) => (
           <HStack gap={2}>
             <Tooltip content="Manage meetings">
-              <Button size="sm" variant="ghost" onClick={() => openMeetingsModal(row.original)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="Manage meetings"
+                onClick={() => openMeetingsModal(row.original)}
+              >
                 <FaCalendar />
               </Button>
             </Tooltip>
             <Tooltip content="Edit lab section">
-              <Button size="sm" variant="ghost" onClick={() => handleEdit(row.original)}>
+              <Button size="sm" variant="ghost" aria-label="Edit lab section" onClick={() => handleEdit(row.original)}>
                 <FaEdit />
               </Button>
             </Tooltip>

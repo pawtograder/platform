@@ -1,7 +1,7 @@
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
 import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import { getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, VStack } from "@chakra-ui/react";
 import { headers } from "next/headers";
@@ -20,7 +20,7 @@ export default async function SubmissionsLayout({
   if (!user_id) {
     redirect("/");
   }
-  const role = await getUserRolesForCourse(Number(course_id), user_id);
+  const role = await getEffectiveCourseIdentity(Number(course_id), user_id);
   if (!role) {
     redirect("/");
   }

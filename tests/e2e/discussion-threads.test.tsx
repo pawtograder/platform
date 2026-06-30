@@ -289,11 +289,17 @@ test.describe("Custom Discussion Topics", () => {
     const editButtons = page.getByRole("button", { name: "Edit" });
     await expect(editButtons).toHaveCount(4);
 
-    // The "N thread(s)" badge is rendered from realtime data and arrives slightly
-    // after the topic list itself. Without waiting on a thread badge the screenshot
-    // races realtime arrival, flipping a topic between "Delete enabled" and "Delete
-    // disabled with 1 thread badge" between runs.
-    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible({ timeout: 10_000 });
+    // The "N thread(s)" badge is computed client-side from
+    // useDiscussionThreadTeasers() — i.e. the discussionThreadTeasers
+    // TableController's initial query. The topic list paints from a
+    // different (smaller) controller, so the topic rows are visible
+    // well before the threads table has been loaded. We need to wait
+    // for the threads fetch to complete before screenshotting, or the
+    // visual baseline flips between "no badges" and "N threads"
+    // between runs. Use the default expect() timeout — the initial
+    // query against seeded test data on CI has been observed to take
+    // well past 10s when the database is under load.
+    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible();
     await visualScreenshot(page, "Discussion Topics Management Page");
   });
 

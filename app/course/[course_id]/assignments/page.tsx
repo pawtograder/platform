@@ -3,17 +3,19 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
+import { DueDateDisplay } from "@/components/ui/due-date-display";
 import Link from "@/components/ui/link";
 import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
-import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignments } from "@/hooks/useCourseController";
 import { useIdentity } from "@/hooks/useIdentities";
+import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { InputGroup } from "@/components/ui/input-group";
 import { Box, EmptyState, Heading, Icon, Input, Skeleton, Stack, Table, Text } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BsSearch } from "react-icons/bs";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
@@ -43,12 +45,8 @@ type AssignmentUnit = {
   group: string;
 };
 
-export type AssignmentsForStudentDashboard = Omit<
-  Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"],
-  "id"
-> & {
-  id: number;
-};
+export type AssignmentsForStudentDashboard =
+  Database["public"]["Functions"]["get_assignments_for_student_dashboard"]["Returns"][number];
 
 function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard): string {
   if (!assignment.submission_id) {
@@ -70,7 +68,6 @@ function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard)
 export default function StudentPage() {
   const { identities } = useIdentity();
   const { course_id } = useParams();
-  const { user } = useAuthState();
   const { role } = useClassProfiles();
   const course = role.classes;
   const [query, setQuery] = useState("");
@@ -91,27 +88,61 @@ export default function StudentPage() {
   });
   const groups: AssignmentGroupMemberWithGroupAndRepo[] | null = groupsData?.data ?? null;
 
-  const { data: assignmentsData, isLoading } = useList<AssignmentsForStudentDashboard>({
-    resource: "assignments_for_student_dashboard",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "student_user_id", operator: "eq", value: user?.id },
-      { field: "student_profile_id", operator: "eq", value: private_profile_id }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    queryOptions: {
-      enabled: !!user && !!private_profile_id
-    },
-    sorters: [{ field: "due_date", order: "desc" }]
-  });
-
-  const assignments = assignmentsData?.data ?? null;
+  // Dashboard data via SECURITY DEFINER RPC. The function checks authorization at the
+  // top (caller is either the student themselves or an instructor/grader of the class)
+  // and returns the student's assignment dashboard rows. Replaces the prior
+  // `useList({ resource: "assignments_for_student_dashboard" })` on a view whose
+  // security_invoker scoping couldn't accommodate the instructor read-only view-as path.
+  const [assignments, setAssignments] = useState<AssignmentsForStudentDashboard[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  useEffect(() => {
+    if (!course_id || !private_profile_id) {
+      return;
+    }
+    const supabase = createClient();
+    let cancelled = false;
+    setIsLoading(true);
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc("get_assignments_for_student_dashboard", {
+          p_class_id: Number(course_id),
+          p_student_profile_id: private_profile_id
+        });
+        if (cancelled) return;
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load assignments dashboard:", error);
+          setAssignments(null);
+        } else {
+          setAssignments(data ?? []);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error("Failed to load assignments dashboard:", error);
+        setAssignments(null);
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [course_id, private_profile_id]);
 
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
   const actions = !githubIdentity ? <LinkAccount /> : <></>;
+
+  // The dashboard RPC doesn't carry the advisory suggested_due_date; pull it from the
+  // course controller (full assignment rows) and look it up by id when rendering.
+  const courseAssignments = useAssignments();
+  const suggestedDueDateById = useMemo(
+    () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
+    [courseAssignments]
+  );
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -136,7 +167,10 @@ export default function StudentPage() {
         type: "assignment",
         due_date: modifiedDueDate,
         due_date_component: modifiedDueDate ? (
-          <TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />
+          <DueDateDisplay
+            suggestedDueDate={suggestedDueDateById.get(assignment.id)}
+            dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
+          />
         ) : (
           <>-</>
         ),
@@ -186,7 +220,7 @@ export default function StudentPage() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();

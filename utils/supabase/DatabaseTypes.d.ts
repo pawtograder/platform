@@ -43,6 +43,7 @@ export type GraderResultTestExtraData = {
 
 export type GraderResultTestsHintFeedback = Database["public"]["Tables"]["grader_result_tests_hint_feedback"]["Row"];
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
+export type SubmissionPrLink = Database["public"]["Tables"]["submission_pr_links"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"],
@@ -777,10 +778,12 @@ export type YmlRubricType = Omit<
   | "review_round"
   | "is_private"
   | "cap_score_to_assignment_points"
+  | "hide_unless_assigned"
 > & {
   parts: YmlRubricPartType[];
   description?: string;
   cap_score_to_assignment_points?: boolean;
+  hide_unless_assigned?: boolean;
 };
 export type YmlRubricPartType = Omit<
   HydratedRubricPart,

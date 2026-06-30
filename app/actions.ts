@@ -5,6 +5,7 @@ import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 import { env } from "process";
 import { isSignupsEnabled } from "@/lib/features";
+import { getBranding } from "@/lib/branding";
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -143,15 +144,33 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     return redirect("/course");
   }
 };
-export const signInWithMicrosoftAction = async (formData: FormData) => {
+/**
+ * Generic SSO sign-in. The sign-in page renders one button per configured
+ * provider (web.branding.ssoProviders / BRAND_SSO_PROVIDERS) and submits the
+ * provider's index. We re-read the branding config SERVER-SIDE and look the
+ * entry up by index, so the provider id and OAuth scopes come from trusted
+ * config rather than the (tamperable) client form.
+ */
+export const signInWithSSOAction = async (formData: FormData) => {
   const supabase = await createClient();
 
   const redirectParam = formData.get("redirect") as string | null;
   const nextPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
+
+  // Validate sso_index explicitly: Number(null/"") is 0, which would silently
+  // select the first provider for a missing/blank field. Require a non-empty,
+  // integer-only string.
+  const rawIndex = formData.get("sso_index");
+  const providers = getBranding().ssoProviders;
+  const cfg = typeof rawIndex === "string" && /^\d+$/.test(rawIndex) ? providers[Number(rawIndex)] : undefined;
+  if (!cfg) {
+    return encodedRedirect("error", "/sign-in", "Unknown sign-in provider", { redirect: nextPath });
+  }
+
   const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=${encodeURIComponent(nextPath)}`;
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
-    provider: "azure",
-    options: { scopes: "email User.Read", redirectTo }
+    provider: cfg.provider,
+    options: { ...(cfg.scopes ? { scopes: cfg.scopes } : {}), redirectTo }
   });
 
   if (error) {

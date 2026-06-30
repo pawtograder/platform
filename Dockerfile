@@ -1,7 +1,21 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Retry npm ci to absorb transient download flakes — particularly the
+# `supabase` dev-dep's postinstall script, which fetches the supabase CLI
+# tarball from github.com/releases and occasionally truncates mid-stream
+# (Z_DATA_ERROR: incorrect header check). The retries here cover both
+# npm's own fetcher (npm config) and the postinstall scripts (outer loop).
+RUN npm config set fetch-retries 5 \
+ && npm config set fetch-retry-mintimeout 10000 \
+ && npm config set fetch-retry-maxtimeout 60000 \
+ && success=0 \
+ && for i in 1 2 3; do \
+      if npm ci; then success=1; break; fi; \
+      echo "npm ci attempt $i failed; sleeping 10s"; \
+      sleep 10; \
+    done \
+ && test "$success" -eq 1
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
@@ -20,6 +34,12 @@ ARG NEXT_PUBLIC_POSTHOG_HOST=""
 ARG NEXT_PUBLIC_POSTHOG_UI_HOST=""
 ARG NEXT_PUBLIC_ENABLE_SIGNUPS=""
 ARG NEXT_PUBLIC_GIT_COMMIT_SHA=""
+# A/B deployment channels (see utils/channels.ts). PAWTOGRADER_CHANNEL identifies
+# the build's channel ("" => stable). CHANNEL_HOST_SUFFIX enables per-course
+# host-redirect routing in middleware and also derives the cross-channel auth
+# cookie scope (".<suffix>"). Both empty by default => routing disabled.
+ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
+ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
 ARG SENTRY_RELEASE=""
 ARG SUPABASE_URL=""
 
@@ -34,6 +54,8 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_POSTHOG_UI_HOST=$NEXT_PUBLIC_POSTHOG_UI_HOST \
     NEXT_PUBLIC_ENABLE_SIGNUPS=$NEXT_PUBLIC_ENABLE_SIGNUPS \
     NEXT_PUBLIC_GIT_COMMIT_SHA=$NEXT_PUBLIC_GIT_COMMIT_SHA \
+    NEXT_PUBLIC_PAWTOGRADER_CHANNEL=$NEXT_PUBLIC_PAWTOGRADER_CHANNEL \
+    NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$NEXT_PUBLIC_CHANNEL_HOST_SUFFIX \
     SENTRY_RELEASE=$SENTRY_RELEASE \
     SUPABASE_URL=$SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \

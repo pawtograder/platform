@@ -1,0 +1,99 @@
+{{- if and .Values.auth.smtp.enabled .Values.auth.smtp.relay.enabled }}
+{{- /*
+Outbound SMTP relay for GoTrue mail.
+
+NU's upstream firewall silently drops STARTTLS handshakes on outbound SMTP
+submission ports (587 / 2525 / 25) from any cluster pod — TCP connects, the
+banner + EHLO + STARTTLS flow, then the TLS ClientHello goes unanswered
+until timeout. So GoTrue can't reach Postmark directly.
+
+This byte-transparent socat relay forwards plain TCP to a campus LXC that
+re-emits the stream through a tailscale exit-node at a residential ISP
+(which doesn't filter submission ports). STARTTLS terminates end-to-end at
+the provider; the relay never sees decrypted bytes. Mirror of
+apps/zammad/smtp-relay.yaml — that one's LXC listener ends at Dreamhost;
+this one needs an LXC listener that ends at Postmark (see README).
+
+The relay is NOT itself a TLS endpoint, so GoTrue must still dial the real
+provider hostname for cert verification (GoTrue has no skip-verify). Point
+it here with a CoreDNS rewrite of that hostname → this Service (see README
+"Deploying staging" → SMTP).
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: pawtograder-smtp-relay
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smtp-relay") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: smtp
+      port: {{ .Values.auth.smtp.relay.port | default 587 }}
+      targetPort: smtp
+      protocol: TCP
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "smtp-relay") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pawtograder-smtp-relay
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smtp-relay") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "smtp-relay") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smtp-relay") | nindent 8 }}
+    spec:
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: socat
+          image: {{ .Values.auth.smtp.relay.image | default "alpine/socat:1.8.0.3" | quote }}
+          args:
+            # -d -d logs every connection (forks, dial, peer addrs). Mail
+            # volume is low and the visibility is worth it.
+            - "-d"
+            - "-d"
+            # mss= clamps TCP_MAXSEG on BOTH socat sockets. socat bridges
+            # separate TCP connections (client↔relay and relay↔LXC), each
+            # negotiating its own MSS off the pod's 1500 MTU. Both legs cross
+            # an overlay/encap hop (client↔relay can be cross-node; relay↔LXC
+            # is pod→campus-VLAN) whose real path MTU is lower with no working
+            # PMTUD, so unclamped the multi-KB STARTTLS cert exchange
+            # blackholes (banner passes, TLS handshake hangs). Clamping caps
+            # outgoing segments AND the MSS we announce, so neither leg emits a
+            # segment too large for the path, in either direction.
+            - "TCP-LISTEN:{{ .Values.auth.smtp.relay.port | default 587 }},fork,reuseaddr{{ with .Values.auth.smtp.relay.mss }},mss={{ . }}{{ end }}"
+            - "TCP:{{ required "auth.smtp.relay.downstream is required when the relay is enabled (campus LXC host:port that tunnels to the SMTP provider)" .Values.auth.smtp.relay.downstream }}{{ with .Values.auth.smtp.relay.mss }},mss={{ . }}{{ end }}"
+          ports:
+            - name: smtp
+              containerPort: {{ .Values.auth.smtp.relay.port | default 587 }}
+              protocol: TCP
+          resources:
+            {{- toYaml (.Values.auth.smtp.relay.resources | default dict) | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.auth)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.auth)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

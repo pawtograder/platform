@@ -48,7 +48,7 @@ function checkRateLimit(orgName: string, repoName: string, path: string): void {
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { courseId, orgName, repoName, path } = (await req.json()) as FunctionTypes.GetFileRequest;
+  const { courseId, orgName, repoName, path, skipRetryOnNotFound } = (await req.json()) as FunctionTypes.GetFileRequest;
   scope?.setTag("function", "repository-get-file");
   scope?.setTag("courseId", courseId.toString());
   scope?.setTag("orgName", orgName);
@@ -56,6 +56,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("path", path);
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+  // Surface a real (retryable) lookup failure instead of a misleading "...associated with
+  // undefined" error when `data` is null.
+  if (courseOrgName.error) {
+    throw new Error(`Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`);
+  }
   if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
     throw new Error(
       `Requested a file from ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
@@ -69,8 +74,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {
     scope?.setTag("get_file_error", JSON.stringify(error));
+    // No GitHub App installation for this org (a course whose org hasn't installed
+    // the app, or a synthetic org in e2e). This is an expected, instructor-actionable
+    // condition — surface it as a clean 404 instead of a generic 500 that pages us
+    // via Sentry.
+    if (error instanceof Error && error.message.includes("No octokit found")) {
+      scope?.setTag("get_file_no_installation", "true");
+      throw new NotFoundError(
+        `No GitHub App installation found for organization ${orgName}. Install the Pawtograder GitHub App on ${orgName} to read ${path}.`
+      );
+    }
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
       scope?.setTag("get_file_error_status", (error as { status: number }).status.toString());
+      // The editor's read path opens files that may legitimately not exist yet (create-on-save),
+      // so it sets skipRetryOnNotFound to avoid the 15s+retry that otherwise stalls the UI for
+      // 15-30s. Other callers (racing fresh repo creation) keep the delayed retry.
+      if (skipRetryOnNotFound) {
+        throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
+      }
       // Add a delay to help clients get over racing with repo creation
       await new Promise((resolve) => setTimeout(resolve, 15000));
 

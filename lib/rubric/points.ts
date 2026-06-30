@@ -1,6 +1,8 @@
 import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
 
-type CriterionScoreShape = Pick<HydratedRubricCriteria, "is_additive" | "is_deduction_only" | "total_points"> & {
+type CriterionModeShape = Pick<HydratedRubricCriteria, "is_additive" | "is_deduction_only" | "total_points">;
+
+type CriterionScoreShape = CriterionModeShape & {
   rubric_checks: Pick<HydratedRubricCheck, "points">[];
 };
 
@@ -21,6 +23,32 @@ export function maxPointsForCriterion(criteria: CriterionScoreShape): number {
     return Math.min(sumCheckPoints, totalPoints);
   }
   return totalPoints;
+}
+
+/**
+ * Points a single criterion *actually* contributes to a student's grade, given the
+ * sum of applied check-point magnitudes (`appliedTotal`, always non-negative — points
+ * are stored as positive magnitudes and the sign comes from the criterion mode). This
+ * is the exact per-criterion `score` branch from `_submission_review_recompute_scores`
+ * (see `20260604000000_floor-submission-review-score-at-zero.sql`):
+ *
+ * - deduction-only: `greatest(-appliedTotal, -total_points)` → in `[-total_points, 0]`
+ * - additive: `least(appliedTotal, total_points)` → in `[0, total_points]`
+ * - non-additive: `greatest(total_points - appliedTotal, 0)` → in `[0, total_points]`
+ *
+ * Critically, the deduction-only branch yields a *non-positive* number (a penalty),
+ * not `total_points - appliedTotal`. In every branch the result is
+ * `<= maxPointsForCriterion(criteria)`, so a rolled-up earned total can never exceed
+ * the rolled-up max.
+ */
+export function earnedPointsForCriterion(criteria: CriterionModeShape, appliedTotal: number): number {
+  const totalPoints = criteria.total_points ?? 0;
+  if (criteria.is_deduction_only) {
+    const penalty = Math.max(-appliedTotal, -totalPoints);
+    return penalty === 0 ? 0 : penalty; // normalize -0 → 0 so the UI never renders "−0"
+  }
+  if (criteria.is_additive) return Math.min(appliedTotal, totalPoints);
+  return Math.max(totalPoints - appliedTotal, 0);
 }
 
 export type AssignToStudentPartSummary = {

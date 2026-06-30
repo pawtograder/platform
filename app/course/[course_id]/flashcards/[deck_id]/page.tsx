@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Card, Container, Heading, HStack, Progress, Spinner, Text, VStack } from "@chakra-ui/react";
@@ -44,6 +45,15 @@ const shuffleCards = (cards: FlashcardRow[]): FlashcardRow[] => {
 export default function FlashcardsDeckPage() {
   const params = useParams();
   const { user } = useAuthState();
+  // View-as student: log_flashcard_interaction writes p_student_id = user.id (the
+  // real instructor's auth id) and would silently log practice activity against the
+  // instructor's student-flashcard analytics. Treat the entire page as read-only and
+  // gate every interaction RPC below. There is no per-student read path for deck progress
+  // (the table is keyed on the viewer's own id), so rather than hydrate the instructor's
+  // own progress — which would leak their mastered cards into the view-as session — we
+  // skip the read and seed a fresh deck (nothing mastered). A blank start is the honest
+  // fallback; it does not pretend to be the student's progress.
+  const isReadOnly = useIsReadOnly();
   const supabase = createClient();
 
   const courseId = params.course_id as string;
@@ -127,7 +137,8 @@ export default function FlashcardsDeckPage() {
       pageSize: 1000
     },
     queryOptions: {
-      enabled: !!user?.id && !isNaN(courseIdNum)
+      // Don't read the instructor's own progress while masquerading (see note above).
+      enabled: !!user?.id && !isNaN(courseIdNum) && !isReadOnly
     }
   });
 
@@ -139,7 +150,17 @@ export default function FlashcardsDeckPage() {
 
   // Update local state and initialize queue when progress data is first loaded
   useEffect(() => {
-    if (!isProgressLoading && progressData?.data && !progressLoaded && !isFlashcardsLoading) {
+    if (progressLoaded || isFlashcardsLoading) return;
+    // View-as student: the progress read is disabled, so seed a fresh deck (nothing
+    // mastered) instead of waiting on progressData — never the instructor's own progress.
+    if (isReadOnly) {
+      setGotItCardIds(new Set());
+      setCardQueue(shuffleCards(flashcards));
+      setCurrentCardIndex(0);
+      setProgressLoaded(true);
+      return;
+    }
+    if (!isProgressLoading && progressData?.data) {
       const initialMasteredIds = new Set((progressData?.data || []).map((p) => p.card_id));
       setGotItCardIds(initialMasteredIds);
 
@@ -148,7 +169,7 @@ export default function FlashcardsDeckPage() {
       setCurrentCardIndex(0);
       setProgressLoaded(true);
     }
-  }, [isProgressLoading, progressData, flashcards, progressLoaded, masteredCardIds, isFlashcardsLoading]);
+  }, [isProgressLoading, progressData, flashcards, progressLoaded, masteredCardIds, isFlashcardsLoading, isReadOnly]);
 
   const gotItCards = useMemo(() => {
     return flashcards.filter((card) => gotItCardIds.has(card.id));
@@ -166,6 +187,9 @@ export default function FlashcardsDeckPage() {
       setShowAnswer(false);
       setPromptViewTimestamp(Date.now());
       setAnswerViewTimestamp(0); // Reset answer timestamp for new card
+      // Suppress the analytics write in view-as: it would attribute the masquerader's
+      // practice to the real instructor's flashcard record.
+      if (isReadOnly) return;
       supabase
         .rpc("log_flashcard_interaction", {
           p_action: "card_prompt_viewed",
@@ -184,12 +208,16 @@ export default function FlashcardsDeckPage() {
           }
         });
     },
-    [user?.id, courseIdNum, deckIdNum, supabase]
+    [user?.id, courseIdNum, deckIdNum, supabase, isReadOnly]
   );
 
   // Log deck viewed when session starts
   useEffect(() => {
     if (user?.id && !sessionStarted && !isNaN(courseIdNum) && !isNaN(deckIdNum) && progressLoaded) {
+      if (isReadOnly) {
+        setSessionStarted(true);
+        return;
+      }
       supabase
         .rpc("log_flashcard_interaction", {
           p_action: "deck_viewed",
@@ -208,7 +236,7 @@ export default function FlashcardsDeckPage() {
         });
       setSessionStarted(true);
     }
-  }, [user?.id, sessionStarted, courseIdNum, deckIdNum, progressLoaded, supabase]);
+  }, [user?.id, sessionStarted, courseIdNum, deckIdNum, progressLoaded, supabase, isReadOnly]);
 
   // Initialize with first card when cards are loaded and properly set up timing
   useEffect(() => {
@@ -230,6 +258,9 @@ export default function FlashcardsDeckPage() {
     // Only calculate duration if we have a valid timestamp (not 0)
     const duration = promptViewTimestamp > 0 ? Date.now() - promptViewTimestamp : 0;
     const now = Date.now();
+    setShowAnswer(true);
+    setAnswerViewTimestamp(now); // Track when answer was shown
+    if (isReadOnly) return;
     supabase
       .rpc("log_flashcard_interaction", {
         p_action: "card_answer_viewed",
@@ -247,13 +278,12 @@ export default function FlashcardsDeckPage() {
           });
         }
       });
-    setShowAnswer(true);
-    setAnswerViewTimestamp(now); // Track when answer was shown
-  }, [currentCard, user?.id, promptViewTimestamp, courseIdNum, deckIdNum, supabase]);
+  }, [currentCard, user?.id, promptViewTimestamp, courseIdNum, deckIdNum, supabase, isReadOnly]);
 
   // Handle "Got It" action
   const handleGotIt = useCallback(async () => {
     if (!currentCard || !user?.id) return;
+    if (isReadOnly) return;
 
     // Calculate duration since answer was shown (or prompt if answer not shown yet)
     const duration =
@@ -320,7 +350,8 @@ export default function FlashcardsDeckPage() {
     currentCardIndex,
     supabase,
     cardQueue,
-    displayCard
+    displayCard,
+    isReadOnly
   ]);
 
   const handleBackToQuestion = useCallback(() => {
@@ -336,6 +367,7 @@ export default function FlashcardsDeckPage() {
     setPromptViewTimestamp(now);
     setAnswerViewTimestamp(0);
 
+    if (isReadOnly) return;
     // Log a fresh prompt-view event so analytics reflect this second look at the question
     supabase
       .rpc("log_flashcard_interaction", {
@@ -354,13 +386,14 @@ export default function FlashcardsDeckPage() {
           });
         }
       });
-  }, [currentCard, user?.id, courseIdNum, deckIdNum, supabase]);
+  }, [currentCard, user?.id, courseIdNum, deckIdNum, supabase, isReadOnly]);
 
   // Handle "Keep Trying" action - move current card to back of queue
   const handleKeepTrying = useCallback(() => {
     if (!currentCard || !user?.id) {
       return;
     }
+    if (isReadOnly) return;
 
     // Calculate duration since answer was shown (or prompt if answer not shown yet)
     const duration =
@@ -419,13 +452,15 @@ export default function FlashcardsDeckPage() {
     currentCardIndex,
     cardQueue,
     displayCard,
-    supabase
+    supabase,
+    isReadOnly
   ]);
 
   // Handle returning a card from "got it" pile to practice pile
   const handleReturnCard = useCallback(
     async (cardId: number) => {
       if (!user?.id) return;
+      if (isReadOnly) return;
 
       supabase
         .rpc("log_flashcard_interaction", {
@@ -474,12 +509,13 @@ export default function FlashcardsDeckPage() {
         return updated;
       });
     },
-    [user?.id, courseIdNum, deckIdNum, supabase, flashcards]
+    [user?.id, courseIdNum, deckIdNum, supabase, flashcards, isReadOnly]
   );
 
   // Handle resetting all progress
   const handleResetAllProgress = useCallback(async () => {
     if (!user?.id) return;
+    if (isReadOnly) return;
 
     supabase
       .rpc("log_flashcard_interaction", {
@@ -526,7 +562,7 @@ export default function FlashcardsDeckPage() {
       description: "All cards have been returned to the practice pile.",
       type: "info"
     });
-  }, [user?.id, courseIdNum, deckIdNum, flashcards, supabase]);
+  }, [user?.id, courseIdNum, deckIdNum, flashcards, supabase, isReadOnly]);
 
   // Loading states
   if (isDeckLoading || isFlashcardsLoading || isProgressLoading || !progressLoaded) {

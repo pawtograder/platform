@@ -3,13 +3,21 @@
 import { useClassSections, useCourseController, useLabSections } from "@/hooks/useCourseController";
 import type { UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useFindTableControllerValue } from "@/lib/TableController";
-import { Icon } from "@chakra-ui/react";
-import { useCallback, useMemo } from "react";
+import { HStack, Icon } from "@chakra-ui/react";
+import { ReactNode, useCallback, useMemo } from "react";
 import { BsPerson } from "react-icons/bs";
 import { Tooltip } from "./tooltip";
 import Link from "./link";
 
-export default function StudentSummaryTrigger({ student_id, course_id }: { student_id: string; course_id: number }) {
+export default function StudentSummaryTrigger({
+  student_id,
+  course_id,
+  children
+}: {
+  student_id: string;
+  course_id: number;
+  children?: ReactNode;
+}) {
   const controller = useCourseController();
   const classSections = useClassSections();
   const labSections = useLabSections();
@@ -34,8 +42,8 @@ export default function StudentSummaryTrigger({ student_id, course_id }: { stude
         parts.push(`Lab: ${labSection.name || `Lab ${labSection.id}`}`);
       }
     }
-    if (parts.length === 0) return "Open student in new tab";
-    return parts.join(" · ");
+    if (parts.length === 0) return "Open student summary in new tab";
+    return `${parts.join(" · ")} · Open student summary in new tab`;
   }, [userRole?.class_section_id, userRole?.lab_section_id, classSections, labSections]);
 
   return (
@@ -45,8 +53,19 @@ export default function StudentSummaryTrigger({ student_id, course_id }: { stude
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`Open student ${student_id} in new tab`}
+        variant="plain"
+        _hover={{ bg: "bg.muted", textDecoration: "none" }}
+        transition="background-color 0.12s"
+        borderRadius="md"
+        bg="bg.subtle"
+        px={1.5}
+        py={0.5}
+        display="inline-flex"
       >
-        <Icon as={BsPerson} />
+        <HStack gap={1.5} align="center">
+          {children}
+          <Icon as={BsPerson} color="fg.muted" />
+        </HStack>
       </Link>
     </Tooltip>
   );

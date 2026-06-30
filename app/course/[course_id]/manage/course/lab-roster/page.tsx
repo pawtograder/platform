@@ -348,10 +348,9 @@ export default function LabRosterPage() {
           const name = row.original.profiles?.name;
           const profileId = row.original.private_profile_id;
           return (
-            <HStack gap={2}>
-              <StudentSummaryTrigger student_id={profileId} course_id={Number(course_id)} />
+            <StudentSummaryTrigger student_id={profileId} course_id={Number(course_id)}>
               <Text fontWeight="medium">{name || "N/A"}</Text>
-            </HStack>
+            </StudentSummaryTrigger>
           );
         }
       },

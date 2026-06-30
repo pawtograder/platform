@@ -15,6 +15,7 @@ import {
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -604,7 +605,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
   return (
     <HStack>
       <Avatar.Root size="xs">
-        <Avatar.Image src={profile?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(profile?.avatar_url)} alt="" />
         <Avatar.Fallback>{profile?.name?.slice(0, 2)}</Avatar.Fallback>
       </Avatar.Root>
       <Text fontSize="sm" color="fg.muted">
@@ -915,10 +916,14 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
 
 export default function ManageGroupWidget({
   assignment,
-  repositories
+  repositories,
+  showRepositories = true
 }: {
   assignment: Assignment;
   repositories: Repository[];
+  // Hidden for repo-less modes (none / no_submission), where group management
+  // still applies but there are no Git repositories to link.
+  showRepositories?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
   const { time_zone } = useCourse();
@@ -940,7 +945,7 @@ export default function ManageGroupWidget({
         <Text fontSize="sm" color="fg.muted">
           You will not be able to join a group for this assignment.
         </Text>
-        <RepositoriesInfo repositories={repositories} />
+        {showRepositories && <RepositoriesInfo repositories={repositories} />}
       </Box>
     );
   }
@@ -1015,7 +1020,7 @@ export default function ManageGroupWidget({
         {description}
       </Text>
       {actions}
-      <RepositoriesInfo repositories={repositories} />
+      {showRepositories && <RepositoriesInfo repositories={repositories} />}
     </Box>
   );
 }

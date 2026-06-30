@@ -3,9 +3,51 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, isUserInOrg, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
-import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import {
+  resolveRepoCreationStrategy,
+  type AssignmentForRepoCreation,
+  type SourceRepoRow
+} from "../_shared/repoCreationStrategy.ts";
+import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
+
+function branchProtectionFromAssignment(a: {
+  protect_block_force_push?: boolean | null;
+  protect_require_pull_request?: boolean | null;
+  protect_required_reviewers?: number | null;
+}): BranchProtectionConfig {
+  return {
+    blockForcePush: a.protect_block_force_push ?? true,
+    requirePullRequest: a.protect_require_pull_request ?? false,
+    requiredReviewers: a.protect_required_reviewers ?? 0
+  };
+}
+
+async function fetchSourceAssignmentRepos(
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  assignment: { repo_mode?: string | null; source_assignment_id?: number | null }
+): Promise<SourceRepoRow[]> {
+  if (assignment.repo_mode !== "fork_from_prior_assignment" || !assignment.source_assignment_id) {
+    return [];
+  }
+  const { data, error } = await adminSupabase
+    .from("repositories")
+    .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
+    .eq("assignment_id", assignment.source_assignment_id)
+    .limit(2000);
+  if (error) {
+    throw new Error(`Error fetching source assignment repositories: ${error.message}`);
+  }
+  return (data ?? []).map((r) => ({
+    repository: r.repository,
+    profile_id: r.profile_id,
+    assignment_group_id: r.assignment_group_id,
+    group_name: r.assignment_groups?.name ?? null
+  }));
+}
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-repos-for-student");
@@ -22,6 +64,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let assignmentId: number | undefined;
   let forTestAssignment = false;
   let usedEdgeSecretAuth = false;
+  let templateRepoOverride: string | undefined;
   const syncAllPermissions = true;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
@@ -35,6 +78,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const assignment_id_param = url.searchParams.get("assignment_id");
     assignmentId = assignment_id_param ? Number.parseInt(assignment_id_param) : undefined;
     forTestAssignment = url.searchParams.get("for_test_assignment") === "true";
+    templateRepoOverride = url.searchParams.get("template_repo_override") ?? undefined;
     console.log("assignment_id", assignmentId);
     // syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
     console.log("sync_all_permissions", syncAllPermissions);
@@ -62,6 +106,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     githubUsername = userData.github_username;
     scope?.setTag("Source", "edge-function-secret");
+  } else if (isServiceRoleRequest(req.headers.get("Authorization"))) {
+    // Service-role JWT path — used by admin scripts (demo provisioning) that need to
+    // pass user_id + template_repo_override without minting a real user JWT. Treated as
+    // trusted (same as edge-function-secret) since possession of the service role key
+    // already implies full admin privileges.
+    usedEdgeSecretAuth = true;
+    let requestBody: AutograderCreateReposForStudentRequest = {};
+    if (req.method === "POST") {
+      try {
+        requestBody = await req.json();
+      } catch {
+        console.log("No request body or invalid JSON, using defaults");
+      }
+    }
+    if (!requestBody.user_id) {
+      throw new UserVisibleError("user_id is required when calling with the service-role key", 400);
+    }
+    userId = requestBody.user_id;
+    classId = requestBody.class_id;
+    assignmentId = requestBody.assignment_id;
+    forTestAssignment = requestBody.for_test_assignment === true;
+    templateRepoOverride = requestBody.template_repo_override;
+    const { data: userData, error: userDataError } = await adminSupabase
+      .from("users")
+      .select("github_username")
+      .eq("user_id", userId)
+      .single();
+    if (userDataError || !userData) {
+      throw new SecurityError(`Invalid user: ${userId}`);
+    }
+    githubUsername = userData.github_username;
+    scope?.setTag("Source", "service-role-jwt");
   } else {
     // JWT authentication - parse request body for parameters
     let requestBody: AutograderCreateReposForStudentRequest = {};
@@ -114,6 +190,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("github_username", githubUsername);
   if (!githubUsername) {
     throw new UserVisibleError(`User ${userId} has no Github username linked`, 400);
+  }
+  if (templateRepoOverride !== undefined) {
+    if (!usedEdgeSecretAuth) {
+      throw new UserVisibleError("template_repo_override requires edge-function-secret or service-role auth", 403);
+    }
+    if (assignmentId === undefined) {
+      throw new UserVisibleError("template_repo_override requires assignment_id", 400);
+    }
+    scope?.setTag("template_repo_override", templateRepoOverride);
   }
 
   if (forTestAssignment) {
@@ -309,6 +394,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   const assignments = allAssignments.filter(
     (a) =>
+      a.repo_mode !== "none" &&
+      a.repo_mode !== "no_submission" &&
       a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")) &&
@@ -330,7 +417,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         if (assignmentId !== undefined && assignment.id !== assignmentId) {
           return;
         }
-        const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
+        const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
 
         console.log(
           `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`
@@ -361,7 +448,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+            const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+            const strategy = resolveRepoCreationStrategy(
+              {
+                id: assignment.id,
+                repo_mode: assignment.repo_mode ?? "template_only_staff",
+                template_repo: assignment.template_repo,
+                source_assignment_id: assignment.source_assignment_id
+              } as AssignmentForRepoCreation,
+              {
+                assignment_group_id: group.id,
+                group_name: group.name,
+                display_name: group.name
+              },
+              sourceRepos
+            );
+            if (strategy.kind !== "create") {
+              throw new UserVisibleError(
+                `Cannot create group repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+              );
+            }
+            const headSha = await createRepo(c.classes!.github_org!, repoName, strategy.sourceRepo, {
+              creation_method: strategy.creationMethod,
+              branch_protection: branchProtectionFromAssignment(assignment)
+            });
             await adminSupabase
               .from("repositories")
               .update({
@@ -454,7 +564,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       try {
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
+        const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+        const strategy = resolveRepoCreationStrategy(
+          {
+            id: assignment.id,
+            repo_mode: assignment.repo_mode ?? "template_only_staff",
+            template_repo: assignment.template_repo,
+            source_assignment_id: assignment.source_assignment_id
+          } as AssignmentForRepoCreation,
+          { profile_id: userProfileID, display_name: githubUsername! },
+          sourceRepos
+        );
+        if (strategy.kind !== "create") {
+          throw new UserVisibleError(
+            `Cannot create individual repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+          );
+        }
+        // Demo provisioning can override the per-student template repo so each real-fleet
+        // member starts from a canned submission rather than the blank handout. Already
+        // gated above to (edge-secret OR service-role) + matching assignment_id.
+        const sourceTemplateRepo =
+          templateRepoOverride && assignmentId !== undefined && assignment.id === assignmentId
+            ? templateRepoOverride
+            : strategy.sourceRepo;
+        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo, {
+          creation_method: strategy.creationMethod,
+          branch_protection: branchProtectionFromAssignment(assignment)
+        });
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
         await adminSupabase

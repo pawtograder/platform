@@ -1,0 +1,175 @@
+{
+  "uid": "pawtograder-realtime",
+  "title": "Pawtograder · Realtime Fanout",
+  "tags": ["pawtograder", "realtime"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Phoenix connections",
+      "description": "Aggregate Phoenix connection count across all realtime replicas. Tracks active WebSocket + HTTP keepalive sessions.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(phoenix_connections_total{job=\"pawtograder-realtime\"})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tenants connected",
+      "description": "Distinct Supabase realtime tenants with at least one active client. Self-hosted pawtograder has one tenant per deploy.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(realtime_tenants_connected{job=\"pawtograder-realtime\"})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Server broadcasts / s (1m)",
+      "description": "realtime.send() calls emitted from the Next.js web app, derived from web_realtime_broadcast_total.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(web_realtime_broadcast_total[1m]))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Erlang reductions / s",
+      "description": "Reduction-count delta across all realtime replicas — a coarse proxy for VM workload (every function call increments reductions).",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m]))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Phoenix connections by replica",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{pod}}",
+          "expr": "phoenix_connections_total{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Server-initiated broadcasts by channel class",
+      "description": "Per-channel broadcast rate from web_realtime_broadcast_total. channel_class is set at the call site (e.g. submission_comments, office_hours).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{channel_class}}",
+          "expr": "sum by(channel_class)(rate(web_realtime_broadcast_total[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Realtime memory by kind",
+      "description": "beam_memory_*_total_bytes — processes is the dominant share under load; binary signals large message buffers; ets is the in-memory state.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "proc",
+          "legendFormat": "{{pod}} processes",
+          "expr": "beam_memory_processes_total_bytes{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "bin",
+          "legendFormat": "{{pod}} binary",
+          "expr": "beam_memory_binary_total_bytes{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "ets",
+          "legendFormat": "{{pod}} ets",
+          "expr": "beam_memory_ets_total_bytes{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Erlang VM activity",
+      "description": "Process and port counts indicate concurrency level. Run-queue depth > 0 sustained means a scheduler is backlogged.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "proc",
+          "legendFormat": "{{pod}} processes",
+          "expr": "beam_stats_process_count{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "port",
+          "legendFormat": "{{pod}} ports",
+          "expr": "beam_stats_port_count{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "rq",
+          "legendFormat": "{{pod}} run queue",
+          "expr": "beam_stats_run_queue_count{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Realtime pod CPU (host view)",
+      "description": "osmon reads /proc; osmon_cpu_util is the per-replica utilization fraction. RAM lives on the Stack Overview dashboard (different unit / scale, doesn't compose with percentunit on the same axis).",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "cpu",
+          "legendFormat": "{{pod}} cpu",
+          "expr": "osmon_cpu_util{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "GC reclaimed bytes / s",
+      "description": "Rate of bytes reclaimed by the BEAM garbage collector — proxy for GC pressure.",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "gc",
+          "legendFormat": "{{pod}}",
+          "expr": "rate(beam_stats_gc_reclaimed_bytes{job=\"pawtograder-realtime\"}[1m])"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    }
+  ]
+}
