@@ -48,6 +48,34 @@ ingress:
     enabled: true
     secretName: pawtograder-staging-tls
 
+# ----- A/B deployment channel: canary lane ----------------------------------
+# Standing canary channel served at canary.staging.pawtograder.net (its own web
+# + edge-functions build) against the SAME staging data plane. Courses opt in
+# via classes.deployment_channel='canary'; the stable web middleware then
+# redirects those courses here and shares the session cookie across the two
+# hosts. That redirect is baked into the stable image at build time from the
+# CHANNEL_HOST_SUFFIX Actions variable (set on the repo) — without it, stable
+# ignores channels and this lane is simply unreachable via redirect.
+#
+# Pin to a known-good canary tag, NOT canary-latest: the staging auto-deploy
+# (release-images.yml deploy-staging) runs `helm upgrade --wait`, which blocks
+# on these channel pods too, so a broken canary image would turn an ordinary
+# staging deploy red. Roll the canary forward by bumping this pin in a PR.
+channels:
+  - name: canary
+    web:
+      image:
+        tag: canary-055b7e2
+      replicas: 1
+    edgeFunctions:
+      image:
+        tag: canary-055b7e2
+      replicas: 1
+
+# Reflected *.staging.pawtograder.net wildcard cert (cert-manager Certificate
+# `staging-wildcard` in this namespace) — covers every channel host.
+channelWildcardTlsSecret: staging-wildcard-tls
+
 # Secrets come from ExternalSecrets synced out of OpenBao
 # (kv/apps/pawtograder-staging/*). Bootstrap with:
 #   scripts/setup-openbao-edge-functions.sh --bundle <name>
