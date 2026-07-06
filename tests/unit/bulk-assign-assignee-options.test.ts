@@ -40,4 +40,13 @@ describe("bulk assign assignee options", () => {
     expect(() => [...options].sort(compareAssigneeOptions)).not.toThrow();
     expect([...options].sort(compareAssigneeOptions).map(getAssigneeOptionLabel)).toEqual(["Ada", "profile-a", "Zoe"]);
   });
+
+  it("uses a hydrated profile name over an earlier fallback label", () => {
+    const option = {
+      label: "profile-a",
+      value: { private_profile_id: "profile-a", profiles: { name: "Grace Hopper" } }
+    };
+
+    expect(getAssigneeOptionLabel(option)).toBe("Grace Hopper");
+  });
 });
