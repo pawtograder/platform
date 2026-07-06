@@ -3,8 +3,10 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
+import { Switch } from "@/components/ui/switch";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
+import { createManualSubmissionsForNonSubmitters } from "@/lib/edgeFunctions";
 import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
@@ -73,9 +75,10 @@ export default function BulkAssignGradingPage() {
             <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
               Reassigning Work
             </Link>
-            ), and will only process submissions/rubric parts that have not been assigned yet. If a student/group has
-            not yet made a submission, they will not be assigned to a grader. However, as students update existing
-            submissions, the grading assignments will be updated automatically.
+            ), and will only process submissions/rubric parts that have not been assigned yet. By default, students and
+            groups that have not yet submitted are not assigned to a grader; enable &ldquo;Assign grading for all
+            students&rdquo; below to create empty submissions for non-submitters so they can be graded too. As students
+            update existing submissions, the grading assignments will be updated automatically.
           </Text>
           <Text fontSize="sm" maxW="lg">
             The algorithm will first split submissions between graders (assigning all selected rubric parts to each
@@ -103,6 +106,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
   const [dueDate, setDueDate] = useState<string>(addDays(assignment.due_date, 7).toISOString());
   const [baseOnAll, setBaseOnAll] = useState<boolean>(false);
+  // When true, students/groups with no active submission are stubbed out (empty
+  // 'manual' submissions created) at generate time so they can be assigned.
+  const [includeNonSubmitters, setIncludeNonSubmitters] = useState<boolean>(false);
   const [selectedTags, setSelectedTags] = useState<
     MultiValue<{
       label: string;
@@ -597,8 +603,16 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       return selectedPartIds.every((pid) => allAssignedParts.has(pid));
     };
 
+    // In the default mode we only assign grading for students who have actually
+    // submitted. Existing empty stubs (submitted_via='manual', e.g. from "Grade
+    // anyway" or an abandoned all-students draft) must NOT count as submitted —
+    // unless this is a no_submission assignment, where stubs are the only
+    // submission kind. With the toggle on, stubs are included like any other.
+    const excludeStubs = !includeNonSubmitters && assignment.repo_mode !== "no_submission";
+
     const filtered = allActiveSubmissions
       .filter((sub) => sub.assignment_id === Number(assignment_id))
+      .filter((sub) => !(excludeStubs && sub.submitted_via === "manual"))
       .filter((sub) => !isAssignedForSelectedParts(sub.id))
       .filter((sub) => {
         if (gradersAndInstructors.some((gi) => gi.id === sub.profile_id)) {
@@ -663,7 +677,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     currentReviewAssignments,
     rubricParts,
     reviewAssignmentPartsById,
-    assignment_id
+    assignment_id,
+    includeNonSubmitters,
+    assignment.repo_mode
   ]);
 
   /**
@@ -810,14 +826,201 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   }, [selectedUsers]);
 
   /**
+   * When "assign for all students" is on, find every enrolled student/group with
+   * no active submission (respecting the current section/lab/tag filters), create
+   * an empty 'manual' stub for each via the bulk RPC, and return the new rows
+   * shaped as SubmissionWithGrading so they can be merged into the pool. Idempotent:
+   * targets that already have an active submission are skipped up front, and the
+   * RPC itself returns the existing id for any that race in.
+   */
+  const createStubsForNonSubmitters = useCallback(async (): Promise<SubmissionWithGrading[]> => {
+    const assignmentIdNum = Number(assignment_id);
+
+    const selectedClassSectionIds = new Set(selectedClassSections.map((s) => s.value.id));
+    const selectedLabSectionIds = new Set(selectedLabSections.map((s) => s.value.id));
+
+    const passesFilters = (memberIds: string[]): boolean => {
+      if (memberIds.length === 0) return false;
+      if (selectedClassSectionIds.size > 0) {
+        const ok = memberIds.some((pid) =>
+          userRoles.some((ur) => ur.private_profile_id === pid && selectedClassSectionIds.has(ur.class_section_id || 0))
+        );
+        if (!ok) return false;
+      }
+      if (selectedLabSectionIds.size > 0) {
+        const ok = memberIds.some((pid) =>
+          userRoles.some((ur) => ur.private_profile_id === pid && selectedLabSectionIds.has(ur.lab_section_id || 0))
+        );
+        if (!ok) return false;
+      }
+      if (selectedStudentTags.length > 0) {
+        const memberSet = new Set(memberIds);
+        const ok = tags.some(
+          (tag) =>
+            memberSet.has(tag.profile_id) &&
+            selectedStudentTags.some((sel) => sel.value.color === tag.color && sel.value.name === tag.name)
+        );
+        if (!ok) return false;
+      }
+      // Require at least one enrolled, non-disabled member.
+      return memberIds.some((pid) => userRoles.some((ur) => ur.private_profile_id === pid && !ur.disabled));
+    };
+
+    // Groups for this assignment + their membership.
+    const { data: groups, error: groupsError } = await supabase
+      .from("assignment_groups")
+      .select("id, assignment_groups_members(profile_id)")
+      .eq("assignment_id", assignmentIdNum);
+    if (groupsError) throw groupsError;
+
+    const groupIdToMembers = new Map<number, string[]>();
+    const profileToGroupId = new Map<string, number>();
+    for (const g of groups ?? []) {
+      const members = ((g.assignment_groups_members ?? []) as { profile_id: string }[]).map((m) => m.profile_id);
+      groupIdToMembers.set(g.id, members);
+      for (const pid of members) profileToGroupId.set(pid, g.id);
+    }
+
+    // Targets that already have an active submission (real or stub) are not missing.
+    const existing = allActiveSubmissions.filter((s) => s.assignment_id === assignmentIdNum);
+    const groupsWithSubmission = new Set<number>();
+    const individualsWithSubmission = new Set<string>();
+    for (const s of existing) {
+      if (s.assignment_group_id != null) groupsWithSubmission.add(s.assignment_group_id);
+      else if (s.profile_id) individualsWithSubmission.add(s.profile_id);
+    }
+
+    const missingProfileIds: string[] = [];
+    const missingGroupIds: number[] = [];
+
+    for (const [groupId, members] of groupIdToMembers.entries()) {
+      if (groupsWithSubmission.has(groupId)) continue;
+      if (!passesFilters(members)) continue;
+      missingGroupIds.push(groupId);
+    }
+
+    const students = userRoles.filter((ur) => ur.role === "student" && !ur.disabled && ur.private_profile_id);
+    for (const ur of students) {
+      const pid = ur.private_profile_id as string;
+      if (profileToGroupId.has(pid)) continue; // handled via the group path
+      if (individualsWithSubmission.has(pid)) continue;
+      if (!passesFilters([pid])) continue;
+      missingProfileIds.push(pid);
+    }
+
+    if (missingProfileIds.length === 0 && missingGroupIds.length === 0) {
+      return [];
+    }
+
+    const newIds = await createManualSubmissionsForNonSubmitters(
+      { assignment_id: assignmentIdNum, profile_ids: missingProfileIds, assignment_group_ids: missingGroupIds },
+      supabase
+    );
+    if (newIds.length === 0) return [];
+
+    const { data: newRows, error: fetchError } = await supabase.from("submissions").select("*").in("id", newIds);
+    if (fetchError) throw fetchError;
+
+    return (newRows ?? []).map((sub) => {
+      const memberIds =
+        sub.assignment_group_id != null
+          ? (groupIdToMembers.get(sub.assignment_group_id) ?? [])
+          : sub.profile_id
+            ? [sub.profile_id]
+            : [];
+      return {
+        ...(sub as unknown as SubmissionWithGrading),
+        submission_reviews: [],
+        review_assignments: [],
+        assignment_groups:
+          memberIds.length > 0 ? { assignment_groups_members: memberIds.map((profile_id) => ({ profile_id })) } : null
+      } as SubmissionWithGrading;
+    });
+  }, [
+    assignment_id,
+    selectedClassSections,
+    selectedLabSections,
+    selectedStudentTags,
+    userRoles,
+    tags,
+    allActiveSubmissions,
+    supabase
+  ]);
+
+  /**
+   * Entry point for the "Prepare Review Assignments" button. In the default mode
+   * this just runs the solver over the submitted students. With "assign for all
+   * students" on, it first stubs out non-submitters and merges them into the pool.
+   */
+  const handleGenerateReviews = async () => {
+    if (!includeNonSubmitters) {
+      generateReviews(submissionsToDo ?? []);
+      return;
+    }
+
+    // Pre-check the cheap guards that generateReviews() enforces BEFORE creating
+    // any stubs, so an abortable run doesn't leave orphan empty submissions.
+    if (!selectedRubric?.id) {
+      toaster.create({
+        title: `Error: No rubric found`,
+        description: `Was unable to find a rubric and therefore could not generate reviews`
+      });
+      return;
+    }
+    // Modes that draw from the selected grader pool must have at least one grader
+    // available; lab-leaders / group-mentors modes derive assignees differently.
+    if (
+      assignmentMode !== "by_lab_leaders" &&
+      assignmentMode !== "by_group_mentors" &&
+      finalSelectedUsers().length === 0
+    ) {
+      toaster.create({
+        title: `Warning: No ${role}`,
+        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
+      });
+      return;
+    }
+
+    setIsGeneratingReviews(true);
+    let stubs: SubmissionWithGrading[] = [];
+    try {
+      stubs = await createStubsForNonSubmitters();
+    } catch (err) {
+      toaster.error({
+        title: "Could not create submissions",
+        description: err instanceof Error ? err.message : "Failed to create submissions for non-submitters."
+      });
+      setIsGeneratingReviews(false);
+      return;
+    }
+
+    if (stubs.length > 0) {
+      toaster.create({
+        title: `Created ${stubs.length} empty submission${stubs.length === 1 ? "" : "s"}`,
+        description: `Empty submissions were created for students/groups without a submission so they can be assigned for grading.`,
+        type: "info"
+      });
+    }
+
+    // Merge stubs into the current pool, de-duping by id in case realtime already
+    // delivered some of the new rows.
+    const byId = new Map<number, SubmissionWithGrading>();
+    for (const s of submissionsToDo ?? []) byId.set(s.id, s);
+    for (const s of stubs) byId.set(s.id, s);
+    generateReviews(Array.from(byId.values()));
+  };
+
+  /**
    * Generates reviews based on the initial selected information and grading conflicts.
    */
-  const generateReviews = () => {
-    if (!submissionsToDo) {
+  const generateReviews = (submissionsList: SubmissionWithGrading[]) => {
+    setIsGeneratingReviews(true);
+    if (!submissionsList || submissionsList.length === 0) {
       toaster.create({
         title: `Warning: No submissions`,
         description: `Could not find any submissions to grade this assignment`
       });
+      setIsGeneratingReviews(false);
       return;
     }
     if (!selectedRubric?.id) {
@@ -825,6 +1028,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         title: `Error: No rubric found`,
         description: `Was unable to find a rubric and therefore could not generate reviews`
       });
+      setIsGeneratingReviews(false);
       return;
     }
 
@@ -833,7 +1037,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const submissionsWithoutMentor: SubmissionWithGrading[] = [];
       const submissionsWithoutGroup: SubmissionWithGrading[] = [];
 
-      for (const submission of submissionsToDo) {
+      for (const submission of submissionsList) {
         if (!submission.assignment_group_id) {
           submissionsWithoutGroup.push(submission);
           continue;
@@ -866,7 +1070,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       const studentsWithoutLab: SubmissionWithGrading[] = [];
       const leaderlessLabSections = new Set<number>();
 
-      for (const submission of submissionsToDo) {
+      for (const submission of submissionsList) {
         // Get student's lab section
         const memberIds =
           submission.assignment_groups?.assignment_groups_members?.map((m) => m.profile_id) ||
@@ -902,6 +1106,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           title: "Cannot assign: Lab sections without leaders",
           description: `The following lab sections have students with submissions but no assigned leaders: ${labSectionNames}. Please assign leaders to these lab sections before proceeding.`
         });
+        setIsGeneratingReviews(false);
         return;
       }
 
@@ -921,15 +1126,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           title: `Warning: No ${role}`,
           description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
         });
+        setIsGeneratingReviews(false);
         return;
       }
     }
 
-    setIsGeneratingReviews(true);
-
     // Handle lab leaders mode separately
     if (assignmentMode === "by_lab_leaders") {
-      const result = generateReviewsByLabLeaders();
+      const result = generateReviewsByLabLeaders(submissionsList);
       setDraftReviews(result.draftAssignments);
       setIsGeneratingReviews(false);
       return;
@@ -937,7 +1141,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     // Handle group mentors mode separately
     if (assignmentMode === "by_group_mentors") {
-      const result = generateReviewsByGroupMentors();
+      const result = generateReviewsByGroupMentors(submissionsList);
       if (result.skippedSubmissions.length > 0) {
         toaster.create({
           title: `Skipped ${result.skippedSubmissions.length} submissions`,
@@ -1025,7 +1229,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
     if (graderPreferences.size > 0) {
       // Process each submission to check for preferred graders
-      submissionsToDo.forEach((submission) => {
+      submissionsList.forEach((submission) => {
         // Get all group members or just the single submitter
         const groupMembers = submission.assignment_groups?.assignment_groups_members || [
           { profile_id: submission.profile_id }
@@ -1092,7 +1296,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       });
     } else {
       // No preferences, all submissions go to optimization
-      remainingSubmissions.push(...submissionsToDo);
+      remainingSubmissions.push(...submissionsList);
     }
 
     // Now run optimization on remaining submissions
@@ -1124,7 +1328,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    * Generates review assignments by assigning each submission to all lab leaders of the student's lab section.
    * Skips submissions from students without lab sections.
    */
-  const generateReviewsByLabLeaders = (): {
+  const generateReviewsByLabLeaders = (
+    submissionsList: SubmissionWithGrading[]
+  ): {
     draftAssignments: DraftReviewAssignment[];
     skippedSubmissions: SubmissionWithGrading[];
   } => {
@@ -1133,7 +1339,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Track seen (submission_id, assignee_profile_id, rubric_part_id) combinations to prevent duplicates
     const seenAssignments = new Set<string>();
 
-    if (!submissionsToDo) {
+    if (!submissionsList) {
       return { draftAssignments, skippedSubmissions };
     }
 
@@ -1141,7 +1347,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const isAllPartsSelected =
       selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
 
-    for (const submission of submissionsToDo) {
+    for (const submission of submissionsList) {
       // Get all group members or just the single submitter
       const groupMembers = submission.assignment_groups?.assignment_groups_members || [
         { profile_id: submission.profile_id }
@@ -1236,7 +1442,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     return { draftAssignments, skippedSubmissions };
   };
 
-  const generateReviewsByGroupMentors = (): {
+  const generateReviewsByGroupMentors = (
+    submissionsList: SubmissionWithGrading[]
+  ): {
     draftAssignments: DraftReviewAssignment[];
     skippedSubmissions: SubmissionWithGrading[];
   } => {
@@ -1244,7 +1452,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const skippedSubmissions: SubmissionWithGrading[] = [];
     const seenAssignments = new Set<string>();
 
-    if (!submissionsToDo) {
+    if (!submissionsList) {
       return { draftAssignments, skippedSubmissions };
     }
 
@@ -1252,7 +1460,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const isAllPartsSelected =
       selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
 
-    for (const submission of submissionsToDo) {
+    for (const submission of submissionsList) {
       // Get the assignment group for this submission
       const groupId = submission.assignment_group_id;
 
@@ -1785,6 +1993,16 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         </Fieldset.Legend>
         <Fieldset.Content m={0}>
           <VStack align="flex-start" maxW={"lg"} gap={1}>
+            <Field.Root>
+              <Switch checked={includeNonSubmitters} onCheckedChange={(e) => setIncludeNonSubmitters(e.checked)}>
+                Assign grading for all students (create empty submissions for non-submitters)
+              </Switch>
+              <Field.HelperText>
+                {includeNonSubmitters
+                  ? "Students and groups without a submission will get an empty submission created for them so they can be graded."
+                  : "Only students and groups that have submitted will be assigned for grading (default)."}
+              </Field.HelperText>
+            </Field.Root>
             <Field.Root>
               <Field.Label>Filter by class section</Field.Label>
               <Select
@@ -2357,7 +2575,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           <HStack gap={4}>
             <Button
               maxWidth={"md"}
-              onClick={generateReviews}
+              onClick={handleGenerateReviews}
               variant="subtle"
               colorPalette="green"
               disabled={
@@ -2366,7 +2584,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 ((assignmentMode as string) !== "by_lab_leaders" &&
                   (assignmentMode as string) !== "by_group_mentors" &&
                   !role) ||
-                submissionsToDo?.length === 0
+                (!includeNonSubmitters && submissionsToDo?.length === 0)
               }
               loading={isGeneratingReviews}
             >

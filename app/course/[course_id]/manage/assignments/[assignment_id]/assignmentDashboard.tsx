@@ -56,6 +56,9 @@ type DashboardRow = {
   class_section_name?: string | null;
   lab_section_name?: string | null;
   ordinal?: number | null;
+  // Null for enrolled students with no active submission (they now appear in the
+  // view so they can be graded anyway). Grading-progress counts exclude them.
+  activesubmissionid?: number | null;
 };
 
 function StatRow({ label, stats }: { label: string; stats: ScoreStats }) {
@@ -204,6 +207,12 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   // Cohort pushed from the rubric report to filter the submissions table (button or drill-in).
   const [tableCohort, setTableCohort] = useState<{ ids: number[]; label: string } | null>(null);
 
+  // Grading-progress counts should reflect only students with an active
+  // submission; non-submitters (activesubmissionid === null) are surfaced
+  // separately so instructors can see who still needs a submission.
+  const submittedRows = useMemo(() => rows.filter((r) => r.activesubmissionid != null), [rows]);
+  const notSubmittedCount = rows.length - submittedRows.length;
+
   // Distinct section / lab names for the filter control.
   const { classSections, labSections } = useMemo(() => collectSectionOptions(rows), [rows]);
 
@@ -229,7 +238,8 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
   return (
     <VStack align="stretch" gap={8} p={4}>
       <GradingStatusPanel
-        rows={rows}
+        rows={submittedRows}
+        notSubmittedCount={notSubmittedCount}
         assignmentId={Number(assignment_id)}
         supabase={supabase}
         onChanged={() => tableController?.refetchAll()}
@@ -351,7 +361,9 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
           Submissions
         </Heading>
         <Text fontSize="sm" color="fg.muted" mb={3}>
-          Only students who have made a submission appear here. To see every student&apos;s repository, visit the{" "}
+          Every enrolled student appears here. Students without a submission can be graded anyway using the &ldquo;Grade
+          anyway&rdquo; action, which creates an empty submission for them. To see every student&apos;s repository,
+          visit the{" "}
           <Link asChild color="fg.info">
             <NextLink href={repositoriesHref}>Repository Status</NextLink>
           </Link>{" "}

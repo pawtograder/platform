@@ -457,6 +457,40 @@ export async function createManualSubmission(
   return data;
 }
 
+/**
+ * Bulk-create stub submissions (`submitted_via='manual'`) for an explicit list
+ * of profiles and/or groups on an assignment. Idempotent per target (returns the
+ * existing active submission id where one is already in place). Used by the
+ * bulk-assign flow to stub out non-submitters before drafting grading
+ * assignments. Returns the resulting submission ids.
+ */
+export async function createManualSubmissionsForNonSubmitters(
+  params: { assignment_id: number; profile_ids?: string[]; assignment_group_ids?: number[] },
+  supabase: SupabaseClient<Database>
+): Promise<number[]> {
+  const { data, error } = await (supabase.rpc as CallableFunction)("create_manual_submissions_for_non_submitters", {
+    p_assignment_id: params.assignment_id,
+    p_profile_ids: params.profile_ids ?? [],
+    p_assignment_group_ids: params.assignment_group_ids ?? []
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to create manual submissions",
+      recoverable: false
+    });
+  }
+  if (!Array.isArray(data) || !data.every((id) => typeof id === "number")) {
+    throw new EdgeFunctionError({
+      details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+      message: "Failed to create manual submissions",
+      recoverable: false
+    });
+  }
+  return data as number[];
+}
+
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
   const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });
   if (ret.data) {

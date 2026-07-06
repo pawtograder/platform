@@ -23,8 +23,10 @@ import {
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { createManualSubmission } from "@/lib/edgeFunctions";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import TableController from "@/lib/TableController";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -61,16 +63,71 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
+/**
+ * "Grade anyway" action for a student/group with no active submission. Creates
+ * an empty (`submitted_via='manual'`) stub submission on demand, then navigates
+ * to its grading page. Targets the group when `assignmentGroupId` is set so one
+ * stub covers all members, else the individual profile.
+ */
+function GradeAnywayButton({
+  course_id,
+  assignment_id,
+  profile_id,
+  assignment_group_id
+}: {
+  course_id: string;
+  assignment_id: string;
+  profile_id: string;
+  assignment_group_id: number | null;
+}) {
+  const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
+
+  const handleConfirm = useCallback(async () => {
+    try {
+      const submissionId = await createManualSubmission(
+        {
+          assignment_id: Number(assignment_id),
+          ...(assignment_group_id != null ? { assignment_group_id } : { profile_id })
+        },
+        supabase
+      );
+      router.push(`/course/${course_id}/assignments/${assignment_id}/submissions/${submissionId}`);
+    } catch (err) {
+      toaster.error({
+        title: "Could not start grading",
+        description: err instanceof Error ? err.message : "Failed to create a submission to grade."
+      });
+    }
+  }, [assignment_group_id, profile_id, assignment_id, course_id, router, supabase]);
+
+  return (
+    <PopConfirm
+      triggerLabel="Grade anyway"
+      confirmHeader="Grade without a submission?"
+      confirmText="This creates an empty submission for this student/group so you can grade them. The student will be able to see it."
+      onConfirm={handleConfirm}
+      trigger={
+        <Button variant="outline" size="xs" colorPalette="gray">
+          Grade anyway
+        </Button>
+      }
+    />
+  );
+}
+
 function StudentNameCell({
   course_id,
   assignment_id,
   uid,
-  activeSubmissionId
+  activeSubmissionId,
+  assignmentGroupId
 }: {
   course_id: string;
   assignment_id: string;
   uid: string;
   activeSubmissionId: number | null;
+  assignmentGroupId: number | null;
 }) {
   const isObfuscated = useObfuscatedGradesMode();
   const canShowGradeFor = useCanShowGradeFor(uid);
@@ -87,6 +144,14 @@ function StudentNameCell({
         </Link>
       ) : (
         <PersonName uid={uid} showAvatar={false} />
+      )}
+      {activeSubmissionId === null && (
+        <GradeAnywayButton
+          course_id={course_id}
+          assignment_id={assignment_id}
+          profile_id={uid}
+          assignment_group_id={assignmentGroupId}
+        />
       )}
       <Box flex="1" display="flex" justifyContent="flex-end">
         {isObfuscated && (
@@ -480,6 +545,7 @@ export default function AssignmentsTable({
               assignment_id={assignment_id as string}
               uid={uid}
               activeSubmissionId={row.original.activesubmissionid}
+              assignmentGroupId={row.original.assignment_group_id ?? null}
             />
           );
         }
