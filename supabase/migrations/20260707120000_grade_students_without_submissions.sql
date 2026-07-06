@@ -180,8 +180,9 @@ begin
       where ur.class_id = v_class_id
         and ur.private_profile_id = p_profile_id
         and ur.role = 'student'
+        and ur.disabled = false
     ) then
-      raise exception 'Profile % is not a student enrolled in class %', p_profile_id, v_class_id
+      raise exception 'Profile % is not an active student enrolled in class %', p_profile_id, v_class_id
         using errcode = '42501';
     end if;
   end if;
@@ -269,8 +270,9 @@ begin
         where ur.class_id = v_class_id
           and ur.private_profile_id = v_profile_id
           and ur.role = 'student'
+          and ur.disabled = false
       ) then
-        raise exception 'Profile % is not a student enrolled in class %', v_profile_id, v_class_id
+        raise exception 'Profile % is not an active student enrolled in class %', v_profile_id, v_class_id
           using errcode = '42501';
       end if;
       v_submission_id := public.create_manual_submission_internal(p_assignment_id, v_profile_id, null);
