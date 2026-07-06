@@ -252,55 +252,44 @@ test("instructors can manage grading default profiles and apply them on assignme
   }).toPass({ timeout: 20_000 });
 });
 
-test("deadline automation assigns grading to lab leaders and queues reminder emails", async () => {
+test("auto-assign 'graders' pool assigns submissions and queues reminder emails to graders", async () => {
   test.setTimeout(120_000);
 
+  // Happy-path integration for the most common pool: submissions are routed to the
+  // pinned graders and, once review assignments are past due, the reminder cron emails
+  // those graders. The grader subset is pinned so the assertions don't depend on which
+  // other graders earlier serial tests have left in the class.
   const workflowSuffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const [labLeaderA, labLeaderB, studentA, studentB] = await createUsersInClass([
+  const [graderA, graderB, studentA, studentB] = await createUsersInClass([
     {
-      name: `E2E Lab Leader A ${workflowSuffix}`,
-      email: `e2e-lab-leader-a-${workflowSuffix}@pawtograder.net`,
+      name: `E2E Grader A ${workflowSuffix}`,
+      email: `e2e-grader-a-${workflowSuffix}@pawtograder.net`,
       role: "grader",
       class_id: course.id,
       useMagicLink: true
     },
     {
-      name: `E2E Lab Leader B ${workflowSuffix}`,
-      email: `e2e-lab-leader-b-${workflowSuffix}@pawtograder.net`,
+      name: `E2E Grader B ${workflowSuffix}`,
+      email: `e2e-grader-b-${workflowSuffix}@pawtograder.net`,
       role: "grader",
       class_id: course.id,
       useMagicLink: true
     },
     {
-      name: `E2E Lab Student A ${workflowSuffix}`,
-      email: `e2e-lab-student-a-${workflowSuffix}@pawtograder.net`,
+      name: `E2E Grader Pool Student A ${workflowSuffix}`,
+      email: `e2e-grader-student-a-${workflowSuffix}@pawtograder.net`,
       role: "student",
       class_id: course.id,
       useMagicLink: true
     },
     {
-      name: `E2E Lab Student B ${workflowSuffix}`,
-      email: `e2e-lab-student-b-${workflowSuffix}@pawtograder.net`,
+      name: `E2E Grader Pool Student B ${workflowSuffix}`,
+      email: `e2e-grader-student-b-${workflowSuffix}@pawtograder.net`,
       role: "student",
       class_id: course.id,
       useMagicLink: true
     }
   ]);
-
-  await createLabSectionWithStudents({
-    class_id: course.id,
-    day_of_week: "monday",
-    lab_leaders: [labLeaderA],
-    students: [studentA],
-    name: `E2E Auto-Assign Lab A ${workflowSuffix}`
-  });
-  await createLabSectionWithStudents({
-    class_id: course.id,
-    day_of_week: "tuesday",
-    lab_leaders: [labLeaderB],
-    students: [studentB],
-    name: `E2E Auto-Assign Lab B ${workflowSuffix}`
-  });
 
   const autoAssignment = await insertAssignment({
     class_id: course.id,
@@ -316,6 +305,7 @@ test("deadline automation assigns grading to lab leaders and queues reminder ema
       due_date: addDays(new Date(), -1).toISOString(),
       auto_assign_at_deadline: true,
       auto_assign_assignee_pool: "graders",
+      auto_assign_grader_subset_private_profile_ids: [graderA.private_profile_id, graderB.private_profile_id],
       auto_assign_review_due_hours: 0,
       late_grading_reminders_enabled: true,
       late_grading_reminder_interval_hours: 12,
@@ -343,7 +333,7 @@ test("deadline automation assigns grading to lab leaders and queues reminder ema
   expect(runAutomationError).toBeNull();
 
   const expectedSubmissionIds = [firstSubmission.submission_id, secondSubmission.submission_id].sort((a, b) => a - b);
-  const labLeaderProfileIds = [labLeaderA.private_profile_id, labLeaderB.private_profile_id];
+  const graderProfileIds = [graderA.private_profile_id, graderB.private_profile_id];
 
   await expect(async () => {
     const { data: reviewAssignments, error: reviewAssignmentsError } = await supabase
@@ -359,7 +349,7 @@ test("deadline automation assigns grading to lab leaders and queues reminder ema
     expect(reviewAssignments!.map((row) => row.submission_id).sort((a, b) => a - b)).toEqual(expectedSubmissionIds);
     for (const row of reviewAssignments!) {
       expect(row.completed_at).toBeNull();
-      expect(labLeaderProfileIds).toContain(row.assignee_profile_id);
+      expect(graderProfileIds).toContain(row.assignee_profile_id);
       expect(new Date(row.due_date).getTime()).toBeLessThanOrEqual(Date.now());
     }
   }).toPass({ timeout: 20_000 });
@@ -389,7 +379,7 @@ test("deadline automation assigns grading to lab leaders and queues reminder ema
     expect(queuedEmails!.length).toBeGreaterThan(0);
 
     const queuedUserIds = new Set(queuedEmails!.map((row) => row.user_id));
-    const expectedUserIds = new Set([labLeaderA.user_id, labLeaderB.user_id]);
+    const expectedUserIds = new Set([graderA.user_id, graderB.user_id]);
     for (const userId of queuedUserIds) {
       expect(expectedUserIds.has(userId)).toBe(true);
     }
@@ -1369,4 +1359,543 @@ test("late submission after deadline is auto-assigned at submission time without
   const finalRows = await fetchReviewAssignments(a.id, a.grading_rubric_id!);
   expect(finalRows.length).toBe(2);
   expect(finalRows.every((r) => r.assignee_profile_id === graderLate.private_profile_id)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Cron-BATCH tests. The pool tests above flip the deadline into the past BEFORE
+// inserting submissions, so the AFTER INSERT trigger assigns each submission and
+// the cron batch (auto_assign_grading_reviews_for_assignment) never runs. These
+// tests instead insert submissions while the deadline is still in the FUTURE
+// (trigger no-ops), then move the deadline into the past WITHOUT inserting a new
+// submission, so the rows stay unassigned and run_assignment_grading_automation
+// genuinely exercises the batch round-robin + conflict logic. The grader subset
+// is always pinned so distribution is deterministic regardless of which graders
+// earlier serial tests have left in the class.
+// ---------------------------------------------------------------------------
+
+test("auto-assign 'graders' pool batch round-robin distributes submissions evenly across the pool", async () => {
+  test.setTimeout(120_000);
+  const suffix = makeSuffix("batch-round-robin");
+
+  const [graderOne, graderTwo, studentOne, studentTwo, studentThree, studentFour] = await createUsersInClass([
+    {
+      name: `E2E RR Grader 1 ${suffix}`,
+      email: `e2e-rr-g1-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E RR Grader 2 ${suffix}`,
+      email: `e2e-rr-g2-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E RR Student 1 ${suffix}`,
+      email: `e2e-rr-s1-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E RR Student 2 ${suffix}`,
+      email: `e2e-rr-s2-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E RR Student 3 ${suffix}`,
+      email: `e2e-rr-s3-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E RR Student 4 ${suffix}`,
+      email: `e2e-rr-s4-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
+  ]);
+  const subsetIds = [graderOne.private_profile_id, graderTwo.private_profile_id];
+
+  const a = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Batch Round Robin ${suffix}`,
+    assignment_slug: `e2e-batch-rr-${suffix}`
+  });
+  // Auto-assign on, but keep the deadline in the FUTURE so the per-submission trigger
+  // does not fire — these submissions must be left for the cron batch.
+  await configureAutoAssign(a.id, {
+    due_date: addDays(new Date(), 1).toISOString(),
+    auto_assign_assignee_pool: "graders",
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0
+  });
+
+  const submissionIds: number[] = [];
+  for (const student of [studentOne, studentTwo, studentThree, studentFour]) {
+    const sub = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: a.id,
+      class_id: course.id
+    });
+    submissionIds.push(sub.submission_id);
+  }
+
+  // Pre-deadline: the trigger must not have assigned anything yet.
+  expect((await fetchReviewAssignments(a.id, a.grading_rubric_id!)).length).toBe(0);
+
+  // Flip into the past without a new insert, then let the batch run.
+  const { error: pastErr } = await supabase
+    .from("assignments")
+    .update({ due_date: addDays(new Date(), -1).toISOString() })
+    .eq("id", a.id);
+  expect(pastErr).toBeNull();
+
+  const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
+  expect(rpcError).toBeNull();
+
+  await expect(async () => {
+    const rows = await fetchReviewAssignments(a.id, a.grading_rubric_id!);
+    expect(rows.length).toBe(4);
+    expect(new Set(rows.map((r) => r.submission_id))).toEqual(new Set(submissionIds));
+    for (const row of rows) {
+      expect(subsetIds).toContain(row.assignee_profile_id);
+    }
+    // Round-robin balance: with 4 submissions and 2 pinned graders, each grader gets exactly 2.
+    const perGrader = subsetIds.map((g) => rows.filter((r) => r.assignee_profile_id === g).length);
+    expect(perGrader.sort((x, y) => x - y)).toEqual([2, 2]);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("auto-assign 'graders' pool batch skips a conflicted grader and assigns the non-conflicted one", async () => {
+  test.setTimeout(120_000);
+  const suffix = makeSuffix("batch-conflict");
+
+  const [graderConflicted, graderClean, studentConflict, studentClean] = await createUsersInClass([
+    {
+      name: `E2E BC Grader X ${suffix}`,
+      email: `e2e-bc-gx-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E BC Grader Clean ${suffix}`,
+      email: `e2e-bc-gc-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E BC Student X ${suffix}`,
+      email: `e2e-bc-sx-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E BC Student Clean ${suffix}`,
+      email: `e2e-bc-sc-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
+  ]);
+  const subsetIds = [graderConflicted.private_profile_id, graderClean.private_profile_id];
+
+  await insertGradingConflict({
+    classId: course.id,
+    graderProfileId: graderConflicted.private_profile_id,
+    studentProfileId: studentConflict.private_profile_id,
+    createdByProfileId: instructor!.private_profile_id
+  });
+
+  const a = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Batch Conflict ${suffix}`,
+    assignment_slug: `e2e-batch-conflict-${suffix}`
+  });
+  await configureAutoAssign(a.id, {
+    due_date: addDays(new Date(), 1).toISOString(),
+    auto_assign_assignee_pool: "graders",
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0
+  });
+
+  const subConflict = await insertPreBakedSubmission({
+    student_profile_id: studentConflict.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  const subClean = await insertPreBakedSubmission({
+    student_profile_id: studentClean.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+
+  expect((await fetchReviewAssignments(a.id, a.grading_rubric_id!)).length).toBe(0);
+
+  const { error: pastErr } = await supabase
+    .from("assignments")
+    .update({ due_date: addDays(new Date(), -1).toISOString() })
+    .eq("id", a.id);
+  expect(pastErr).toBeNull();
+
+  const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
+  expect(rpcError).toBeNull();
+
+  await expect(async () => {
+    const rows = await fetchReviewAssignments(a.id, a.grading_rubric_id!);
+    expect(rows.length).toBe(2);
+    const conflictRow = rows.find((r) => r.submission_id === subConflict.submission_id);
+    const cleanRow = rows.find((r) => r.submission_id === subClean.submission_id);
+    // The conflicted grader must never be assigned the student they conflict with.
+    expect(conflictRow?.assignee_profile_id).toBe(graderClean.private_profile_id);
+    expect(conflictRow?.assignee_profile_id).not.toBe(graderConflicted.private_profile_id);
+    // The clean student may be assigned to either grader.
+    expect(subsetIds).toContain(cleanRow?.assignee_profile_id);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("auto-assign 'graders' pool trigger skips a conflicted grader for a late submission", async () => {
+  test.setTimeout(120_000);
+  const suffix = makeSuffix("trigger-conflict");
+
+  const [graderConflicted, graderClean, studentConflict, studentClean] = await createUsersInClass([
+    {
+      name: `E2E TC Grader X ${suffix}`,
+      email: `e2e-tc-gx-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E TC Grader Clean ${suffix}`,
+      email: `e2e-tc-gc-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E TC Student X ${suffix}`,
+      email: `e2e-tc-sx-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E TC Student Clean ${suffix}`,
+      email: `e2e-tc-sc-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
+  ]);
+  const subsetIds = [graderConflicted.private_profile_id, graderClean.private_profile_id];
+
+  await insertGradingConflict({
+    classId: course.id,
+    graderProfileId: graderConflicted.private_profile_id,
+    studentProfileId: studentConflict.private_profile_id,
+    createdByProfileId: instructor!.private_profile_id
+  });
+
+  const a = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Trigger Conflict ${suffix}`,
+    assignment_slug: `e2e-trigger-conflict-${suffix}`
+  });
+  // Deadline already in the past + auto-assign on: the per-submission trigger fires at insert.
+  await configureAutoAssign(a.id, {
+    auto_assign_assignee_pool: "graders",
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0
+  });
+
+  // Late submission by the conflicted student: the trigger's pool query must exclude the
+  // conflicted grader and pick the clean one.
+  const subConflict = await insertPreBakedSubmission({
+    student_profile_id: studentConflict.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  const subClean = await insertPreBakedSubmission({
+    student_profile_id: studentClean.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+
+  // The trigger ran synchronously during the inserts — assert without the cron.
+  await expect(async () => {
+    const rows = await fetchReviewAssignments(a.id, a.grading_rubric_id!);
+    const conflictRow = rows.find((r) => r.submission_id === subConflict.submission_id);
+    const cleanRow = rows.find((r) => r.submission_id === subClean.submission_id);
+    expect(conflictRow?.assignee_profile_id).toBe(graderClean.private_profile_id);
+    expect(conflictRow?.assignee_profile_id).not.toBe(graderConflicted.private_profile_id);
+    expect(subsetIds).toContain(cleanRow?.assignee_profile_id);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("auto-assign skips assignments whose deadline is past the 7-day auto-assign window", async () => {
+  test.setTimeout(120_000);
+  const suffix = makeSuffix("window-autoassign");
+
+  const [grader, studentInWindow, studentOutWindow] = await createUsersInClass([
+    {
+      name: `E2E WA Grader ${suffix}`,
+      email: `e2e-wa-g-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E WA Student In ${suffix}`,
+      email: `e2e-wa-in-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E WA Student Out ${suffix}`,
+      email: `e2e-wa-out-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
+  ]);
+  const subsetIds = [grader.private_profile_id];
+
+  // Within-window control: deadline 3 days ago.
+  const aIn = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Window In ${suffix}`,
+    assignment_slug: `e2e-window-in-${suffix}`
+  });
+  await configureAutoAssign(aIn.id, {
+    due_date: addDays(new Date(), 1).toISOString(),
+    auto_assign_assignee_pool: "graders",
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: studentInWindow.private_profile_id,
+    assignment_id: aIn.id,
+    class_id: course.id
+  });
+  await supabase
+    .from("assignments")
+    .update({ due_date: addDays(new Date(), -3).toISOString() })
+    .eq("id", aIn.id);
+
+  // Out-of-window: deadline 8 days ago (> the 7-day auto-assign window).
+  const aOut = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Window Out ${suffix}`,
+    assignment_slug: `e2e-window-out-${suffix}`
+  });
+  await configureAutoAssign(aOut.id, {
+    due_date: addDays(new Date(), 1).toISOString(),
+    auto_assign_assignee_pool: "graders",
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: studentOutWindow.private_profile_id,
+    assignment_id: aOut.id,
+    class_id: course.id
+  });
+  await supabase
+    .from("assignments")
+    .update({ due_date: addDays(new Date(), -8).toISOString() })
+    .eq("id", aOut.id);
+
+  const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
+  expect(rpcError).toBeNull();
+
+  await expect(async () => {
+    const inRows = await fetchReviewAssignments(aIn.id, aIn.grading_rubric_id!);
+    expect(inRows.length).toBe(1);
+    expect(inRows[0].assignee_profile_id).toBe(grader.private_profile_id);
+    // Outside the 7-day window the candidate row is never selected, so nothing is assigned.
+    const outRows = await fetchReviewAssignments(aOut.id, aOut.grading_rubric_id!);
+    expect(outRows.length).toBe(0);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("late grading reminders skip assignments past the 30-day reminder window", async () => {
+  test.setTimeout(120_000);
+  const suffix = makeSuffix("window-reminder");
+
+  const [grader, studentInWindow, studentOutWindow] = await createUsersInClass([
+    {
+      name: `E2E WR Grader ${suffix}`,
+      email: `e2e-wr-g-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E WR Student In ${suffix}`,
+      email: `e2e-wr-in-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E WR Student Out ${suffix}`,
+      email: `e2e-wr-out-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
+  ]);
+  const subsetIds = [grader.private_profile_id];
+  const reminderConfig = {
+    auto_assign_assignee_pool: "graders" as const,
+    auto_assign_grader_subset_private_profile_ids: subsetIds,
+    auto_assign_review_due_hours: 0,
+    late_grading_reminders_enabled: true,
+    late_grading_reminder_interval_hours: 12
+  };
+
+  // In-window: deadline 1 day ago (configureAutoAssign default). The trigger assigns an
+  // incomplete, past-due review at insert, so the cron has someone to remind.
+  const aIn = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Reminder In ${suffix}`,
+    assignment_slug: `e2e-reminder-in-${suffix}`
+  });
+  await configureAutoAssign(aIn.id, reminderConfig);
+  await insertPreBakedSubmission({
+    student_profile_id: studentInWindow.private_profile_id,
+    assignment_id: aIn.id,
+    class_id: course.id
+  });
+
+  // Out-of-window: create the incomplete review while the deadline is 1 day ago (trigger fires),
+  // then push the deadline to 31 days ago so the assignment falls outside the 30-day window.
+  const aOut = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Reminder Old ${suffix}`,
+    assignment_slug: `e2e-reminder-old-${suffix}`
+  });
+  await configureAutoAssign(aOut.id, reminderConfig);
+  await insertPreBakedSubmission({
+    student_profile_id: studentOutWindow.private_profile_id,
+    assignment_id: aOut.id,
+    class_id: course.id
+  });
+  await supabase
+    .from("assignments")
+    .update({ due_date: addDays(new Date(), -31).toISOString() })
+    .eq("id", aOut.id);
+
+  await supabase.from("emails").delete().eq("class_id", course.id);
+  await supabase.from("email_batches").delete().eq("class_id", course.id);
+
+  const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
+  expect(rpcError).toBeNull();
+
+  await expect(async () => {
+    const { data: inEmails, error: inErr } = await supabase
+      .from("emails")
+      .select("user_id")
+      .eq("class_id", course.id)
+      .like("subject", `Late grading reminder: ${aIn.title}%`);
+    expect(inErr).toBeNull();
+    expect(inEmails!.length).toBeGreaterThan(0);
+
+    const { data: outEmails, error: outErr } = await supabase
+      .from("emails")
+      .select("user_id")
+      .eq("class_id", course.id)
+      .like("subject", `Late grading reminder: ${aOut.title}%`);
+    expect(outErr).toBeNull();
+    expect(outEmails!.length).toBe(0);
+  }).toPass({ timeout: 20_000 });
+});
+
+// ---------------------------------------------------------------------------
+// UI regression guards.
+// ---------------------------------------------------------------------------
+
+test("late-grading CC emails can be typed character-by-character without losing separators", async ({ page }) => {
+  test.setTimeout(120_000);
+  await loginAsUser(page, instructor!, course);
+  await page.goto(`/course/${course.id}/manage/course/grading-assignment-defaults`);
+  await expect(page.getByRole("heading", { name: "Grading Assignment Defaults" })).toBeVisible();
+
+  const suffix = makeSuffix("cc-typed");
+  const profileName = `E2E CC Typed ${suffix}`;
+  await page.getByLabel("Profile name").fill(profileName);
+
+  // Reveal the CC field by enabling reminders (label-click pattern for Chakra checkboxes).
+  const remindersCheckbox = page.getByRole("checkbox", { name: "Enable late grading reminders" });
+  if (!(await remindersCheckbox.isChecked())) {
+    await page.getByText("Enable late grading reminders", { exact: true }).click();
+  }
+  await expect(remindersCheckbox).toBeChecked();
+  await page.getByLabel("Reminder interval (hours)").fill("12");
+
+  // Type the CC value ONE CHARACTER AT A TIME. The earlier bug rebuilt the input value from the
+  // parsed/trimmed array on every keystroke, which dropped the separator and made a second
+  // address impossible to type. .fill() is atomic and would NOT catch that — pressSequentially
+  // reproduces real typing.
+  const ccInput = page.getByLabel("CC emails");
+  await ccInput.click();
+  await ccInput.pressSequentially("staff1@example.edu, staff2@example.edu", { delay: 20 });
+  await expect(ccInput).toHaveValue("staff1@example.edu, staff2@example.edu");
+
+  await page.getByRole("button", { name: "Create profile" }).click();
+  await expect(page.getByText("Profile created")).toBeVisible();
+
+  await expect(async () => {
+    const { data: createdProfile, error } = await supabase
+      .from("grading_assignment_default_profiles")
+      .select("late_grading_cc_emails")
+      .eq("class_id", course.id)
+      .eq("name", profileName)
+      .maybeSingle();
+    expect(error).toBeNull();
+    expect(createdProfile).not.toBeNull();
+    expect((createdProfile!.late_grading_cc_emails as { emails: string[] }).emails).toEqual([
+      "staff1@example.edu",
+      "staff2@example.edu"
+    ]);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("creating an assignment persists the 'Permit empty submissions' checkbox", async ({ page }) => {
+  test.setTimeout(180_000);
+  await loginAsUser(page, instructor!, course);
+  await page.goto(`/course/${course.id}/manage/assignments/new`);
+  await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
+
+  const slug = `pe-${Math.random().toString(36).slice(2, 8)}`; // <= 16 chars, lowercase/digits/hyphen
+  // datetime-local inputs expect "YYYY-MM-DDTHH:mm"; release must be in the future.
+  const release = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  const due = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+
+  await page.getByLabel("Title").fill(`E2E Permit Empty ${slug}`);
+  await page.getByLabel("Slug").fill(slug);
+  await page.getByLabel("Points possible").fill("10");
+  await page.getByLabel("Release date").fill(release);
+  await page.getByLabel("Due date").fill(due);
+  await page.getByLabel("Submission type").selectOption("individual");
+  // No-repository mode so Save doesn't attempt to create GitHub repos.
+  await page.getByLabel("Repository configuration").selectOption("none");
+
+  const permitEmpty = page.getByRole("checkbox", { name: "Permit empty submissions (match handout exactly)" });
+  if (!(await permitEmpty.isChecked())) {
+    await page.getByText("Permit empty submissions (match handout exactly)", { exact: true }).click();
+  }
+  await expect(permitEmpty).toBeChecked();
+
+  await page.getByRole("button", { name: "Save" }).click();
+
+  // On success the page navigates to the autograder route; assert the persisted column directly.
+  await expect(async () => {
+    const { data, error } = await supabase
+      .from("assignments")
+      .select("permit_empty_submissions")
+      .eq("class_id", course.id)
+      .eq("slug", slug)
+      .maybeSingle();
+    expect(error).toBeNull();
+    expect(data).not.toBeNull();
+    expect(data!.permit_empty_submissions).toBe(true);
+  }).toPass({ timeout: 30_000 });
 });

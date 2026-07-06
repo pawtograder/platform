@@ -10,7 +10,7 @@ import type {
   GradingAssignmentDefaultProfile,
   UserRoleWithPrivateProfileAndUser
 } from "@/utils/supabase/DatabaseTypes";
-import { normalizeProfileIdSubset } from "../../assignments/new/form";
+import { normalizeProfileIdSubset, normalizeCcEmails, numberInputValueAs } from "../../assignments/new/form";
 import {
   Box,
   CardBody,
@@ -68,32 +68,6 @@ const parseCcEmails = (value: string): GradingCcEmails => ({
     .filter((entry) => entry.length > 0)
 });
 
-const normalizeCcEmails = (value: unknown): GradingCcEmails => {
-  if (value && typeof value === "object" && "emails" in value) {
-    const emails = (value as { emails?: unknown }).emails;
-    if (Array.isArray(emails)) {
-      return {
-        emails: emails
-          .filter((email): email is string => typeof email === "string")
-          .map((email) => email.trim())
-          .filter((email) => email.length > 0)
-      };
-    }
-  }
-
-  return { emails: [] };
-};
-
-const toCcText = (value: unknown): string => normalizeCcEmails(value).emails.join(", ");
-
-const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) => {
-  if (value === "" || value === null || value === undefined) {
-    return emptyFallback;
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? n : emptyFallback;
-};
-
 export default function GradingAssignmentDefaultsPage() {
   const { course_id } = useParams();
   const classId = Number(course_id);
@@ -113,7 +87,6 @@ export default function GradingAssignmentDefaultsPage() {
   const remindersEnabled = watch("late_grading_reminders_enabled");
   const autoAssignEnabled = watch("auto_assign_at_deadline");
   const assigneePool = watch("auto_assign_assignee_pool");
-  const ccValue = watch("late_grading_cc_emails");
 
   const { userRolesWithProfiles } = useCourseController();
   const gradersOnly = useCallback((r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" && !r.disabled, []);
@@ -133,7 +106,9 @@ export default function GradingAssignmentDefaultsPage() {
       setValue("auto_assign_grader_subset_private_profile_ids", []);
     }
   }, [assigneePool, setValue]);
-  const ccText = toCcText(ccValue);
+  // CC field shows the raw text the user types; re-deriving it from the parsed array would
+  // strip separators mid-typing. Synced with form state only at the reset points below.
+  const [ccText, setCcText] = useState("");
 
   const { data: profileData, refetch } = useList<GradingAssignmentDefaultProfile>({
     resource: "grading_assignment_default_profiles",
@@ -165,11 +140,13 @@ export default function GradingAssignmentDefaultsPage() {
       late_grading_reply_to: profile.late_grading_reply_to ?? "",
       late_grading_cc_emails: normalizeCcEmails(profile.late_grading_cc_emails)
     });
+    setCcText(normalizeCcEmails(profile.late_grading_cc_emails).emails.join(", "));
   };
 
   const clearForm = () => {
     setEditingId(null);
     reset(defaultValues);
+    setCcText("");
   };
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -449,6 +426,7 @@ export default function GradingAssignmentDefaultsPage() {
                         <Input
                           type="number"
                           {...register("late_grading_reminder_interval_hours", {
+                            required: "Reminder interval is required when reminders are enabled",
                             min: { value: 1, message: "Must be at least 1 hour" },
                             setValueAs: numberInputValueAs(null)
                           })}
@@ -464,7 +442,10 @@ export default function GradingAssignmentDefaultsPage() {
                       <Field label="CC emails" helperText="Comma-separated emails copied on reminders.">
                         <Input
                           value={ccText}
-                          onChange={(event) => setValue("late_grading_cc_emails", parseCcEmails(event.target.value))}
+                          onChange={(event) => {
+                            setCcText(event.target.value);
+                            setValue("late_grading_cc_emails", parseCcEmails(event.target.value));
+                          }}
                           placeholder="staff@example.edu, lead-ta@example.edu"
                         />
                       </Field>

@@ -76,7 +76,7 @@ export default function NewAssignmentPage() {
       try {
         const supabase = createClient();
         // create the self eval configuration first
-        const isEnabled = form.getValues("eval_config") === "use_eval";
+        const isEnabled = getValues("eval_config") === "use_eval";
         const settings = await mutateAsync(
           {
             resource: "assignment_self_review_settings",
@@ -136,7 +136,7 @@ export default function NewAssignmentPage() {
             max_late_tokens: getValues("max_late_tokens") || null,
             require_tokens_before_due_date: getValues("require_tokens_before_due_date") !== false,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
-            permit_empty_submissions: false,
+            permit_empty_submissions: getValues("permit_empty_submissions") === true,
             total_points: getValues("total_points"),
             template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
@@ -244,7 +244,7 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, form, getValues, router, mutateAsync, timezone]);
+  }, [course_id, getValues, router, mutateAsync, timezone]);
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>

@@ -66,7 +66,7 @@ export type AssignmentFormValues = Omit<
 };
 
 /** Coerce number inputs so toggling visibility never leaves `NaN` in form state (NaN breaks `??` fallbacks). */
-const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) => {
+export const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) => {
   if (value === "" || value === null || value === undefined) {
     return emptyFallback;
   }
@@ -74,7 +74,7 @@ const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) =>
   return Number.isFinite(n) ? n : emptyFallback;
 };
 
-const normalizeCcEmails = (value: unknown): GradingCcEmails => {
+export const normalizeCcEmails = (value: unknown): GradingCcEmails => {
   if (value && typeof value === "object" && "emails" in value) {
     const emails = (value as { emails?: unknown }).emails;
     if (Array.isArray(emails)) {
@@ -1078,6 +1078,30 @@ function GradingAutomationSubform({
     }
   }, [assigneePool, setValue]);
 
+  // The CC field shows the raw text the user types. We must NOT re-derive the displayed
+  // value from the parsed/trimmed array on every keystroke — doing so strips the separator
+  // the instant it's typed, making it impossible to enter a second address. Keep a local
+  // string and only resync it when the form value changes for a non-typing reason (a profile
+  // applied, or the edit-load reset), detected by comparing normalized arrays.
+  const [ccText, setCcText] = useState(() =>
+    normalizeCcEmails(form.getValues("late_grading_cc_emails")).emails.join(", ")
+  );
+  useEffect(() => {
+    const subscription = watch((value, { name }) => {
+      if (name === "late_grading_cc_emails" || !name) {
+        const fromForm = normalizeCcEmails(value.late_grading_cc_emails).emails;
+        setCcText((prev) => {
+          const fromPrev = prev
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+          return fromPrev.join(" ") === fromForm.join(" ") ? prev : fromForm.join(", ");
+        });
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
   const applyProfileValuesToForm = useCallback(
     (profile: GradingAssignmentDefaultProfile) => {
       setValue("auto_assign_at_deadline", profile.auto_assign_at_deadline);
@@ -1336,9 +1360,11 @@ function GradingAutomationSubform({
                   control={form.control}
                   render={({ field }) => (
                     <Input
-                      value={normalizeCcEmails(field.value).emails.join(", ")}
+                      value={ccText}
                       onChange={(event) => {
-                        const emails = event.target.value
+                        const raw = event.target.value;
+                        setCcText(raw);
+                        const emails = raw
                           .split(",")
                           .map((email) => email.trim())
                           .filter((email) => email.length > 0);

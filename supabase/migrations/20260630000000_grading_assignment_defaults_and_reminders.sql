@@ -251,6 +251,8 @@ DECLARE
   v_staff_ids uuid[];
   v_staff_count integer := 0;
   v_idx integer := 1;
+  v_offset integer;
+  v_candidate uuid;
   v_assignee uuid;
   v_actor_user_id uuid;
   v_review_due_date timestamptz;
@@ -357,7 +359,49 @@ BEGIN
         )
       ORDER BY s.id
     LOOP
-      v_assignee := v_staff_ids[((v_idx - 1) % v_staff_count) + 1];
+      -- Resolve the submitter + any group members so we can honor grading
+      -- conflicts, exactly as the lab_leaders/group_mentors branches and the
+      -- manual bulk-assign calculator do.
+      IF v_submission.agid IS NOT NULL THEN
+        SELECT COALESCE(array_agg(DISTINCT agm.profile_id), '{}'::uuid[])
+        INTO v_member_profiles
+        FROM public.assignment_groups_members agm
+        WHERE agm.assignment_group_id = v_submission.agid
+          AND agm.class_id = v_assignment.class_id
+          AND agm.assignment_id = v_assignment.id;
+      ELSE
+        v_member_profiles := '{}'::uuid[];
+      END IF;
+
+      v_student_profiles := ARRAY(
+        SELECT DISTINCT mp
+        FROM unnest(v_member_profiles || ARRAY[v_submission.pid]) AS t(mp)
+        WHERE mp IS NOT NULL
+      );
+
+      -- Round-robin to the next grader in rotation who has no declared conflict
+      -- with this submission's students. If every grader in the pool conflicts,
+      -- skip the submission (mirrors the CONTINUE-on-conflict in the other pools).
+      v_assignee := NULL;
+      FOR v_offset IN 0 .. v_staff_count - 1 LOOP
+        v_candidate := v_staff_ids[(((v_idx - 1 + v_offset) % v_staff_count) + 1)];
+        IF NOT EXISTS (
+          SELECT 1
+          FROM public.grading_conflicts gc
+          WHERE gc.class_id = v_assignment.class_id
+            AND gc.grader_profile_id = v_candidate
+            AND gc.student_profile_id = ANY(v_student_profiles)
+        ) THEN
+          v_assignee := v_candidate;
+          v_idx := v_idx + v_offset + 1;
+          EXIT;
+        END IF;
+      END LOOP;
+
+      IF v_assignee IS NULL THEN
+        CONTINUE;
+      END IF;
+
       v_draft_assignments := v_draft_assignments || jsonb_build_array(
         jsonb_build_object(
           'assignee_profile_id', v_assignee,
@@ -365,7 +409,6 @@ BEGIN
           'rubric_part_id', NULL
         )
       );
-      v_idx := v_idx + 1;
     END LOOP;
   ELSIF v_assignment.auto_assign_assignee_pool = 'lab_leaders' THEN
     FOR v_submission IN
@@ -691,6 +734,11 @@ BEGIN
         )
       )
   LOOP
+    -- Isolate each assignment in its own subtransaction so one failure (e.g. a
+    -- constraint violation or deadlock inside auto-assign or reminders) cannot
+    -- abort the whole cron run and permanently wedge automation for every other
+    -- assignment. Mirrors the submission-trigger wrapper's WHEN OTHERS guard.
+    BEGIN
     INSERT INTO public.assignment_grading_automation_state (assignment_id, class_id)
     VALUES (v_assignment.id, v_assignment.class_id)
     ON CONFLICT (assignment_id) DO NOTHING;
@@ -734,6 +782,9 @@ BEGIN
 
       RAISE LOG 'Queued late grading reminders for assignment %, recipients=%', v_assignment.id, v_reminder_count;
     END IF;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'run_assignment_grading_automation failed for assignment %: %', v_assignment.id, SQLERRM;
+    END;
   END LOOP;
 END;
 $$;
@@ -886,6 +937,13 @@ BEGIN
               AND subset_id.txt::uuid = ur.private_profile_id
           )
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.grading_conflicts gc
+          WHERE gc.class_id = v_assignment.class_id
+            AND gc.grader_profile_id = ur.private_profile_id
+            AND gc.student_profile_id = ANY(v_student_profiles)
+        )
     ) picked
     ORDER BY picked.c ASC, picked.private_profile_id ASC
     LIMIT 1;
@@ -1001,12 +1059,23 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO public, pg_temp
 AS $$
+DECLARE
+  v_prev_sub text;
 BEGIN
+  -- auto_assign_grading_review_for_submission impersonates an instructor via
+  -- set_config('request.jwt.claim.sub', ..., true) so bulk_assign_reviews' instructor
+  -- check passes. That GUC is transaction-local and would otherwise leak into the rest
+  -- of this student's submission-INSERT transaction (making auth.uid() the instructor for
+  -- the post-INSERT RLS re-check and any later same-transaction work). Capture and restore
+  -- it around the call. On a trapped exception the subtransaction rollback already reverts
+  -- the GUC; the explicit restore covers the success path.
+  v_prev_sub := current_setting('request.jwt.claim.sub', true);
   BEGIN
     PERFORM public.auto_assign_grading_review_for_submission(NEW.id);
   EXCEPTION WHEN OTHERS THEN
     RAISE WARNING 'auto_assign_grading_review_for_submission failed for submission %: %', NEW.id, SQLERRM;
   END;
+  PERFORM set_config('request.jwt.claim.sub', COALESCE(v_prev_sub, ''), true);
   RETURN NEW;
 END;
 $$;
