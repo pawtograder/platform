@@ -171,6 +171,21 @@ begin
       using errcode = '42501';
   end if;
 
+  -- If a profile was passed, verify it belongs to a student enrolled in this
+  -- assignment's class. The internal helper trusts p_profile_id, so this guard
+  -- prevents creating a submission for a profile from another class.
+  if p_profile_id is not null then
+    if not exists (
+      select 1 from public.user_roles ur
+      where ur.class_id = v_class_id
+        and ur.private_profile_id = p_profile_id
+        and ur.role = 'student'
+    ) then
+      raise exception 'Profile % is not a student enrolled in class %', p_profile_id, v_class_id
+        using errcode = '42501';
+    end if;
+  end if;
+
   -- If a group id was passed, verify it belongs to this assignment.
   if p_assignment_group_id is not null then
     select ag.assignment_id into v_group_assignment_id
@@ -247,6 +262,17 @@ begin
   if p_profile_ids is not null then
     foreach v_profile_id in array p_profile_ids
     loop
+      -- The internal helper trusts the profile id, so verify each profile is a
+      -- student enrolled in this class before creating a stub for it.
+      if not exists (
+        select 1 from public.user_roles ur
+        where ur.class_id = v_class_id
+          and ur.private_profile_id = v_profile_id
+          and ur.role = 'student'
+      ) then
+        raise exception 'Profile % is not a student enrolled in class %', v_profile_id, v_class_id
+          using errcode = '42501';
+      end if;
       v_submission_id := public.create_manual_submission_internal(p_assignment_id, v_profile_id, null);
       v_result := array_append(v_result, v_submission_id);
     end loop;

@@ -958,6 +958,29 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       return;
     }
 
+    // Pre-check the cheap guards that generateReviews() enforces BEFORE creating
+    // any stubs, so an abortable run doesn't leave orphan empty submissions.
+    if (!selectedRubric?.id) {
+      toaster.create({
+        title: `Error: No rubric found`,
+        description: `Was unable to find a rubric and therefore could not generate reviews`
+      });
+      return;
+    }
+    // Modes that draw from the selected grader pool must have at least one grader
+    // available; lab-leaders / group-mentors modes derive assignees differently.
+    if (
+      assignmentMode !== "by_lab_leaders" &&
+      assignmentMode !== "by_group_mentors" &&
+      finalSelectedUsers().length === 0
+    ) {
+      toaster.create({
+        title: `Warning: No ${role}`,
+        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
+      });
+      return;
+    }
+
     setIsGeneratingReviews(true);
     let stubs: SubmissionWithGrading[] = [];
     try {
