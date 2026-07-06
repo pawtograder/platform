@@ -92,7 +92,9 @@ async function handleAssignmentGroupJoin(
         course_slug: assignmentGroup.classes!.slug!,
         org: assignmentGroup.classes!.github_org!,
         repo: assignmentGroup.repositories[0].repository,
-        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        githubUsernames: remaining_members
+          .map((m) => m.profiles?.user_roles?.users?.github_username)
+          .filter((u): u is string => !!u),
         debug_id: `assignment-group-join-${assignment_group_id}`
       });
     } else if (remaining_members_error) {

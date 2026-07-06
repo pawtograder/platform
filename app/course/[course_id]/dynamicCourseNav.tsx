@@ -142,6 +142,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
+        name: "LMS (LTI) Sync",
+        icon: FiUsers,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/lti`
+      },
+      {
         name: "Feature flags",
         icon: FiSliders,
         instructors_only: true,

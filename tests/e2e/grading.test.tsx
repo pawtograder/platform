@@ -416,7 +416,14 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // 8:06 PM applied-at timestamp diff that previously made this flaky is handled
     // by the transparent-text wrap on rubric-sidebar.tsx.
     await expect(page.getByRole("button", { name: "Draft Regrade Request" })).toBeVisible();
-    await visualScreenshot(page, "Student can request a regrade");
+    // Capture the request dialog itself, not the full page. It's a centered modal, so a
+    // full-page screenshot places it at a vertical center that shifts with total page
+    // height (run-to-run thread/scroll variance) — a placement jump, not a content diff.
+    // Scoping to the dialog crops to its own (static) box. Same approach as the resolve
+    // screenshot below.
+    await visualScreenshot(page, "Student can request a regrade", {
+      element: page.getByRole("dialog").filter({ hasText: "Request a Regrade" })
+    });
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -529,7 +536,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       await expect(appealRegion.getByText(REGRADE_RESOLUTION).first()).toBeVisible();
       await expect(appealRegion.getByText(REGRADE_ESCALATION).first()).toBeVisible();
     }
-    await visualScreenshot(page, "Students can appeal their regrade request");
+    // Capture the escalate dialog itself, not the full page. It's a centered modal whose
+    // full-page vertical position shifts with total page height run-to-run (~200px jump,
+    // ~65% full-page diff). Scoping to the dialog crops to its own (static) box.
+    await visualScreenshot(page, "Students can appeal their regrade request", {
+      element: page.getByRole("dialog").filter({ hasText: "Escalate Regrade Request" })
+    });
     await page.getByRole("button", { name: "Escalate Request" }).click();
     // Wait for the escalation to settle before axe runs — otherwise axe races
     // the closing popover / toast and reports transient focus-trap / labeling violations.

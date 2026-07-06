@@ -400,7 +400,12 @@ async function runSeeding(config: SeederConfig) {
   const fixedUsers = {
     instructor: process.env.FIXED_INSTRUCTOR_EMAIL || undefined,
     grader: process.env.FIXED_GRADER_EMAIL || undefined,
-    student: process.env.FIXED_STUDENT_EMAIL || undefined
+    student: process.env.FIXED_STUDENT_EMAIL || undefined,
+    // Opt-in like the other fixed users: set FIXED_ADMIN_EMAIL to seed a known
+    // site-admin login for the admin portal. Left unset, no admin is created, so
+    // a deployment that doesn't ask for one never gets an always-on, full-site
+    // admin account on the shared seed password.
+    admin: process.env.FIXED_ADMIN_EMAIL || undefined
   };
 
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);
@@ -422,11 +427,11 @@ async function runSeeding(config: SeederConfig) {
     .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!);
 
-  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student) {
+  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
     // when operators wire this up for staging / on-call rotations.
     console.log(
-      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"}`
+      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"} admin=${fixedUsers.admin ? "[configured]" : "(none)"}`
     );
     chain = chain.withFixedUsers(fixedUsers);
   }

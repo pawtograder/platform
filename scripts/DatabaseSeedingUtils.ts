@@ -148,6 +148,7 @@ export interface SeedingConfiguration {
     instructor?: string;
     grader?: string;
     student?: string;
+    admin?: string;
   };
   // -------- Demo-mode opt-ins (all optional; null/undef preserves test behavior) --------
   /** LLM-authored fixture bundle. When set, takes precedence over the
@@ -1675,7 +1676,7 @@ export class DatabaseSeeder {
    * into the seeded class (real submissions, real grading assignments,
    * etc. — not post-hoc bolt-ons).
    */
-  withFixedUsers(fixed: { instructor?: string; grader?: string; student?: string }): this {
+  withFixedUsers(fixed: { instructor?: string; grader?: string; student?: string; admin?: string }): this {
     this.config.fixedUsers = fixed;
     return this;
   }
@@ -2324,7 +2325,19 @@ export class DatabaseSeeder {
       `✓ Using ${existingStudents.length} existing + created ${newStudents.length} new students = ${students.length} total`
     );
 
-    return { instructors, graders, students };
+    // Site admin: an `admin` user_role in any class satisfies authorize_for_admin(),
+    // so this is the seeded login for the admin portal. Created with a stable
+    // email so dev/preview/e2e always have a known admin without manual setup.
+    // createUserInClass is idempotent by email, so re-seeds reuse it.
+    const admins: TestingUser[] = [];
+    if (config.fixedUsers?.admin) {
+      admins.push(
+        await createUserInClass({ role: "admin", class_id, name: "Site Admin", email: config.fixedUsers.admin })
+      );
+      console.log(`✓ Ensured site admin ${config.fixedUsers.admin}`);
+    }
+
+    return { instructors, graders, students, admins };
   }
 
   private async createClassStructure(

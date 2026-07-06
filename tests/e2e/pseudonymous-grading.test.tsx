@@ -489,8 +489,43 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
       page.getByRole("button", { name: "Escalate Request" }),
       "Escalate Request button is removed after escalation"
     ).toHaveCount(0);
+    // Wait for the realtime comment stream to finish rendering before the snapshot.
+    // The inline thread lazy-loads its historical comments (regrade request, grader
+    // response, escalation), which races the capture and shifts the thread height — and
+    // everything below it, including the code lines — run-to-run. Bracket oldest→newest
+    // so the whole thread has landed; .first() tolerates the just-posted comment's
+    // transient optimistic-insert + realtime-echo duplicate (same pattern as grading.test.tsx).
+    await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE).first()).toBeVisible();
+    await expect(region.getByText(STUDENT_ESCALATION_COMMENT).first()).toBeVisible();
+    // Neutralize composer focus before capture. MessageInput re-focuses its textarea
+    // after a send (setTimeout focus in message-input.tsx), so after the comment+escalate
+    // flow the composer is left focused/expanded (its send toolbar shown) in some runs and
+    // collapsed in others — a ~20% region diff. Blur whatever holds focus so the composer
+    // is consistently collapsed.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    // Pin the thread's scroll position. The region lives in a fixed-height scroll pane
+    // whose offset (nudged by the autoresizing composer) varies run-to-run, so an element
+    // capture otherwise shows a different vertical slice (file header vs. status badge at
+    // the top). Align the region to the top of its scroll container before capturing.
+    await region.evaluate((el) => {
+      const isScrollable = (c: HTMLElement) => {
+        const s = getComputedStyle(c);
+        return /(auto|scroll|overlay)/.test(s.overflowY) && c.scrollHeight > c.clientHeight;
+      };
+      let p: HTMLElement | null = el.parentElement;
+      while (p && !isScrollable(p)) p = p.parentElement;
+      const container = p ?? (document.scrollingElement as HTMLElement | null);
+      if (container) {
+        container.scrollTop += el.getBoundingClientRect().top - container.getBoundingClientRect().top - 8;
+      }
+    });
+    // Capture the inline thread region, not the full page. The escalation dialog is
+    // closed by now; scoping to the region (whose comments are confirmed rendered above)
+    // crops out page-level scroll/shift. Same approach as the resolve screenshot in
+    // grading.test.tsx.
     await visualScreenshot(page, "Pseudonymous grading - Student escalates regrade", {
-      stabilizeRubric: "Grading Rubric"
+      element: region
     });
     await assertStudentPageAccessible(page, "pseudonymous grading - student escalation /files");
   });
