@@ -49,6 +49,7 @@ import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import ClearAssignmentsButton from "../ClearAssignmentsButton";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import { compareAssigneeOptions, getAssigneeDisplayLabel } from "./assigneeOptions";
 
 // Main Page Component
 export default function BulkAssignGradingPage() {
@@ -774,7 +775,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // Memoized sorted version of selectedUsers for display
   const sortedSelectedUsers = useMemo(() => {
-    return [...selectedUsers].sort((a, b) => a.label.localeCompare(b.label));
+    return [...selectedUsers].sort(compareAssigneeOptions);
   }, [selectedUsers]);
 
   /**
@@ -791,7 +792,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     const userOptions = availableUsers.map((user) => ({
-      label: user.profiles.name,
+      label: getAssigneeDisplayLabel(user),
       value: user
     }));
 
@@ -2004,10 +2005,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                   value={sortedSelectedUsers}
                   options={selectedGraders()
                     .map((user) => ({
-                      label: user.profiles.name,
+                      label: getAssigneeDisplayLabel(user),
                       value: user
                     }))
-                    .sort((a, b) => a.label.localeCompare(b.label))}
+                    .sort(compareAssigneeOptions)}
                   components={{
                     MultiValue: ({ data, removeProps, ...props }) => {
                       const allValues = props.selectProps.value as typeof selectedUsers;
