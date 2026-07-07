@@ -135,6 +135,18 @@ is already warm.
    the new primary via `pg_basebackup`) so you are protected against the next
    failure.
 
+> **Failing back to the old primary?** Promotion branches a new timeline (e.g.
+> timeline 2), and its `.history` file plus WAL land in the archive. If you
+> abandon the promoted node and bring the _original_ primary back on the old
+> timeline, you must delete the abandoned timeline's objects from the archive
+> (`NNNNNNNN.history` and its `NNNNNNNN*` WAL segments) before rebuilding a
+> standby. Otherwise the standby's `restore_command`, following
+> `recovery_target_timeline = 'latest'`, chases the abandoned timeline, hits an
+> "incorrect prev-link" / "requested WAL segment has already been removed", and
+> crash-loops. After clearing it, take a fresh `wal-g backup-push` so the archive
+> has a clean single-timeline lineage. (In a normal failover you keep the
+> promoted node and this does not arise.)
+
 > Failover is deliberately **manual** (no automatic leader election). That
 > avoids the split-brain risk an unsupervised promoter carries against a shared
 > WAL archive. If automatic failover becomes a requirement, the tracked path is

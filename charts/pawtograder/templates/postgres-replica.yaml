@@ -114,6 +114,11 @@ spec:
                 echo "primary_conninfo = 'host=${PRIMARY} port={{ .Values.postgres.service.port }} user=supabase_replication_admin password=${REPL_PASSWORD} application_name=$(hostname)'"
                 echo "restore_command = 'wal-g wal-fetch %f %p'"
                 echo "recovery_target_timeline = 'latest'"
+                # The supabase/postgres image ships /etc/postgresql-custom/read-replica.conf
+                # with `hot_standby = off`, pulled in by our include_dir. Force it on
+                # here (postgresql.auto.conf is read last, so it wins) or the standby
+                # refuses read connections and never becomes Ready.
+                echo "hot_standby = on"
               } >> "$PGDATA/postgresql.auto.conf"
               chown -R 999:999 "$PGDATA"
               chmod 700 "$PGDATA"
