@@ -22,12 +22,12 @@ The image ships the `wal-g` binary (its cloud-only `admin-mgr` wrapper is
 absent), so the chart calls wal-g directly, configured by `WALG_*`/`AWS_*` env
 sourced from the `pawtograder-s3` secret and `postgres.walg.*` values:
 
-| Piece | Mechanism | Where |
-|---|---|---|
-| WAL archiving | `archive_command = wal-g wal-push %p` (+ `archive_timeout`) | primary postgres, via generated `postgresql.conf` |
-| Base backups | `wal-g backup-push` on an interval, `wal-g delete retain` for retention | `base-backup` sidecar in the primary pod |
-| Restore (PITR) | `wal-g backup-fetch` + WAL replay to a target | manual, this runbook |
-| Standby stream | `pg_basebackup -R` bootstrap → WAL streaming, `wal-g wal-fetch` fallback | `postgres-replica` StatefulSet |
+| Piece          | Mechanism                                                                | Where                                             |
+| -------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
+| WAL archiving  | `archive_command = wal-g wal-push %p` (+ `archive_timeout`)              | primary postgres, via generated `postgresql.conf` |
+| Base backups   | `wal-g backup-push` on an interval, `wal-g delete retain` for retention  | `base-backup` sidecar in the primary pod          |
+| Restore (PITR) | `wal-g backup-fetch` + WAL replay to a target                            | manual, this runbook                              |
+| Standby stream | `pg_basebackup -R` bootstrap → WAL streaming, `wal-g wal-fetch` fallback | `postgres-replica` StatefulSet                    |
 
 `WALG_S3_PREFIX` is kept **distinct** from the nightly-dump prefix (`backup.s3`)
 so the two schemes never mix in one bucket path.
@@ -51,18 +51,18 @@ In the environment's values overlay (e.g. `values-staging.yaml`):
 postgres:
   walg:
     enabled: true
-    s3Prefix: s3://pawtograder-staging-backups/walg   # DISTINCT from backup.s3
-    s3Endpoint: https://s3.talos.ripley.cloud          # blank = real AWS
+    s3Prefix: s3://pawtograder-staging-backups/walg # DISTINCT from backup.s3
+    s3Endpoint: https://s3.talos.ripley.cloud # blank = real AWS
     region: us-east-1
     forcePathStyle: true
     baseBackup:
       intervalHours: 24
-      keepBackups: 8            # retention ≈ intervalHours × keepBackups
+      keepBackups: 8 # retention ≈ intervalHours × keepBackups
   replica:
-    enabled: true               # requires walg.enabled (render guard enforces)
+    enabled: true # requires walg.enabled (render guard enforces)
     replicas: 1
     persistence:
-      storageClass: local-path  # own volume on another node
+      storageClass: local-path # own volume on another node
       size: 100Gi
 ```
 

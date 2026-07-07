@@ -5,7 +5,7 @@ Rancher-managed Kubernetes cluster. It expands the operator checklist in
 [`values-prod.yaml`](../../charts/pawtograder/examples/values-prod.yaml) into a
 sequence, and points at the chart docs for the details of each step.
 
-This is the *cluster* bring-up. It complements, and does not replace:
+This is the _cluster_ bring-up. It complements, and does not replace:
 
 - [`charts/pawtograder/README.md`](../../charts/pawtograder/README.md) — the
   source of truth for values, secrets, and image builds.
@@ -30,12 +30,8 @@ without their secrets and storage. Do them in this order.
 
 ### 1. Cluster prerequisites
 
-- [ ] **Namespace** created in the target Rancher project (`kubectl create ns
-      "$NS"`, or the Rancher UI). Keep it in its own project for RBAC isolation.
-- [ ] **Replicated storage class** available and set as `postgres.persistence.
-      storageClass` in your values. **Not `local-path`**: node loss on a
-      single-primary Postgres with node-local storage is unrecoverable short of
-      the last backup. Ceph RBD, cloud block storage (EBS/PD), or equivalent.
+- [ ] **Namespace** created in the target Rancher project (`kubectl create ns "$NS"`, or the Rancher UI). Keep it in its own project for RBAC isolation.
+- [ ] **Replicated storage class** available and set as `postgres.persistence.storageClass` in your values. **Not `local-path`**: node loss on a single-primary Postgres with node-local storage is unrecoverable short of the last backup. Ceph RBD, cloud block storage (EBS/PD), or equivalent.
 - [ ] **ingress-nginx** (or your ingress controller) installed; its namespace
       label matches `networkPolicy.ingressControllerNamespaceSelector`.
 - [ ] **cert-manager** with the `ClusterIssuer` named in `ingress.annotations`
@@ -114,11 +110,7 @@ not disable the guard.
 ### 6. Post-install verification
 
 - [ ] **Smoke test** (below) passes.
-- [ ] **First backup + verify.** Wait for the first scheduled `backup` Job (or
-      trigger one: `kubectl -n "$NS" create job --from=cronjob/<release>-backup
-      backup-manual`), then confirm the `backup-verify` Job goes green. A
-      restore is only as good as its last verified backup — see
-      [disaster-recovery.md](./disaster-recovery.md).
+- [ ] **First backup + verify.** Wait for the first scheduled `backup` Job (or trigger one: `kubectl -n "$NS" create job --from=cronjob/<release>-backup backup-manual`), then confirm the `backup-verify` Job goes green. A restore is only as good as its last verified backup — see [disaster-recovery.md](./disaster-recovery.md).
 - [ ] **Alerts wired.** `kube_job_status_failed{job_name=~".*backup.*"}`, ESO
       `externalsecret_status_condition`, and the Studio/ingress cert. See
       [monitoring-alerting.md](./monitoring-alerting.md).

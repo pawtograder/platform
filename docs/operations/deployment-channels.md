@@ -1,6 +1,6 @@
 # Deployment Channels (A/B by course)
 
-Deployment channels let a **subset of courses** run a *different build* of the
+Deployment channels let a **subset of courses** run a _different build_ of the
 web app and edge functions against the **same** database as everyone else.
 A course is pinned to a channel (a named build: `stable`, `canary`, or `team7`).
 Its users are routed to that channel's host, while every other
@@ -8,7 +8,7 @@ course stays on stable.
 
 This is distinct from **PR previews**: a preview is a full, isolated stack with
 its **own** database (`pawtograder-preview-pr-*`). A channel shares the live
-data plane. It only swaps the *code* (web + edge-functions images) for the
+data plane. It only swaps the _code_ (web + edge-functions images) for the
 courses that opt in. That makes it the mechanism for staged rollouts and for the
 "dogfooding" case where a cohort develops Pawtograder while using it.
 
@@ -18,12 +18,12 @@ courses that opt in. That makes it the mechanism for staged rollouts and for the
 
 The stack splits into a shared **data plane** and a per-channel **code plane**:
 
-| Layer | Stable | Channel `<name>` |
-|---|---|---|
-| Postgres, GoTrue (auth), PostgREST, Realtime, Storage, Kong | shared, one set | shared, same set |
-| Web (Next.js) | `pawtograder-web` | `pawtograder-web-<name>` |
-| Edge functions (Deno) | `pawtograder-functions` | `pawtograder-functions-<name>` |
-| Host | `<global.hostname>` (e.g. `staging.pawtograder.net`) | `<name>.<global.hostname>` (e.g. `canary.staging.pawtograder.net`) |
+| Layer                                                       | Stable                                               | Channel `<name>`                                                   |
+| ----------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| Postgres, GoTrue (auth), PostgREST, Realtime, Storage, Kong | shared, one set                                      | shared, same set                                                   |
+| Web (Next.js)                                               | `pawtograder-web`                                    | `pawtograder-web-<name>`                                           |
+| Edge functions (Deno)                                       | `pawtograder-functions`                              | `pawtograder-functions-<name>`                                     |
+| Host                                                        | `<global.hostname>` (e.g. `staging.pawtograder.net`) | `<name>.<global.hostname>` (e.g. `canary.staging.pawtograder.net`) |
 
 - Each channel is served on its **own single-label host** (`<name>.<hostname>`)
   with **path-based API** on that same host, so a single `*.<zone>` wildcard TLS
@@ -79,11 +79,11 @@ channels:
     # host: canary.staging.pawtograder.net   # optional; default <name>.<global.hostname>
     web:
       image:
-        tag: canary-055b7e2      # REQUIRED: a channel must have its own tag
+        tag: canary-055b7e2 # REQUIRED: a channel must have its own tag
       replicas: 1
     edgeFunctions:
       image:
-        tag: canary-055b7e2      # REQUIRED
+        tag: canary-055b7e2 # REQUIRED
       replicas: 1
     # tls:
     #   secretName: canary-own-tls   # only if `host` is outside the wildcard zone
@@ -92,6 +92,7 @@ channelWildcardTlsSecret: staging-wildcard-tls
 ```
 
 Notes:
+
 - `web.image.tag` **and** `edgeFunctions.image.tag` are required per channel. The
   chart fails render otherwise (a channel without its own tag would silently run
   the stable image). Repository/pullPolicy default from `web.image` /
@@ -100,7 +101,7 @@ Notes:
   Ingress; functions are only reachable through it).
 - **Pin to a known-good tag, not `<name>-latest`.** The staging auto-deploy runs
   `helm upgrade --wait`, which blocks on the channel's pods too. A broken
-  channel image would turn an *ordinary* stable deploy red.
+  channel image would turn an _ordinary_ stable deploy red.
 - If a channel's `host` is set outside the wildcard zone, either bring it back
   under the zone or set `channels[].tls.secretName` for a per-channel cert.
 
@@ -136,7 +137,7 @@ update public.classes set deployment_channel = 'stable' where id = <course_id>;
 ```
 
 The redirect only fires for a user **enrolled** in the course: the middleware
-reads `deployment_channel` through RLS *as that user*, so a non-member reads
+reads `deployment_channel` through RLS _as that user_, so a non-member reads
 `null`, treated as `stable`, so no redirect.
 
 ---
@@ -159,6 +160,7 @@ reads `deployment_channel` through RLS *as that user*, so a non-member reads
 ## Runbooks
 
 ### Enable channels on an environment (first time)
+
 1. Set the `CHANNEL_HOST_SUFFIX` repo variable to the zone.
 2. Ensure `*.<zone>` DNS + a `*.<zone>` cert-manager Certificate exist; note the
    secret name.
@@ -170,15 +172,18 @@ reads `deployment_channel` through RLS *as that user*, so a non-member reads
 > sessions must log in again once.
 
 ### Add a new channel
+
 1. Build its image: `gh workflow run release-images.yml --ref <branch> -f channel=<name>`.
 2. Add a `channels[]` entry pinned to the new `<name>-<sha>` tag; merge to `staging`.
 3. Pin courses to it via SQL.
 
 ### Roll a channel forward
+
 1. Rebuild from the updated branch (same `workflow_dispatch`).
 2. Bump the pinned `web`/`edgeFunctions` `image.tag` in the values file, then merge.
 
 ### Remove a channel
+
 1. Delete the `channels[]` entry (and reset any pinned courses' `deployment_channel`
    back to `stable`); merge. The channel's Deployments/Service/Ingress/Kong route
    are removed on the next deploy.
@@ -188,21 +193,24 @@ reads `deployment_channel` through RLS *as that user*, so a non-member reads
 ## Troubleshooting
 
 **A pinned course doesn't redirect.**
-- Is the stable image built *after* `CHANNEL_HOST_SUFFIX` was set? Routing is
+
+- Is the stable image built _after_ `CHANNEL_HOST_SUFFIX` was set? Routing is
   build-time. The current stable image must have the suffix baked. Check the
   deployed `pawtograder-web` image tag corresponds to a post-variable build.
 - Is the user **enrolled** in the course? (RLS, see above.)
 - Is `deployment_channel` actually set on that course row?
 
 **Session drops when crossing between hosts (e.g., canary-to-stable logout).**
+
 - Almost always a **stale host-only** `sb-<ref>-auth-token` cookie from a login made
-  *before* the suffix was baked (host-only), conflicting with the newer
+  _before_ the suffix was baked (host-only), conflicting with the newer
   `.<zone>` domain-scoped cookie after a token rotation on the other host.
 - Fix: fully clear cookies for the zone and all channel subdomains, then log in
   fresh. Only affects sessions predating the suffix flip. Genuinely new sessions
   are unaffected.
 
 **`deploy-staging` stuck / builds "killed" with empty logs.**
+
 - The self-hosted `pawtograder-ci` ARC runners' `dind` init container can
   crash-loop (`docker info` startup probe, 1 s timeout, flaps cluster-wide under
   load), leaving jobs queued or failing with no step-level error. This is runner
@@ -215,7 +223,7 @@ reads `deployment_channel` through RLS *as that user*, so a non-member reads
 
 - **Edge-functions A/B is not yet exercised end-to-end.** A channel image built
   with `workflow_dispatch -f channel=<name>` (no `api_hostname`) bakes
-  `NEXT_PUBLIC_SUPABASE_URL=https://api.<zone>`, the *stable* API host, so the
+  `NEXT_PUBLIC_SUPABASE_URL=https://api.<zone>`, the _stable_ API host, so the
   channel web's function calls hit **stable** functions; `functions-<name>` runs
   but receives no traffic (Kong only host-routes `<name>.<zone>/functions/v1` to
   `functions-<name>`). For true functions-level A/B, the channel build must bake

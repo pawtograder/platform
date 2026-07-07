@@ -13,11 +13,11 @@ the Helm release name.
 
 ## Severity
 
-| Sev | Definition | Examples | Response |
-|---|---|---|---|
-| **SEV1** | Platform down or data at risk | App unreachable, Postgres down, backups failing near a deadline, suspected data loss/breach | Page immediately; all-hands; status update to stakeholders |
-| **SEV2** | Major feature broken, no data risk | Grading/autograder stalled, realtime dead, LTI/roster sync failing, one tier crash-looping | Page during hours / next-business-day off-hours; single owner |
-| **SEV3** | Degraded or cosmetic | Elevated latency, a dashboard/alert gap, single non-critical integration down | Ticket; batch with normal work |
+| Sev      | Definition                         | Examples                                                                                    | Response                                                      |
+| -------- | ---------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **SEV1** | Platform down or data at risk      | App unreachable, Postgres down, backups failing near a deadline, suspected data loss/breach | Page immediately; all-hands; status update to stakeholders    |
+| **SEV2** | Major feature broken, no data risk | Grading/autograder stalled, realtime dead, LTI/roster sync failing, one tier crash-looping  | Page during hours / next-business-day off-hours; single owner |
+| **SEV3** | Degraded or cosmetic               | Elevated latency, a dashboard/alert gap, single non-critical integration down               | Ticket; batch with normal work                                |
 
 Map `severity: critical` alerts ([monitoring-alerting.md](./monitoring-alerting.md))
 to SEV1/2 paging and `severity: warning` to a chat channel, in Alertmanager.
@@ -60,12 +60,14 @@ same incident at 3am. Know the course deadlines when triaging.
 pod) is the workhorse. Components:
 
 ### Web (`<release>-web`)
+
 - Symptom: sign-in page won't load, 5xx, or blank app.
 - Check: pod Ready + logs; is it a bad image? (`helm history` → [rollback](./rollback.md)).
 - CSP / mixed-content errors in the browser console point at a build/env
   mismatch, not a pod crash.
 
 ### Postgres (`<release>-postgres-0`)
+
 - Symptom: everything 5xx at once (every tier depends on it).
 - Check: pod status, PVC bound, disk not full (`df` via `kubectl exec`),
   connection count near `max_connections`.
@@ -74,6 +76,7 @@ pod) is the workhorse. Components:
   (§1.1) — recovery is restore, not promote.
 
 ### PostgREST / Realtime / Storage / Auth (`<release>-rest|realtime|storage|auth`)
+
 - Symptom: data reads fail (rest), live updates dead (realtime), files 404
   (storage), can't log in (auth).
 - Check: logs for DB connection errors (→ Postgres or a rotated password, see
@@ -82,6 +85,7 @@ pod) is the workhorse. Components:
   if not, `rollout restart`.
 
 ### Edge Functions (`<release>-edge-functions`)
+
 - Symptom: GitHub webhooks not processing, autograder not enqueuing, notifications
   silent, gradebook cells not recalculating.
 - Check: HPA scaled up? (deadline load) logs for the failing function.
@@ -91,16 +95,19 @@ pod) is the workhorse. Components:
   restore or fresh DB skipped it (see [rollback.md](./rollback.md) / DR notes).
 
 ### Kong (`<release>-kong`)
+
 - Symptom: everything behind the gateway 5xx even though upstreams are healthy.
 - Check: Kong pod + config; the smoke test's `/auth/v1/health` through Kong is a
   quick gateway probe.
 
 ### Backups (`<release>-backup*`)
+
 - Symptom: `PawtograderBackupJobFailed` / `PawtograderBackupMissing`.
 - Go straight to [disaster-recovery.md](./disaster-recovery.md) — "When
   backup-verify goes red" triages by log line.
 
 ### Secrets / ESO
+
 - Symptom: `PawtograderExternalSecretNotReady`, or a pod crash-looping on a
   missing/stale secret after a restart.
 - Go to [secrets-rotation.md](./secrets-rotation.md); check the ExternalSecret

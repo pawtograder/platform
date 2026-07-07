@@ -71,7 +71,7 @@ Notes per integration:
 ### Postgres passwords (`pawtograder-postgres`)
 
 `POSTGRES_PASSWORD` (superuser) and `PAWTOGRADER_PASSWORD` (app role) are read by
-Postgres *at init* and by every service that connects. Rotating a live DB
+Postgres _at init_ and by every service that connects. Rotating a live DB
 password is not a plain secret swap — the role's password in the database must
 change too, in lockstep, or every connection fails:
 

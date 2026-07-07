@@ -9,7 +9,7 @@ migration runner (`charts/pawtograder/images/migrations/migrate.sh`) applies
 `supabase/migrations/*.sql` in order, records each in
 `supabase_migrations.schema_migrations` with a content hash, and on re-run
 **skips** anything already applied. It never reverses a migration. So "rollback"
-means *roll the application image back and leave the schema where it is* — which
+means _roll the application image back and leave the schema where it is_ — which
 is safe only when the newer schema is backward-compatible with the older app.
 
 ---
@@ -53,7 +53,7 @@ migration files it applies nothing and exits `applied=0`. Finish with the
 [smoke checklist](./production-install.md#smoke-test).
 
 > **`helm rollback` vs. re-pinning tags.** `helm rollback <release> <rev>`
-> restores the previous *release manifest*, which also reverts the pinned image
+> restores the previous _release manifest_, which also reverts the pinned image
 > tags — so it works too. Prefer editing the values file and `helm upgrade`
 > when the values file is your source of truth (GitOps), so the committed state
 > matches the cluster. Either way a fresh migrations Job runs; that is safe
@@ -70,7 +70,7 @@ migration:
   `schema_migrations`; the object stays in the DB).
 - Editing the applied migration file trips **drift detection** on the next run
   (`stored_sha != on_disk_sha`) and the migrator fails loudly. If you must
-  change what a migration did, write a *new* migration with a fresh timestamp.
+  change what a migration did, write a _new_ migration with a fresh timestamp.
 
 So: roll the image back, leave the schema forward, and if the new schema
 objects are genuinely unwanted, retire them with a **new forward migration**
@@ -90,7 +90,7 @@ worst-case first:
    releases so a rollback target always exists.
 2. **Restore from backup (last resort, lossy).** Follow
    [disaster-recovery.md](./disaster-recovery.md) §B. This reverts the schema
-   *and* the data to the last backup, so you lose every write since that backup
+   _and_ the data to the last backup, so you lose every write since that backup
    (RPO up to one backup interval). Only when a forward-fix is impossible and the
    data corruption is worse than the loss.
 

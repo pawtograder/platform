@@ -31,16 +31,16 @@ The `backup` CronJob (`charts/pawtograder/templates/backup.yaml`, default
 Object naming is timestamped so lexical sort equals chronological sort; the
 newest object is always `... | sort | tail -1`.
 
-| Fact | Value / source |
-|---|---|
-| Backup objects | `s3://<bucket>/pawtograder-*.dump` (custom format) |
-| Bucket / endpoint | `backup.s3.bucket` / `backup.s3.endpoint` in the prod values |
-| S3 credentials | Secret `pawtograder-s3`, keys `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
-| Postgres StatefulSet + Service | `<release>-postgres`; pod `<release>-postgres-0` |
-| DB name | `postgres` (`postgres.database`) |
-| Superuser for restore | `supabase_admin` (see below) |
-| DB password | Secret `pawtograder-postgres`, key `POSTGRES_PASSWORD` |
-| Retention | `backup.retentionDays` days, enforced by an S3 ILM rule |
+| Fact                           | Value / source                                                              |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| Backup objects                 | `s3://<bucket>/pawtograder-*.dump` (custom format)                          |
+| Bucket / endpoint              | `backup.s3.bucket` / `backup.s3.endpoint` in the prod values                |
+| S3 credentials                 | Secret `pawtograder-s3`, keys `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| Postgres StatefulSet + Service | `<release>-postgres`; pod `<release>-postgres-0`                            |
+| DB name                        | `postgres` (`postgres.database`)                                            |
+| Superuser for restore          | `supabase_admin` (see below)                                                |
+| DB password                    | Secret `pawtograder-postgres`, key `POSTGRES_PASSWORD`                      |
+| Retention                      | `backup.retentionDays` days, enforced by an S3 ILM rule                     |
 
 > Use `supabase_admin`, not `postgres`, for restore. The chart demotes the
 > `postgres` role, and the schema owns objects created by the superuser
@@ -164,11 +164,11 @@ nothing writes during the restore and no half-restored state is served.
 The `backup-verify` CronJob (`backup-verify.yaml`, weekly by default) downloads
 the newest object and fails loudly on three conditions. Triage by the log line:
 
-| Log line | Meaning | Action |
-|---|---|---|
-| `no pawtograder-*.dump objects in s3/...` | Backups are not landing at all | Check the `backup` CronJob: `kubectl -n "$NS" get cronjob,job -l app.kubernetes.io/component=backup`; read the newest backup job's logs. Common causes: bad S3 creds, wrong `backup.s3.endpoint`, bucket missing. |
-| `suspiciously small TOC (<10 entries)` | Newest dump is empty/corrupt | The dump ran against an empty or wrong DB, or was truncated. Restore from an **older** object (procedure A, pick by timestamp) and fix the backup source before relying on new dumps. |
-| `newest backup is older than 48h` | Backups stopped producing output | The CronJob isn't running or its jobs are failing. Check for suspended CronJob, failed jobs, or the ARC/`dind` runner-style infra issues that stall scheduled work. |
+| Log line                                  | Meaning                          | Action                                                                                                                                                                                                            |
+| ----------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no pawtograder-*.dump objects in s3/...` | Backups are not landing at all   | Check the `backup` CronJob: `kubectl -n "$NS" get cronjob,job -l app.kubernetes.io/component=backup`; read the newest backup job's logs. Common causes: bad S3 creds, wrong `backup.s3.endpoint`, bucket missing. |
+| `suspiciously small TOC (<10 entries)`    | Newest dump is empty/corrupt     | The dump ran against an empty or wrong DB, or was truncated. Restore from an **older** object (procedure A, pick by timestamp) and fix the backup source before relying on new dumps.                             |
+| `newest backup is older than 48h`         | Backups stopped producing output | The CronJob isn't running or its jobs are failing. Check for suspended CronJob, failed jobs, or the ARC/`dind` runner-style infra issues that stall scheduled work.                                               |
 
 `backup-verify` is a **structural** check (TOC parse + freshness); it does not
 prove the data restores. Run the scratch restore (procedure A) by hand before
