@@ -32,6 +32,20 @@ jobs:
       - name: Run linting check
         run: npm run lint
 
+  # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
+  # dangerous production values combination (e2e bypasses, plaintext/
+  # non-recoverable secrets, seeding, resetOnDrift, floating image tags,
+  # unauthenticated Studio). See charts/pawtograder/PRODUCTION-READINESS.md §4.
+  chart-guardrails:
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.20.2
+      - name: Run chart guard-rail render tests
+        run: charts/pawtograder/tests/render-guardrails.sh
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.

@@ -1,0 +1,101 @@
+{{- /*
+Alerting rules for the operational failure modes PRODUCTION-READINESS left to
+"cluster monitoring": a failed/stale backup (§1.5), a stale ExternalSecret
+(§5), and the Studio/ingress cert nearing expiry (checklist). Shipping them
+here means an install gets the alerts by default instead of every operator
+re-deriving them.
+
+Emitted only when monitoring.enabled AND monitoring.prometheusRules.enabled, and
+only useful on a cluster running the Prometheus Operator (kube-prometheus-stack)
+whose ruleSelector matches `monitoring.prometheusRules.labels`. If the
+kube-metrics / ESO / cert-manager exporters named in the exprs aren't present,
+that series is simply absent — tune to your stack. See
+docs/operations/monitoring-alerting.md.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alerts") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alerts") | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRules.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: pawtograder.backup
+      rules:
+        # A backup or backup-verify Job failed. The dump is the only recovery
+        # floor (no PITR), so a silently failing backup is a data-loss risk.
+        - alert: PawtograderBackupJobFailed
+          expr: |
+            max by (job_name, namespace) (
+              kube_job_status_failed{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"}
+            ) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder backup job failed ({{`{{ $labels.job_name }}`}})"
+            description: >-
+              A backup or backup-verify Job in {{ .Release.Namespace }} has
+              failed pods. Backups are the only recovery floor (no WAL/PITR).
+              Runbook: docs/operations/disaster-recovery.md ("When backup-verify
+              goes red").
+        # No successful backup Job completed recently. Catches the case where
+        # the CronJob stopped scheduling entirely (no failing Job to alert on).
+        - alert: PawtograderBackupMissing
+          expr: |
+            (
+              time() - max(
+                kube_job_status_completion_time{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"}
+              )
+            ) > {{ .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }} * 3600
+            or absent(kube_job_status_completion_time{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"})
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder has no recent successful backup"
+            description: >-
+              No backup Job in {{ .Release.Namespace }} has completed in the last
+              {{ .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}h.
+              The CronJob may be suspended or its runs failing to start.
+              Runbook: docs/operations/disaster-recovery.md.
+    - name: pawtograder.secrets
+      rules:
+        # An ExternalSecret is not Ready — ESO syncs at refreshInterval and
+        # serves the last-good value silently, so a broken store is invisible
+        # until a pod restarts against a stale/absent secret.
+        - alert: PawtograderExternalSecretNotReady
+          expr: |
+            externalsecret_status_condition{namespace="{{ .Release.Namespace }}", condition="Ready", status="False"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder ExternalSecret not syncing ({{`{{ $labels.name }}`}})"
+            description: >-
+              ExternalSecret {{`{{ $labels.name }}`}} in {{ .Release.Namespace }}
+              has been non-Ready for 15m. The backing store (OpenBao/Vault) may be
+              unreachable or the path/role wrong; the mounted Secret is stale.
+              Runbook: docs/operations/secrets-rotation.md.
+    - name: pawtograder.certs
+      rules:
+        # A cert-manager Certificate (Studio/ingress TLS) is close to expiry.
+        - alert: PawtograderCertificateExpiringSoon
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds{namespace="{{ .Release.Namespace }}"} - time())
+              < {{ .Values.monitoring.prometheusRules.certExpiryWarningDays | default 14 }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder TLS certificate expiring soon ({{`{{ $labels.name }}`}})"
+            description: >-
+              Certificate {{`{{ $labels.name }}`}} in {{ .Release.Namespace }}
+              expires in under {{ .Values.monitoring.prometheusRules.certExpiryWarningDays | default 14 }}
+              days. Check cert-manager renewal (DNS-01 solver, issuer health).
+{{- end }}

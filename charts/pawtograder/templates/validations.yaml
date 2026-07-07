@@ -28,6 +28,10 @@ keyed off global.environment (dev | preview | staging | production):
 {{- fail "studio.ingressEnabled=true without studio.basicAuth.enabled exposes full database control to anyone with the URL. Enable basic-auth, or set studio.allowUnauthenticatedIngress=true to confirm another auth layer (VPN / oauth2-proxy / IP allowlist) fronts this host." -}}
 {{- end -}}
 
+{{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
+{{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
+{{- end -}}
+
 {{- if has $env (list "staging" "production") -}}
 {{- if .Values.secrets.create -}}
 {{- fail (printf "secrets.create=true renders plaintext secret material into the Helm release (values, history, GitOps repo) — not allowed when global.environment=%s. Use ESO / sealed-secrets / pre-created Secrets." $env) -}}

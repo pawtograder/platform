@@ -258,6 +258,42 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "web") -}}
 {{- end -}}
 
+{{- define "pawtograder.postgres.replica.host" -}}
+{{- include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- end -}}
+
+{{/*
+WAL-G environment (the WALG_ and AWS_ vars). Shared verbatim by the primary
+container (runs archive_command), the base-backup sidecar, and the replica (restore_command
+fallback), so wal-g behaves identically wherever it runs. Call with the root
+context and nindent (see the postgres StatefulSet for a call site). S3
+credentials come from secrets.names.s3 (the same secret backup.yaml uses).
+*/}}
+{{- define "pawtograder.walg.env" -}}
+- name: WALG_S3_PREFIX
+  value: {{ required "postgres.walg.s3Prefix is required when postgres.walg.enabled=true" .Values.postgres.walg.s3Prefix | quote }}
+- name: WALG_COMPRESSION_METHOD
+  value: {{ .Values.postgres.walg.compressionMethod | default "zstd" | quote }}
+- name: AWS_REGION
+  value: {{ .Values.postgres.walg.region | default "us-east-1" | quote }}
+{{- if .Values.postgres.walg.s3Endpoint }}
+- name: AWS_ENDPOINT
+  value: {{ .Values.postgres.walg.s3Endpoint | quote }}
+{{- end }}
+- name: AWS_S3_FORCE_PATH_STYLE
+  value: {{ .Values.postgres.walg.forcePathStyle | default true | quote }}
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_ACCESS_KEY_ID
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_SECRET_ACCESS_KEY
+{{- end -}}
+
 {{/*
 Postgres connection URL — pointed at supavisor by default. Components that
 need the unpooled connection use pawtograder.postgres.directUrl.

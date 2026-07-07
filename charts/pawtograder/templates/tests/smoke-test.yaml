@@ -1,0 +1,70 @@
+{{- /*
+Post-deploy smoke gate (`helm test`). PRODUCTION-READINESS §5 / Deferred #7
+tracked this as missing: today the only deploy gate is `helm upgrade --wait`,
+which proves pods are *Ready*, not that the stack actually *serves*. This Job
+runs as a Helm test hook — `helm test <release>` (and CI after a deploy) runs
+it, and a non-zero exit fails the release.
+
+It is intentionally in-cluster and dependency-light: it hits the web Service's
+readiness path and GoTrue's health endpoint through Kong, exercising the web
+tier, the gateway, and (via GoTrue's health) that auth booted. It does NOT sign
+in or read application data — that is the human smoke checklist in
+docs/operations/production-install.md. Keep this fast and deterministic so it
+is safe to run on every deploy.
+*/ -}}
+{{- if .Values.tests.smoke.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "smoke-test") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smoke-test") | nindent 4 }}
+  annotations:
+    # test hook: run on `helm test`, not during install. delete the previous
+    # run's Pod before the next so repeated `helm test` calls don't collide.
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.tests.smoke.activeDeadlineSeconds | default 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smoke-test") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: smoke
+          image: {{ .Values.tests.smoke.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              WEB="http://{{ include "pawtograder.web.host" . }}:{{ .Values.web.service.port }}/"
+              # GoTrue /health through Kong (/auth/v1 -> auth, stripped to /).
+              AUTH="http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}/auth/v1/health"
+
+              # Retry: even after --wait, the gateway's upstream may need a beat.
+              check() {
+                # $1 = label, $2 = url
+                for i in $(seq 1 30); do
+                  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$2" || echo 000)
+                  if [ "$code" = "200" ]; then
+                    echo "[smoke] OK $1 ($2) -> 200"
+                    return 0
+                  fi
+                  echo "[smoke] waiting $1 ($2) -> $code ($i/30)"
+                  sleep 2
+                done
+                echo "[smoke] FAIL $1 ($2): never returned 200 (last=$code)" >&2
+                return 1
+              }
+              check "web"  "$WEB"
+              check "auth" "$AUTH"
+              echo "[smoke] all checks passed"
+          resources:
+            {{- toYaml .Values.tests.smoke.resources | nindent 12 }}
+{{- end }}

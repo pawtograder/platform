@@ -28,6 +28,15 @@ data:
     {{- range $k, $v := .Values.postgres.config }}
     {{ $k }} = {{ $v }}
     {{- end }}
+    {{- if .Values.postgres.walg.enabled }}
+    # WAL-G continuous archiving (postgres.walg.enabled). The image ships the
+    # wal-g binary but not the cloud-only `admin-mgr` wrapper, so call wal-g
+    # directly; it reads WALG_*/AWS_* from the container env (see the
+    # StatefulSet). archive_command MUST succeed or WAL accumulates in pg_wal.
+    archive_mode = on
+    archive_command = 'wal-g wal-push %p'
+    archive_timeout = '{{ .Values.postgres.walg.archiveTimeout | default "60s" }}'
+    {{- end }}
   pg_hba.conf: |
     local   all             all                                     trust
     host    all             all             127.0.0.1/32            trust
@@ -35,7 +44,13 @@ data:
     host    all             all             10.0.0.0/8              md5
     host    all             all             172.16.0.0/12           md5
     host    all             all             192.168.0.0/16          md5
+    # Replication (streaming standby via pg_basebackup + WAL streaming). Must
+    # cover the same private ranges as `host all all` above — a standby whose
+    # pod IP is in 172.16/12 or 192.168/16 (common k8s pod CIDRs) is rejected
+    # if only 10/8 is listed. Auth as supabase_replication_admin (md5).
     host    replication     all             10.0.0.0/8              md5
+    host    replication     all             172.16.0.0/12           md5
+    host    replication     all             192.168.0.0/16          md5
   # supabase_admin is created by initdb as the bootstrap superuser
   # (POSTGRES_USER=supabase_admin in the StatefulSet). No bootstrap script
   # needed for it; this placeholder is kept so we can stage other pre-migrate

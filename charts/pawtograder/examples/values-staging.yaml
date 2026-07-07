@@ -116,6 +116,30 @@ postgres:
       # maintenance_work_mem) without burning the whole node.
       memory: 16Gi
 
+  # WAL-G continuous archiving → PITR (recover to any second in the retention
+  # window, not just the nightly dump). Reuses pawtograder-s3 (Ceph at
+  # s3.talos.ripley.cloud); keep the walg prefix DISTINCT from the nightly-dump
+  # bucket path. See docs/operations/point-in-time-recovery.md.
+  walg:
+    enabled: true
+    s3Prefix: s3://pawtograder-staging-backups/walg
+    s3Endpoint: https://s3.talos.ripley.cloud
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8   # ~8 days of PITR window
+
+  # Streaming standby replica: warm failover target + read scaling. local-path
+  # is fine (own volume on another node); spreadAcrossNodes keeps it off the
+  # primary's node. Failover is MANUAL — see the PITR runbook.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: local-path
+      size: 100Gi
+
 # ----- Stateless tier: HA-ish, generous resource ceilings ------------------
 auth:
   external:

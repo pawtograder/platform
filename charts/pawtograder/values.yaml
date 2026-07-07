@@ -345,6 +345,74 @@ postgres:
     - pgsodium
     - supabase_vault
 
+  # ---------------------------------------------------------------------------
+  # WAL-G: continuous WAL archiving to S3 (→ point-in-time recovery) and the
+  # base backups PITR + streaming-replica bootstrap build on. Off by default;
+  # single-primary + nightly pg_dump (backup.yaml) is the v0.1 floor. Turn on
+  # in a durable overlay to get PITR (recovery to any second within retention),
+  # not just last-night's dump. See docs/operations/point-in-time-recovery.md.
+  #
+  # The supabase/postgres image ships the `wal-g` binary (its cloud-only
+  # `admin-mgr` wrapper is absent), so the chart calls wal-g directly:
+  #   archive_command = wal-g wal-push %p     (per-segment, from postgres)
+  #   base backup     = wal-g backup-push     (interval, from the sidecar)
+  #   restore         = wal-g backup-fetch / wal-fetch  (runbook / replica)
+  # Config is passed to wal-g via WALG_*/AWS_* env, sourced from the S3 secret
+  # (secrets.names.s3) plus the values below.
+  walg:
+    enabled: false
+    # WALG_S3_PREFIX — where WAL + base backups live. Keep this DISTINCT from
+    # the nightly-dump bucket/prefix (backup.s3) so the two schemes never mix.
+    s3Prefix: "" # e.g. s3://pawtograder-staging-backups/walg
+    # S3 endpoint/region/path-style for the object store (MinIO/Ceph/AWS).
+    # Reuses the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in secrets.names.s3.
+    s3Endpoint: "" # e.g. https://s3.talos.ripley.cloud (blank = real AWS)
+    region: "us-east-1"
+    forcePathStyle: true
+    # brotli|lz4|lzma|zstd — zstd is a good ratio/speed default.
+    compressionMethod: "zstd"
+    # archive_command failure = postgres retries and WAL piles up in pg_wal
+    # (disk-fill risk), so archiving must keep up. archive_timeout forces a
+    # segment switch so idle periods still bound RPO.
+    archiveTimeout: "60s"
+    # Base backups: the sidecar loop cadence and how many full backups to keep.
+    # WAL older than the oldest retained base backup is pruned with it. Sizing:
+    # retention window ≈ baseBackupIntervalHours × keepBackups.
+    baseBackup:
+      enabled: true
+      intervalHours: 24
+      keepBackups: 8
+      # Wait this long after the sidecar starts before the FIRST base backup,
+      # so postgres + archiving are healthy first.
+      initialDelaySeconds: 120
+      resources:
+        requests: { cpu: "50m",  memory: "128Mi" }
+        limits:   { cpu: "1",    memory: "512Mi" }
+
+  # ---------------------------------------------------------------------------
+  # Streaming standby replica. A separate StatefulSet that bootstraps from the
+  # primary via pg_basebackup and streams WAL (hot standby, read-only), with
+  # `wal-g wal-fetch` as the archive fallback if it falls behind the primary's
+  # retained pg_wal. Off by default. Gives read-scaling + a warm failover
+  # target; failover is MANUAL (documented promote runbook), not automatic.
+  # Requires postgres.walg.enabled (the replica needs the archive fallback and
+  # shares the WAL-G config). See docs/operations/point-in-time-recovery.md.
+  replica:
+    enabled: false
+    replicas: 1
+    # Replica gets its own storage (own PVC per pod). local-path is fine here:
+    # a streaming replica on another node with its own volume is the point.
+    persistence:
+      storageClass: ""
+      size: 50Gi
+      accessMode: ReadWriteOnce
+    resources:
+      requests: { cpu: "500m", memory: "2Gi" }
+      limits:   { cpu: "2",    memory: "8Gi" }
+    # Soft anti-affinity to keep the standby off the primary's node (a replica
+    # sharing the primary's node defeats the durability purpose).
+    spreadAcrossNodes: true
+
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1148,6 +1216,21 @@ backup:
     schedule: "0 6 * * 1" # weekly, after Monday's backup
     activeDeadlineSeconds: 1800
     startingDeadlineSeconds: 1800
+  # Restore DRILL: the full-restore rehearsal `verify` stops short of. It
+  # restores the newest dump into a throwaway database on the LIVE postgres,
+  # asserts a core table has a plausible row count, then drops the scratch DB.
+  # A dump can `pg_restore --list` cleanly yet still fail to restore — this
+  # catches that. Off by default (it writes to the primary under a unique DB
+  # name); enable in prod and schedule clear of the backup window.
+  restoreDrill:
+    enabled: false
+    schedule: "0 8 * * 1" # weekly, after verify
+    activeDeadlineSeconds: 3600
+    startingDeadlineSeconds: 1800
+    # Core table + minimum row count proving the restore holds real data.
+    # public.classes exists on every install (a live prod DB has >= 1 class).
+    assertTable: "public.classes"
+    assertMinRows: 1
   # `mc` (MinIO client) is downloaded at runtime because the
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
@@ -1188,6 +1271,18 @@ monitoring:
   scrapeInterval: 30s
   scrapeTimeout: 10s
 
+  # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
+  # staleness, ExternalSecret sync failure, and TLS cert expiry — the
+  # operational alerts PRODUCTION-READINESS deferred to cluster monitoring.
+  # `labels` must match the cluster Prometheus's ruleSelector (kube-prometheus-
+  # stack's default is `release: <kps-release>`); set it to what your cluster
+  # uses or the rules won't be picked up. See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    enabled: true
+    labels: {}          # e.g. { release: kube-prometheus-stack }
+    backupMaxAgeHours: 36
+    certExpiryWarningDays: 14
+
   # postgres_exporter sidecar in the postgres pod. Connects via TCP to
   # localhost:5432 with supabase_admin. The custom queries ConfigMap is
   # rendered by templates/monitoring.yaml (label
@@ -1221,3 +1316,22 @@ monitoring:
   # the web app's stdout; the cluster Alloy joins pod labels and ships
   # to Loki for you. Querying: Grafana Explore → Loki datasource →
   # {namespace="pawtograder-preview-pr-<id>"}.
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
+# Helm test hooks. `helm test <release>` (and CI after a deploy) runs these; a
+# non-zero exit fails the release. The smoke test is a fast in-cluster serve
+# check (web readiness path + GoTrue /health through Kong) — the automated
+# post-deploy gate PRODUCTION-READINESS §5 tracked as missing. It complements,
+# and does NOT replace, the human smoke checklist in
+# docs/operations/production-install.md (sign-in, gradebook read, realtime).
+tests:
+  smoke:
+    enabled: true
+    # curl + sh, small and dependency-free.
+    image: curlimages/curl:8.11.1
+    activeDeadlineSeconds: 120
+    resources:
+      requests: { cpu: "10m", memory: "16Mi" }
+      limits:   { cpu: "100m", memory: "64Mi" }

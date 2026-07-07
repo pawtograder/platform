@@ -11,11 +11,11 @@ Status legend: ✅ fixed in this branch · 🔶 partially addressed · ⬜ defer
 
 | # | Finding | Where | Status |
 |---|---------|-------|--------|
-| 1.1 | Postgres is a single replica with no failover (documented as deferred to v0.2) | `postgres-statefulset.yaml`, `values.yaml` ("single primary") | ⬜ deferred — see [Deferred work](#deferred-work) |
-| 1.2 | No WAL archiving → recovery granularity is the last nightly dump (≤24 h data loss on disk failure) | `postgres-config.yaml` | ⬜ deferred — needs pgBackRest/WAL-G sidecar design |
+| 1.1 | Postgres is a single replica with no failover (documented as deferred to v0.2) | `postgres-statefulset.yaml`, `values.yaml` ("single primary") | 🔶 optional streaming standby (`postgres.replica`, `postgres-replica.yaml`) gives a warm failover target + read scaling with a documented **manual** promote ([`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md)); AUTOMATIC failover (Patroni/CNPG) still deferred |
+| 1.2 | No WAL archiving → recovery granularity is the last nightly dump (≤24 h data loss on disk failure) | `postgres-config.yaml` | ✅ optional WAL-G archiving + base backups (`postgres.walg`) → PITR to any second in the retention window; the image's bundled `wal-g` is called directly. Runbook: [`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md) |
 | 1.3 | Backup is a plain-SQL `pg_dump \| gzip` with **no integrity verification** before or after upload | `backup.yaml` | ✅ switched to `pg_dump -Fc`, gzip/TOC verified, post-upload size check |
-| 1.4 | No restore testing — a corrupt backup looks identical to a good one | — | ✅ new `backup-verify` CronJob runs `pg_restore --list` against the newest object weekly |
-| 1.5 | Backup CronJob has no `activeDeadlineSeconds`/`startingDeadlineSeconds`, no failure alerting | `backup.yaml` | ✅ deadlines added; 🔶 alerting = PrometheusRule on `kube_job_status_failed` left to cluster monitoring |
+| 1.4 | No restore testing — a corrupt backup looks identical to a good one | — | ✅ `backup-verify` CronJob runs `pg_restore --list` weekly; ✅ optional `backup-restore-drill` CronJob (`backup.restoreDrill.enabled`) does a full restore into a scratch DB + row-count assertion. Runbook: [`docs/operations/disaster-recovery.md`](../../docs/operations/disaster-recovery.md) |
+| 1.5 | Backup CronJob has no `activeDeadlineSeconds`/`startingDeadlineSeconds`, no failure alerting | `backup.yaml` | ✅ deadlines added; ✅ chart now ships a `PrometheusRule` (`prometheus-rules.yaml`) alerting on backup Job failure/staleness — see [`docs/operations/monitoring-alerting.md`](../../docs/operations/monitoring-alerting.md) |
 | 1.6 | Retention via `mc ilm rule add … \|\| true` can fail silently | `backup.yaml` | ✅ failure is now loud (verifies an expiry rule exists) |
 | 1.7 | `mc` downloaded from dl.min.io at job runtime (availability + supply-chain) | `backup.yaml` | 🔶 still downloaded (SHA-pinned); baking into the migrations image tracked below |
 | 1.8 | Staging uses `local-path` (node-local) storage — node loss = data loss | `values-staging.yaml` | ⬜ accepted for staging; prod example mandates replicated storage class |
@@ -66,27 +66,44 @@ new `examples/values-prod.yaml` declares `production` and documents the remainin
 operator checklist (replicated storage class, prod image builds, ESO paths, redis
 `internal`, SMTP, monitoring tokens).
 
-## 5. Release / deploy pipeline (not chart-fixable; tracked)
+## 5. Release / deploy pipeline
 
 - The web image bakes `NEXT_PUBLIC_SUPABASE_ANON_KEY` + URLs at build time and a tag push
   (`v*`) does **not** build web without a manual `workflow_dispatch` — production needs its
-  own build path wired to the prod cluster's anon key (`release-images.yml`).
-- No automated rollback or post-deploy smoke gate beyond `helm upgrade --wait`.
-- ESO syncs have no failure alerting (`refreshInterval: 1h`, stale secrets serve silently);
-  add a PrometheusRule on `externalsecret_status_condition` in cluster monitoring.
-- Forward-only migrations have no documented "roll app back, leave schema forward" runbook.
+  own build path wired to the prod cluster's anon key (`release-images.yml`). 🔶 documented
+  as an install step in [`docs/operations/production-install.md`](../../docs/operations/production-install.md)
+  §4; a dedicated prod build workflow is still tracked below.
+- ✅ Post-deploy smoke gate: `helm test` hook (`templates/tests/smoke-test.yaml`) probes the
+  web readiness path + GoTrue health through Kong, beyond `helm upgrade --wait`. The human
+  smoke checklist is in production-install.md.
+- ✅ Rollback: [`docs/operations/rollback.md`](../../docs/operations/rollback.md) documents
+  the "roll app back, leave schema forward" path for forward-only migrations.
+- ✅ ESO sync failure alerting: `prometheus-rules.yaml` ships a `PrometheusRule` on
+  `externalsecret_status_condition` (was: "add one in cluster monitoring").
 
 ## Deferred work
 
-1. **Postgres HA** (1.1): single-primary is a deliberate v0.1 limitation. Recommended path:
-   pgBackRest or WAL-G sidecar with WAL archiving to S3 first (cheap PITR, keeps
-   single-primary), CloudNativePG/Patroni if real failover becomes a requirement.
-2. **WAL archiving** (1.2): blocked on choosing the tool above; `postgres.config` passthrough
-   already accepts `archive_mode`/`archive_command` for operators who wire their own.
+1. **Automatic Postgres failover** (1.1): the WAL-G + streaming-standby path is now shipped
+   (`postgres.walg` / `postgres.replica`, on in staging) and gives PITR + a **manual** promote.
+   What remains deferred is *automatic* leader election/failover — the tracked path is
+   Patroni or CloudNativePG, avoided for now because an unsupervised promoter risks
+   split-brain against the shared WAL archive.
+2. ✅ **WAL archiving / PITR** (1.2): done — `postgres.walg` wires `archive_command`, base
+   backups, and retention via the image's bundled `wal-g`. See
+   [`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md).
 3. **Bake `mc` into the migrations image** (1.7): removes the runtime download from backup,
    verify, and retention paths.
 4. **Per-service metrics auth** (3.5) and **Kong rate-limiting plugin** (3.6).
 5. **Defense-in-depth key-auth on Kong storage/functions routes** (3.8).
 6. **Per-component ServiceAccounts** — today one SA with no API access is shared; split if
    any workload ever needs the k8s API.
-7. **Prod web-image build path + post-deploy smoke test + rollback runbook** (§5).
+7. **Prod web-image build path** (§5): a dedicated prod-cluster web/edge/migrations build
+   workflow (the manual `workflow_dispatch` + install-step docs are the current stopgap).
+   The post-deploy smoke gate and rollback runbook this item also tracked are now done
+   (§5: `templates/tests/smoke-test.yaml`, `docs/operations/rollback.md`).
+
+## Operations runbooks
+
+Go-live operational docs added under [`docs/operations/`](../../docs/operations/):
+production install, disaster recovery, rollback, secrets rotation, monitoring &
+alerting, and incident response. See that directory's README for the index.
