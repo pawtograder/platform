@@ -136,17 +136,17 @@ is already warm.
    failure.
 
 > **Failing back to the old primary?** Promotion branches a new timeline (e.g.
-> timeline 2), and its `.history` file plus WAL land in the archive. If you
-> abandon the promoted node and bring the _original_ primary back on the old
-> timeline, you must delete the abandoned timeline's objects from the archive
-> (`NNNNNNNN.history` and its `NNNNNNNN*` WAL segments) before rebuilding a
-> standby. Otherwise the standby's `restore_command`, following
-> `recovery_target_timeline = 'latest'`, chases the abandoned timeline, hits an
-> "incorrect prev-link" / "requested WAL segment has already been removed", and
-> crash-loops. After clearing it, take a fresh `wal-g backup-push` so the archive
-> has a clean single-timeline lineage. (In a normal failover you keep the
-> promoted node and this does not arise.)
-
+> timeline 2), and its `.history` file plus WAL land in the archive. Do **not**
+> delete the abandoned timeline's objects from the shared archive: that history
+> is part of the archive's recovery lineage, and removing it can break later
+> point-in-time restores. Instead, keep the promoted node as the primary and
+> rebuild the old primary as a fresh standby of it. Run `pg_rewind` (fast, when
+> the old primary shut down cleanly and has data checksums or `wal_log_hints`);
+> failing that, wipe its PGDATA and re-bootstrap with `pg_basebackup`. Either way
+> the rebuilt standby follows the new timeline via
+> `recovery_target_timeline = 'latest'`, the same rebuild-the-standby step as any
+> post-failover recovery, with no archive surgery.
+>
 > Failover is deliberately **manual** (no automatic leader election). That
 > avoids the split-brain risk an unsupervised promoter carries against a shared
 > WAL archive. If automatic failover becomes a requirement, the tracked path is

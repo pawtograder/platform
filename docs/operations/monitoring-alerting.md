@@ -27,8 +27,10 @@ deploys neither Prometheus nor Grafana). Two pieces:
 > **The one thing you must set:** `monitoring.prometheusRules.labels` must match
 > the cluster Prometheus's `ruleSelector`. kube-prometheus-stack's default
 > selector is `release: <kps-release-name>`. If the label doesn't match, the
-> Operator never loads the rules and they silently do nothing. Set it in your
-> prod values:
+> Operator never loads the rules and they silently do nothing. In
+> staging/production the chart **refuses to render** an enabled `PrometheusRule`
+> with empty `labels` (set `monitoring.prometheusRules.allowUnselectedRules=true`
+> to override if your Prometheus selects all rules). Set it in your prod values:
 >
 > ```yaml
 > monitoring:
@@ -47,22 +49,27 @@ and `severity: warning` to a chat channel per your on-call setup — see
 
 ## Alerts shipped by the chart
 
-| Alert                                | Severity | Fires when                                                                                    | Runbook                                        |
-| ------------------------------------ | -------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `PawtograderBackupJobFailed`         | critical | A `*backup*` Job in the namespace has failed pods (`kube_job_status_failed > 0`) for 5m       | [disaster-recovery.md](./disaster-recovery.md) |
-| `PawtograderBackupMissing`           | critical | No `*backup*` Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent | [disaster-recovery.md](./disaster-recovery.md) |
-| `PawtograderExternalSecretNotReady`  | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                      | [secrets-rotation.md](./secrets-rotation.md)   |
-| `PawtograderCertificateExpiringSoon` | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry           | below                                          |
+| Alert                                | Severity | Fires when                                                                                                        | Runbook                                        |
+| ------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `PawtograderBackupJobFailed`         | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                           | [disaster-recovery.md](./disaster-recovery.md) |
+| `PawtograderBackupMissing`           | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                        | [disaster-recovery.md](./disaster-recovery.md) |
+| `PawtograderBackupVerifyJobFailed`   | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)             | [disaster-recovery.md](./disaster-recovery.md) |
+| `PawtograderWALArchiveFailing`       | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling      | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderExternalSecretNotReady`  | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                          | [secrets-rotation.md](./secrets-rotation.md)   |
+| `PawtograderCertificateExpiringSoon` | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                              | below                                          |
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`).
 
 ### Why these three
 
-- **Backup** is the entire recovery floor (there is no WAL/PITR, §1.1/§1.2), so
-  a silently failing backup is a data-loss risk that stays invisible until the
-  day you need to restore. Two alerts because a stopped CronJob produces no
-  _failing_ Job to catch (`PawtograderBackupMissing` covers that).
+- **Backup** is the recovery floor for any install without WAL-G/PITR enabled
+  (`postgres.walg` is optional and off by default, §1.2), so a silently failing
+  backup is a data-loss risk that stays invisible until the day you need to
+  restore. Two alerts because a stopped CronJob produces no _failing_ Job to
+  catch (`PawtograderBackupMissing` covers that). When `postgres.walg` is on, the
+  separate `PawtograderWALArchiveFailing` alert covers a stalled WAL archive
+  (pg_wal filling the primary's volume).
 - **ExternalSecret** staleness is invisible by design: ESO serves the last-good
   value on a sync failure and only re-reads at `refreshInterval` (1h). A broken
   OpenBao path surfaces as a crash-looping pod at the _next_ restart, long after

@@ -107,11 +107,21 @@ spec:
                 -U supabase_replication_admin \
                 -D "$PGDATA" -R -X stream -c fast --no-password
               # pg_basebackup -R omits the password from primary_conninfo. Rewrite
-              # it with the password + an application_name (shows in
-              # pg_stat_replication on the primary), and add the wal-g archive
-              # fallback for when the primary has recycled the needed WAL.
+              # it with an application_name (shows in pg_stat_replication on the
+              # primary) and the wal-g archive fallback for when the primary has
+              # recycled the needed WAL. The replication password goes in a
+              # chmod-600 .pgpass referenced by `passfile=`, NOT inlined as
+              # `password=…`: a password containing a space, quote, or backslash
+              # would otherwise break the libpq conninfo parse (and leak into
+              # postgresql.auto.conf). .pgpass lives in PGDATA so it persists on
+              # the PVC and is re-read on every standby restart.
+              PASSFILE="$PGDATA/.pgpass"
+              # .pgpass field escaping: backslash-escape ':' and '\'.
+              esc_pw=$(printf '%s' "$REPL_PASSWORD" | sed 's/[:\\]/\\&/g')
+              printf '%s:%s:*:%s:%s\n' "$PRIMARY" "{{ .Values.postgres.service.port }}" "supabase_replication_admin" "$esc_pw" > "$PASSFILE"
+              chmod 600 "$PASSFILE"
               {
-                echo "primary_conninfo = 'host=${PRIMARY} port={{ .Values.postgres.service.port }} user=supabase_replication_admin password=${REPL_PASSWORD} application_name=$(hostname)'"
+                echo "primary_conninfo = 'host=${PRIMARY} port={{ .Values.postgres.service.port }} user=supabase_replication_admin passfile=${PASSFILE} application_name=$(hostname)'"
                 echo "restore_command = 'wal-g wal-fetch %f %p'"
                 echo "recovery_target_timeline = 'latest'"
                 # The supabase/postgres image ships /etc/postgresql-custom/read-replica.conf

@@ -16,7 +16,7 @@ is safe only when the newer schema is backward-compatible with the older app.
 
 ## Decision: is this a safe app-only rollback?
 
-```
+```text
 Did the bad release ship a schema migration?
 ├── No  → plain app rollback (§A). Safe, fast.
 └── Yes → Is that migration backward-compatible with the previous app?

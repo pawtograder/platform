@@ -55,7 +55,11 @@ spec:
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
 
                   # Newest object (timestamped names sort chronologically).
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1)
+                  # `|| true`: under `set -euo pipefail`, a no-match grep exits 1
+                  # and pipefail would abort the script AT this assignment, before
+                  # the friendly guard below ever runs. Swallow it so an empty
+                  # bucket reaches the diagnostic instead of dying silently.
+                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
                   if [ -z "$LATEST" ]; then
                     echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"
                     exit 1
@@ -63,14 +67,24 @@ spec:
                   echo "[drill] restoring newest backup: $LATEST"
                   mc cp "s3/${S3_BUCKET}/${LATEST}" /tmp/latest.dump
 
+                  # Reap ALL leftover scratch DBs from prior runs, not just this
+                  # run's name. A run SIGKILLed after CREATE DATABASE (deadline /
+                  # eviction / OOM) skips the EXIT trap and leaves a full-size
+                  # restore_drill_* copy on the LIVE primary; because each run
+                  # picks a NEW timestamped name, a per-name drop would never
+                  # reap those orphans and they would accumulate until the PVC
+                  # fills. Match by prefix and drop every one before starting.
+                  psql -d postgres -v ON_ERROR_STOP=1 -tAc \
+                    "SELECT 'DROP DATABASE IF EXISTS \"' || datname || '\";' FROM pg_database WHERE datname LIKE 'restore_drill_%';" \
+                    | psql -d postgres -v ON_ERROR_STOP=1 -f -
+
                   # Unique scratch DB name so a leftover from a killed run never
-                  # collides. Drop first in case one leaked, then recreate.
+                  # collides with the current one.
                   SCRATCH="restore_drill_$(date -u +%Y%m%d%H%M%S)"
                   echo "[drill] scratch database: $SCRATCH"
                   cleanup() { psql -d postgres -c "DROP DATABASE IF EXISTS \"$SCRATCH\";" || true; }
                   trap cleanup EXIT
 
-                  psql -d postgres -c "DROP DATABASE IF EXISTS \"$SCRATCH\";"
                   psql -d postgres -c "CREATE DATABASE \"$SCRATCH\";"
 
                   # Real restore into the scratch DB. --no-owner/--no-acl so the

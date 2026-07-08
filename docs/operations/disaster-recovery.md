@@ -106,7 +106,7 @@ LATEST=$(mc ls "s3/$S3_BUCKET/" | awk '{print $NF}' \
   | grep '^pawtograder-.*\.dump$' | sort | tail -1)
 echo "restoring from: $LATEST"
 mc cp "s3/$S3_BUCKET/$LATEST" /tmp/latest.dump
-pg_restore --list /tmp/latest.dump | head   # sanity: TOC parses
+pg_restore --list /tmp/latest.dump >/dev/null   # sanity: TOC parses (preserves exit status)
 ```
 
 Set `S3_ENDPOINT`, `S3_BUCKET`, and the AWS keys from the `pawtograder-s3`

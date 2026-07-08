@@ -56,8 +56,19 @@ same incident at 3am. Know the course deadlines when triaging.
 
 ## Per-component triage
 
-`kubectl -n "$NS" logs deploy/<component>` (add `--previous` for a crash-looped
-pod) is the workhorse. Components:
+Reading logs depends on the workload backing the component:
+
+- **Deployments** (web, auth, storage, edge-functions, realtime, Kong, …):
+  `kubectl -n "$NS" logs deploy/<release>-<component>` (add `--previous` for a
+  crash-looped pod).
+- **StatefulSet** (Postgres): `kubectl -n "$NS" logs <release>-postgres-0`
+  (append `-c <container>` for a sidecar, e.g. `base-backup` or
+  `postgres-exporter`).
+- **Jobs / CronJobs** (backup, backup-verify, restore-drill, migrations):
+  `kubectl -n "$NS" logs job/<job-name>`; list them with
+  `kubectl -n "$NS" get jobs`.
+
+Components:
 
 ### Web (`<release>-web`)
 

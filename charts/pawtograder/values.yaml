@@ -1280,6 +1280,12 @@ monitoring:
   prometheusRules:
     enabled: true
     labels: {}          # e.g. { release: kube-prometheus-stack }
+    # In staging/production the chart REFUSES to render an enabled PrometheusRule
+    # with empty `labels`, because kube-prometheus-stack's ruleSelector matches
+    # `release: <name>` and an unlabeled rule is silently never loaded (every
+    # alert inert). Set `labels` to your cluster's ruleSelector, or set this to
+    # true to confirm your Prometheus selects all rules and skip the guard.
+    allowUnselectedRules: false
     backupMaxAgeHours: 36
     certExpiryWarningDays: 14
 
@@ -1331,7 +1337,9 @@ tests:
     enabled: true
     # curl + sh, small and dependency-free.
     image: curlimages/curl:8.11.1
-    activeDeadlineSeconds: 120
+    # Must cover both checks' worst-case retry budget (2 × 30 × (5s curl + 2s
+    # sleep) ≈ 420s) so a slow-but-recovering rollout isn't killed mid-retry.
+    activeDeadlineSeconds: 480
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }

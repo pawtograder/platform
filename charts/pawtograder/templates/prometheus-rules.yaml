@@ -13,6 +13,14 @@ that series is simply absent — tune to your stack. See
 docs/operations/monitoring-alerting.md.
 */ -}}
 {{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- /* The nightly-dump CronJob's name. Its spawned Jobs are
+     `<name>-<numeric-timestamp>`, so `<name>-[0-9].*` matches the dump Job but
+     NOT the sibling `<name>-verify-*` / `<name>-restore-drill-*` Jobs (those
+     have a letter after `<name>-`). Keeps a failing/slow verify or drill from
+     masking a stale real backup or paging as a backup outage. */}}
+{{- $backupJob := include "pawtograder.componentName" (dict "ctx" . "component" "backup") }}
+{{- $backupMaxAge := .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -25,45 +33,107 @@ metadata:
     {{- end }}
 spec:
   groups:
+    {{- if .Values.backup.enabled }}
     - name: pawtograder.backup
       rules:
-        # A backup or backup-verify Job failed. The dump is the only recovery
-        # floor (no PITR), so a silently failing backup is a data-loss risk.
+        # The nightly pg_dump Job failed. Scoped to the dump Job only
+        # ({{ $backupJob }}-<timestamp>) so a failing verify/restore-drill pages
+        # separately (below), not as a backup outage. The recency guard (Job
+        # started within backupMaxAgeHours) keeps a RETAINED failed Job
+        # (failedJobsHistoryLimit) from firing forever after a later run recovers.
         - alert: PawtograderBackupJobFailed
           expr: |
-            max by (job_name, namespace) (
-              kube_job_status_failed{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"}
-            ) > 0
+            (
+              max by (job_name, namespace) (
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              ) > 0
+            )
+            and on (job_name, namespace) (
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+                > time() - {{ $backupMaxAge }} * 3600
+            )
           for: 5m
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder backup job failed ({{`{{ $labels.job_name }}`}})"
             description: >-
-              A backup or backup-verify Job in {{ .Release.Namespace }} has
-              failed pods. Backups are the only recovery floor (no WAL/PITR).
+              The nightly pg_dump Job in {{ $ns }} has failed pods. Backups are
+              the recovery floor for any install without WAL-G/PITR enabled.
               Runbook: docs/operations/disaster-recovery.md ("When backup-verify
               goes red").
-        # No successful backup Job completed recently. Catches the case where
-        # the CronJob stopped scheduling entirely (no failing Job to alert on).
+        # No successful dump completed recently. Catches the case where the
+        # CronJob stopped scheduling entirely (no failing Job to alert on).
+        # Dump-only scope so a verify/drill success can't reset the clock.
         - alert: PawtograderBackupMissing
           expr: |
             (
               time() - max(
-                kube_job_status_completion_time{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"}
+                kube_job_status_completion_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
               )
-            ) > {{ .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }} * 3600
-            or absent(kube_job_status_completion_time{namespace="{{ .Release.Namespace }}", job_name=~".*backup.*"})
+            ) > {{ $backupMaxAge }} * 3600
+            or absent(kube_job_status_completion_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"})
           for: 30m
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder has no recent successful backup"
             description: >-
-              No backup Job in {{ .Release.Namespace }} has completed in the last
-              {{ .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}h.
-              The CronJob may be suspended or its runs failing to start.
-              Runbook: docs/operations/disaster-recovery.md.
+              No pg_dump Job in {{ $ns }} has completed in the last
+              {{ $backupMaxAge }}h. The CronJob may be suspended or its runs
+              failing to start. Runbook: docs/operations/disaster-recovery.md.
+        # A backup-verify or restore-drill Job failed. These prove the newest
+        # dump actually restores (verify = TOC parse; drill = full restore into a
+        # scratch DB), so a failure means recoverability is in doubt even when the
+        # dump itself is fresh — serious, but distinct from the dump pipeline
+        # being down, so it pages at warning with its own scope. Recency-guarded
+        # like the dump alert.
+        - alert: PawtograderBackupVerifyJobFailed
+          expr: |
+            (
+              max by (job_name, namespace) (
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill)-[0-9].*"}
+              ) > 0
+            )
+            and on (job_name, namespace) (
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill)-[0-9].*"}
+                > time() - {{ $backupMaxAge }} * 3600
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder backup verify/restore-drill failed ({{`{{ $labels.job_name }}`}})"
+            description: >-
+              A backup-verify or restore-drill Job in {{ $ns }} failed — the
+              newest dump parsed or restored incorrectly, so recoverability is in
+              doubt even if the dump is fresh. Runbook:
+              docs/operations/disaster-recovery.md ("When backup-verify goes red").
+    {{- end }}
+    {{- if .Values.postgres.walg.enabled }}
+    - name: pawtograder.walg
+      rules:
+        # WAL-G archiving is failing: the most recent `archive_command` attempt
+        # errored and has not since succeeded (pawtograder_wal_archiving metric
+        # from the postgres_exporter query in monitoring.yaml). With
+        # archive_mode=on, unarchived WAL accumulates in pg_wal and can fill the
+        # primary's PVC, halting all writes. Fires before the disk fills so there
+        # is time to fix the object store / credentials.
+        - alert: PawtograderWALArchiveFailing
+          expr: |
+            max(pawtograder_wal_archiving_last_attempt_failed{namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder WAL-G archiving is failing"
+            description: >-
+              The most recent `archive_command` (wal-g wal-push) in {{ $ns }}
+              failed and has not since succeeded. archive_mode is on, so WAL is
+              piling up in pg_wal and will eventually fill the primary's volume,
+              halting all writes. Check the S3 endpoint/credentials and pg_wal
+              usage. Runbook: docs/operations/point-in-time-recovery.md.
+    {{- end }}
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and

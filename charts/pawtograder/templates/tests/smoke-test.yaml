@@ -27,7 +27,12 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: {{ .Values.tests.smoke.activeDeadlineSeconds | default 120 }}
+  # Must exceed the two checks' worst-case retry budget: each check loops 30×
+  # (curl --max-time 5 + sleep 2) ≈ 210s, two back-to-back ≈ 420s. A deadline
+  # below that (the old 120s) kills a slow-but-recovering rollout with an opaque
+  # DeadlineExceeded instead of letting a check exhaust its retries or a real
+  # failure print the intended `[smoke] FAIL` diagnostic.
+  activeDeadlineSeconds: {{ .Values.tests.smoke.activeDeadlineSeconds | default 480 }}
   template:
     metadata:
       labels:
@@ -57,7 +62,14 @@ spec:
               # non-5xx HTTP response, i.e. reachable and not server-erroring).
               check() {
                 for i in $(seq 1 30); do
-                  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$2" || echo 000)
+                  # curl already writes '000' to stdout on a failed transfer
+                  # (connection refused / timeout / DNS) AND exits non-zero, so
+                  # `|| echo 000` would APPEND a second 000 -> code="000000",
+                  # which the "up" check reads as a reachable non-5xx code and
+                  # falsely passes when the gateway is down. Swallow the exit and
+                  # normalize an empty capture to 000 instead.
+                  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$2" || true)
+                  [ -n "$code" ] || code=000
                   if [ "$3" = "200" ] && [ "$code" = "200" ]; then
                     echo "[smoke] OK $1 ($2) -> 200"; return 0
                   fi

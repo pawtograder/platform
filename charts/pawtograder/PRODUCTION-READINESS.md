@@ -15,7 +15,7 @@ Status legend: ✅ fixed in this branch · 🔶 partially addressed · ⬜ defer
 | 1.2 | No WAL archiving → recovery granularity is the last nightly dump (≤24 h data loss on disk failure) | `postgres-config.yaml` | ✅ optional WAL-G archiving + base backups (`postgres.walg`) → PITR to any second in the retention window; the image's bundled `wal-g` is called directly. Runbook: [`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md) |
 | 1.3 | Backup is a plain-SQL `pg_dump \| gzip` with **no integrity verification** before or after upload | `backup.yaml` | ✅ switched to `pg_dump -Fc`, gzip/TOC verified, post-upload size check |
 | 1.4 | No restore testing — a corrupt backup looks identical to a good one | — | ✅ `backup-verify` CronJob runs `pg_restore --list` weekly; ✅ optional `backup-restore-drill` CronJob (`backup.restoreDrill.enabled`) does a full restore into a scratch DB + row-count assertion. Runbook: [`docs/operations/disaster-recovery.md`](../../docs/operations/disaster-recovery.md) |
-| 1.5 | Backup CronJob has no `activeDeadlineSeconds`/`startingDeadlineSeconds`, no failure alerting | `backup.yaml` | ✅ deadlines added; ✅ chart now ships a `PrometheusRule` (`prometheus-rules.yaml`) alerting on backup Job failure/staleness — see [`docs/operations/monitoring-alerting.md`](../../docs/operations/monitoring-alerting.md) |
+| 1.5 | Backup CronJob has no `activeDeadlineSeconds`/`startingDeadlineSeconds`, no failure alerting | `backup.yaml` | ✅ deadlines added; ✅ chart now ships a `PrometheusRule` (`prometheus-rules.yaml`) alerting on backup Job failure/staleness — **requires `monitoring.prometheusRules.labels` to match the cluster `ruleSelector`** (render-guarded in staging/prod), see [`docs/operations/monitoring-alerting.md`](../../docs/operations/monitoring-alerting.md) |
 | 1.6 | Retention via `mc ilm rule add … \|\| true` can fail silently | `backup.yaml` | ✅ failure is now loud (verifies an expiry rule exists) |
 | 1.7 | `mc` downloaded from dl.min.io at job runtime (availability + supply-chain) | `backup.yaml` | 🔶 still downloaded (SHA-pinned); baking into the migrations image tracked below |
 | 1.8 | Staging uses `local-path` (node-local) storage — node loss = data loss | `values-staging.yaml` | ⬜ accepted for staging; prod example mandates replicated storage class |
@@ -74,8 +74,10 @@ operator checklist (replicated storage class, prod image builds, ESO paths, redi
   as an install step in [`docs/operations/production-install.md`](../../docs/operations/production-install.md)
   §4; a dedicated prod build workflow is still tracked below.
 - ✅ Post-deploy smoke gate: `helm test` hook (`templates/tests/smoke-test.yaml`) probes the
-  web readiness path + GoTrue health through Kong, beyond `helm upgrade --wait`. The human
-  smoke checklist is in production-install.md.
+  web readiness path + GoTrue health through Kong — a check `helm upgrade --wait` (pod
+  readiness only) does not do. It is a `helm.sh/hook: test` Job, so it does **not** run during
+  `helm upgrade`; the deploy pipeline must invoke `helm test <release>` after the upgrade for
+  the gate to run. The human smoke checklist is in production-install.md.
 - ✅ Rollback: [`docs/operations/rollback.md`](../../docs/operations/rollback.md) documents
   the "roll app back, leave schema forward" path for forward-only migrations.
 - ✅ ESO sync failure alerting: `prometheus-rules.yaml` ships a `PrometheusRule` on
@@ -100,7 +102,8 @@ operator checklist (replicated storage class, prod image builds, ESO paths, redi
 7. **Prod web-image build path** (§5): a dedicated prod-cluster web/edge/migrations build
    workflow (the manual `workflow_dispatch` + install-step docs are the current stopgap).
    The post-deploy smoke gate and rollback runbook this item also tracked are now done
-   (§5: `templates/tests/smoke-test.yaml`, `docs/operations/rollback.md`).
+   (§5: `templates/tests/smoke-test.yaml` — run via `helm test <release>` after the upgrade,
+   `docs/operations/rollback.md`).
 
 ## Operations runbooks
 

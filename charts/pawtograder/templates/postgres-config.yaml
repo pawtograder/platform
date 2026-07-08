@@ -44,13 +44,18 @@ data:
     host    all             all             10.0.0.0/8              md5
     host    all             all             172.16.0.0/12           md5
     host    all             all             192.168.0.0/16          md5
-    # Replication (streaming standby via pg_basebackup + WAL streaming). Must
+    host    replication     all             10.0.0.0/8              md5
+    {{- if .Values.postgres.replica.enabled }}
+    # Replication (streaming standby via pg_basebackup + WAL streaming). Only
+    # rendered when a replica is enabled — adding these unconditionally would
+    # change pg_hba.conf (and the primary StatefulSet's checksum/config) for
+    # every install, rolling the primary on an otherwise no-op upgrade. Must
     # cover the same private ranges as `host all all` above — a standby whose
     # pod IP is in 172.16/12 or 192.168/16 (common k8s pod CIDRs) is rejected
     # if only 10/8 is listed. Auth as supabase_replication_admin (md5).
-    host    replication     all             10.0.0.0/8              md5
     host    replication     all             172.16.0.0/12           md5
     host    replication     all             192.168.0.0/16          md5
+    {{- end }}
   # supabase_admin is created by initdb as the bootstrap superuser
   # (POSTGRES_USER=supabase_admin in the StatefulSet). No bootstrap script
   # needed for it; this placeholder is kept so we can stage other pre-migrate

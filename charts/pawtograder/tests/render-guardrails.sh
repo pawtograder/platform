@@ -87,6 +87,13 @@ assert_refused "secrets.create in production" \
   "renders plaintext secret material" --set secrets.create=true
 assert_refused "resetOnDrift in production" \
   "DESTROYS ALL APPLICATION DATA" --set migrations.resetOnDrift=true
+assert_refused "walg without base backup" \
+  "PITR silently cannot restore" \
+  --set postgres.walg.enabled=true --set postgres.walg.baseBackup.enabled=false \
+  --set postgres.walg.s3Prefix=s3://b/walg
+assert_refused "prometheus rules without ruleSelector labels" \
+  "every backup/ESO/cert alert is inert" \
+  --set monitoring.enabled=true
 
 echo "== production-only guards =="
 assert_refused "web e2e bypass" \
@@ -109,6 +116,22 @@ assert_renders "resetOnDrift allowed on dev" \
   --set global.environment=dev --set migrations.resetOnDrift=true
 assert_renders "seed allowed on dev" \
   --set global.environment=dev --set seed.enabled=true
+
+echo "== backup / monitoring guards permit the safe combinations =="
+# walg with base backup on (the default) is fine.
+assert_renders "walg with base backup renders" \
+  --set postgres.walg.enabled=true --set postgres.walg.baseBackup.enabled=true \
+  --set postgres.walg.s3Prefix=s3://b/walg
+# walg WITHOUT base backup is a legitimate ephemeral-tier convenience, so the
+# guard must NOT fire there.
+assert_renders "walg without base backup allowed on dev" \
+  --set global.environment=dev --set postgres.walg.enabled=true \
+  --set postgres.walg.baseBackup.enabled=false --set postgres.walg.s3Prefix=s3://b/walg
+# A ruleSelector label, or the explicit opt-out, clears the PrometheusRule guard.
+assert_renders "prometheus rules with ruleSelector label renders" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_renders "prometheus rules allowUnselectedRules renders" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
 
 echo
 if [ "$FAILED" -ne 0 ]; then

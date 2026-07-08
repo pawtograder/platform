@@ -281,7 +281,11 @@ credentials come from secrets.names.s3 (the same secret backup.yaml uses).
   value: {{ .Values.postgres.walg.s3Endpoint | quote }}
 {{- end }}
 - name: AWS_S3_FORCE_PATH_STYLE
-  value: {{ .Values.postgres.walg.forcePathStyle | default true | quote }}
+  # `dig` (not `| default true`): sprig's `default` treats a boolean false as
+  # empty and would force "true", making forcePathStyle: false impossible to
+  # set. `dig` returns the actual value when the key is present — including
+  # false — and only falls back to true when the key is absent.
+  value: {{ dig "forcePathStyle" true .Values.postgres.walg | quote }}
 - name: AWS_ACCESS_KEY_ID
   valueFrom:
     secretKeyRef:

@@ -42,6 +42,39 @@ data:
             usage: "GAUGE"
             description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
 
+    # WAL-G continuous archiving health. With postgres.walg.enabled the primary
+    # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
+    # piles up in pg_wal and can fill the volume (write outage). last_attempt_failed
+    # drives the PawtograderWALArchiveFailing alert; wal_dir_bytes is for
+    # dashboards. Harmless when archiving is off (archiver counters stay 0).
+    # Query key = metric prefix, so metrics are pawtograder_wal_archiving_*.
+    pawtograder_wal_archiving:
+      query: |
+        SELECT
+          archived_count::float AS archived_count,
+          failed_count::float AS failed_count,
+          CASE
+            WHEN last_failed_time IS NOT NULL
+             AND (last_archived_time IS NULL OR last_failed_time > last_archived_time)
+            THEN 1 ELSE 0
+          END::float AS last_attempt_failed,
+          COALESCE((SELECT SUM(size) FROM pg_ls_waldir()), 0)::float AS wal_dir_bytes
+        FROM pg_stat_archiver
+      master: true
+      metrics:
+        - archived_count:
+            usage: "COUNTER"
+            description: "WAL segments successfully archived since stats reset"
+        - failed_count:
+            usage: "COUNTER"
+            description: "Failed archive attempts since stats reset"
+        - last_attempt_failed:
+            usage: "GAUGE"
+            description: "1 if the most recent archive_command attempt failed (last_failed_time newer than last_archived_time)"
+        - wal_dir_bytes:
+            usage: "GAUGE"
+            description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
+
     pg_stat_statements_top:
       query: |
         SELECT queryid::text,

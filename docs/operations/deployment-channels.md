@@ -112,7 +112,7 @@ Notes:
 Channel images are built by `.github/workflows/release-images.yml` via
 `workflow_dispatch`, from the branch holding the channel's code:
 
-```
+```bash
 gh workflow run release-images.yml --ref <branch> -f channel=<name>
 ```
 
