@@ -42,20 +42,24 @@ without their secrets and storage. Do them in this order.
 - [ ] **PriorityClasses** created cluster-side if you set
       `global.priorityClassName` (the chart references them; it does not create
       them).
-- [ ] **External Secrets Operator** installed, with a `SecretStore`/
-      `ClusterSecretStore` pointing at your OpenBao/Vault.
-- [ ] **Shared Redis** deployed and its OpenBao path populated. The prod
-      template sets `redis.provider: shared` and points
-      `redis.shared.path` at `apps/pawtograder/redis-production`, so both the
-      Redis instance and that Bao path must exist before install. Deploy the
-      instance from
-      [`charts/pawtograder/examples/shared-redis/`](../../charts/pawtograder/examples/shared-redis/),
-      then populate the path by running `setup-openbao-redis-shared.sh` with
-      `--bao-path apps/pawtograder/redis-production` (it writes `redis_password`
-      and `REDIS_URL`; the script defaults to the `redis-shared` path, so pass
-      `--bao-path`). The chart syncs the path into the `pawtograder-redis`
-      Secret via `templates/redis-externalsecret.yaml`, which web and
-      edge-functions mount.
+- [ ] **External Secrets Operator** — required **only if** you sync secrets
+      from a store (the `values-prod.yaml` path). Install it with a `SecretStore`/
+      `ClusterSecretStore` pointing at your OpenBao/Vault. If your cluster has no
+      ESO, use the pre-created-Secrets path instead — see §2 and
+      [`values-prod-noeso.yaml`](../../charts/pawtograder/examples/values-prod-noeso.yaml);
+      ESO is not otherwise a prerequisite.
+- [ ] **Redis** — pick a provider. `internal` (the no-ESO default in
+      [`values-prod-noeso.yaml`](../../charts/pawtograder/examples/values-prod-noeso.yaml))
+      deploys a single-replica Redis with the release and owns the
+      `pawtograder-redis` Secret — nothing to provision. `shared` (the
+      `values-prod.yaml` path) uses a cluster-wide Redis you run outside the
+      release, synced via ESO: deploy the instance from
+      [`charts/pawtograder/examples/shared-redis/`](../../charts/pawtograder/examples/shared-redis/)
+      and populate its OpenBao path with `setup-openbao-redis-shared.sh
+      --bao-path apps/pawtograder/redis-production` (it defaults to the
+      `redis-shared` path, so pass `--bao-path`); the chart then syncs it into
+      `pawtograder-redis` via `templates/redis-externalsecret.yaml`. Redis state
+      is reconstructable either way — losing it is not data loss.
 - [ ] **kube-prometheus-stack** (or an equivalent Prometheus Operator plus
       Grafana) installed. The chart's ServiceMonitors, PrometheusRules, and
       Grafana dashboards depend on it (see the chart README's "Monitoring"
@@ -65,12 +69,27 @@ without their secrets and storage. Do them in this order.
       `$NS`), or the shipped dashboards are silently absent. Routing a
       `severity: critical` alert to a human is the separate step in §6.
 
-### 2. Secret material (ESO-only in prod)
+### 2. Secret material (ESO or pre-created — never chart-generated)
 
 `secrets.create` and `secrets.autogenerate` are **refused** under
-`environment: production` — key material must be escrowed, not generated into
-Helm release history. Populate the backing store, then create the
-ExternalSecrets that sync into the `secrets.names` K8s Secrets.
+`environment: production` — key material must never be generated into Helm
+release history. The guard does **not** mandate ESO, though: it is satisfied by
+Secrets that already exist in the namespace. Two supported paths:
+
+- **Pre-created (no ESO)** — the [`values-prod-noeso.yaml`](../../charts/pawtograder/examples/values-prod-noeso.yaml)
+  path, for clusters without External Secrets Operator. Set
+  `secrets.externalSecret.enabled: false` (the chart then renders **no**
+  ExternalSecrets) and create the base Secrets yourself before install —
+  sealed-secrets for a GitOps repo, or `kubectl create secret` for a manual
+  one. Each Secret's exact key list is documented in
+  [`charts/pawtograder/examples/externalsecrets/`](../../charts/pawtograder/examples/externalsecrets/)
+  (one manifest per base Secret) and the chart README's "Required Secrets".
+  With `redis.provider: internal` the chart owns `pawtograder-redis`, so you
+  create only the six base Secrets (`jwt`, `postgres`, `s3`, `smtp`, `web`,
+  `edge-functions`). Then skip to §3 — the ESO steps below don't apply.
+- **ESO-synced** — the [`values-prod.yaml`](../../charts/pawtograder/examples/values-prod.yaml)
+  path: populate the backing store (OpenBao/Vault), then let the chart's
+  ExternalSecrets sync it into the `secrets.names` K8s Secrets, as below.
 
 The chart renders ExternalSecrets for only three of the Secrets it mounts:
 `pawtograder-web` and `pawtograder-edge-functions`
@@ -148,8 +167,10 @@ must be your prod namespace.
 
 ### 5. Install
 
-Copy `values-prod.yaml` into your deployment repo, fill every `← ...` blank,
-then:
+Copy the base template that matches your cluster into your deployment repo and
+fill every `← ...` blank: [`values-prod.yaml`](../../charts/pawtograder/examples/values-prod.yaml)
+(ESO + shared Redis) or [`values-prod-noeso.yaml`](../../charts/pawtograder/examples/values-prod-noeso.yaml)
+(pre-created Secrets + in-chart Redis + existing wildcard cert). Then:
 
 ```bash
 helm upgrade --install <release> ./charts/pawtograder \
