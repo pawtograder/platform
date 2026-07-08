@@ -21,7 +21,8 @@ set -uo pipefail
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAILED=0
 ERRFILE="$(mktemp)"
-trap 'rm -f "$ERRFILE"' EXIT
+OUTFILE="$(mktemp)"
+trap 'rm -f "$ERRFILE" "$OUTFILE"' EXIT
 
 # A production values set that renders clean. Each guard test adds ONE
 # dangerous override on top so the only reason a render can fail is that guard.
@@ -66,6 +67,24 @@ assert_renders() {
   fi
 }
 
+# assert_rendered_contains "<label>" "<template>" "<expected substring>" <extra --set args...>
+# Renders one template with --show-only and asserts the output contains the
+# expected text — used to lock in a hardening detail (securityContext, SA-token
+# opt-out) that lives in a rendered manifest rather than in a guard `fail`.
+assert_rendered_contains() {
+  local label="$1" template="$2" want="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+  elif ! grep -qF "$want" "$OUTFILE"; then
+    echo "FAIL [$label]: rendered, but missing expected text: $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 echo "== baseline =="
 assert_renders "clean production baseline renders"
 
@@ -95,11 +114,35 @@ assert_refused "prometheus rules without ruleSelector labels" \
   "every backup/ESO/cert alert is inert" \
   --set monitoring.enabled=true
 
+echo "== staging tier: durable guards fire, production-only guards do not =="
+# staging is a durable tier: helm's last---set-wins retiers the production
+# baseline to staging, so the durable (staging+prod) guards must still bite,
+# while the production-only pins (image tags, storageClass, e2e/seed) relax.
+assert_refused "secrets.create in staging" \
+  "renders plaintext secret material" \
+  --set global.environment=staging --set secrets.create=true
+assert_refused "resetOnDrift in staging" \
+  "DESTROYS ALL APPLICATION DATA" \
+  --set global.environment=staging --set migrations.resetOnDrift=true
+assert_refused "blank prometheusRules label value in staging" \
+  "matches no ruleSelector" \
+  --set global.environment=staging --set monitoring.enabled=true \
+  --set monitoring.prometheusRules.labels.release=""
+assert_renders "web e2e allowed on staging" \
+  --set global.environment=staging --set web.e2e.enabled=true
+assert_renders "seed allowed on staging" \
+  --set global.environment=staging --set seed.enabled=true
+assert_renders "empty image tag + storageClass allowed on staging" \
+  --set global.environment=staging --set web.image.tag="" \
+  --set postgres.persistence.storageClass=""
+
 echo "== production-only guards =="
 assert_refused "web e2e bypass" \
   "enable privileged test-only code paths" --set web.e2e.enabled=true
 assert_refused "edge e2e mockGitHub" \
   "enable privileged test-only code paths" --set edgeFunctions.e2e.mockGitHub=true
+assert_refused "edge e2e enabled" \
+  "enable privileged test-only code paths" --set edgeFunctions.e2e.enabled=true
 assert_refused "secrets.autogenerate" \
   "non-recoverable key material" --set secrets.autogenerate=true
 assert_refused "seed enabled" \
@@ -110,6 +153,10 @@ assert_refused "floating edge image tag (-latest suffix)" \
   "is a floating tag" --set edgeFunctions.image.tag=canary-latest
 assert_refused "empty web image tag (appVersion fallback)" \
   "silently fall back to Chart.AppVersion" --set web.image.tag=""
+assert_refused "floating migrations image tag (latest)" \
+  "is a floating tag" --set migrations.image.tag=latest
+assert_refused "empty migrations image tag (appVersion fallback)" \
+  "silently fall back to Chart.AppVersion" --set migrations.image.tag=""
 assert_refused "empty postgres storageClass (cluster default)" \
   "node loss = data loss" --set postgres.persistence.storageClass=""
 assert_refused "blank prometheusRules label value" \
@@ -144,6 +191,15 @@ assert_renders "prometheus rules with ruleSelector label renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
+
+echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
+assert_rendered_contains "internal redis pod runs non-root with a securityContext" \
+  templates/redis.yaml "runAsNonRoot: true" \
+  --set redis.provider=internal
+assert_rendered_contains "smtp-relay does not automount the SA token" \
+  templates/smtp-relay.yaml "automountServiceAccountToken: false" \
+  --set auth.smtp.enabled=true --set auth.smtp.relay.enabled=true \
+  --set auth.smtp.relay.downstream=lxc.example.edu:2525
 
 echo
 if [ "$FAILED" -ne 0 ]; then
