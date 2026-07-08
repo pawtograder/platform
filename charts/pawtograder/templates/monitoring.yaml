@@ -75,6 +75,29 @@ data:
             usage: "GAUGE"
             description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
 
+    # Connection-budget saturation. Counts every backend against max_connections;
+    # PostgREST pools (rest.dbPool × replicas), supavisor, GoTrue, realtime,
+    # storage and this exporter all share the budget (postgres.config.max_connections,
+    # default 400). Drives the PawtograderPostgresConnections* alerts. master:true
+    # so auto-discovered per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES)
+    # don't re-export the cluster-wide count under different `server` labels.
+    pawtograder_db_connections:
+      query: |
+        SELECT (SELECT COUNT(*) FROM pg_stat_activity)::float AS used,
+               (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max,
+               (SELECT setting::float FROM pg_settings WHERE name = 'superuser_reserved_connections') AS reserved
+      master: true
+      metrics:
+        - used:
+            usage: "GAUGE"
+            description: "Current backend connections across all databases (pg_stat_activity count)"
+        - max:
+            usage: "GAUGE"
+            description: "max_connections setting — the hard ceiling on total backends"
+        - reserved:
+            usage: "GAUGE"
+            description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
+
     pg_stat_statements_top:
       query: |
         SELECT queryid::text,

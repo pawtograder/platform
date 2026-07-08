@@ -138,6 +138,52 @@ spec:
               Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
               usage. Runbook: docs/operations/point-in-time-recovery.md.
     {{- end }}
+    {{- if .Values.postgres.enabled }}
+    - name: pawtograder.postgres
+      rules:
+        # Connection-budget saturation. pawtograder_db_connections (postgres_exporter
+        # query in monitoring.yaml) reports used backends against max_connections;
+        # the ratio is compared to a percent threshold. max() not sum(): there is a
+        # single primary and max() collapses any residual per-`server` label
+        # duplication from the exporter's auto-discovery. No absent() arm — an
+        # exporter that is down must NOT page as connection saturation.
+        - alert: PawtograderPostgresConnectionsHigh
+          expr: |
+            max(pawtograder_db_connections_used{namespace="{{ $ns }}"})
+              / max(pawtograder_db_connections_max{namespace="{{ $ns }}"})
+              > {{ divf .Values.monitoring.prometheusRules.connectionUsagePercentWarning 100 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres connection usage is high"
+            description: >-
+              Backend connections in {{ $ns }} have exceeded
+              {{ .Values.monitoring.prometheusRules.connectionUsagePercentWarning }}% of
+              max_connections for 15m. Usually a pool leak (PostgREST rest.dbPool ×
+              replicas, supavisor, or realtime holding more than expected) or
+              idle-in-transaction sessions pinning slots. Raise
+              postgres.config.max_connections only with memory headroom (each
+              backend costs RAM). Runbook: docs/operations/monitoring-alerting.md.
+        - alert: PawtograderPostgresConnectionsSaturated
+          expr: |
+            max(pawtograder_db_connections_used{namespace="{{ $ns }}"})
+              / max(pawtograder_db_connections_max{namespace="{{ $ns }}"})
+              > {{ divf .Values.monitoring.prometheusRules.connectionUsagePercentCritical 100 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres connections are nearly saturated"
+            description: >-
+              Backend connections in {{ $ns }} have exceeded
+              {{ .Values.monitoring.prometheusRules.connectionUsagePercentCritical }}% of
+              max_connections for 5m. superuser_reserved_connections shrinks the
+              app-usable ceiling below max_connections, so new client connections
+              are about to be refused (FATAL: too many clients). Kill leaked/idle
+              sessions or scale down connection consumers immediately. Runbook:
+              docs/operations/monitoring-alerting.md.
+    {{- end }}
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and

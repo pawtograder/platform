@@ -910,6 +910,27 @@ redis:
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
       limits: { cpu: "1", memory: "1Gi" }
+    # Per-component hardening (NOT the global fallback): uid 999 must be pinned
+    # here so drop-ALL is safe. The redis:7.4.2-alpine entrypoint only needs root
+    # for its chown + su-exec dance; started directly as the image's redis user
+    # (uid 999) it skips that path entirely, so the full conservative baseline
+    # holds. readOnlyRootFilesystem is safe both ways: persistence-off runs
+    # `--save "" --appendonly no` (writes nothing; a manual BGSAVE would error,
+    # which is acceptable), and persistence-on writes only under /data, which is a
+    # volume mount. To opt out for a custom image whose entrypoint needs more,
+    # override either key (e.g. set it to {}).
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      fsGroup: 999
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      readOnlyRootFilesystem: true
     nodeSelector: {}
     tolerations: []
 
@@ -1292,6 +1313,9 @@ monitoring:
     allowUnselectedRules: false
     backupMaxAgeHours: 36
     certExpiryWarningDays: 14
+    # Postgres connection-budget saturation (used/max_connections), percent.
+    connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
+    connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
 
   # postgres_exporter sidecar in the postgres pod. Connects via TCP to
   # localhost:5432 with supabase_admin. The custom queries ConfigMap is
