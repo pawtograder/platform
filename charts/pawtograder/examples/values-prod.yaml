@@ -13,9 +13,11 @@
 #  [ ] Replicated storage class for postgres (Ceph RBD, EBS, …) — NOT
 #      local-path: node loss must not be data loss.
 #  [ ] Production image builds: the web image bakes NEXT_PUBLIC_SUPABASE_URL
-#      and the cluster's ANON_KEY at build time. Build web/edge/migrations
-#      images against the PROD hostname + prod anon key (release-images.yml
-#      workflow_dispatch with explicit inputs), then pin the tags below.
+#      and the cluster's ANON_KEY at build time. Build web/edge/migrations via
+#      release-images.yml workflow_dispatch with web_hostname/api_hostname set
+#      to the prod host(s) and namespace set to the prod namespace; the build
+#      reads ANON_KEY live from <namespace>/pawtograder-jwt (needs the CI secret
+#      KUBECONFIG_BASE64 able to reach the prod cluster). Then pin the tags below.
 #  [ ] OpenBao/ESO paths populated for every bundle you enable
 #      (scripts/setup-openbao-edge-functions.sh) + JWT bundle from
 #      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.

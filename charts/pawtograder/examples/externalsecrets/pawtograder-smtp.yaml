@@ -1,0 +1,39 @@
+# Operator-authored ExternalSecret for the base `pawtograder-smtp` Secret.
+# Not chart-rendered; apply before the first helm upgrade.
+#
+# GoTrue reads these four keys by name (templates/auth.yaml). The sender name
+# is set from auth.smtp.senderName in values, not from this Secret, so
+# SMTP_SENDER_NAME is intentionally absent.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pawtograder-smtp
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao
+    kind: ClusterSecretStore
+  target:
+    name: pawtograder-smtp
+    creationPolicy: Owner
+  data:
+    - secretKey: SMTP_ADMIN_EMAIL
+      remoteRef:
+        key: apps/pawtograder/smtp-production
+        property: SMTP_ADMIN_EMAIL
+    - secretKey: SMTP_HOST
+      remoteRef:
+        key: apps/pawtograder/smtp-production
+        property: SMTP_HOST
+    - secretKey: SMTP_PORT
+      remoteRef:
+        key: apps/pawtograder/smtp-production
+        property: SMTP_PORT
+    - secretKey: SMTP_USER
+      remoteRef:
+        key: apps/pawtograder/smtp-production
+        property: SMTP_USER
+    - secretKey: SMTP_PASS
+      remoteRef:
+        key: apps/pawtograder/smtp-production
+        property: SMTP_PASS

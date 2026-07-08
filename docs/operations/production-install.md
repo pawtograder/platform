@@ -44,6 +44,26 @@ without their secrets and storage. Do them in this order.
       them).
 - [ ] **External Secrets Operator** installed, with a `SecretStore`/
       `ClusterSecretStore` pointing at your OpenBao/Vault.
+- [ ] **Shared Redis** deployed and its OpenBao path populated. The prod
+      template sets `redis.provider: shared` and points
+      `redis.shared.path` at `apps/pawtograder/redis-production`, so both the
+      Redis instance and that Bao path must exist before install. Deploy the
+      instance from
+      [`charts/pawtograder/examples/shared-redis/`](../../charts/pawtograder/examples/shared-redis/),
+      then populate the path by running `setup-openbao-redis-shared.sh` with
+      `--bao-path apps/pawtograder/redis-production` (it writes `redis_password`
+      and `REDIS_URL`; the script defaults to the `redis-shared` path, so pass
+      `--bao-path`). The chart syncs the path into the `pawtograder-redis`
+      Secret via `templates/redis-externalsecret.yaml`, which web and
+      edge-functions mount.
+- [ ] **kube-prometheus-stack** (or an equivalent Prometheus Operator plus
+      Grafana) installed. The chart's ServiceMonitors, PrometheusRules, and
+      Grafana dashboards depend on it (see the chart README's "Monitoring"
+      section). The Grafana dashboard sidecar must watch the app namespace, but
+      kube-prometheus-stack defaults to watching only Grafana's own namespace,
+      so set `grafana.sidecar.dashboards.searchNamespace: ALL` (or include
+      `$NS`), or the shipped dashboards are silently absent. Routing a
+      `severity: critical` alert to a human is the separate step in §6.
 
 ### 2. Secret material (ESO-only in prod)
 
@@ -51,6 +71,16 @@ without their secrets and storage. Do them in this order.
 `environment: production` — key material must be escrowed, not generated into
 Helm release history. Populate the backing store, then create the
 ExternalSecrets that sync into the `secrets.names` K8s Secrets.
+
+The chart renders ExternalSecrets for only three of the Secrets it mounts:
+`pawtograder-web` and `pawtograder-edge-functions`
+(`templates/edge-functions-externalsecret.yaml`) plus `pawtograder-redis`
+(`templates/redis-externalsecret.yaml`). The four base Secrets
+(`pawtograder-jwt`, `pawtograder-postgres`, `pawtograder-s3`,
+`pawtograder-smtp`) are not chart-rendered, so you author their ExternalSecrets
+yourself. Example manifests, one per base Secret, live in
+[`charts/pawtograder/examples/externalsecrets/`](../../charts/pawtograder/examples/externalsecrets/);
+each target Secret's key list matches exactly what the chart consumes.
 
 - [ ] **JWT bundle** generated with `scripts/GenerateJwtKeys.ts` and stored in
       OpenBao. **Escrow the private key** somewhere durable and separate —
@@ -74,21 +104,47 @@ OpenBao + ESO" sections for the exact paths and keys.
 
 ### 3. Object storage
 
-- [ ] **S3 buckets** for storage and backups created **with versioning on**
-      (`storage.s3.bucket`, `backup.s3.bucket`). Credentials in
-      `pawtograder-s3`. Set `storage.s3.endpoint` / `backup.s3.endpoint`.
+Create the buckets on any S3-compatible backend (e.g., AWS S3, MinIO, or Ceph
+RGW) with its own console or CLI. Point `storage.s3.endpoint` /
+`backup.s3.endpoint` at that backend and put the credentials in
+`pawtograder-s3`.
+
+- [ ] **Storage + backup buckets** created **with versioning on**
+      (`storage.s3.bucket`, `backup.s3.bucket`).
+- [ ] **Noncurrent-version expiration** added to both buckets. Backup retention
+      is an `mc ilm` object-expiry rule the backup Job creates
+      (`templates/backup.yaml`, keyed off `backup.retentionDays`). On a
+      versioned bucket, object expiry only writes delete markers, so old
+      noncurrent versions accumulate indefinitely and storage grows without
+      bound. Add a noncurrent-version expiration rule to each bucket so
+      superseded versions age out.
 
 ### 4. Production image builds
 
-The web image bakes `NEXT_PUBLIC_SUPABASE_URL` and the cluster's **anon key** at
-build time, so staging images cannot serve prod. Build against the prod
-hostname + prod anon key:
+The web image bakes `NEXT_PUBLIC_SUPABASE_URL` and the cluster's anon key at
+build time, so a staging image cannot serve prod. The `release-images.yml`
+`workflow_dispatch` takes `web_hostname`, `api_hostname`, `namespace`,
+`channel`, and `channel_host_suffix`. There is no anon-key input. The build
+reads the anon key live from `<namespace>/pawtograder-jwt` in the cluster
+(`release-images.yml`, the "Read anon key from cluster" step), so `namespace`
+must be your prod namespace.
 
 - [ ] Build web / edge-functions / migrations via `release-images.yml`
-      (`workflow_dispatch`) with the prod hostname and anon-key inputs.
+      (`workflow_dispatch`), with `web_hostname` / `api_hostname` set to the
+      prod hostname(s) and `namespace` set to the prod namespace.
+- [ ] Confirm the CI secret `KUBECONFIG_BASE64` holds a kubeconfig that reaches
+      the prod cluster API. The web build reads the anon key through it and
+      fails hard if it is missing or cannot reach the cluster.
 - [ ] **Pin the resulting tags** (`vX.Y.Z` or `<branch>-<sha>`) in
       `web.image.tag`, `edgeFunctions.image.tag`, `migrations.image.tag`. A
       floating `*-latest` tag is refused by the prod render guard.
+
+> **Known blocker, tracked for the prod-deploy repo work.** The web build bakes
+> `STAGING_GITHUB_OAUTH_CLIENT_ID`, `STAGING_BUGSINK_DSN`, and the staging
+> PostHog keys into every image with no prod override (`release-images.yml`, the
+> "Build & push web image" step), so a prod web image built today ships staging
+> OAuth, error reporting, and analytics. Do not patch the workflow here; it is
+> out of scope for the cluster bring-up.
 
 ### 5. Install
 
