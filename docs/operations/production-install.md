@@ -143,7 +143,7 @@ must be your prod namespace.
 > `STAGING_GITHUB_OAUTH_CLIENT_ID`, `STAGING_BUGSINK_DSN`, and the staging
 > PostHog keys into every image with no prod override (`release-images.yml`, the
 > "Build & push web image" step), so a prod web image built today ships staging
-> OAuth, error reporting, and analytics. Do not patch the workflow here; it is
+> OAuth, error reporting, and analytics. Do not patch the workflow here. It is
 > out of scope for the cluster bring-up.
 
 ### 5. Install

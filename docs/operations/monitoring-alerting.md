@@ -61,8 +61,8 @@ the age of the last backup) and confirm a human actually gets paged.
 | `PawtograderBackupMissing`                | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                                       | [disaster-recovery.md](./disaster-recovery.md)           |
 | `PawtograderBackupVerifyJobFailed`        | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)                             | [disaster-recovery.md](./disaster-recovery.md)           |
 | `PawtograderWALArchiveFailing`            | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                  | [incident-response.md](./incident-response.md)           |
-| `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | [incident-response.md](./incident-response.md)           |
+| `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                  | below                                                    |
+| `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | below                                                    |
 | `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
 | `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                              | below                                                    |
 
@@ -80,9 +80,9 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
   (pg_wal filling the primary's volume).
 - **Postgres connections** because the budget is `postgres.config.max_connections`
   (default 400), shared by the PostgREST pools (`rest.dbPool` × replicas),
-  supavisor, GoTrue, realtime, storage, and the exporter. As backends approach
-  the ceiling, new connections are refused and every tier 5xxes at once, so the
-  warning fires with headroom (80%) and the critical close to the wall (90%).
+  supavisor, GoTrue, realtime, storage, and the exporter. As client backends approach
+  `max_connections`, new connections are refused and every tier returns 5xx errors at once, so the
+  warning fires with headroom (80%) and the critical close to the limit (90%).
   Remediation: find idle-in-transaction backends, trim the pools, or raise
   `max_connections` with matching memory headroom.
 - **ExternalSecret** staleness is invisible by design: ESO serves the last-good

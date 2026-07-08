@@ -912,7 +912,7 @@ redis:
       limits: { cpu: "1", memory: "1Gi" }
     # Per-component hardening (NOT the global fallback): uid 999 must be pinned
     # here so drop-ALL is safe. The redis:7.4.2-alpine entrypoint only needs root
-    # for its chown + su-exec dance; started directly as the image's redis user
+    # for its chown + su-exec steps; started directly as the image's redis user
     # (uid 999) it skips that path entirely, so the full conservative baseline
     # holds. readOnlyRootFilesystem is safe both ways: persistence-off runs
     # `--save "" --appendonly no` (writes nothing; a manual BGSAVE would error,

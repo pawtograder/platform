@@ -101,7 +101,7 @@ Notes:
 - **Pin to a known-good tag, not `<name>-latest`.** The staging auto-deploy runs
   `helm upgrade --wait`, which blocks on the channel's pods too. A broken
   channel image would turn an _ordinary_ stable deploy red.
-- A channel's host is always `<name>.<global.hostname>`; the chart computes it
+- A channel's host is always `<name>.<global.hostname>`. The chart computes it
   and offers no per-channel host override. The `*.<zone>` wildcard covers every
   such single-label host. Set `channels[].tls.secretName` only to serve a channel
   from a dedicated per-channel certificate instead of the wildcard.

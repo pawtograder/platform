@@ -75,22 +75,26 @@ data:
             usage: "GAUGE"
             description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
 
-    # Connection-budget saturation. Counts every backend against max_connections;
+    # Connection-budget saturation. Counts client backends against max_connections;
     # PostgREST pools (rest.dbPool × replicas), supavisor, GoTrue, realtime,
     # storage and this exporter all share the budget (postgres.config.max_connections,
-    # default 400). Drives the PawtograderPostgresConnections* alerts. master:true
-    # so auto-discovered per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES)
-    # don't re-export the cluster-wide count under different `server` labels.
+    # default 400). The backend_type filter matters: walsenders, autovacuum
+    # workers, and parallel workers draw from their own pools (max_wal_senders,
+    # autovacuum_max_workers, max_worker_processes), so counting them would
+    # inflate the ratio and page for saturation that isn't there. Drives the
+    # PawtograderPostgresConnections* alerts. master:true so auto-discovered
+    # per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES) don't re-export
+    # the cluster-wide count under different `server` labels.
     pawtograder_db_connections:
       query: |
-        SELECT (SELECT COUNT(*) FROM pg_stat_activity)::float AS used,
+        SELECT (SELECT COUNT(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::float AS used,
                (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max,
                (SELECT setting::float FROM pg_settings WHERE name = 'superuser_reserved_connections') AS reserved
       master: true
       metrics:
         - used:
             usage: "GAUGE"
-            description: "Current backend connections across all databases (pg_stat_activity count)"
+            description: "Current client backends across all databases (the connections max_connections governs)"
         - max:
             usage: "GAUGE"
             description: "max_connections setting — the hard ceiling on total backends"

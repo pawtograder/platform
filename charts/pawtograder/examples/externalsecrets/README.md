@@ -31,19 +31,19 @@ kubectl -n "$NS" get externalsecret   # every one SecretSynced=True
 Every key here is what a chart template reads by name; adding a key the chart
 does not consume is harmless, but a missing key breaks the pod that needs it.
 
-- **`pawtograder-jwt`** — read across GoTrue, PostgREST, realtime, and the web
+- **`pawtograder-jwt`**: read across GoTrue, PostgREST, realtime, and the web
   tier (`templates/secrets.yaml` documents the full set). The manifest lists the
   nine always-required keys plus the two metrics tokens the prod template needs
   (`REALTIME_METRICS_BEARER`, `METRICS_SCRAPE_TOKEN`), because `monitoring.enabled`
   is `true`. The `SUPAVISOR_*` keys are needed only when `supavisor.enabled` is
   `true`; the prod template disables Supavisor, so they are commented out.
-- **`pawtograder-postgres`** — `POSTGRES_PASSWORD` (superuser) and
+- **`pawtograder-postgres`**: `POSTGRES_PASSWORD` (superuser) and
   `PAWTOGRADER_PASSWORD` (app role). The streaming standby reuses
   `POSTGRES_PASSWORD` for `supabase_replication_admin`, so no separate
   replication password is required.
-- **`pawtograder-s3`** — the object-store credentials the storage tier and the
+- **`pawtograder-s3`**: the object-store credentials the storage tier and the
   backup / verify / restore-drill Jobs use.
-- **`pawtograder-smtp`** — the four SMTP fields GoTrue reads by key. The sender
+- **`pawtograder-smtp`**: the four SMTP fields GoTrue reads by key. The sender
   name is set from `auth.smtp.senderName` in values, not from this Secret.
 
 ## Structure
