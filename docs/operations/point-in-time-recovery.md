@@ -7,8 +7,9 @@ covers configuring it, recovering to a point in time, and promoting the standby.
 
 It builds on and supersedes the RPO floor in
 [disaster-recovery.md](./disaster-recovery.md) (the plain `pg_dump`), which stays
-as an independent second scheme. Closes PRODUCTION-READINESS §1.1 (HA) and §1.2
-(WAL/PITR) for environments that enable it.
+as an independent second scheme. This closes PRODUCTION-READINESS §1.2
+(WAL/PITR) and provides the manual standby-promotion path for §1.1; automatic
+leader election/failover remains deferred.
 
 Scope: the `supabase/postgres` StatefulSet deployed by `charts/pawtograder`.
 `NS` is the release namespace, `<release>` the Helm release. Cluster access is a

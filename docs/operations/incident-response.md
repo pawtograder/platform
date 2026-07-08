@@ -82,9 +82,11 @@ Components:
 - Symptom: everything 5xx at once (every tier depends on it).
 - Check: pod status, PVC bound, disk not full (`df` via `kubectl exec`),
   connection count near `max_connections`.
-- **Never** delete the PVC or the pod's data. On corruption/loss go to
-  [disaster-recovery.md](./disaster-recovery.md). Single-primary has no failover
-  (§1.1) — recovery is restore, not promote.
+- **Never** delete the PVC or the pod's data. If a healthy standby exists,
+  follow [point-in-time-recovery.md](./point-in-time-recovery.md) to promote it
+  manually; if you need a point-in-time restore or only the dump is usable, go to
+  [disaster-recovery.md](./disaster-recovery.md). Automatic failover is still
+  deferred, so promotion is an operator decision.
 
 ### PostgREST / Realtime / Storage / Auth (`<release>-rest|realtime|storage|auth`)
 

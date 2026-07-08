@@ -84,8 +84,9 @@ monitoring tokens). Guard coverage is asserted by
 - ✅ Post-deploy smoke gate: `helm test` hook (`templates/tests/smoke-test.yaml`) probes the
   web readiness path + GoTrue health through Kong — a check `helm upgrade --wait` (pod
   readiness only) does not do. It is a `helm.sh/hook: test` Job, so it does **not** run during
-  `helm upgrade`; the deploy pipeline must invoke `helm test <release>` after the upgrade for
-  the gate to run. The human smoke checklist is in production-install.md.
+  `helm upgrade`; staging CI now invokes `helm test <release>` after upgrade, and the prod
+  install/rollback runbooks call out the same gate. The human smoke checklist is in
+  production-install.md.
 - ✅ Rollback: [`docs/operations/rollback.md`](../../docs/operations/rollback.md) documents
   the "roll app back, leave schema forward" path for forward-only migrations.
 - ✅ ESO sync failure alerting: `prometheus-rules.yaml` ships a `PrometheusRule` on

@@ -201,18 +201,26 @@ the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
 realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
 in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
-### Edge-function credentials via OpenBao + ESO
+### Integration credentials via OpenBao + ESO
 
-`pawtograder-edge-functions` carries every external-integration secret the
-edge runtime consumes — GitHub App, AWS Chime, Discord, Canvas, SIS,
-SMTP, MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways
-to provision it:
+`pawtograder-web` carries Next.js / GoTrue runtime secrets (OAuth client
+credentials, LTI, Discord webhook public keys, web-only LLM config).
+`pawtograder-edge-functions` carries every external-integration secret the edge
+runtime consumes — GitHub App, AWS Chime, Discord bot, Canvas, SIS, SMTP,
+MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways to provision
+them:
 
 1. **OpenBao + External Secrets Operator** (recommended for staging/prod).
    One operator step per integration ("bundle") per environment:
 
    ```sh
-   # github-app bundle
+   # Web-app bundle (GoTrue OAuth, LTI, Discord public keys, etc.)
+   scripts/setup-openbao-edge-functions.sh \
+     --env production \
+     --bundle web \
+     --from-file .secrets/web-production.env
+
+   # github-app bundle for edge functions
    scripts/setup-openbao-edge-functions.sh \
      --env preview \
      --bundle github-app \
@@ -246,26 +254,29 @@ to provision it:
    secrets:
      externalSecret:
        enabled: true
-       env: preview
-       bundles:
+       env: production
+       webBundles:
+         - web
+       edgeFunctionsBundles:
          - github-app
          - aws-chime
    ```
 
-   The chart renders one `ExternalSecret` with a `dataFrom: extract`
-   entry per bundle. ESO syncs them all into
-   `pawtograder-edge-functions` with `creationPolicy: Owner`. Adding a
-   new env var to an existing bundle is "edit the script's
-   `BUNDLE_KEYS`, rerun the script" — no chart change.
+   The chart renders one `ExternalSecret` per target Secret. Each has a
+   `dataFrom: extract` entry per bundle. ESO syncs web bundles into
+   `pawtograder-web` and edge bundles into `pawtograder-edge-functions` with
+   `creationPolicy: Owner`. Adding a new env var to an existing bundle is
+   "edit the script's `BUNDLE_KEYS`, rerun the script" — no chart change.
 
    When `externalSecret.enabled=true` the chart's stub-generation path
    (for E2E previews) is automatically suppressed so ESO is the
    unambiguous owner.
 
-2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.).
-   Just make sure `pawtograder-edge-functions` exists in the release
-   namespace with whichever env vars your deploy uses; the edge runtime
-   checks every integration before use, so missing keys are tolerated.
+2. **Hand-provisioned Secrets** (sealed-secrets, `kubectl create`, etc.).
+   Just make sure `pawtograder-web` and/or `pawtograder-edge-functions` exist in
+   the release namespace with whichever env vars your deploy uses. The web and
+   edge pods mount those Secrets by name; optional integrations tolerate missing
+   keys until their feature path is used.
 
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }
@@ -456,11 +467,13 @@ box (3 pods × ~1 GiB each). Raise `realtime.replicas` to scale further; pods
 discover each other through the headless Service for fan-out across the
 cluster.
 
-## Postgres replica (planned)
+## Postgres standby
 
-The current release ships a single-primary postgres. A read replica will be
-added in a future minor release; for now, scale realtime/rest horizontally
-and rely on supavisor to absorb connection bursts.
+The chart can run an optional streaming standby (`postgres.replica`) backed by
+WAL-G archiving (`postgres.walg`). It is a warm manual failover target and
+read-only service, not automatic HA: promotion is operator-driven to avoid
+split-brain against the shared WAL archive. See
+[`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md).
 
 ## Required postgres extensions
 

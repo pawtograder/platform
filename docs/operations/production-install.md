@@ -55,16 +55,21 @@ ExternalSecrets that sync into the `secrets.names` K8s Secrets.
 - [ ] **JWT bundle** generated with `scripts/GenerateJwtKeys.ts` and stored in
       OpenBao. **Escrow the private key** somewhere durable and separate —
       losing it invalidates every issued session and signed URL.
-- [ ] **Edge-function + service bundles** populated with
-      `scripts/setup-openbao-edge-functions.sh` (GitHub App, Discord, Canvas,
-      LLM, Sentry — every `envFromSecrets` entry you enable).
+- [ ] **Web + edge-function bundles** populated with
+      `scripts/setup-openbao-edge-functions.sh` (`web` for GoTrue/LTI/web-only
+      keys, plus GitHub App, Discord, Canvas, MCP/LLM, Sentry, and every
+      `edgeFunctionsBundles` entry you enable). The prod template includes the
+      `misc` bundle because it carries `EDGE_FUNCTION_SECRET` for DB→edge
+      callbacks.
 - [ ] **Postgres, S3, SMTP** secrets populated (`pawtograder-postgres`,
       `pawtograder-s3`, `pawtograder-smtp`).
 - [ ] **ExternalSecrets** applied and **synced green** before installing the
       chart. Confirm: `kubectl -n "$NS" get externalsecret` shows every one
-      `SecretSynced=True`. A pod that starts before its secret exists crash-loops.
+      `SecretSynced=True`. Base Secrets (`jwt`, `postgres`, `s3`, `smtp`) are
+      required for pod startup; optional web/edge integration bundles fail later
+      on the feature path that needs the missing key.
 
-See the chart README's "Required Secrets" and "Edge-function credentials via
+See the chart README's "Required Secrets" and "Integration credentials via
 OpenBao + ESO" sections for the exact paths and keys.
 
 ### 3. Object storage
@@ -93,14 +98,15 @@ then:
 ```bash
 helm upgrade --install <release> ./charts/pawtograder \
   -n "$NS" --create-namespace \
-  -f <your-prod-values>.yaml --wait
+  -f <your-prod-values>.yaml --wait --wait-for-jobs
 ```
 
 Order of operations inside the chart: Postgres StatefulSet comes up → the
 migrations Job waits for Postgres **and** the Supabase services' own migrations,
 then applies Pawtograder migrations and rewrites the vault edge-callback URL to
 the in-cluster Kong host → the stateless tiers retry until the schema exists.
-`--wait` blocks until everything is Ready.
+`--wait --wait-for-jobs` blocks until Deployments are Ready and the per-revision
+migrations Job has completed.
 
 If the render is **refused**, the guard rails caught a staging-only setting
 (e2e, `secrets.create`/`autogenerate`, `seed.enabled`, `resetOnDrift`, a
@@ -110,7 +116,9 @@ values; do not disable the guard.
 
 ### 6. Post-install verification
 
-- [ ] **Smoke test** (below) passes.
+- [ ] **Helm smoke test** passes:
+      `helm test <release> -n "$NS"`.
+- [ ] **Human smoke test** (below) passes.
 - [ ] **First backup + verify.** Wait for the first scheduled `backup` Job (or trigger one: `kubectl -n "$NS" create job --from=cronjob/<release>-backup backup-manual`), then confirm `backup-verify` goes green — it runs weekly, so trigger it too rather than waiting: `kubectl -n "$NS" create job --from=cronjob/<release>-backup-verify backup-verify-manual`. A restore is only as good as its last verified backup — see [disaster-recovery.md](./disaster-recovery.md).
 - [ ] **Alerts wired end-to-end.** The chart's PrometheusRules show up in the
       cluster Prometheus (`prometheusRules.labels` matched the `ruleSelector`),

@@ -142,6 +142,19 @@ spec:
                 secretKeyRef:
                   name: pawtograder-e2e
                   key: EDGE_FUNCTION_SECRET
+            {{- else }}
+            # Production / staging: if the operator provided EDGE_FUNCTION_SECRET
+            # in the edge-functions Secret, Phase 4 writes the same value into
+            # vault so DB-triggered callbacks authenticate against the runtime.
+            # Optional keeps existing installs that rely on the legacy seeded
+            # default rendering; prod values include the `misc` bundle so this
+            # should be present there.
+            - name: EDGE_FUNCTION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.edgeFunctions }}
+                  key: EDGE_FUNCTION_SECRET
+                  optional: true
             {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}

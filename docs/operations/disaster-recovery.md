@@ -159,9 +159,10 @@ nothing writes during the restore and no half-restored state is served.
    real failure — stop and investigate before bringing traffic back.
 3. **Bring writers back** by scaling the tiers to their prod replica counts
    (re-run `helm upgrade` with the prod values, or `kubectl scale` back up).
-4. **Smoke test** before announcing recovery: sign in, open a course, load the
-   gradebook, confirm a recent submission renders. See
-   [production-install.md](./production-install.md) for the smoke checklist.
+4. **Smoke test** before announcing recovery: run
+   `helm test <release> -n "$NS"`, then sign in, open a course, load the
+   gradebook, and confirm a recent submission renders. See
+   [production-install.md](./production-install.md) for the full checklist.
 
 > The application's edge callbacks (`SUPABASE_PROJECT_URL`, vault
 > `edge-function-secret`) are set by the migrations job, not by the dump. A

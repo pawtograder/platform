@@ -44,13 +44,15 @@ prod render guard refuses those).
 # In the prod values overlay, set the web/edge/migrations image tags back to
 # the last-good release, then:
 helm upgrade <release> charts/pawtograder \
-  -n "$NS" -f <your-prod-values>.yaml --wait
+  -n "$NS" -f <your-prod-values>.yaml --wait --wait-for-jobs
 ```
 
-`--wait` blocks until the rolled-back pods are Ready. The migrations Job re-runs
-(its name is keyed to the Helm revision) but is idempotent: with no new
-migration files it applies nothing and exits `applied=0`. Finish with the
-[smoke checklist](./production-install.md#smoke-test).
+`--wait --wait-for-jobs` blocks until the rolled-back pods are Ready and the
+per-revision migrations Job has completed. The migrations Job re-runs (its name
+is keyed to the Helm revision) but is idempotent: with no new migration files it
+applies nothing and exits `applied=0`. Finish with
+`helm test <release> -n "$NS"` and the
+[human smoke checklist](./production-install.md#smoke-test).
 
 > **`helm rollback` vs. re-pinning tags.** `helm rollback <release> <rev>`
 > restores the previous _release manifest_, which also reverts the pinned image

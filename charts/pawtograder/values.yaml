@@ -187,13 +187,13 @@ secrets:
     web: pawtograder-web
     edgeFunctions: pawtograder-edge-functions
 
-  # External Secrets Operator (ESO) wiring for pawtograder-edge-functions.
-  # When enabled, the chart renders an ExternalSecret that pulls one Bao
-  # path per integration "bundle" and dumps each verbatim into the
-  # pawtograder-edge-functions Secret via `dataFrom: extract`. Keys at
-  # each Bao path are stored under their literal env-var names
-  # (GITHUB_APP_ID, DISCORD_BOT_TOKEN, …) so adding a new env var to a
-  # bundle requires no chart change — just rerun the script.
+  # External Secrets Operator (ESO) wiring for the web and edge-functions
+  # integration Secrets. When enabled, the chart renders ExternalSecrets that
+  # pull one Bao path per integration "bundle" and dump each verbatim into
+  # pawtograder-web / pawtograder-edge-functions via `dataFrom: extract`.
+  # Keys at each Bao path are stored under their literal env-var names
+  # (GITHUB_APP_ID, DISCORD_BOT_TOKEN, LTI_KEY_ENCRYPTION_SECRET, …) so adding
+  # a new env var to a bundle requires no chart change — just rerun the script.
   #
   # Provision the upstream Bao paths with
   #   scripts/setup-openbao-edge-functions.sh --bundle <name> ...
@@ -206,7 +206,11 @@ secrets:
   externalSecret:
     enabled: false
     env: ""                       # required when enabled: preview|staging|prod
-    bundles: []                   # subset of: github-app, aws-chime, discord,
+    # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
+    # edgeFunctionsBundles explicitly in new overlays.
+    bundles: []
+    webBundles: []                # usually: web
+    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
                                   #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
@@ -260,7 +264,7 @@ secrets:
       secretKey: ""
 
 # -----------------------------------------------------------------------------
-# PostgreSQL (single primary; replica support deferred to v0.2)
+# PostgreSQL (single primary with optional manual-failover streaming standby)
 # -----------------------------------------------------------------------------
 postgres:
   enabled: true

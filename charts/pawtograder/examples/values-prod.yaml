@@ -19,6 +19,9 @@
 #  [ ] OpenBao/ESO paths populated for every bundle you enable
 #      (scripts/setup-openbao-edge-functions.sh) + JWT bundle from
 #      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.
+#      This template has the chart render ExternalSecrets for the web and
+#      edge-functions integration Secrets; keep `webBundles` /
+#      `edgeFunctionsBundles` below in sync with what you populate.
 #  [ ] S3 buckets (storage + backups) with versioning; verify the
 #      backup-verify CronJob goes green after the first nightly backup.
 #  [ ] monitoring.prometheusRules.labels set to your cluster Prometheus's
@@ -84,6 +87,24 @@ secrets:
     smtp: pawtograder-smtp
     web: pawtograder-web
     edgeFunctions: pawtograder-edge-functions
+  externalSecret:
+    enabled: true
+    env: production
+    # `web` is the web-app bundle: GoTrue OAuth credentials, LTI secrets,
+    # Discord public keys, and other Next.js-only runtime env.
+    webBundles:
+      - web
+    # Edge runtime bundles. These all land in pawtograder-edge-functions.
+    # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
+    # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths
+    # are populated and used in this environment.
+    edgeFunctionsBundles:
+      - github-app
+      - discord
+      - canvas
+      - mcp
+      - sentry
+      - misc
 
 # ----- Postgres: durable, protected ------------------------------------------
 postgres:
@@ -134,12 +155,6 @@ web:
     tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
   e2e:
     enabled: false
-  envFromSecrets:
-    - pawtograder-github-app
-    - pawtograder-discord
-    - pawtograder-canvas
-    - pawtograder-llm
-    - pawtograder-sentry
 
 edgeFunctions:
   policy: per_request
@@ -156,12 +171,6 @@ edgeFunctions:
   e2e:
     enabled: false
     mockGitHub: false
-  envFromSecrets:
-    - pawtograder-github-app
-    - pawtograder-discord
-    - pawtograder-canvas
-    - pawtograder-llm
-    - pawtograder-sentry
 
 migrations:
   image:
@@ -180,10 +189,14 @@ auth:
     enabled: true
     senderName: "Pawtograder"
 
-# No shared preview Redis in prod — the chart deploys its own (auth on,
-# in-memory; the data is reconstructable rate-limiter/cache state).
+# Prod Redis should be ESO-backed, not chart-generated, so no Redis password
+# lands in Helm release state. Point this at a managed or cluster-level Redis
+# you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
+# mounts it into web + edge-functions.
 redis:
-  provider: internal
+  provider: shared
+  shared:
+    path: apps/pawtograder/redis-production
 
 supavisor:
   enabled: false        # match staging: everything dials postgres directly
