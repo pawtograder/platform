@@ -49,14 +49,14 @@ and `severity: warning` to a chat channel per your on-call setup — see
 
 ## Alerts shipped by the chart
 
-| Alert                                | Severity | Fires when                                                                                                        | Runbook                                        |
-| ------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `PawtograderBackupJobFailed`         | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                           | [disaster-recovery.md](./disaster-recovery.md) |
-| `PawtograderBackupMissing`           | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                        | [disaster-recovery.md](./disaster-recovery.md) |
-| `PawtograderBackupVerifyJobFailed`   | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)             | [disaster-recovery.md](./disaster-recovery.md) |
-| `PawtograderWALArchiveFailing`       | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling      | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderExternalSecretNotReady`  | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                          | [secrets-rotation.md](./secrets-rotation.md)   |
-| `PawtograderCertificateExpiringSoon` | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                              | below                                          |
+| Alert                                | Severity | Fires when                                                                                                   | Runbook                                                  |
+| ------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `PawtograderBackupJobFailed`         | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                      | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupMissing`           | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                   | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupVerifyJobFailed`   | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)         | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderWALArchiveFailing`       | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderExternalSecretNotReady`  | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                     | [secrets-rotation.md](./secrets-rotation.md)             |
+| `PawtograderCertificateExpiringSoon` | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                          | below                                                    |
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`).
