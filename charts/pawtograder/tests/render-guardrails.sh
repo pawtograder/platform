@@ -108,6 +108,13 @@ assert_refused "floating web image tag (latest)" \
   "is a floating tag" --set web.image.tag=latest
 assert_refused "floating edge image tag (-latest suffix)" \
   "is a floating tag" --set edgeFunctions.image.tag=canary-latest
+assert_refused "empty web image tag (appVersion fallback)" \
+  "silently fall back to Chart.AppVersion" --set web.image.tag=""
+assert_refused "empty postgres storageClass (cluster default)" \
+  "node loss = data loss" --set postgres.persistence.storageClass=""
+assert_refused "blank prometheusRules label value" \
+  "matches no ruleSelector" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=""
 
 echo "== ephemeral tiers still permit what durable tiers refuse =="
 # resetOnDrift is a legitimate dev/preview convenience; the guard must NOT fire
@@ -116,6 +123,11 @@ assert_renders "resetOnDrift allowed on dev" \
   --set global.environment=dev --set migrations.resetOnDrift=true
 assert_renders "seed allowed on dev" \
   --set global.environment=dev --set seed.enabled=true
+# Empty tag (appVersion fallback) and default storage class are fine on
+# ephemeral tiers — only production must pin.
+assert_renders "empty image tag + storageClass allowed on dev" \
+  --set global.environment=dev --set web.image.tag="" \
+  --set postgres.persistence.storageClass=""
 
 echo "== backup / monitoring guards permit the safe combinations =="
 # walg with base backup on (the default) is fine.

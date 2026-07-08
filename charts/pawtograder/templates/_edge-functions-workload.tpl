@@ -51,6 +51,7 @@ spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}
   {{- end }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.edgeFunctions) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -61,10 +62,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $ctx.Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.edgeFunctions) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ $ctx.Values.edgeFunctions.service.port }}
@@ -183,6 +189,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
           resources:
             {{- toYaml $ctx.Values.edgeFunctions.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
@@ -193,4 +205,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions "name" $component) | nindent 6 }}
 {{- end -}}

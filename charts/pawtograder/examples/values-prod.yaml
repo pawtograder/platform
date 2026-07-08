@@ -21,11 +21,19 @@
 #      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.
 #  [ ] S3 buckets (storage + backups) with versioning; verify the
 #      backup-verify CronJob goes green after the first nightly backup.
-#  [ ] Alert on: kube_job_status_failed{job_name=~".*backup.*"}, ESO
-#      externalsecret_status_condition, and the Studio ingress cert.
+#  [ ] monitoring.prometheusRules.labels set to your cluster Prometheus's
+#      ruleSelector (kube-prometheus-stack: `release: <its release name>`) —
+#      the chart's alerts are inert without it, and the render fails if you
+#      leave it blank.
+#  [ ] An Alertmanager receiver that actually pages someone for
+#      severity: critical — the chart ships alert RULES only; routing lives
+#      with the cluster monitoring stack. Fire a test alert end-to-end.
+#      See docs/operations/monitoring-alerting.md.
 #  [ ] PriorityClasses created cluster-side if you set them below.
-#  [ ] A documented restore runbook:
-#      pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>
+#  [ ] Rehearse the restore + standby-promotion runbooks against this
+#      cluster before term start (docs/operations/disaster-recovery.md,
+#      docs/operations/point-in-time-recovery.md) so RTO is measured, not
+#      guessed.
 
 global:
   environment: production
@@ -88,6 +96,32 @@ postgres:
   resources:
     requests: { cpu: "2", memory: 8Gi }
     limits: { cpu: "8", memory: 24Gi }
+
+  # WAL-G continuous archiving → PITR: recovery to any second in the retention
+  # window instead of the nightly dump (~24 h RPO without it). This is the
+  # PRIMARY recovery path the runbooks assume — see
+  # docs/operations/point-in-time-recovery.md. Keep the walg prefix DISTINCT
+  # from the nightly-dump bucket path (backup.s3).
+  walg:
+    enabled: true
+    s3Prefix: ""        # ← e.g. s3://pawtograder-prod-backups/walg
+    s3Endpoint: ""      # ← your S3 endpoint (blank = real AWS)
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8    # ~8 days of PITR window
+
+  # Streaming standby: warm failover target + read scaling. Promotion is
+  # MANUAL (see the PITR runbook) — do a promotion drill before term start.
+  # The standby's own volume can be node-local; spreadAcrossNodes keeps it
+  # off the primary's node.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: ""  # ← any per-node class is fine (own volume, other node)
+      size: 200Gi
 
 # ----- Stateless tier ---------------------------------------------------------
 # Chart defaults already give every multi-replica tier: PDB (minAvailable 1),
@@ -185,7 +219,21 @@ backup:
   verify:
     enabled: true
     schedule: "0 6 * * 1"
+  # Weekly full restore into a scratch DB + row-count assertion — the only
+  # automated proof a dump actually RESTORES, not just parses. Runs on the
+  # primary's node budget; schedule it off-peak, after verify.
+  restoreDrill:
+    enabled: true
+    schedule: "0 8 * * 1"
 
 # ----- Observability -------------------------------------------------------------
 monitoring:
   enabled: true
+  # REQUIRED: labels the cluster Prometheus's ruleSelector matches, or every
+  # shipped alert (backup failure/staleness, WAL-G, ESO sync, cert expiry) is
+  # silently inert. kube-prometheus-stack defaults to `release: <its release
+  # name>`. The chart refuses to render production with this left empty.
+  # See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    labels:
+      release: ""       # ← your kube-prometheus-stack release name

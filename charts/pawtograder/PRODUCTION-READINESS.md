@@ -18,7 +18,7 @@ Status legend: ✅ fixed in this branch · 🔶 partially addressed · ⬜ defer
 | 1.5 | Backup CronJob has no `activeDeadlineSeconds`/`startingDeadlineSeconds`, no failure alerting | `backup.yaml` | ✅ deadlines added; ✅ chart now ships a `PrometheusRule` (`prometheus-rules.yaml`) alerting on backup Job failure/staleness — **requires `monitoring.prometheusRules.labels` to match the cluster `ruleSelector`** (render-guarded in staging/prod), see [`docs/operations/monitoring-alerting.md`](../../docs/operations/monitoring-alerting.md) |
 | 1.6 | Retention via `mc ilm rule add … \|\| true` can fail silently | `backup.yaml` | ✅ failure is now loud (verifies an expiry rule exists) |
 | 1.7 | `mc` downloaded from dl.min.io at job runtime (availability + supply-chain) | `backup.yaml` | 🔶 still downloaded (SHA-pinned); baking into the migrations image tracked below |
-| 1.8 | Staging uses `local-path` (node-local) storage — node loss = data loss | `values-staging.yaml` | ⬜ accepted for staging; prod example mandates replicated storage class |
+| 1.8 | Staging uses `local-path` (node-local) storage — node loss = data loss | `values-staging.yaml` | ✅ accepted for staging; a `production` render now **refuses** an empty `postgres.persistence.storageClass` (would bind to the cluster default, possibly node-local) |
 | 1.9 | No graceful shutdown for postgres (default 30 s grace, no preStop) | `postgres-statefulset.yaml` | ✅ `terminationGracePeriodSeconds: 600` |
 
 ## 2. Availability & resilience
@@ -51,7 +51,7 @@ Status legend: ✅ fixed in this branch · 🔶 partially addressed · ⬜ defer
 ## 4. Environment separation (staging settings that must not reach prod)
 
 Addressed by the new **`global.environment`** value (`dev` | `preview` | `staging` | `production`,
-default `dev`) and `templates/validations.tpl`, which fails a `production` render when any of
+default `dev`) and `templates/validations.yaml`, which fails a `production` render when any of
 these are set:
 
 - `web.e2e.enabled` / `edgeFunctions.e2e.enabled` / `edgeFunctions.e2e.mockGitHub` (privileged test paths)
@@ -59,12 +59,20 @@ these are set:
 - `migrations.resetOnDrift` (drops `public` schema — destroys all application data)
 - `seed.enabled` (demo data)
 - `studio.ingressEnabled` without `studio.basicAuth.enabled`
-- a floating (`*-latest`) image tag on web / edge-functions / migrations
+- a floating (`*-latest`) **or empty** image tag on web / edge-functions /
+  migrations (empty silently falls back to `Chart.AppVersion`)
+- an empty `postgres.persistence.storageClass` (binds the DB to the cluster
+  default class, which may be node-local — the 1.8 trap)
+- enabled PrometheusRules whose `labels` are unset or blank-valued (alerts the
+  cluster Prometheus never selects — silently inert; staging+prod)
 
 `examples/values-staging.yaml` now declares `global.environment: staging`;
-new `examples/values-prod.yaml` declares `production` and documents the remaining
-operator checklist (replicated storage class, prod image builds, ESO paths, redis
-`internal`, SMTP, monitoring tokens).
+`examples/values-prod.yaml` declares `production`, matches-or-exceeds staging's
+durability posture (WAL-G PITR + streaming standby + weekly restore drill on),
+and documents the remaining operator checklist (replicated storage class, prod
+image builds, ESO paths, alert-routing verification, redis `internal`, SMTP,
+monitoring tokens). Guard coverage is asserted by
+`tests/render-guardrails.sh`.
 
 ## 5. Release / deploy pipeline
 
@@ -86,7 +94,7 @@ operator checklist (replicated storage class, prod image builds, ESO paths, redi
 ## Deferred work
 
 1. **Automatic Postgres failover** (1.1): the WAL-G + streaming-standby path is now shipped
-   (`postgres.walg` / `postgres.replica`, on in staging) and gives PITR + a **manual** promote.
+   (`postgres.walg` / `postgres.replica`, on in staging and in the prod example) and gives PITR + a **manual** promote.
    What remains deferred is *automatic* leader election/failover — the tracked path is
    Patroni or CloudNativePG, avoided for now because an unsupervised promoter risks
    split-brain against the shared WAL archive.

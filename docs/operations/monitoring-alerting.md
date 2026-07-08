@@ -45,6 +45,12 @@ the cluster monitoring stack, not this chart. Map `severity: critical` to a page
 and `severity: warning` to a chat channel per your on-call setup — see
 [incident-response.md](./incident-response.md).
 
+A selected rule is still inert if no receiver matches it, and nothing in the
+chart can detect that. Before go-live, prove the path end-to-end once: fire a
+test alert (e.g. `amtool alert add PawtograderRoutingTest severity=critical`
+against the Alertmanager API, or temporarily lower `backupMaxAgeHours` below
+the age of the last backup) and confirm a human actually gets paged.
+
 ---
 
 ## Alerts shipped by the chart
@@ -61,7 +67,7 @@ and `severity: warning` to a chat channel per your on-call setup — see
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`).
 
-### Why these three
+### Why these
 
 - **Backup** is the recovery floor for any install without WAL-G/PITR enabled
   (`postgres.walg` is optional and off by default, §1.2), so a silently failing

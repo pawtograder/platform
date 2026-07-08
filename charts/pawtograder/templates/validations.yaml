@@ -13,7 +13,9 @@ keyed off global.environment (dev | preview | staging | production):
                  and migrate.sh independently re-checks the tier at runtime).
   production   — e2e bypasses (privileged test paths), secrets.autogenerate
                  (non-recoverable keys), seed.enabled (demo data), floating
-                 image tags (irreproducible deploys).
+                 or empty image tags (irreproducible / appVersion-fallback
+                 deploys), empty postgres storageClass (cluster default may
+                 be node-local).
 */ -}}
 {{- $env := .Values.global.environment | default "dev" -}}
 {{- if not (has $env (list "dev" "preview" "staging" "production")) -}}
@@ -45,6 +47,13 @@ keyed off global.environment (dev | preview | staging | production):
 {{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled (not .Values.monitoring.prometheusRules.labels) (not .Values.monitoring.prometheusRules.allowUnselectedRules) -}}
 {{- fail (printf "monitoring.prometheusRules.enabled=true with an empty monitoring.prometheusRules.labels ships a PrometheusRule the cluster Prometheus never loads — kube-prometheus-stack's ruleSelector matches `release: <name>`, so with no matching label every backup/ESO/cert alert is inert. Not allowed when global.environment=%s. Set monitoring.prometheusRules.labels to your cluster's ruleSelector (e.g. { release: kube-prometheus-stack }), or set monitoring.prometheusRules.allowUnselectedRules=true to confirm your Prometheus selects all rules." $env) -}}
 {{- end -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled (not .Values.monitoring.prometheusRules.allowUnselectedRules) -}}
+{{- range $k, $v := .Values.monitoring.prometheusRules.labels -}}
+{{- if not $v -}}
+{{- fail (printf "monitoring.prometheusRules.labels.%s is empty — a blank label value matches no ruleSelector, so every shipped alert is silently inert (same failure as leaving labels unset, but it passes the empty-map check). Fill in the value (e.g. %s: kube-prometheus-stack). Not allowed when global.environment=%s." $k $k $env) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- if eq $env "production" -}}
@@ -62,5 +71,11 @@ keyed off global.environment (dev | preview | staging | production):
 {{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
 {{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}
 {{- end -}}
+{{- if not $tag -}}
+{{- fail (printf "%s.image.tag is empty — it would silently fall back to Chart.AppVersion (%q), deploying an image nobody chose. Production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>)." $name $.Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.postgres.persistence.storageClass -}}
+{{- fail "postgres.persistence.storageClass is empty — it would bind the database PVC to the cluster's DEFAULT StorageClass, which may be node-local (local-path): node loss = data loss. Production must name a replicated storage class explicitly (Ceph RBD, EBS, ...)." -}}
 {{- end -}}
 {{- end -}}

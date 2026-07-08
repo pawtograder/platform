@@ -104,16 +104,18 @@ the in-cluster Kong host → the stateless tiers retry until the schema exists.
 
 If the render is **refused**, the guard rails caught a staging-only setting
 (e2e, `secrets.create`/`autogenerate`, `seed.enabled`, `resetOnDrift`, a
-floating image tag, or an unauthenticated Studio ingress). Fix the values; do
-not disable the guard.
+floating or unpinned image tag, an empty `postgres.persistence.storageClass`,
+unset PrometheusRule labels, or an unauthenticated Studio ingress). Fix the
+values; do not disable the guard.
 
 ### 6. Post-install verification
 
 - [ ] **Smoke test** (below) passes.
-- [ ] **First backup + verify.** Wait for the first scheduled `backup` Job (or trigger one: `kubectl -n "$NS" create job --from=cronjob/<release>-backup backup-manual`), then confirm the `backup-verify` Job goes green. A restore is only as good as its last verified backup — see [disaster-recovery.md](./disaster-recovery.md).
-- [ ] **Alerts wired.** `kube_job_status_failed{job_name=~".*backup.*"}`, ESO
-      `externalsecret_status_condition`, and the Studio/ingress cert. See
-      [monitoring-alerting.md](./monitoring-alerting.md).
+- [ ] **First backup + verify.** Wait for the first scheduled `backup` Job (or trigger one: `kubectl -n "$NS" create job --from=cronjob/<release>-backup backup-manual`), then confirm `backup-verify` goes green — it runs weekly, so trigger it too rather than waiting: `kubectl -n "$NS" create job --from=cronjob/<release>-backup-verify backup-verify-manual`. A restore is only as good as its last verified backup — see [disaster-recovery.md](./disaster-recovery.md).
+- [ ] **Alerts wired end-to-end.** The chart's PrometheusRules show up in the
+      cluster Prometheus (`prometheusRules.labels` matched the `ruleSelector`),
+      and a test `severity: critical` alert reaches a human through
+      Alertmanager. See [monitoring-alerting.md](./monitoring-alerting.md).
 - [ ] **Integration credentials** installed and exercised (GitHub App webhook
       delivery, SMTP send, LTI launch if used) per [DEPLOYMENT.md](../../DEPLOYMENT.md).
 

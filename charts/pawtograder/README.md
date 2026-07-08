@@ -417,17 +417,19 @@ worked example (Google + Microsoft + GitHub) is in
 
 Start from `examples/values-prod.yaml` — it is a documented template, not a
 deployable file: copy it into your deployment repo and fill in the hostname,
-storage classes, S3 endpoints, and pinned image tags. The full gap analysis
-that drove the production hardening (and the items still deferred — postgres
-HA, WAL archiving/PITR) lives in [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
+storage classes, S3 endpoints, alert labels, and pinned image tags. The full
+gap analysis that drove the production hardening (and the items still
+deferred — automatic postgres failover, per-service metrics auth) lives in
+[PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**
   (`templates/validations.yaml`): the chart refuses to render with e2e
   bypasses, `secrets.create`/`autogenerate`, `seed.enabled`,
-  `migrations.resetOnDrift`, floating `-latest` image tags, or a Studio
-  ingress without basic-auth. Staging arms a smaller subset.
+  `migrations.resetOnDrift`, floating or unpinned image tags, an empty
+  `postgres.persistence.storageClass`, unset/blank PrometheusRule labels, or
+  a Studio ingress without basic-auth. Staging arms a smaller subset.
 - **NetworkPolicies** (`networkPolicy.enabled=true`): default-deny ingress
   to every release pod, with allows for intra-release traffic, the ingress
   controller's namespace (→ web/kong/studio), and the monitoring namespace.

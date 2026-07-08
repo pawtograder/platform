@@ -1,9 +1,9 @@
 # Disaster Recovery (backup & restore)
 
 How Pawtograder's Postgres backups are produced, how to restore one, and what
-to do when the automated verification goes red. This is the procedure the
-`values-prod.yaml` operator checklist points at ("A documented restore
-runbook").
+to do when the automated verification goes red. This is the restore procedure
+the `values-prod.yaml` operator checklist tells you to rehearse before term
+start.
 
 Scope: the nightly **`pg_dump` scheme** for the Postgres deployed by
 `charts/pawtograder` (`postgres-statefulset.yaml`). This logical dump runs
