@@ -5,12 +5,24 @@ to do when the automated verification goes red. This is the procedure the
 `values-prod.yaml` operator checklist points at ("A documented restore
 runbook").
 
-Scope: the single-primary Postgres deployed by `charts/pawtograder`
-(`postgres-statefulset.yaml`). Postgres HA and WAL archiving are deliberate
-v0.1 non-goals (see [`PRODUCTION-READINESS.md`](../../charts/pawtograder/PRODUCTION-READINESS.md)
-§1.1/§1.2), so the recovery floor is **the last good nightly dump**, not
-point-in-time. Everything below assumes cluster access through the prod
-Rancher project (a downloaded kubeconfig, or the Rancher UI's shell where noted).
+Scope: the nightly **`pg_dump` scheme** for the Postgres deployed by
+`charts/pawtograder` (`postgres-statefulset.yaml`). This logical dump runs
+independently and is always on — the coarse-grained fallback that survives
+classes of corruption WAL replay does not. When WAL-G continuous archiving + a
+streaming standby are enabled (`postgres.walg` / `postgres.replica`), those are
+the **primary** recovery paths (seconds-level RPO, warm failover) — see
+[point-in-time-recovery.md](./point-in-time-recovery.md); this dump is then the
+second, independent scheme. Everything below assumes cluster access through the
+prod Rancher project (a downloaded kubeconfig, or the Rancher UI's shell where
+noted).
+
+**Which recovery path?**
+
+- Primary lost and a standby is running → **promote the standby** (fastest); see
+  [point-in-time-recovery.md](./point-in-time-recovery.md).
+- Recover to a point in time (bad migration, mass delete) with WAL-G enabled →
+  **PITR restore**; see [point-in-time-recovery.md](./point-in-time-recovery.md).
+- No WAL-G/standby, or the nightly dump is the only good artifact → **this doc**.
 
 ---
 
@@ -50,9 +62,10 @@ newest object is always `... | sort | tail -1`.
 
 ## Recovery objectives (what "recovered" means here)
 
-- **RPO (data loss ceiling):** up to one backup interval. With the default
-  daily schedule, worst case is ~24 h of writes since the last successful
-  backup. There is no WAL archiving, so anything after the last dump is gone.
+- **RPO (data loss ceiling):** up to one backup interval for _this_ scheme —
+  with the default daily schedule, worst case ~24 h of writes since the last
+  successful dump. (With WAL-G enabled the deployment's RPO is seconds; this
+  dump's coarser RPO is the fallback, not the ceiling for the deployment.)
 - **RTO (time to restore):** dominated by dump size and the drop/recreate of
   the schema. For a small-to-mid course DB, budget 15–45 min end to end once
   you have the object in hand; larger DBs scale roughly with `pg_restore`
@@ -192,6 +205,8 @@ it.
   SHA-pinned `mc`. Baking it into the image is tracked (PRODUCTION-READINESS
   §1.7). The pin means a tampered download is rejected, not that the download
   is removed.
-- **Single-primary storage.** On a node/volume loss the StatefulSet's PVC must
-  come from a **replicated** storage class in prod (not `local-path`), or the
-  restore above is your only recourse.
+- **Single-primary storage (no standby).** With no standby running, a
+  node/volume loss means the StatefulSet's PVC must come from a **replicated**
+  storage class in prod (not `local-path`), or this restore is your only
+  recourse. A running standby (`postgres.replica`) plus a replicated class
+  removes that single point of failure — promote instead of restore.
