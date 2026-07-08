@@ -118,10 +118,13 @@ spec:
         # from the postgres_exporter query in monitoring.yaml). With
         # archive_mode=on, unarchived WAL accumulates in pg_wal and can fill the
         # primary's PVC, halting all writes. Fires before the disk fills so there
-        # is time to fix the object store / credentials.
+        # is time to fix the object store / credentials. The `absent()` arm makes
+        # the alert self-monitoring: if the exporter is down (metric missing) the
+        # critical WAL-fill risk would otherwise go undetected.
         - alert: PawtograderWALArchiveFailing
           expr: |
             max(pawtograder_wal_archiving_last_attempt_failed{namespace="{{ $ns }}"}) > 0
+            or absent(pawtograder_wal_archiving_last_attempt_failed{namespace="{{ $ns }}"})
           for: 15m
           labels:
             severity: critical
@@ -129,9 +132,10 @@ spec:
             summary: "Pawtograder WAL-G archiving is failing"
             description: >-
               The most recent `archive_command` (wal-g wal-push) in {{ $ns }}
-              failed and has not since succeeded. archive_mode is on, so WAL is
-              piling up in pg_wal and will eventually fill the primary's volume,
-              halting all writes. Check the S3 endpoint/credentials and pg_wal
+              failed and has not since succeeded, or the WAL-G archiving metric
+              is missing (postgres-exporter down). archive_mode is on, so WAL can
+              pile up in pg_wal and fill the primary's volume, halting all writes.
+              Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
               usage. Runbook: docs/operations/point-in-time-recovery.md.
     {{- end }}
     - name: pawtograder.secrets
