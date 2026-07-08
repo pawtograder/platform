@@ -376,3 +376,10 @@ backup:
 # unauthed (no METRICS_TOKEN set) and is the rate-limiting metrics source.
 monitoring:
   enabled: true
+  # Match the ripley kube-prometheus-stack release name so its ruleSelector
+  # picks up the PrometheusRule the chart ships (backup / ESO / cert alerts).
+  # kps on ripley uses an empty ruleSelector today (matches all), but set the
+  # label explicitly so it keeps working if that selector is ever tightened.
+  prometheusRules:
+    labels:
+      release: kps
