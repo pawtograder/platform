@@ -4,23 +4,31 @@ import { useCourse } from "@/hooks/useCourseController";
 import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
 import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
-import CreateAssignment from "./form";
 import { Box, Heading, Text } from "@chakra-ui/react";
+import CreateAssignment, { AssignmentFormValues, normalizeProfileIdSubset } from "./form";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
-  const form = useForm<Assignment>({
+  const form = useForm<AssignmentFormValues>({
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
       allow_not_graded_submissions: true,
       permit_empty_submissions: false,
       require_tokens_before_due_date: true,
+      grading_default_profile_id: null,
+      auto_assign_at_deadline: false,
+      auto_assign_assignee_pool: "graders",
+      auto_assign_review_due_hours: 72,
+      auto_assign_grader_subset_private_profile_ids: [],
+      late_grading_reminders_enabled: false,
+      late_grading_reminder_interval_hours: 12,
+      late_grading_reply_to: null,
+      late_grading_cc_emails: { emails: [] },
       // Default the group-formation method so the Groups subform's <select>
       // reflects a real selection instead of an empty (apparently unselected)
       // value. `false` = instructor-formed groups, matching how the rest of the
@@ -94,6 +102,13 @@ export default function NewAssignmentPage() {
           return;
         }
 
+        const remindersEnabled = getValues("late_grading_reminders_enabled") ?? false;
+        const assigneePool = getValues("auto_assign_assignee_pool") ?? "graders";
+        const graderSubset =
+          assigneePool === "graders"
+            ? normalizeProfileIdSubset(getValues("auto_assign_grader_subset_private_profile_ids"))
+            : [];
+
         const isFork = repoMode === "fork_from_prior_assignment";
         // PR-mode identification: "branch_convention" is only meaningful with a non-empty
         // regex. If the convention is blank, fall back to "base_branch" so we never persist an
@@ -121,7 +136,7 @@ export default function NewAssignmentPage() {
             max_late_tokens: getValues("max_late_tokens") || null,
             require_tokens_before_due_date: getValues("require_tokens_before_due_date") !== false,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
-            permit_empty_submissions: false,
+            permit_empty_submissions: getValues("permit_empty_submissions") === true,
             total_points: getValues("total_points"),
             template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
@@ -152,6 +167,17 @@ export default function NewAssignmentPage() {
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
               : null,
+            grading_default_profile_id: getValues("grading_default_profile_id") ?? null,
+            auto_assign_at_deadline: getValues("auto_assign_at_deadline") ?? false,
+            auto_assign_assignee_pool: assigneePool,
+            auto_assign_review_due_hours: getValues("auto_assign_review_due_hours") ?? 72,
+            auto_assign_grader_subset_private_profile_ids: graderSubset,
+            late_grading_reminders_enabled: remindersEnabled,
+            late_grading_reminder_interval_hours: remindersEnabled
+              ? (getValues("late_grading_reminder_interval_hours") ?? 12)
+              : null,
+            late_grading_reply_to: getValues("late_grading_reply_to") ?? null,
+            late_grading_cc_emails: getValues("late_grading_cc_emails") ?? { emails: [] },
             repo_mode: repoMode,
             source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
             // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
