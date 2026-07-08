@@ -565,7 +565,7 @@ these metric names directly.
 
 ### Dashboards
 
-Five dashboards land in the Grafana **Pawtograder** folder when
+Seven dashboards land in the Grafana **Pawtograder** folder when
 `monitoring.enabled=true`:
 
 | UID                              | Title              | Covers                                    |
@@ -575,10 +575,12 @@ Five dashboards land in the Grafana **Pawtograder** folder when
 | `pawtograder-realtime`           | Realtime Fanout    | connection churn, broadcast rate, Erlang VM load |
 | `pawtograder-edge-functions`     | Edge Functions     | per-function RPS / p95 / errors           |
 | `pawtograder-app-business`       | App Business       | submissions/min, grading actions, queue depth, per-class views |
+| `pawtograder-rate-limiting`      | Rate Limiting & Queues | GitHub Bottleneck backpressure, circuit-breaker state, async worker + dead-letter queue depths |
+| `pawtograder-edge-soak`          | Edge Soak / Resilience | edge HPA scaling, per-pod memory / OOMKills, worker cancel/kill events, function errors + throughput |
 
 Toggle individual dashboards via `monitoring.dashboards.{stackOverview,
-postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness}: false` if your
-platform team owns them out-of-band.
+postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness, rateLimiting,
+edgeSoak}: false` if your platform team owns them out-of-band.
 
 ### Logs
 

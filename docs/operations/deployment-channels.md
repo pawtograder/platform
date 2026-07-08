@@ -76,7 +76,6 @@ would drop anything not committed there.
 ```yaml
 channels:
   - name: canary
-    # host: canary.staging.pawtograder.net   # optional; default <name>.<global.hostname>
     web:
       image:
         tag: canary-055b7e2 # REQUIRED: a channel must have its own tag
@@ -86,7 +85,7 @@ channels:
         tag: canary-055b7e2 # REQUIRED
       replicas: 1
     # tls:
-    #   secretName: canary-own-tls   # only if `host` is outside the wildcard zone
+    #   secretName: canary-own-tls   # optional: a dedicated per-channel cert instead of the *.<zone> wildcard
 
 channelWildcardTlsSecret: staging-wildcard-tls
 ```
@@ -102,8 +101,10 @@ Notes:
 - **Pin to a known-good tag, not `<name>-latest`.** The staging auto-deploy runs
   `helm upgrade --wait`, which blocks on the channel's pods too. A broken
   channel image would turn an _ordinary_ stable deploy red.
-- If a channel's `host` is set outside the wildcard zone, either bring it back
-  under the zone or set `channels[].tls.secretName` for a per-channel cert.
+- A channel's host is always `<name>.<global.hostname>`; the chart computes it
+  and offers no per-channel host override. The `*.<zone>` wildcard covers every
+  such single-label host. Set `channels[].tls.secretName` only to serve a channel
+  from a dedicated per-channel certificate instead of the wildcard.
 
 ---
 

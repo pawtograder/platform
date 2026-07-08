@@ -108,7 +108,7 @@ is already warm.
 2. **Stop app writers** so nothing writes to the dead primary path:
    ```bash
    kubectl -n "$NS" scale deploy \
-     <release>-web <release>-rest <release>-edge-functions <release>-realtime \
+     <release>-web <release>-rest <release>-functions <release>-realtime \
      --replicas=0
    ```
 3. **Promote the standby:**
@@ -239,6 +239,12 @@ the live database. The lowest-risk path is to treat the recovered data dir as a
 - **Retention window ≈ `baseBackup.intervalHours × keepBackups`.** WAL older than
   the oldest retained base backup is pruned with it, so a PITR target must fall
   inside that window. Size `keepBackups` to the recovery window you need.
+- **No physical replication slot for the standby.** The chart creates none, so
+  the primary never retains WAL on the standby's behalf. A standby that lags past
+  the WAL still in the primary's `pg_wal` falls back to `wal-g wal-fetch` from the
+  archive (`postgres-replica.yaml` writes the `restore_command`). This is
+  deliberate: with no slot, a dead or slow standby cannot pin WAL on the primary
+  and fill its disk.
 - **`archive_command` must keep succeeding** or WAL accumulates in `pg_wal` and
   can fill the primary's disk. Alert on it (add a rule alongside the backup
   alerts in [monitoring-alerting.md](./monitoring-alerting.md)); `wal-g wal-show`

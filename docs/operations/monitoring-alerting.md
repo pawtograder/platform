@@ -55,14 +55,16 @@ the age of the last backup) and confirm a human actually gets paged.
 
 ## Alerts shipped by the chart
 
-| Alert                                | Severity | Fires when                                                                                                   | Runbook                                                  |
-| ------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `PawtograderBackupJobFailed`         | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                      | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderBackupMissing`           | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                   | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderBackupVerifyJobFailed`   | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)         | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderWALArchiveFailing`       | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderExternalSecretNotReady`  | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                     | [secrets-rotation.md](./secrets-rotation.md)             |
-| `PawtograderCertificateExpiringSoon` | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                          | below                                                    |
+| Alert                                     | Severity | Fires when                                                                                                                       | Runbook                                                  |
+| ----------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `PawtograderBackupJobFailed`              | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                                          | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupMissing`                | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                                       | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupVerifyJobFailed`        | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)                             | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderWALArchiveFailing`            | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                  | [incident-response.md](./incident-response.md)           |
+| `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | [incident-response.md](./incident-response.md)           |
+| `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
+| `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                              | below                                                    |
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`).
@@ -76,6 +78,13 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
   catch (`PawtograderBackupMissing` covers that). When `postgres.walg` is on, the
   separate `PawtograderWALArchiveFailing` alert covers a stalled WAL archive
   (pg_wal filling the primary's volume).
+- **Postgres connections** because the budget is `postgres.config.max_connections`
+  (default 400), shared by the PostgREST pools (`rest.dbPool` × replicas),
+  supavisor, GoTrue, realtime, storage, and the exporter. As backends approach
+  the ceiling, new connections are refused and every tier 5xxes at once, so the
+  warning fires with headroom (80%) and the critical close to the wall (90%).
+  Remediation: find idle-in-transaction backends, trim the pools, or raise
+  `max_connections` with matching memory headroom.
 - **ExternalSecret** staleness is invisible by design: ESO serves the last-good
   value on a sync failure and only re-reads at `refreshInterval` (1h). A broken
   OpenBao path surfaces as a crash-looping pod at the _next_ restart, long after
@@ -88,6 +97,10 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
 Each alert's expression depends on an exporter being present in the cluster:
 
 - backup alerts → `kube-state-metrics` (`kube_job_status_*`).
+- WAL-G alert → the chart's own `postgres_exporter` custom query
+  (`pawtograder_wal_archiving_*`, defined in `templates/monitoring.yaml`).
+- Postgres connection alerts → the chart's own `postgres_exporter` custom query
+  (`pawtograder_db_connections_*`, defined in `templates/monitoring.yaml`).
 - ESO alert → the External Secrets Operator's `/metrics`
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`
@@ -104,8 +117,10 @@ relying on the alert.
 After install (see [production-install.md](./production-install.md)):
 
 1. **Rules loaded.** In Prometheus → Status → Rules, the `pawtograder.backup`,
-   `pawtograder.secrets`, and `pawtograder.certs` groups appear. If they don't,
-   the `prometheusRules.labels` selector doesn't match — fix it first.
+   `pawtograder.secrets`, and `pawtograder.certs` groups appear, plus
+   `pawtograder.walg` when `postgres.walg` is enabled and `pawtograder.postgres`
+   when `postgres` is deployed. If they don't, the `prometheusRules.labels`
+   selector doesn't match — fix it first.
 2. **Series exist.** Query each metric above in Prometheus and confirm it
    returns data for the release namespace.
 3. **Fire a test.** Delete a synced Secret (or point an ExternalSecret at a bad
@@ -116,7 +131,8 @@ After install (see [production-install.md](./production-install.md)):
 
 Track in your cluster monitoring, out of scope for the chart today:
 
-- Postgres saturation (connections near `max_connections`, disk near full,
-  replication slot lag from the `pg_replication_slots` custom query).
+- Postgres disk near full, and replication slot lag from the
+  `pg_replication_slots` custom query. (Connection-budget saturation is now
+  shipped — see `PawtograderPostgresConnections*` in the alert table above.)
 - Web/edge error-rate and latency SLOs off the app `/api/metrics` series.
 - Realtime WebSocket connection churn.

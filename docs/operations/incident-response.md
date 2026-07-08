@@ -58,9 +58,10 @@ same incident at 3am. Know the course deadlines when triaging.
 
 Reading logs depends on the workload backing the component:
 
-- **Deployments** (web, auth, storage, edge-functions, realtime, Kong, …):
+- **Deployments** (web, auth, storage, functions, realtime, Kong, …):
   `kubectl -n "$NS" logs deploy/<release>-<component>` (add `--previous` for a
-  crash-looped pod).
+  crash-looped pod). The edge-functions tier's Deployment is `<release>-functions`
+  (chart component `functions`), not `<release>-edge-functions`.
 - **StatefulSet** (Postgres): `kubectl -n "$NS" logs <release>-postgres-0`
   (append `-c <container>` for a sidecar, e.g. `base-backup` or
   `postgres-exporter`).
@@ -97,7 +98,7 @@ Components:
 - A wedged-but-listening service should self-heal via its liveness probe (§2.4);
   if not, `rollout restart`.
 
-### Edge Functions (`<release>-edge-functions`)
+### Edge Functions (`<release>-functions`)
 
 - Symptom: GitHub webhooks not processing, autograder not enqueuing, notifications
   silent, gradebook cells not recalculating.

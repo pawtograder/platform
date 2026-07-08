@@ -55,7 +55,8 @@ and/or edge-functions Secret. Rotate one without touching the others:
 1. Update the bundle path in OpenBao (rerun `setup-openbao-edge-functions.sh`
    for that bundle, or patch the single key).
 2. Force ESO sync on `pawtograder-edge-functions` / `pawtograder-web`.
-3. `rollout restart` the web and edge-functions deployments.
+3. `rollout restart` the web (`<release>-web`) and edge-functions
+   (`<release>-functions`) deployments.
 
 Notes per integration:
 
@@ -67,6 +68,13 @@ Notes per integration:
   credential details.
 - **SMTP password:** notifications and auth email pause between the provider
   change and the pod restart — rotate off-peak.
+- **Redis (`redis.provider: shared`):** the shared `REDIS_URL` is not part of the
+  web/edge bundle. It has its own OpenBao path (`apps/pawtograder/redis-production`
+  in prod, set by `redis.shared.path`) and syncs into the `pawtograder-redis`
+  ExternalSecret (`templates/redis-externalsecret.yaml`), which both the web and
+  edge-functions deployments mount via `envFrom`. So rotate the OpenBao path,
+  force ESO sync on `pawtograder-redis` (not the web/edge bundles), then
+  `rollout restart` the `<release>-web` and `<release>-functions` deployments.
 
 ### Postgres passwords (`pawtograder-postgres`)
 
@@ -79,8 +87,8 @@ change too, in lockstep, or every connection fails:
    DB, via a Studio SQL console or `psql` as `supabase_admin`.
 2. Update the value in OpenBao and force ESO sync.
 3. `rollout restart` **every** tier that connects (rest, realtime, storage,
-   auth, edge-functions, supavisor if enabled) — they cache the password in env
-   and reconnect with it.
+   auth, functions, supavisor if enabled) — they cache the password in env and
+   reconnect with it. The edge-functions Deployment is `<release>-functions`.
 
 Treat this as a brief planned outage; expect connection errors in the gap
 between the `ALTER ROLE` and the restarts. Prefer to avoid it unless the

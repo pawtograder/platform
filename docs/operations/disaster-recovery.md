@@ -59,6 +59,13 @@ newest object is always `... | sort | tail -1`.
 > (pgsodium extension, vault). Restoring as `supabase_admin` avoids ownership
 > and `CREATE EXTENSION` permission errors. `--no-owner --no-acl` further
 > decouples the dump from role-name specifics.
+>
+> The nightly dump runs as the demoted `postgres` role (`backup.yaml`), which
+> does not own the pgsodium/vault objects the superuser created, so those sit
+> outside the dump role's ownership. Restores use `supabase_admin` to put them
+> back, and the weekly restore-drill CronJob (`backup-restore-drill.yaml`)
+> restores as `supabase_admin` for the same reason, exercising that path before
+> you need it.
 
 ## Recovery objectives (what "recovered" means here)
 
@@ -143,7 +150,7 @@ nothing writes during the restore and no half-restored state is served.
    stop issuing writes:
    ```bash
    kubectl -n "$NS" scale deploy \
-     <release>-web <release>-rest <release>-edge-functions <release>-realtime \
+     <release>-web <release>-rest <release>-functions <release>-realtime \
      --replicas=0
    ```
    Leave Postgres running. (Rancher UI: set each workload's scale to 0 from the
@@ -190,11 +197,14 @@ each term as the real rehearsal.
 
 ## Alerting
 
-The failure signal is a failed Kubernetes Job. Prod must alert on it — see
-[monitoring-alerting.md](./monitoring-alerting.md) for the
-`kube_job_status_failed{job_name=~".*backup.*"}` PrometheusRule. Without that
-alert a silently broken backup looks identical to a healthy one until you need
-it.
+The failure signal is a failed Kubernetes Job. Prod must alert on it. The chart
+ships `PawtograderBackupJobFailed` and `PawtograderBackupMissing` for the nightly
+dump Job, and `PawtograderBackupVerifyJobFailed` for the verify/restore-drill
+Jobs. Their exact selectors distinguish the dump Job from the verify/drill
+siblings, so a slow drill never masks a stale real backup; see
+[monitoring-alerting.md](./monitoring-alerting.md) for the expressions. Without
+that alert a silently broken backup looks identical to a healthy one until you
+need it.
 
 ## Known gaps (tracked)
 
