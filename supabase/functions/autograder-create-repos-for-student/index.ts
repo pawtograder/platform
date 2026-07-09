@@ -503,7 +503,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);
             console.error(e);
-            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            // Keep the row (is_github_ready stays false) and record the reason instead of deleting
+            // it. Deleting only the DB row orphans a possibly-blank GitHub repo, which the next
+            // attempt would then adopt. Leaving the row lets the reconciler + self-healing
+            // createRepo repair it and surfaces the failure to the instructor.
+            await adminSupabase
+              .from("repositories")
+              .update({ creation_error: e instanceof Error ? e.message : String(e) })
+              .eq("id", dbRepo!.id);
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -625,7 +632,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
         );
         console.error(e);
-        await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+        // Keep the row and record the reason rather than deleting it (see group-repo path above):
+        // deleting orphans a possibly-blank GitHub repo and hides the pending state.
+        await adminSupabase
+          .from("repositories")
+          .update({ creation_error: e instanceof Error ? e.message : String(e) })
+          .eq("id", dbRepo!.id);
       }
     });
   await Promise.all(requests);
