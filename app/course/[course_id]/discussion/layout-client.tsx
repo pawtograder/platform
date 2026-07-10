@@ -45,12 +45,25 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
     router.replace(qs ? `${pathname}?${qs}` : pathname);
   };
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Sidebar defaults open on desktop, collapsed on small screens; toggleable everywhere so
+  // keyboard/touch users are not locked out of the thread list at narrow widths.
+  const [sidebarOpen, setSidebarOpen] = useState<boolean | null>(null);
   const isDesktop = useBreakpointValue({ base: false, lg: true }) ?? false;
-  const showFullSidebar = isDesktop && sidebarOpen;
+  const showFullSidebar = sidebarOpen ?? isDesktop;
 
   return (
-    <Box as="section" aria-label="Discussion" height="100dvh" overflow="hidden" display="flex" flexDirection="column">
+    // WCAG 1.4.10 (Reflow): the fixed 100dvh/overflow-hidden app shell only applies from md up.
+    // At narrow widths (== 400% zoom on a 1280px window) the page is a normal scrolling document
+    // so no content is clipped behind an overflow-hidden container.
+    <Box
+      as="section"
+      aria-label="Discussion"
+      height={{ base: "auto", md: "100dvh" }}
+      minH={{ base: "100dvh", md: "auto" }}
+      overflow={{ base: "visible", md: "hidden" }}
+      display="flex"
+      flexDirection="column"
+    >
       <DiscussionHeader
         mode={mode}
         onSearchChangeAction={handleSearchChange}
@@ -61,7 +74,7 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
       <Box
         flex="1"
         minH={0}
-        overflow="auto"
+        overflow={{ base: "visible", md: "auto" }}
         px={{ base: 3, md: 6 }}
         pt={{ base: 3, md: 6 }}
         pb="80px"
@@ -69,18 +82,17 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
         flexDirection="column"
       >
         {threadId ? (
-          <Flex direction="row" gap={{ base: 3, lg: 6 }} align="stretch" flex="1" minH={0}>
+          <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 3, lg: 6 }} align="stretch" flex="1" minH={0}>
             <Box
               flex={{ lg: showFullSidebar ? 4 : "unset" }}
-              width={{ base: "52px", lg: showFullSidebar ? "auto" : "52px" }}
+              width={{ base: "100%", lg: showFullSidebar ? "auto" : "52px" }}
               minW={0}
             >
               <TopicThreadSidebar
                 rootId={threadId}
                 isOpen={showFullSidebar}
                 onToggle={() => {
-                  if (!isDesktop) return;
-                  setSidebarOpen((v) => !v);
+                  setSidebarOpen((v) => !(v ?? isDesktop));
                 }}
               />
             </Box>

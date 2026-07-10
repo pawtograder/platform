@@ -453,7 +453,15 @@ export default function DynamicCourseNav() {
               <UserMenu />
             </Box>
           </Flex>
-          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
+          <HStack
+            as="nav"
+            id={isMdUp ? "primary-nav" : undefined}
+            aria-label="Course navigation"
+            width="100%"
+            mt={2}
+            // WCAG 1.4.10: wrap instead of overflowing horizontally when zoomed/narrow.
+            flexWrap="wrap"
+          >
             {filteredLinks.map((link) => {
               if (link.submenu) {
                 return (
