@@ -589,8 +589,8 @@ async function diagnoseGitHubLinkStatus(
     currentGithubUsername,
     usernameChanged: Boolean(
       currentGithubUsername &&
-      target.users?.github_username &&
-      currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
+        target.users?.github_username &&
+        currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
     ),
     classOrg: githubOrg,
     studentTeamSlug,
