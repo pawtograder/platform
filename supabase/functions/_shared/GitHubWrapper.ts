@@ -1070,6 +1070,30 @@ export async function assertSourceNotEmpty(
 }
 
 /**
+ * True when a repo create/generate/fork request failed because the target name is already taken.
+ * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
+ * top-level message OR inside response.data.errors[], so check both rather than a single brittle
+ * substring against message alone.
+ */
+function isRepoNameAlreadyExistsError(e: unknown): boolean {
+  if (!(e instanceof RequestError)) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string; field?: string };
+        haystacks.push(eo.message ?? "", eo.field ?? "");
+      }
+    }
+  }
+  const joined = haystacks.join(" ").toLowerCase();
+  return joined.includes("name already exists") || joined.includes("already exists on this account");
+}
+
+/**
  * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
  * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
  * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
@@ -1082,20 +1106,29 @@ async function finalizeRepo(
   scope?: Sentry.Scope
 ): Promise<string> {
   const { is_template_repo, branch_protection = DEFAULT_BRANCH_PROTECTION } = opts;
-  // Enable squash merging; set template flag when applicable
+  // Enable squash merging; set template flag when applicable. These are non-essential settings on an
+  // otherwise-usable repo, and this finalize runs on idempotent re-runs against already-existing
+  // (adopted) repos too — so log-and-continue on failure rather than failing the whole creation,
+  // matching the enable-Actions and ruleset steps below.
   scope?.setTag("github_operation", "patch_repo_settings");
-  await retryWithBackoff(
-    () =>
-      octokit.request("PATCH /repos/{owner}/{repo}", {
-        owner: org,
-        repo: repoName,
-        allow_squash_merge: true,
-        is_template: is_template_repo ? true : false
-      }),
-    3, // maxRetries
-    1000, // baseDelayMs
-    scope
-  );
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("PATCH /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName,
+          allow_squash_merge: true,
+          is_template: is_template_repo ? true : false
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+  } catch (patchErr) {
+    console.error("Error patching repo settings (squash merge / template flag)", patchErr);
+    scope?.setTag("patch_repo_settings_failed", "true");
+    Sentry.captureException(patchErr, scope);
+  }
   // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
   scope?.setTag("github_operation", "enable_actions");
   try {
@@ -1254,7 +1287,7 @@ export async function createRepo(
   try {
     await createAndWaitReady();
   } catch (createErr) {
-    if (createErr instanceof RequestError && createErr.message.includes("Name already exists on this account")) {
+    if (isRepoNameAlreadyExistsError(createErr)) {
       // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If
       // it is EMPTY, a previous attempt left it half-created — REPAIR it by deleting and
       // regenerating rather than adopting a blank repo forever (the old, broken behavior).
@@ -1280,27 +1313,28 @@ export async function createRepo(
         try {
           await createAndWaitReady();
         } catch (repairErr) {
-          // If the regenerated repo still never receives content, the source is broken — surface a
-          // precise, non-retryable error instead of letting a generic readiness failure be retried.
+          // If the regenerated repo still never receives content, diagnose the source. A genuinely
+          // empty/missing template makes assertSourceNotEmpty throw a terminal NonRetryableRepoError.
+          // If the source is HEALTHY, the repo has simply not finished mirroring yet — a transient
+          // condition, so let the original readiness error propagate as retryable rather than
+          // dead-lettering a slow-but-fine repo on the first attempt.
           if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
             console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
             await assertSourceNotEmpty(octokit, owner, repo, template_repo);
-            throw new NonRetryableRepoError(
-              `Repo ${org}/${repoName} was regenerated but never received content from ${template_repo}`
-            );
           }
           throw repairErr;
         }
       }
       // else: existing non-empty repo — fall through to the shared finalize block to adopt it.
     } else if (createErr instanceof UserVisibleError && createErr.message.includes("did not become ready")) {
-      // The create call succeeded but the repo never received content. The source had nothing to
-      // copy (or GitHub failed to mirror it) — surface a precise, non-retryable error.
+      // The create call succeeded but the repo has not received content yet. Diagnose the source: a
+      // genuinely empty/missing template makes assertSourceNotEmpty throw a terminal
+      // NonRetryableRepoError. If the source is HEALTHY, GitHub has simply not finished mirroring — a
+      // transient condition, so re-throw the original readiness error as retryable rather than
+      // dead-lettering a slow-but-fine repo on the first attempt.
       console.error("Repo did not become ready after create", createErr);
       await assertSourceNotEmpty(octokit, owner, repo, template_repo);
-      throw new NonRetryableRepoError(
-        `Repo ${org}/${repoName} was created but never received content from ${template_repo}`
-      );
+      throw createErr;
     } else {
       console.error("Error creating repo", createErr);
       throw createErr;

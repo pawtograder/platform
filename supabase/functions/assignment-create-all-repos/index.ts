@@ -7,6 +7,7 @@ import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import * as Sentry from "npm:@sentry/deno";
 import {
   resolveRepoCreationStrategy,
@@ -133,6 +134,16 @@ async function ensureExistingRepoCreated({
       }
 
       try {
+        // E2E fixtures must never hit real GitHub (tripping the org-wide circuit breaker). Skip
+        // createRepo + syncRepoPermissions and mark the row ready with a fake SHA, matching every
+        // other direct createRepo caller.
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug: assignment.classes!.slug, repoName })) {
+          await adminSupabase
+            .from("repositories")
+            .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+            .eq("id", repo.id);
+          return;
+        }
         // Create the repository via template-generate or fork as configured.
         const headSha = await github.createRepo(
           org,
@@ -379,6 +390,22 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     }
 
     try {
+      // E2E fixtures must never hit real GitHub (tripping the org-wide circuit breaker). Skip
+      // createRepo + syncRepoPermissions and mark the row ready with a fake SHA, matching every other
+      // direct createRepo caller.
+      if (
+        shouldSkipRealGithubForE2eFixture({
+          org: assignment.classes!.github_org,
+          courseSlug: assignment.classes!.slug,
+          repoName
+        })
+      ) {
+        await adminSupabase
+          .from("repositories")
+          .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+          .eq("id", dbRepo.id);
+        return;
+      }
       const headSha = await github.createRepo(
         assignment.classes!.github_org!,
         repoName,

@@ -2,7 +2,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import * as Sentry from "npm:@sentry/deno";
-import { createRepo, getOctoKit, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  getOctoKit,
+  NonRetryableRepoError,
+  reinviteToOrgTeam,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import {
   assertUserIsInstructor,
   SecurityError,
@@ -241,7 +247,14 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             }
           } catch (e) {
             Sentry.captureException(e, scope);
-            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            // Keep the row (is_github_ready stays false) so the reconciler + self-healing createRepo
+            // can auto-repair a transient failure; deleting would orphan a possibly-blank GitHub repo
+            // and hide it from the reconciler. Only a terminal (non-retryable) failure records
+            // creation_error to park the row for an instructor (matches
+            // autograder-create-repos-for-student).
+            if (e instanceof NonRetryableRepoError) {
+              await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+            }
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -359,7 +372,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       } catch (e) {
         Sentry.captureException(e, scope);
         errorMessages.push(`Error creating repo: ${repoName}`);
-        await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+        // Keep the row so the reconciler + self-healing createRepo can auto-repair a transient
+        // failure (deleting would orphan a possibly-blank GitHub repo and hide it from the
+        // reconciler). Only a terminal (non-retryable) failure records creation_error to park the
+        // row for an instructor (matches the group path above and autograder-create-repos-for-student).
+        if (e instanceof NonRetryableRepoError) {
+          await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+        }
       }
     });
   await Promise.all(requests);
@@ -589,8 +608,8 @@ async function diagnoseGitHubLinkStatus(
     currentGithubUsername,
     usernameChanged: Boolean(
       currentGithubUsername &&
-        target.users?.github_username &&
-        currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
+      target.users?.github_username &&
+      currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
     ),
     classOrg: githubOrg,
     studentTeamSlug,

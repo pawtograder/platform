@@ -2,7 +2,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, isUserInOrg, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  isUserInOrg,
+  NonRetryableRepoError,
+  reinviteToOrgTeam,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -520,14 +526,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);
             console.error(e);
-            // Keep the row (is_github_ready stays false) and record the reason instead of deleting
-            // it. Deleting only the DB row orphans a possibly-blank GitHub repo, which the next
-            // attempt would then adopt. Leaving the row lets the reconciler + self-healing
-            // createRepo repair it and surfaces the failure to the instructor.
-            await adminSupabase
-              .from("repositories")
-              .update({ creation_error: e instanceof Error ? e.message : String(e) })
-              .eq("id", dbRepo!.id);
+            // Keep the row (is_github_ready stays false) instead of deleting it: deleting only the DB
+            // row orphans a possibly-blank GitHub repo, which the next attempt would then adopt.
+            // ONLY a terminal (non-retryable) failure records creation_error — that parks the row and
+            // surfaces it to the instructor, because the reconciler deliberately skips rows with a
+            // creation_error. A transient failure leaves creation_error NULL so the 15-minute
+            // reconciler + self-healing createRepo can auto-repair it.
+            if (e instanceof NonRetryableRepoError) {
+              await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+            }
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -661,12 +668,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
         );
         console.error(e);
-        // Keep the row and record the reason rather than deleting it (see group-repo path above):
-        // deleting orphans a possibly-blank GitHub repo and hides the pending state.
-        await adminSupabase
-          .from("repositories")
-          .update({ creation_error: e instanceof Error ? e.message : String(e) })
-          .eq("id", dbRepo!.id);
+        // Keep the row rather than deleting it (see group-repo path above): deleting orphans a
+        // possibly-blank GitHub repo and hides the pending state. Only a terminal (non-retryable)
+        // failure records creation_error to park the row for an instructor; a transient failure
+        // leaves creation_error NULL so the reconciler + self-healing createRepo can auto-repair it.
+        if (e instanceof NonRetryableRepoError) {
+          await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+        }
       }
     });
   await Promise.all(requests);

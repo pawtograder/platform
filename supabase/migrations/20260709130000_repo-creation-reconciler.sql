@@ -79,11 +79,14 @@ begin
     end if;
   else
     -- Individual repo: single owner username; resolve prior-assignment source by profile.
+    -- Filter out disabled (dropped) roles, matching the group path above and create_all_repos_for_assignment,
+    -- so a dropped student is not re-granted repo access on reconcile/retry.
     select array[u.github_username]
       into v_usernames
       from public.user_roles ur
       join public.users u on u.user_id = ur.user_id
      where ur.private_profile_id = r.profile_id
+       and ur.disabled = false
        and u.github_username is not null
      limit 1;
 
@@ -126,6 +129,12 @@ begin
     r.branch_protection,
     null -- p_student_team_permission
   ) into v_msg_id;
+
+  -- Bump updated_at so the reconciler's stale window (is_github_ready=false AND updated_at < now - N)
+  -- does not re-enqueue a DUPLICATE create_repo job for this repo while this one is still in
+  -- flight/backoff. Transient createRepo retries never otherwise touch the row, so without this a
+  -- second job can race the first (e.g. delete+regenerate a repo the other job is finalizing).
+  update public.repositories set updated_at = now() where id = p_repository_id;
 
   return v_msg_id;
 end;
