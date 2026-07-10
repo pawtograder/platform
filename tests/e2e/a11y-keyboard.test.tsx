@@ -1,6 +1,7 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { addDays } from "date-fns";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
 import { assertLandmarkJump, tabSequence } from "./axeStudentA11y";
 
 /**
@@ -19,6 +20,12 @@ test.beforeAll(async () => {
   [student] = await createUsersInClass([
     { role: "student", class_id: course.id, name: "Keyboard Student", useMagicLink: true }
   ]);
+  await insertAssignment({
+    due_date: addDays(new Date(), 1).toUTCString(),
+    class_id: course.id,
+    name: "Keyboard Nav Assignment",
+    assignment_slug: `e2e-a11y-keyboard-${course.id}`
+  });
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
@@ -89,5 +96,40 @@ test.describe("skip links (engine-agnostic)", () => {
       return Boolean(el && el.closest('[data-landmark="primary-nav"]') && el.tagName === "A");
     });
     expect(inNav, "Tab after the skip lands on the first navigation link").toBe(true);
+  });
+});
+
+test.describe("focus order (WCAG 2.4.3)", () => {
+  test("assignments page tab order follows document order with no positive tabindex", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.getByRole("heading", { name: /assignments/i }).first()).toBeVisible();
+
+    // Positive tabindex is the classic way focus order diverges from reading order.
+    const positiveTabindexCount = await page.locator("[tabindex]:not([tabindex='-1']):not([tabindex='0'])").count();
+    expect(positiveTabindexCount, "no element uses a positive tabindex").toBe(0);
+
+    // Walk the page's tab order and assert every stop comes AFTER the previous
+    // one in DOM order — i.e. keyboard traversal matches the reading sequence.
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.focus();
+    });
+    let prev = await page.evaluateHandle(() => document.body as Element);
+    for (let i = 0; i < 15; i++) {
+      await page.keyboard.press("Tab");
+      const result = await page.evaluate((prevEl) => {
+        const cur = document.activeElement;
+        if (!cur || cur === document.body) return { done: true, inOrder: true };
+        const inOrder =
+          prevEl === document.body || Boolean(prevEl.compareDocumentPosition(cur) & Node.DOCUMENT_POSITION_FOLLOWING);
+        return { done: false, inOrder, label: (cur as HTMLElement).innerText?.slice(0, 60) };
+      }, prev);
+      if (result.done) break; // wrapped around — traversal complete
+      expect(result.inOrder, `tab stop #${i + 1} (${result.label ?? "?"}) follows the previous stop in DOM order`).toBe(
+        true
+      );
+      prev = await page.evaluateHandle(() => document.activeElement as Element);
+    }
   });
 });
