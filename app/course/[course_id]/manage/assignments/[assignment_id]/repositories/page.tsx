@@ -258,7 +258,7 @@ function RetryRepoCreationButton({
     const supabase = createClient();
     setIsRetrying(true);
     try {
-      const { error } = await (supabase.rpc as CallableFunction)("retry_repository_creation", {
+      const { error } = await supabase.rpc("retry_repository_creation", {
         p_repository_id: repoId
       });
       if (error) throw error;
@@ -747,7 +747,7 @@ export default function RepositoriesPage() {
                   <Icon as={FaTimes} color="red.500" />
                   <Text color="red.600">Creation failed</Text>
                 </HStack>
-                <Text fontSize="xs" color="fg.muted" maxW="360px">
+                <Text fontSize="xs" color="fg.muted" maxW="360px" wordBreak="break-word">
                   {row.original.creation_error}
                 </Text>
                 <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />

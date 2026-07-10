@@ -1277,7 +1277,20 @@ export async function createRepo(
         }
         // GitHub frees the name shortly after deletion; give it a moment before regenerating.
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        await createAndWaitReady();
+        try {
+          await createAndWaitReady();
+        } catch (repairErr) {
+          // If the regenerated repo still never receives content, the source is broken — surface a
+          // precise, non-retryable error instead of letting a generic readiness failure be retried.
+          if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
+            console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
+            await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+            throw new NonRetryableRepoError(
+              `Repo ${org}/${repoName} was regenerated but never received content from ${template_repo}`
+            );
+          }
+          throw repairErr;
+        }
       }
       // else: existing non-empty repo — fall through to the shared finalize block to adopt it.
     } else if (createErr instanceof UserVisibleError && createErr.message.includes("did not become ready")) {

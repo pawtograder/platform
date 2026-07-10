@@ -35,12 +35,14 @@ Deno.serve(async (req) => {
   const scope = new Sentry.Scope();
   scope.setTag("function", "github-repo-reconciler");
 
-  // Allow cron job requests or requests with the shared edge-function secret.
+  // Require the shared edge-function secret on EVERY request. The pg_cron invoker sends it via
+  // call_edge_function_internal (injected from Vault). x-supabase-webhook-source is only an
+  // attacker-settable routing/logging label and must never grant access on its own.
   const secret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
   const webhookSource = req.headers.get("x-supabase-webhook-source");
-  if (webhookSource !== "github-repo-reconciler" && secret !== expectedSecret) {
-    console.error("[github-repo-reconciler] Unauthorized request");
+  if (!expectedSecret || secret !== expectedSecret) {
+    console.error(`[github-repo-reconciler] Unauthorized request (source=${webhookSource ?? "none"})`);
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" }
@@ -73,11 +75,14 @@ Deno.serve(async (req) => {
 
     // 2) Alert on repos stuck longer than the threshold.
     const cutoff = new Date(Date.now() - ALERT_AFTER_HOURS * 60 * 60 * 1000).toISOString();
+    // Mirror reconcile_stuck_repo_creations: exclude assignments whose repo_mode doesn't require a
+    // GitHub repo (none/no_submission) so we don't falsely alert on repos that will never be ready.
     const { data: stuckRepos, error: stuckError } = await supabase
       .from("repositories")
-      .select("id, class_id, assignment_id, repository, creation_error, created_at")
+      .select("id, class_id, assignment_id, repository, creation_error, created_at, assignments!inner(repo_mode)")
       .eq("is_github_ready", false)
-      .lt("created_at", cutoff);
+      .lt("created_at", cutoff)
+      .not("assignments.repo_mode", "in", "(none,no_submission)");
     if (stuckError) {
       console.error("[github-repo-reconciler] Failed to query long-stuck repos:", stuckError);
       scope.setContext("stuck_query_error", { error: stuckError.message });
@@ -109,6 +114,8 @@ Deno.serve(async (req) => {
       console.warn(`[github-repo-reconciler] ${stuck.length} repos stuck > ${ALERT_AFTER_HOURS}h (alerted to Sentry)`);
     }
 
+    // Edge runtime may tear down as soon as the response is returned; flush queued Sentry events first.
+    await Sentry.flush(2000);
     return new Response(
       JSON.stringify({
         success: true,
@@ -121,6 +128,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("[github-repo-reconciler] Error:", error);
     Sentry.captureException(error, scope);
+    await Sentry.flush(2000);
     return new Response(
       JSON.stringify({
         error: error instanceof Error ? error.message : "Unknown error",
