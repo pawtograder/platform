@@ -34,6 +34,7 @@ import {
   Menu,
   Portal,
   Text,
+  VisuallyHidden,
   VStack
 } from "@chakra-ui/react";
 import { FiClock, FiCommand } from "react-icons/fi";
@@ -926,16 +927,22 @@ function ConnectionStatusIndicator() {
 
   return (
     <Tooltip content={tooltipContent} showArrow>
+      {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13), and a
+          role=status live region so state changes are announced politely (4.1.3): the
+          visually-hidden text IS the status content — updating it triggers the announcement. */}
       <Box
         width={3}
         height={3}
         borderRadius="full"
         bg={getStatusColor()}
-        aria-label={`Realtime connection status: ${getStatusText()}`}
-        role="note"
+        role="status"
+        tabIndex={0}
         cursor="help"
         flexShrink={0}
-      />
+        _focusVisible={{ outline: "2px solid", outlineColor: "focus", outlineOffset: "2px" }}
+      >
+        <VisuallyHidden>Realtime connection status: {getStatusText()}</VisuallyHidden>
+      </Box>
     </Tooltip>
   );
 }

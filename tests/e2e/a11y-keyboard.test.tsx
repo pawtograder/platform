@@ -14,11 +14,13 @@ import { assertLandmarkJump, tabSequence } from "./axeStudentA11y";
 
 let course: Course;
 let student: TestingUser;
+let instructor: TestingUser;
 
 test.beforeAll(async () => {
   course = await createClass({ name: "E2E A11y Keyboard Class" });
-  [student] = await createUsersInClass([
-    { role: "student", class_id: course.id, name: "Keyboard Student", useMagicLink: true }
+  [student, instructor] = await createUsersInClass([
+    { role: "student", class_id: course.id, name: "Keyboard Student", useMagicLink: true },
+    { role: "instructor", class_id: course.id, name: "Keyboard Instructor", useMagicLink: true }
   ]);
   await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
@@ -29,7 +31,7 @@ test.beforeAll(async () => {
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
-  await logMagicLinksOnFailure([student]);
+  await logMagicLinksOnFailure([student, instructor]);
 });
 
 test.describe("landmark jump chords (Alt+letter)", () => {
@@ -96,6 +98,23 @@ test.describe("skip links (engine-agnostic)", () => {
       return Boolean(el && el.closest('[data-landmark="primary-nav"]') && el.tagName === "A");
     });
     expect(inNav, "Tab after the skip lands on the first navigation link").toBe(true);
+  });
+});
+
+test.describe("nav submenus open from the keyboard (WCAG 2.1.1/4.1.2)", () => {
+  test("Course Settings menu opens with Enter and exposes menu items", async ({ page }) => {
+    // Regression: the desktop submenu trigger rendered as a styled div
+    // (Button asChild → Flex), which keyboard users could not focus or activate.
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}`);
+
+    const trigger = page.getByRole("button", { name: "Course Settings menu" });
+    await expect(trigger).toBeVisible();
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitem", { name: /enrollments/i })).toBeVisible();
+    await page.keyboard.press("Escape");
   });
 });
 

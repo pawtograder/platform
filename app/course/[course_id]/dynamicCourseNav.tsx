@@ -476,6 +476,9 @@ export default function DynamicCourseNav() {
                   >
                     <Menu.Root>
                       <Menu.Trigger asChild>
+                        {/* Must render a real <button> (WCAG 2.1.1/4.1.2): the previous
+                            Button-asChild-Flex chain produced a styled div that keyboard
+                            users could not focus or activate, so the submenu never opened. */}
                         <Button
                           aria-label={`${link.name} menu`}
                           colorPalette="gray"
@@ -483,14 +486,11 @@ export default function DynamicCourseNav() {
                           fontSize="sm"
                           pt="0"
                           variant="ghost"
-                          asChild
                         >
-                          <Flex align="center" role="group">
-                            <HStack>
-                              {React.createElement(link.icon)}
-                              {link.name}
-                            </HStack>
-                          </Flex>
+                          <HStack>
+                            {React.createElement(link.icon)}
+                            {link.name}
+                          </HStack>
                         </Button>
                       </Menu.Trigger>
                       <Portal>

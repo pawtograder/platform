@@ -258,7 +258,8 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                 aria-expanded={isOpen}
                 variant="flushed"
                 border="none"
-                _focusVisible={{ boxShadow: "none", borderColor: "transparent" }}
+                // Visible focus indicator (WCAG 2.4.7) — was suppressed entirely.
+                _focusVisible={{ outline: "2px solid", outlineColor: "focus", outlineOffset: "-2px" }}
                 size="md"
                 flex="1"
               />

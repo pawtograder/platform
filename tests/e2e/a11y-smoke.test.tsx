@@ -99,4 +99,42 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await expect(page).toHaveTitle(/Assignments.*Pawtograder/);
     await assertPageHasLandmarks(page, "assignments list");
   });
+
+  test("status messages and focus visibility: connection status, theme announcement, search focus ring", async ({
+    page,
+    browserName
+  }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}`);
+    await expect(page.locator("#main-content")).toBeVisible();
+
+    // Connection indicator is a keyboard-focusable, named status region (4.1.2/4.1.3/1.4.13).
+    const connection = page.getByRole("status").filter({ hasText: /realtime connection status/i });
+    await expect(connection.first()).toBeVisible();
+    expect(await connection.first().getAttribute("tabindex")).toBe("0");
+
+    // Theme toggle announces the change via a polite live region / toast (4.1.3).
+    await page.getByRole("button", { name: "Toggle color mode" }).first().click();
+    await expect(
+      page.locator('[role="status"], [role="alert"]').filter({ hasText: /switched to .* mode|following your system/i })
+    ).toBeVisible();
+
+    // The global search input shows a visible focus indicator (2.4.7). :focus-visible
+    // matching after synthetic keyboard events is only reliable on chromium.
+    test.skip(browserName === "webkit", "webkit focus-visible heuristics differ under synthetic input");
+    await page.locator("#main-content").focus();
+    await page.keyboard.press("/");
+    const searchInput = page.getByRole("combobox", { name: /search pawtograder/i });
+    await expect(searchInput).toBeFocused();
+    const focusRing = await searchInput.evaluate((el) => {
+      const cs = window.getComputedStyle(el);
+      return { matchesFocusVisible: el.matches(":focus-visible"), outline: cs.outlineStyle, shadow: cs.boxShadow };
+    });
+    if (focusRing.matchesFocusVisible) {
+      expect(
+        focusRing.outline !== "none" || focusRing.shadow !== "none",
+        `focused search input has a visible indicator (outline=${focusRing.outline}, shadow=${focusRing.shadow})`
+      ).toBe(true);
+    }
+  });
 });
