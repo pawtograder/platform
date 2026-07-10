@@ -630,9 +630,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             ? templateRepoOverride
             : strategy.sourceRepo;
         // E2E fixtures must never hit real GitHub (see group-repo path above).
-        if (
-          shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
           await adminSupabase
             .from("repositories")
             .update({

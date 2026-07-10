@@ -29,7 +29,11 @@ Deno.test("isE2eFixtureTarget: fixture org + fixture repo name prefixes match", 
 Deno.test("isE2eFixtureTarget: fixture org + real slug + non-fixture repo name does NOT match", () => {
   // Genuine integration tests use the fixture org with normal names; they must still hit real GitHub.
   assertEquals(
-    isE2eFixtureTarget({ org: "pawtograder-playground", courseSlug: "fall-2026-cs101", repoName: "fall-2026-cs101-handout-hw1" }),
+    isE2eFixtureTarget({
+      org: "pawtograder-playground",
+      courseSlug: "fall-2026-cs101",
+      repoName: "fall-2026-cs101-handout-hw1"
+    }),
     false
   );
 });
@@ -45,7 +49,10 @@ Deno.test("shouldSkipRealGithubForE2eFixture: stub mode always wins (returns fal
   try {
     Deno.env.set("PAWTOGRADER_GITHUB_STUB", "1");
     // Even a clear fixture match must not skip — the stub seam should record the call instead.
-    assertEquals(shouldSkipRealGithubForE2eFixture({ org: "pawtograder-playground", courseSlug: "e2e-ignore-foo" }), false);
+    assertEquals(
+      shouldSkipRealGithubForE2eFixture({ org: "pawtograder-playground", courseSlug: "e2e-ignore-foo" }),
+      false
+    );
   } finally {
     if (prev === undefined) Deno.env.delete("PAWTOGRADER_GITHUB_STUB");
     else Deno.env.set("PAWTOGRADER_GITHUB_STUB", prev);
@@ -56,7 +63,10 @@ Deno.test("shouldSkipRealGithubForE2eFixture: without stub, delegates to the pre
   const prev = Deno.env.get("PAWTOGRADER_GITHUB_STUB");
   try {
     Deno.env.delete("PAWTOGRADER_GITHUB_STUB");
-    assertEquals(shouldSkipRealGithubForE2eFixture({ org: "pawtograder-playground", courseSlug: "e2e-ignore-foo" }), true);
+    assertEquals(
+      shouldSkipRealGithubForE2eFixture({ org: "pawtograder-playground", courseSlug: "e2e-ignore-foo" }),
+      true
+    );
     assertEquals(shouldSkipRealGithubForE2eFixture({ org: "pawtograder-playground", courseSlug: "fall-2026" }), false);
   } finally {
     if (prev === undefined) Deno.env.delete("PAWTOGRADER_GITHUB_STUB");

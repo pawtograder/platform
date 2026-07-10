@@ -333,9 +333,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           level: "info"
         });
         // E2E fixtures must never hit real GitHub (see group-repo path above).
-        if (
-          shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
           await adminSupabase
             .from("repositories")
             .update({
@@ -591,8 +589,8 @@ async function diagnoseGitHubLinkStatus(
     currentGithubUsername,
     usernameChanged: Boolean(
       currentGithubUsername &&
-        target.users?.github_username &&
-        currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
+      target.users?.github_username &&
+      currentGithubUsername.toLowerCase() !== target.users.github_username.toLowerCase()
     ),
     classOrg: githubOrg,
     studentTeamSlug,
