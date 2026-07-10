@@ -19,7 +19,7 @@ import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/ho
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
@@ -265,9 +265,6 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
-  const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
-
   useEffect(() => {
     if (courseNavRef.current) {
       const height = courseNavRef.current.offsetHeight;
@@ -305,8 +302,11 @@ export default function DynamicCourseNav() {
       position="relative"
     >
       <NavigationProgressBar />
-      {/* Mobile Layout */}
-      <Box display={{ base: "block", md: "none" }} aria-hidden={isMdUp ? true : undefined}>
+      {/* Mobile Layout. The inactive responsive twin is removed from BOTH the tab order and the
+          accessibility tree by its breakpoint display:none — no aria-hidden needed. (A JS-derived
+          aria-hidden could disagree with the CSS breakpoint during hydration/resize and hide the
+          copy the user is actually seeing.) */}
+      <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
@@ -321,7 +321,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box id={!isMdUp ? "user-menu" : undefined}>
+            <Box data-landmark="user-menu">
               <UserMenu />
             </Box>
           </HStack>
@@ -329,7 +329,7 @@ export default function DynamicCourseNav() {
           {/* Navigation links - horizontal scroll on mobile */}
           <Box
             as="nav"
-            id={!isMdUp ? "primary-nav" : undefined}
+            data-landmark="primary-nav"
             aria-label="Course navigation"
             overflowX="auto"
             overflowY="hidden"
@@ -431,7 +431,8 @@ export default function DynamicCourseNav() {
       </Box>
 
       {/* Desktop Layout */}
-      <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
+      {/* Desktop Layout — see the mobile twin's comment for why there's no aria-hidden here. */}
+      <Box display={{ base: "none", md: "block" }}>
         <Box width="100%" pt="2">
           {/* Title row: course identity on the left, user-menu chips on the right.
               The chips wrap into stacked lines inside their right-hand block
@@ -449,13 +450,16 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box id={isMdUp ? "user-menu" : undefined} flex="1" minWidth={0}>
+            <Box id="user-menu" data-landmark="user-menu" flex="1" minWidth={0}>
               <UserMenu />
             </Box>
           </Flex>
           <HStack
             as="nav"
-            id={isMdUp ? "primary-nav" : undefined}
+            // Stable id on the desktop copy only (tests + skip-link hrefs); the mobile twin is
+            // reachable through data-landmark, and focusLandmark prefers whichever copy is visible.
+            id="primary-nav"
+            data-landmark="primary-nav"
             aria-label="Course navigation"
             width="100%"
             mt={2}
