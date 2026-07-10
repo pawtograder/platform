@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
+import { Box, Heading, HStack, Icon, Text, VisuallyHidden, VStack } from "@chakra-ui/react";
 import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { FaCheck, FaTimes } from "react-icons/fa";
 import { useMemo, useState } from "react";
@@ -84,13 +84,25 @@ function TestRow({
         ) : (
           <Box w="12px" flexShrink={0} />
         )}
-        <Icon as={passed ? FaCheck : FaTimes} color={passed ? "green.solid" : "red.solid"} boxSize={3} flexShrink={0} />
+        <Icon
+          as={passed ? FaCheck : FaTimes}
+          color={passed ? "green.solid" : "red.solid"}
+          boxSize={3}
+          flexShrink={0}
+          aria-hidden="true"
+        />
+        <VisuallyHidden>{passed ? "Passed:" : "Failed:"}</VisuallyHidden>
         <Text fontSize="sm" wordBreak="break-word">
           {test.name}
         </Text>
       </HStack>
       <Text fontSize="sm" color="fg.muted" flexShrink={0}>
-        {test.score ?? 0}/{test.max_score ?? 0}
+        <VisuallyHidden>
+          {test.score ?? 0} of {test.max_score ?? 0} points
+        </VisuallyHidden>
+        <Text as="span" aria-hidden="true">
+          {test.score ?? 0}/{test.max_score ?? 0}
+        </Text>
       </Text>
     </HStack>
   );

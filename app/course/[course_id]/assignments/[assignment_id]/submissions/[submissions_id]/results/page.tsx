@@ -17,7 +17,8 @@ import {
   Spinner,
   Table,
   Tabs,
-  Text
+  Text,
+  VisuallyHidden
 } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
@@ -261,7 +262,7 @@ export default function GraderResults() {
       <Container>
         <Box p={4} margin={{ base: "2", lg: "4" }}>
           {hasUserVisibleErrors ? (
-            <Alert title="Submission Error" status="error" p={4} mb={4}>
+            <Alert title="Submission Error" status="error" role="alert" p={4} mb={4}>
               An error occurred while processing your submission. Your code has been submitted to{" "}
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>, but the
               autograder encountered issues.
@@ -311,7 +312,7 @@ export default function GraderResults() {
               </Box>
             </Alert>
           ) : (
-            <Alert title="Submission Processing Error" status="warning" p={4} mb={4}>
+            <Alert title="Submission Processing Error" status="warning" role="alert" p={4} mb={4}>
               The autograder reported a problem, but the detailed message is only visible to course staff. Your code was
               still pushed to{" "}
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
@@ -379,7 +380,7 @@ export default function GraderResults() {
       return (
         <Container>
           <Box p={4} margin={{ base: "2", lg: "4" }}>
-            <Alert title="Manual / rubric grading" status="info">
+            <Alert title="Manual / rubric grading" status="info" role="status">
               This assignment is graded manually — there is no autograder feedback for this submission. See the Grade
               tab for rubric scores and comments.
             </Alert>
@@ -390,7 +391,7 @@ export default function GraderResults() {
     return (
       <Container>
         <Box p={4} margin={{ base: "2", lg: "4" }}>
-          <Alert title="Autograder has not finished running">
+          <Alert title="Autograder has not finished running" role="status">
             The autograder started running {formatDistanceToNow(query.data.data.created_at, { addSuffix: true })}, and
             has not completed yet. Please check{" "}
             <Link
@@ -459,10 +460,14 @@ export default function GraderResults() {
                 <ErrorPinCallout matches={errorPinMatches.get(null)!} />
               </Box>
             )}
-            <Heading size="md">Lint Results: {data.grader_results?.lint_passed ? "Passed" : "Failed"}</Heading>
+            <Heading as="h2" size="md">
+              Lint Results: {data.grader_results?.lint_passed ? "Passed" : "Failed"}
+            </Heading>
             {data.grader_results?.lint_output && (
               <Box borderWidth="1px" borderRadius="md" p={2}>
-                <Heading size="sm">Lint Output</Heading>
+                <Heading as="h3" size="sm">
+                  Lint Output
+                </Heading>
                 <Box maxH="400px" overflow="auto">
                   {format_basic_output({
                     output: data.grader_results?.lint_output,
@@ -471,7 +476,9 @@ export default function GraderResults() {
                 </Box>
               </Box>
             )}
-            <Heading size="md">Test Results</Heading>
+            <Heading as="h2" size="md">
+              Test Results
+            </Heading>
             <HStack w="100%" justifyContent="flex-end">
               {hasHiddenOutput && isGraderOrInstructor && (
                 <Switch
@@ -524,9 +531,22 @@ export default function GraderResults() {
                             {(() => {
                               const extraData = result.extra_data as GraderResultTestExtraData;
                               if (extraData?.llm?.prompt || extraData?.llm?.result) {
-                                return <FaRobot />;
+                                return (
+                                  <>
+                                    <VisuallyHidden>AI-assisted check</VisuallyHidden>
+                                    <FaRobot aria-hidden="true" />
+                                  </>
+                                );
                               }
-                              return result.score === result.max_score ? "✅" : "❌";
+                              const passed = result.score === result.max_score;
+                              return (
+                                <>
+                                  <VisuallyHidden>{passed ? "Passed" : "Failed"}</VisuallyHidden>
+                                  <Text as="span" aria-hidden="true">
+                                    {passed ? "✅" : "❌"}
+                                  </Text>
+                                </>
+                              );
                             })()}
                           </Table.Cell>
                           <Table.Cell>
@@ -553,7 +573,9 @@ export default function GraderResults() {
                     return (
                       <CardRoot key={result.id} m={2}>
                         <CardHeader bg="bg.muted" p={2}>
-                          <Heading size="md">Student-Visible Output</Heading>
+                          <Heading as="h4" size="md">
+                            Student-Visible Output
+                          </Heading>
                         </CardHeader>
                         <CardBody>{content}</CardBody>
                       </CardRoot>
@@ -568,10 +590,13 @@ export default function GraderResults() {
                 const testMatches = errorPinMatches.get(result.id) || [];
 
                 return (
-                  <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
+                  <CardRoot key={result.id} aria-labelledby={`test-${result.id}`} mt={4}>
                     <CardHeader bg={`bg.${style}`} p={2}>
                       <HStack justify="space-between">
-                        <Heading size="lg" color={`fg.${style}`}>
+                        {/* The summary table links to #test-{id}; anchoring the id on the heading
+                            (focusable via tabIndex) makes the jump land screen readers on the test
+                            name instead of an unlabeled card container (WCAG 1.3.2 / 2.4.3). */}
+                        <Heading as="h3" size="lg" color={`fg.${style}`} id={`test-${result.id}`} tabIndex={-1}>
                           {result.name} {showScore ? result.score + "/" + result.max_score : ""}
                         </Heading>
                         {isFailing && result.output && (
@@ -614,7 +639,9 @@ export default function GraderResults() {
                         return (
                           <CardRoot key={output.id} m={2}>
                             <CardHeader bg="bg.muted" p={2}>
-                              <Heading size="md">Instructor-Only Output</Heading>
+                              <Heading as="h4" size="md">
+                                Instructor-Only Output
+                              </Heading>
                             </CardHeader>
                             <CardBody>
                               {format_basic_output({

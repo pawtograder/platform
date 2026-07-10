@@ -23,7 +23,7 @@ import type {
   SubmissionComments,
   SubmissionFileComment
 } from "@/utils/supabase/DatabaseTypes";
-import { Badge, Box, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Heading, HStack, Text, VisuallyHidden, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
 export type HandGradingSectionProps = {
@@ -94,11 +94,20 @@ function AppliedCheckRow({
   return (
     <Box borderWidth="1px" borderColor="border.info" borderRadius="md" p={2} w="100%" fontSize="sm">
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap">
-        <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+        <Text as="h5" fontWeight="semibold" color="fg.default" wordBreak="break-word">
           {check.name}
         </Text>
         <Text fontWeight="semibold" color={isAdditive ? "green.600" : "red.600"} flexShrink={0}>
-          {signedPoints}
+          <VisuallyHidden>
+            {points === 0
+              ? `0 points for ${check.name}`
+              : isAdditive
+                ? `${points} points added for ${check.name}`
+                : `${points} points deducted for ${check.name}`}
+          </VisuallyHidden>
+          <Text as="span" aria-hidden="true">
+            {signedPoints}
+          </Text>
         </Text>
       </HStack>
       {check.description && (
@@ -158,7 +167,7 @@ function UnappliedCheckRow({
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap">
         <VStack align="start" gap={0} minW="0">
           <HStack gap={2} flexWrap="wrap">
-            <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+            <Text as="h5" fontWeight="semibold" color="fg.default" wordBreak="break-word">
               {check.name}
             </Text>
             <Badge size="sm" variant="surface" colorPalette="gray">
@@ -384,12 +393,17 @@ function CriterionBlock({
     >
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap" mb={2}>
         <VStack align="start" gap={0} minW="0">
-          <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+          <Text as="h4" fontWeight="semibold" color="fg.default" wordBreak="break-word">
             {criteria.name}
           </Text>
         </VStack>
         <Text fontWeight="semibold" flexShrink={0}>
-          {earned} / {max}
+          <VisuallyHidden>
+            {earned} of {max} points for {criteria.name}
+          </VisuallyHidden>
+          <Text as="span" aria-hidden="true">
+            {earned} / {max}
+          </Text>
         </Text>
       </HStack>
       {criteria.description && (
@@ -495,12 +509,17 @@ export default function HandGradingSection({ reviewId, appliedOnly }: HandGradin
   return (
     <Box display={anyVisible || showEmptyNote ? "block" : "none"} borderWidth="1px" borderRadius="md" p={4} w="100%">
       <HStack justify="space-between" align="center" mb={anyVisible ? 3 : 2} flexWrap="wrap" gap={2}>
-        <Heading as="h2" size="sm">
+        <Heading as="h3" size="sm">
           Hand grading
         </Heading>
         {anyVisible && (
           <Text fontWeight="semibold">
-            {totalEarned} / {totalMax}
+            <VisuallyHidden>
+              {totalEarned} of {totalMax} points from hand grading
+            </VisuallyHidden>
+            <Text as="span" aria-hidden="true">
+              {totalEarned} / {totalMax}
+            </Text>
           </Text>
         )}
       </HStack>

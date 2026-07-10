@@ -1479,7 +1479,7 @@ function TestResults() {
   if (!hasRealAutograderOutput) {
     return (
       <Box>
-        <Heading size="md" mt={2}>
+        <Heading as="h2" size="md" mt={2}>
           Automated Check Results
         </Heading>
         <Text fontSize="sm" color="text.muted" mt={2}>
@@ -1507,7 +1507,7 @@ function TestResults() {
     const uniqueMatches = getAllMatches();
     return (
       <Box>
-        <Heading size="md" mt={2} color="fg.error">
+        <Heading as="h2" size="md" mt={2} color="fg.error">
           Build Failed
         </Heading>
         <Box mt={2} p={2} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
@@ -1546,7 +1546,7 @@ function TestResults() {
 
   return (
     <Box>
-      <Heading size="md" mt={2}>
+      <Heading as="h2" size="md" mt={2}>
         Automated Check Results ({totalScore}/{totalMaxScore})
       </Heading>
       {testResults?.map((test) => {
@@ -1568,11 +1568,11 @@ function TestResults() {
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
-            <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
-              <Heading size="sm">
+            <Heading as="h3" size="sm">
+              <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
-              </Heading>
-            </Link>
+              </Link>
+            </Heading>
             {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
           </Box>
         );
@@ -2154,7 +2154,7 @@ function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
         {reviewAssignment === undefined && activeReviewAssignmentId && <Skeleton height="100px" />}
         {activeReviewAssignmentId && reviewAssignment && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
-            <Heading size="md">
+            <Heading as="h2" size="md">
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
@@ -2326,7 +2326,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
           <VStack align="flex-start">
-            <HStack gap={1}>
+            {/* Semantic page title (WCAG 1.3.1/2.4.6): the submission header is the page's h1 so
+                screen-reader users can orient with heading navigation. Font styles pinned to the
+                surrounding text so the visual layout is unchanged. */}
+            <HStack gap={1} as="h1" fontSize="md" fontWeight="normal" m={0}>
               {submission.is_active && <ActiveSubmissionIcon />}
               {assignmentGroupWithMembers ? (
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
@@ -2418,7 +2421,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             textAlign="center"
             m={0}
           >
-            <Heading size="md">Viewing a not-for-grading submission.</Heading>
+            <Heading as="h2" size="md">
+              Viewing a not-for-grading submission.
+            </Heading>
             <Text fontSize="xs">
               This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
               not be graded. You can still see autograder feedback.
@@ -2436,7 +2441,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             textAlign="center"
             m={0}
           >
-            <Heading size="md">Viewing a previous submission.</Heading>
+            <Heading as="h2" size="md">
+              Viewing a previous submission.
+            </Heading>
             <Text fontSize="xs">
               Use the submission history to view or change the active submission. The active submission is the one that
               will be graded.
