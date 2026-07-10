@@ -5,6 +5,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -49,6 +50,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("id", assignment_id);
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
+
+  // E2E fixtures must never hit real GitHub. Return before createRepo + syncRepoPermissions +
+  // getFileFromRepo (the last has no stub seam and would 404 on the fixture repo). The grader_repo
+  // pointer update above is a harmless DB write and stays; the config update below is correctly
+  // skipped since it depends on getFileFromRepo. Stub-record tests still fall through.
+  if (
+    shouldSkipRealGithubForE2eFixture({
+      org: solutionRepoOrg,
+      courseSlug: assignment.classes.slug,
+      repoName: solutionRepoName
+    })
+  ) {
+    return { repo_name: solutionRepoName, org_name: solutionRepoOrg, skipped: true };
+  }
+
   await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");

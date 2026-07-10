@@ -5,6 +5,7 @@ import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes
 import { createRepo, isUserInOrg, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import {
@@ -486,6 +487,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 `Cannot create group repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
               );
             }
+            // E2E fixtures must never hit real GitHub. Skip createRepo + syncRepoPermissions and mark
+            // the row ready with a fake SHA so the fixture repo doesn't sit stuck (no webhook will
+            // arrive to flip is_github_ready). Stub-record tests still fall through.
+            if (
+              shouldSkipRealGithubForE2eFixture({
+                org: c.classes!.github_org,
+                courseSlug: c.classes!.slug,
+                repoName
+              })
+            ) {
+              await adminSupabase
+                .from("repositories")
+                .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+                .eq("id", dbRepo!.id);
+              return assignment;
+            }
             const headSha = await createRepo(c.classes!.github_org!, repoName, strategy.sourceRepo, {
               creation_method: strategy.creationMethod,
               branch_protection: branchProtectionFromAssignment(assignment)
@@ -612,6 +629,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           templateRepoOverride && assignmentId !== undefined && assignment.id === assignmentId
             ? templateRepoOverride
             : strategy.sourceRepo;
+        // E2E fixtures must never hit real GitHub (see group-repo path above).
+        if (
+          shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })
+        ) {
+          await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: `e2e-skip-${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha,
+              is_github_ready: true
+            })
+            .eq("id", dbRepo!.id);
+          return `e2e-skip-${repoName}`;
+        }
         const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo, {
           creation_method: strategy.creationMethod,
           branch_protection: branchProtectionFromAssignment(assignment)

@@ -22,6 +22,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -742,11 +743,7 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          args.org === "pawtograder-playground" &&
-          args.courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -836,11 +833,7 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          args.org === "pawtograder-playground" &&
-          args.courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -942,12 +935,8 @@ export async function processEnvelope(
         // pawtograder-playground org's e2e test fixtures. When the github stub
         // is active we WANT the call to fall through (the stub records it for
         // assertions and returns a fake SHA), so only skip when the stub is
-        // disabled.
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
-        ) {
+        // disabled — all handled by shouldSkipRealGithubForE2eFixture.
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug, repoName })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1091,11 +1080,7 @@ export async function processEnvelope(
         if (repoName.startsWith(org + "/")) {
           repoName = repoName.substring(org.length + 1);
         }
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1128,11 +1113,7 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          repo?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org, repoName: repo })) {
           //No action, no metrics, no logging
           return true;
         }

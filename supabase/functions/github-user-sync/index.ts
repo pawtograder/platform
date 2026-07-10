@@ -10,6 +10,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import type {
   GitHubLinkStatus,
   GitHubMembershipStatus,
@@ -212,6 +213,21 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
+            // E2E fixtures must never hit real GitHub. Skip createRepo + syncRepoPermissions and mark
+            // the row ready with a fake SHA. Stub-record tests still fall through.
+            if (
+              shouldSkipRealGithubForE2eFixture({
+                org: c.classes!.github_org,
+                courseSlug: c.classes!.slug,
+                repoName
+              })
+            ) {
+              await adminSupabase
+                .from("repositories")
+                .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+                .eq("id", dbRepo!.id);
+              return assignment;
+            }
             const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
             const { error: updateRepoError } = await adminSupabase
               .from("repositories")
@@ -316,6 +332,20 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           message: `Creating repo and syncing permissions for ${repoName}, githubUsername: ${githubUsername}`,
           level: "info"
         });
+        // E2E fixtures must never hit real GitHub (see group-repo path above).
+        if (
+          shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })
+        ) {
+          await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: `e2e-skip-${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha,
+              is_github_ready: true
+            })
+            .eq("id", dbRepo!.id);
+          return `e2e-skip-${repoName}`;
+        }
         const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
         await adminSupabase
