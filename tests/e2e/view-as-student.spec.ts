@@ -77,7 +77,7 @@ test.describe("Instructor view-as-student (read-only)", () => {
     await expect(banner).toContainText(/read only/i);
 
     // Role has flipped to student: instructor-only nav (Course Settings) is gone.
-    await expect(page.getByRole("group").filter({ hasText: "Course Settings" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Course Settings menu" })).toHaveCount(0);
 
     // Realtime: the controller subscribes to the *student's* channels. Authorization for an
     // instructor on class:<id>:user:<studentProfileId> and class:<id>:students is granted by
@@ -109,7 +109,7 @@ test.describe("Instructor view-as-student (read-only)", () => {
     // Wait for the RSC refresh triggered by exitViewAs to settle — instructor-only nav
     // (Course Settings) returns — before navigating away. Otherwise the in-flight refresh of
     // the current route can interrupt the next goto (observed flaky on WebKit).
-    await expect(page.getByRole("group").filter({ hasText: "Course Settings" })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Course Settings menu" })).toHaveCount(1);
     await page.goto(`/course/${course.id}/manage/course/enrollments`);
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
   });

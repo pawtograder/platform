@@ -429,23 +429,29 @@ export async function assertLandmarkJump(
 ): Promise<void> {
   const prefix = contextLabel ? `[${contextLabel}] ` : "";
 
-  // Neutral starting focus so the chord isn't swallowed by a form field.
-  await page.evaluate(() => {
-    (document.activeElement as HTMLElement | null)?.blur();
-    document.body.focus();
-  });
-  await page.keyboard.press(chord);
+  // Retry a few times: on a fresh navigation the chord can fire before the
+  // client-side keydown listener hydrates, leaving focus on <body>.
+  let result = { matched: false, visible: false, actual: "(body)" };
+  for (let attempt = 0; attempt < 5 && !result.matched; attempt++) {
+    // Neutral starting focus so the chord isn't swallowed by a form field.
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.focus();
+    });
+    await page.keyboard.press(chord);
+    await page.waitForTimeout(200);
 
-  const result = await page.evaluate((sel) => {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el || el === document.body) return { matched: false, visible: false, actual: "(body)" };
-    const rect = el.getBoundingClientRect();
-    return {
-      matched: el.matches(sel),
-      visible: rect.width > 1 && rect.height > 1,
-      actual: `${el.tagName.toLowerCase()}#${el.id || "(no id)"}[aria-label="${el.getAttribute("aria-label") ?? ""}"]`
-    };
-  }, expectedFocusSelector);
+    result = await page.evaluate((sel) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body) return { matched: false, visible: false, actual: "(body)" };
+      const rect = el.getBoundingClientRect();
+      return {
+        matched: el.matches(sel),
+        visible: rect.width > 1 && rect.height > 1,
+        actual: `${el.tagName.toLowerCase()}#${el.id || "(no id)"}[aria-label="${el.getAttribute("aria-label") ?? ""}"]`
+      };
+    }, expectedFocusSelector);
+  }
 
   expect(
     result.matched,
@@ -473,6 +479,11 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
     await page.setViewportSize({ width: 320, height: 640 });
   }
 
+  // The test fixture's visual-test CSS pins placeholder text (dates etc.) to a
+  // fixed 18ch nowrap box, which cannot reflow and falsely trips the 320px
+  // check. Disable it for the measurement — real users never load that CSS.
+  await page.evaluate(() => document.documentElement.removeAttribute("data-visual-tests")).catch(() => {});
+
   try {
     // Let responsive breakpoints and dvh-based layouts settle after the resize.
     await page.waitForTimeout(250);
@@ -481,39 +492,88 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
       timeout: 15000
     });
 
-    const metrics = await page.evaluate(() => {
-      const scroller = document.scrollingElement ?? document.documentElement;
-      const main = document.querySelector('main, [role="main"]') as HTMLElement | null;
+    // Layout can transiently overflow while hydration/collapse effects run;
+    // poll until the page-level width settles (or the deadline hits, in which
+    // case the assertions below report the persistent overflow).
+    await page
+      .waitForFunction(
+        () => {
+          const scroller = document.scrollingElement ?? document.documentElement;
+          return scroller.scrollWidth <= scroller.clientWidth + 1;
+        },
+        undefined,
+        { timeout: 5000, polling: 250 }
+      )
+      .catch(() => {});
 
-      // Detect an inner scroll container (app-shell pattern): an ancestor of
-      // main whose overflow-y allows scrolling and actually overflows.
-      let innerScroller: { scrollable: boolean } | null = null;
-      let cur: HTMLElement | null = main;
-      while (cur && cur !== document.body) {
-        const cs = window.getComputedStyle(cur);
-        if (/(auto|scroll)/.test(cs.overflowY) && cur.scrollHeight > cur.clientHeight + 1) {
-          innerScroller = { scrollable: true };
-          break;
+    const sampleMetrics = () =>
+      page.evaluate(() => {
+        const scroller = document.scrollingElement ?? document.documentElement;
+        const main = document.querySelector('main, [role="main"]') as HTMLElement | null;
+
+        // Detect an inner scroll container (app-shell pattern): an ancestor of
+        // main whose overflow-y allows scrolling and actually overflows.
+        let innerScroller: { scrollable: boolean } | null = null;
+        let cur: HTMLElement | null = main;
+        while (cur && cur !== document.body) {
+          const cs = window.getComputedStyle(cur);
+          if (/(auto|scroll)/.test(cs.overflowY) && cur.scrollHeight > cur.clientHeight + 1) {
+            innerScroller = { scrollable: true };
+            break;
+          }
+          cur = cur.parentElement;
         }
-        cur = cur.parentElement;
-      }
 
-      const pageScrollable = scroller.scrollHeight > scroller.clientHeight + 1;
-      const contentOverflowsViewport = main ? main.scrollHeight > window.innerHeight : false;
+        const pageScrollable = scroller.scrollHeight > scroller.clientHeight + 1;
+        const contentOverflowsViewport = main ? main.scrollHeight > window.innerHeight : false;
 
-      return {
-        scrollWidth: scroller.scrollWidth,
-        clientWidth: scroller.clientWidth,
-        mainHeight: main?.getBoundingClientRect().height ?? 0,
-        pageScrollable,
-        innerScrollable: innerScroller?.scrollable ?? false,
-        contentOverflowsViewport
-      };
-    });
+        return {
+          scrollWidth: scroller.scrollWidth,
+          clientWidth: scroller.clientWidth,
+          mainHeight: main?.getBoundingClientRect().height ?? 0,
+          pageScrollable,
+          innerScrollable: innerScroller?.scrollable ?? false,
+          contentOverflowsViewport
+        };
+      });
+
+    // Sample with retries: in-flight enter/exit animations (toasts, tooltips,
+    // slide-ins) can transiently widen the page; only persistent overflow is a
+    // real 1.4.10 failure.
+    let metrics = await sampleMetrics();
+    for (let attempt = 0; attempt < 4 && metrics.scrollWidth > metrics.clientWidth + 1; attempt++) {
+      await page.waitForTimeout(700);
+      metrics = await sampleMetrics();
+    }
+
+    // On persistent overflow, name the widest offending elements so the
+    // failure is actionable without re-running locally.
+    let offenderNote = "";
+    if (metrics.scrollWidth > metrics.clientWidth + 1) {
+      const offenders = await page
+        .evaluate(() => {
+          const limit = (document.scrollingElement ?? document.documentElement).clientWidth + 1;
+          const out: string[] = [];
+          document.querySelectorAll("body *").forEach((el) => {
+            const r = el.getBoundingClientRect();
+            if (r.right <= limit || r.width <= 10) return;
+            const cs = window.getComputedStyle(el);
+            if (cs.display === "none" || cs.visibility === "hidden") return;
+            const pr = el.parentElement?.getBoundingClientRect();
+            if (pr && pr.right > limit) return; // report overflow roots only
+            out.push(
+              `<${el.tagName.toLowerCase()} right=${Math.round(r.right)} w=${Math.round(r.width)}> "${((el as HTMLElement).innerText ?? "").slice(0, 50).replace(/\n/g, " ")}"`
+            );
+          });
+          return out.slice(0, 5);
+        })
+        .catch(() => [] as string[]);
+      offenderNote = offenders.length > 0 ? `\n  overflowing elements:\n  ${offenders.join("\n  ")}` : "";
+    }
 
     expect(
       metrics.scrollWidth,
-      `${prefix}no page-level horizontal scrolling at 320px (scrollWidth ${metrics.scrollWidth} vs clientWidth ${metrics.clientWidth})`
+      `${prefix}no page-level horizontal scrolling at 320px (scrollWidth ${metrics.scrollWidth} vs clientWidth ${metrics.clientWidth})${offenderNote}`
     ).toBeLessThanOrEqual(metrics.clientWidth + 1);
 
     expect(metrics.mainHeight, `${prefix}main content has non-zero height at 320px`).toBeGreaterThan(0);
@@ -528,6 +588,7 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
       ).toBe(true);
     }
   } finally {
+    await page.evaluate(() => document.documentElement.setAttribute("data-visual-tests", "")).catch(() => {});
     if (needsResize && original) {
       await page.setViewportSize(original);
     }

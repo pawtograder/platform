@@ -115,8 +115,12 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
 
     // Theme toggle announces the change via a polite live region / toast (4.1.3).
     await page.getByRole("button", { name: "Toggle color mode" }).first().click();
+    // Both the global live announcer AND the toast may carry the message; either satisfies 4.1.3.
     await expect(
-      page.locator('[role="status"], [role="alert"]').filter({ hasText: /switched to .* mode|following your system/i })
+      page
+        .locator('[role="status"], [role="alert"]')
+        .filter({ hasText: /switched to .* mode|following your system/i })
+        .first()
     ).toBeVisible();
 
     // The global search input shows a visible focus indicator (2.4.7). :focus-visible

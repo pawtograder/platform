@@ -250,7 +250,7 @@ test.describe("Custom Discussion Topics", () => {
   test("An instructor can view the discussion topics management page", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     // Navigate to Course Settings > Discussion Topics
-    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
+    await page.getByRole("button", { name: "Course Settings menu" }).click();
     await expect(page.getByRole("menuitem", { name: "Discussion Topics" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Discussion Topics" }).click();
     await page.waitForURL("**/manage/discussion-topics");
@@ -383,7 +383,7 @@ test.describe("Custom Discussion Topics", () => {
     await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
 
     // ===== STEP 5: Delete the custom discussion topic (as instructor) =====
-    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
+    await page.getByRole("button", { name: "Course Settings menu" }).click();
     await expect(page.getByRole("menuitem", { name: "Discussion Topics" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Discussion Topics" }).click();
     await page.waitForURL("**/manage/discussion-topics");

@@ -236,7 +236,7 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("button", { name: "Submission History" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Commit History" })).toHaveCount(0);
     await expect(page.getByText("Student's Due Date:")).toHaveCount(0);
-    await expect(page.getByRole("group").filter({ hasText: "Course Settings" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Course Settings menu" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: /Overall Score/ })).toHaveCount(0);
     await expect(page.getByText("Released to student")).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Complete Review/ })).toHaveCount(0);

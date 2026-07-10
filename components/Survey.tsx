@@ -40,7 +40,14 @@ export default function SurveyComponent({
     // is read in document order.
     model.questionTitleLocation = "top";
     model.focusFirstQuestionAutomatic = false;
-    model.questionTitleTagName = "h2";
+    // SurveyJS renders titles as <div> by default (settings.titleTags.question);
+    // onGetTitleTagName is the supported per-survey override. (A plain
+    // `questionTitleTagName` assignment is NOT a SurveyJS API and does nothing.)
+    model.onGetTitleTagName.add((_sender, options) => {
+      if ((options.element as { isQuestion?: boolean }).isQuestion) {
+        options.tagName = "h2";
+      }
+    });
     return model;
   }, [surveyJson]);
 

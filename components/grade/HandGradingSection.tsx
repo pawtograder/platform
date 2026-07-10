@@ -97,7 +97,8 @@ function AppliedCheckRow({
         <Text as="h5" fontWeight="semibold" color="fg.default" wordBreak="break-word">
           {check.name}
         </Text>
-        <Text fontWeight="semibold" color={isAdditive ? "green.600" : "red.600"} flexShrink={0}>
+        {/* {color}.fg tokens keep AA contrast in both light and dark modes (green/red.600 fail at 14px). */}
+        <Text fontWeight="semibold" color={isAdditive ? "green.fg" : "red.fg"} flexShrink={0}>
           <VisuallyHidden>
             {points === 0
               ? `0 points for ${check.name}`
@@ -111,7 +112,8 @@ function AppliedCheckRow({
         </Text>
       </HStack>
       {check.description && (
-        <Box color="fg.subtle" fontSize="xs" mt={1}>
+        // fg.muted (not fg.subtle) — subtle is below the 4.5:1 AA contrast floor for body text.
+        <Box color="fg.muted" fontSize="xs" mt={1}>
           <Markdown>{check.description}</Markdown>
         </Box>
       )}
@@ -182,7 +184,7 @@ function UnappliedCheckRow({
         </VStack>
         <VStack align="end" gap={1} flexShrink={0}>
           {potentialLabel && (
-            <Text fontSize="xs" color="fg.subtle">
+            <Text fontSize="xs" color="fg.muted">
               {potentialLabel}
             </Text>
           )}

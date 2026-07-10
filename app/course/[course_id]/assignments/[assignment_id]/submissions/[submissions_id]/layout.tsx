@@ -2450,7 +2450,8 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             </Text>
           </Box>
         )}
-        <HStack>
+        {/* Wraps so submission actions reflow at narrow/zoomed widths (WCAG 1.4.10). */}
+        <HStack flexWrap="wrap">
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
           {assignment.repo_mode === "none" && (

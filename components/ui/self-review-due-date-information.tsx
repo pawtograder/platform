@@ -36,8 +36,9 @@ export default function SelfReviewDueDateInformation() {
   if (!selfReviewAssignment) {
     if (settings.allow_early) {
       return (
-        <HStack>
-          <VStack justifyContent="start" alignItems="start" w="100%">
+        // Wraps so the finalize button drops below the text at narrow/zoomed widths (WCAG 1.4.10).
+        <HStack flexWrap="wrap">
+          <VStack justifyContent="start" alignItems="start" w="100%" minW={0} flex="1 1 16rem">
             <Text>
               A self review will be due at <TimeZoneAwareDate date={selfReviewDueDate} format="full" /> (
               {settings.deadline_offset} hours after the coding assignment due date).
