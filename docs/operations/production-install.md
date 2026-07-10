@@ -126,7 +126,8 @@ OpenBao + ESO" sections for the exact paths and keys.
 Create the buckets on any S3-compatible backend (e.g., AWS S3, MinIO, or Ceph
 RGW) with its own console or CLI. Point `storage.s3.endpoint` /
 `backup.s3.endpoint` at that backend and put the credentials in
-`pawtograder-s3`.
+`pawtograder-s3`. For how to size these buckets and the app-data retention
+policy they hold, see [data-retention.md](./data-retention.md).
 
 - [ ] **Storage + backup buckets** created **with versioning on**
       (`storage.s3.bucket`, `backup.s3.bucket`).

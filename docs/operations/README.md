@@ -21,6 +21,9 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
   (backup, ESO, cert) and how they're wired into kube-prometheus-stack.
 - [Incident Response](./incident-response.md): severity definitions, first
   response, and per-component triage.
+- [Data Retention & Storage Sizing](./data-retention.md): where data lives
+  (Postgres / S3 / GitHub), how to size storage, how to enforce an age-based
+  ("delete after N years") policy, and audit-log partition maintenance.
 
 ## Configuration
 
