@@ -311,6 +311,12 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
   const title = await page.title();
   expect(title.trim(), `${prefix}page has a non-empty <title>`).not.toBe("");
 
+  // WCAG 2.4.2: the title template appends the product name on every route
+  // (app/layout.tsx + course layout). Mirrors lib/branding.ts name resolution
+  // so re-branded deployments can still run the suite.
+  const brandName = process.env.BRAND_NAME?.trim() || "Pawtograder";
+  expect(title, `${prefix}<title> includes the product name ("${brandName}")`).toContain(brandName);
+
   const lang = await page.locator("html").getAttribute("lang");
   expect(lang, `${prefix}html element has a lang attribute`).toBeTruthy();
 
@@ -361,4 +367,169 @@ export async function assertSkipLinksWork(page: Page, contextLabel?: string): Pr
   // focusLandmark adds tabindex=-1 to non-focusable landmarks and focuses them.
   const active = await page.evaluate(() => document.activeElement?.id ?? null);
   expect(active, `${prefix}activating skip link moves focus to #main-content`).toBe("main-content");
+}
+
+export type FocusStop = {
+  tag: string;
+  id: string | null;
+  role: string | null;
+  ariaLabel: string | null;
+  testId: string | null;
+  text: string;
+};
+
+/**
+ * Presses Tab `count` times from a body-focused state and returns a descriptor
+ * of `document.activeElement` after each press. Use to assert focus order
+ * (WCAG 2.4.3) — e.g. that the sequence of stops matches the visual/reading
+ * order of a page region.
+ */
+export async function tabSequence(page: Page, count: number): Promise<FocusStop[]> {
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.body.focus();
+  });
+
+  const stops: FocusStop[] = [];
+  for (let i = 0; i < count; i++) {
+    await page.keyboard.press("Tab");
+    const stop = await page.evaluate<FocusStop>(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body) {
+        return { tag: "body", id: null, role: null, ariaLabel: null, testId: null, text: "" };
+      }
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        role: el.getAttribute("role"),
+        ariaLabel: el.getAttribute("aria-label"),
+        testId: el.getAttribute("data-testid"),
+        text: (el.innerText ?? "").trim().slice(0, 80)
+      };
+    });
+    stops.push(stop);
+  }
+  return stops;
+}
+
+/**
+ * Presses a landmark-jump chord (e.g. "Alt+m") and asserts the resulting
+ * `document.activeElement` matches `expectedFocusSelector` AND is actually
+ * visible (bounding box larger than 1×1 — guards against focusing an element
+ * that is still screen-reader-clipped, the historical Alt+K skip-links bug).
+ *
+ * Callers must gate to chromium: WebKit's synthetic Alt+letter composes
+ * special characters instead of delivering the chord.
+ */
+export async function assertLandmarkJump(
+  page: Page,
+  chord: string,
+  expectedFocusSelector: string,
+  contextLabel?: string
+): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
+
+  // Neutral starting focus so the chord isn't swallowed by a form field.
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.body.focus();
+  });
+  await page.keyboard.press(chord);
+
+  const result = await page.evaluate((sel) => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el || el === document.body) return { matched: false, visible: false, actual: "(body)" };
+    const rect = el.getBoundingClientRect();
+    return {
+      matched: el.matches(sel),
+      visible: rect.width > 1 && rect.height > 1,
+      actual: `${el.tagName.toLowerCase()}#${el.id || "(no id)"}[aria-label="${el.getAttribute("aria-label") ?? ""}"]`
+    };
+  }, expectedFocusSelector);
+
+  expect(
+    result.matched,
+    `${prefix}${chord} focuses "${expectedFocusSelector}" (active element was ${result.actual})`
+  ).toBe(true);
+  expect(result.visible, `${prefix}${chord} target "${expectedFocusSelector}" is visibly rendered (>1×1)`).toBe(true);
+}
+
+/**
+ * WCAG 1.4.10 (Reflow) check: at a 320 CSS-px-wide viewport — the spec's
+ * equivalent of a 1280px window at 400% zoom — the page must not require
+ * horizontal scrolling and all content must remain reachable by vertical
+ * scroll (catches `overflow:hidden` shells that clip content with no way to
+ * reach it).
+ *
+ * If the current viewport is not already 320px wide (preferred: set it via
+ * `test.use({ viewport: { width: 320, height: 640 } })` on the spec), the
+ * helper resizes for the check and restores the original size afterwards.
+ */
+export async function assertReflowAt320(page: Page, contextLabel?: string): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
+  const original = page.viewportSize();
+  const needsResize = !original || original.width !== 320;
+  if (needsResize) {
+    await page.setViewportSize({ width: 320, height: 640 });
+  }
+
+  try {
+    // Let responsive breakpoints and dvh-based layouts settle after the resize.
+    await page.waitForTimeout(250);
+
+    await expect(page.getByRole("main").first(), `${prefix}main landmark visible at 320px`).toBeVisible({
+      timeout: 15000
+    });
+
+    const metrics = await page.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      const main = document.querySelector('main, [role="main"]') as HTMLElement | null;
+
+      // Detect an inner scroll container (app-shell pattern): an ancestor of
+      // main whose overflow-y allows scrolling and actually overflows.
+      let innerScroller: { scrollable: boolean } | null = null;
+      let cur: HTMLElement | null = main;
+      while (cur && cur !== document.body) {
+        const cs = window.getComputedStyle(cur);
+        if (/(auto|scroll)/.test(cs.overflowY) && cur.scrollHeight > cur.clientHeight + 1) {
+          innerScroller = { scrollable: true };
+          break;
+        }
+        cur = cur.parentElement;
+      }
+
+      const pageScrollable = scroller.scrollHeight > scroller.clientHeight + 1;
+      const contentOverflowsViewport = main ? main.scrollHeight > window.innerHeight : false;
+
+      return {
+        scrollWidth: scroller.scrollWidth,
+        clientWidth: scroller.clientWidth,
+        mainHeight: main?.getBoundingClientRect().height ?? 0,
+        pageScrollable,
+        innerScrollable: innerScroller?.scrollable ?? false,
+        contentOverflowsViewport
+      };
+    });
+
+    expect(
+      metrics.scrollWidth,
+      `${prefix}no page-level horizontal scrolling at 320px (scrollWidth ${metrics.scrollWidth} vs clientWidth ${metrics.clientWidth})`
+    ).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+    expect(metrics.mainHeight, `${prefix}main content has non-zero height at 320px`).toBeGreaterThan(0);
+
+    // If the content is taller than the viewport, SOME scroll mechanism must
+    // exist — either the document scrolls or an inner overflow:auto pane does.
+    // (overflow:hidden shells with neither = the audit's "clipped, can't scroll".)
+    if (metrics.contentOverflowsViewport) {
+      expect(
+        metrics.pageScrollable || metrics.innerScrollable,
+        `${prefix}content taller than viewport is reachable by vertical scroll (document or inner pane)`
+      ).toBe(true);
+    }
+  } finally {
+    if (needsResize && original) {
+      await page.setViewportSize(original);
+    }
+  }
 }
