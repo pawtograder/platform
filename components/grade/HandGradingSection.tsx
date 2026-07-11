@@ -23,7 +23,8 @@ import type {
   SubmissionComments,
   SubmissionFileComment
 } from "@/utils/supabase/DatabaseTypes";
-import { Badge, Box, Heading, HStack, Text, VisuallyHidden, VStack } from "@chakra-ui/react";
+import { SpokenValue } from "@/components/ui/spoken-value";
+import { Badge, Box, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
 export type HandGradingSectionProps = {
@@ -99,16 +100,17 @@ function AppliedCheckRow({
         </Text>
         {/* {color}.fg tokens keep AA contrast in both light and dark modes (green/red.600 fail at 14px). */}
         <Text fontWeight="semibold" color={isAdditive ? "green.fg" : "red.fg"} flexShrink={0}>
-          <VisuallyHidden>
-            {points === 0
-              ? `0 points for ${check.name}`
-              : isAdditive
-                ? `${points} points added for ${check.name}`
-                : `${points} points deducted for ${check.name}`}
-          </VisuallyHidden>
-          <Text as="span" aria-hidden="true">
+          <SpokenValue
+            spoken={
+              points === 0
+                ? `0 points for ${check.name}`
+                : isAdditive
+                  ? `${points} points added for ${check.name}`
+                  : `${points} points deducted for ${check.name}`
+            }
+          >
             {signedPoints}
-          </Text>
+          </SpokenValue>
         </Text>
       </HStack>
       {check.description && (
@@ -400,12 +402,9 @@ function CriterionBlock({
           </Text>
         </VStack>
         <Text fontWeight="semibold" flexShrink={0}>
-          <VisuallyHidden>
-            {earned} of {max} points for {criteria.name}
-          </VisuallyHidden>
-          <Text as="span" aria-hidden="true">
+          <SpokenValue spoken={`${earned} of ${max} points for ${criteria.name}`}>
             {earned} / {max}
-          </Text>
+          </SpokenValue>
         </Text>
       </HStack>
       {criteria.description && (
@@ -516,12 +515,9 @@ export default function HandGradingSection({ reviewId, appliedOnly }: HandGradin
         </Heading>
         {anyVisible && (
           <Text fontWeight="semibold">
-            <VisuallyHidden>
-              {totalEarned} of {totalMax} points from hand grading
-            </VisuallyHidden>
-            <Text as="span" aria-hidden="true">
+            <SpokenValue spoken={`${totalEarned} of ${totalMax} points from hand grading`}>
               {totalEarned} / {totalMax}
-            </Text>
+            </SpokenValue>
           </Text>
         )}
       </HStack>

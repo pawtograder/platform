@@ -1,6 +1,7 @@
 "use client";
 import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
+import { SpokenValue } from "@/components/ui/spoken-value";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
@@ -17,8 +18,7 @@ import {
   Spinner,
   Table,
   Tabs,
-  Text,
-  VisuallyHidden
+  Text
 } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
@@ -140,7 +140,7 @@ function PyretRepl({
         textAlign="left"
         bg="bg.muted"
         _hover={{ bg: "bg.muted" }}
-        _focusVisible={{ outline: "2px solid", outlineColor: "focus" }}
+        _focusVisible={{ outline: "2px solid", outlineColor: "orange.500" }}
         px={3}
         py={2}
         cursor="pointer"
@@ -532,20 +532,14 @@ export default function GraderResults() {
                               const extraData = result.extra_data as GraderResultTestExtraData;
                               if (extraData?.llm?.prompt || extraData?.llm?.result) {
                                 return (
-                                  <>
-                                    <VisuallyHidden>AI-assisted check</VisuallyHidden>
-                                    <FaRobot aria-hidden="true" />
-                                  </>
+                                  <SpokenValue spoken="AI-assisted check">
+                                    <FaRobot />
+                                  </SpokenValue>
                                 );
                               }
                               const passed = result.score === result.max_score;
                               return (
-                                <>
-                                  <VisuallyHidden>{passed ? "Passed" : "Failed"}</VisuallyHidden>
-                                  <Text as="span" aria-hidden="true">
-                                    {passed ? "✅" : "❌"}
-                                  </Text>
-                                </>
+                                <SpokenValue spoken={passed ? "Passed" : "Failed"}>{passed ? "✅" : "❌"}</SpokenValue>
                               );
                             })()}
                           </Table.Cell>
@@ -590,7 +584,7 @@ export default function GraderResults() {
                 const testMatches = errorPinMatches.get(result.id) || [];
 
                 return (
-                  <CardRoot key={result.id} aria-labelledby={`test-${result.id}`} mt={4}>
+                  <CardRoot key={result.id} mt={4}>
                     <CardHeader bg={`bg.${style}`} p={2}>
                       <HStack justify="space-between">
                         {/* The summary table links to #test-{id}; anchoring the id on the heading

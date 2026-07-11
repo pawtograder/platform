@@ -1,5 +1,6 @@
 "use client";
 
+import { SpokenValue } from "@/components/ui/spoken-value";
 import { Box, Heading, HStack, Icon, Text, VisuallyHidden, VStack } from "@chakra-ui/react";
 import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { FaCheck, FaTimes } from "react-icons/fa";
@@ -97,12 +98,9 @@ function TestRow({
         </Text>
       </HStack>
       <Text fontSize="sm" color="fg.muted" flexShrink={0}>
-        <VisuallyHidden>
-          {test.score ?? 0} of {test.max_score ?? 0} points
-        </VisuallyHidden>
-        <Text as="span" aria-hidden="true">
+        <SpokenValue spoken={`${test.score ?? 0} of ${test.max_score ?? 0} points`}>
           {test.score ?? 0}/{test.max_score ?? 0}
-        </Text>
+        </SpokenValue>
       </Text>
     </HStack>
   );

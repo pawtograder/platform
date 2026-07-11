@@ -100,10 +100,7 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await assertPageHasLandmarks(page, "assignments list");
   });
 
-  test("status messages and focus visibility: connection status, theme announcement, search focus ring", async ({
-    page,
-    browserName
-  }) => {
+  test("status messages: connection status region and theme announcement", async ({ page }) => {
     await loginAsUser(page, student, course);
     await page.goto(`/course/${course.id}`);
     await expect(page.locator("#main-content")).toBeVisible();
@@ -122,10 +119,17 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
         .filter({ hasText: /switched to .* mode|following your system/i })
         .first()
     ).toBeVisible();
+  });
 
-    // The global search input shows a visible focus indicator (2.4.7). :focus-visible
-    // matching after synthetic keyboard events is only reliable on chromium.
+  test("global search input shows a visible focus indicator (WCAG 2.4.7)", async ({ page, browserName }) => {
+    // :focus-visible matching after synthetic keyboard events is only reliable
+    // on chromium; a top-of-test skip keeps webkit reporting honest (the other
+    // status-message checks above run on every engine).
     test.skip(browserName === "webkit", "webkit focus-visible heuristics differ under synthetic input");
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}`);
+    await expect(page.locator("#main-content")).toBeVisible();
+
     await page.locator("#main-content").focus();
     await page.keyboard.press("/");
     const searchInput = page.getByRole("combobox", { name: /search pawtograder/i });

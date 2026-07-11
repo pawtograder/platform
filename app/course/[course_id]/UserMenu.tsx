@@ -831,6 +831,34 @@ function ObfuscatedGradesModePicker() {
 function ConnectionStatusIndicator() {
   const status = useAutomaticRealtimeConnectionStatus();
 
+  const statusText = (() => {
+    switch (status?.overall) {
+      case "connected":
+        return "All realtime connections active";
+      case "partial":
+        return "Some realtime connections failed";
+      case "disconnected":
+        return "No realtime connections active";
+      case "connecting":
+        return "Connecting to realtime channels...";
+      case undefined:
+        return "";
+      default:
+        return "Unknown status";
+    }
+  })();
+
+  // Debounce the announced copy: `overall` transits through connecting/partial while
+  // channels join one-by-one (page load, navigation, tab refocus), and a role=status
+  // region announces every text change. Only states that persist get announced, so
+  // transient join cycles never reach screen readers (WCAG 4.1.3 without the spam).
+  const [announcedText, setAnnouncedText] = useState("");
+  useEffect(() => {
+    if (!statusText) return;
+    const timer = setTimeout(() => setAnnouncedText(statusText), 3000);
+    return () => clearTimeout(timer);
+  }, [statusText]);
+
   if (!status) {
     return null;
   }
@@ -847,21 +875,6 @@ function ConnectionStatusIndicator() {
         return "yellow.solid";
       default:
         return "gray.muted";
-    }
-  };
-
-  const getStatusText = () => {
-    switch (status.overall) {
-      case "connected":
-        return "All realtime connections active";
-      case "partial":
-        return "Some realtime connections failed";
-      case "disconnected":
-        return "No realtime connections active";
-      case "connecting":
-        return "Connecting to realtime channels...";
-      default:
-        return "Unknown status";
     }
   };
 
@@ -908,7 +921,7 @@ function ConnectionStatusIndicator() {
 
   const tooltipContent = (
     <VStack alignItems="flex-start" gap={1} fontSize="sm">
-      <Text fontWeight="bold">{getStatusText()}</Text>
+      <Text fontWeight="bold">{statusText}</Text>
       <Text fontSize="xs" color="gray.300">
         {status.channels.length} channel{status.channels.length !== 1 ? "s" : ""}
       </Text>
@@ -929,7 +942,8 @@ function ConnectionStatusIndicator() {
     <Tooltip content={tooltipContent} showArrow>
       {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13), and a
           role=status live region so state changes are announced politely (4.1.3): the
-          visually-hidden text IS the status content — updating it triggers the announcement. */}
+          visually-hidden text IS the status content — updating it triggers the announcement.
+          The dot color/tooltip track `status` live; the announced text is the debounced copy. */}
       <Box
         width={3}
         height={3}
@@ -939,9 +953,9 @@ function ConnectionStatusIndicator() {
         tabIndex={0}
         cursor="help"
         flexShrink={0}
-        _focusVisible={{ outline: "2px solid", outlineColor: "focus", outlineOffset: "2px" }}
+        _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
       >
-        <VisuallyHidden>Realtime connection status: {getStatusText()}</VisuallyHidden>
+        <VisuallyHidden>Realtime connection status: {announcedText}</VisuallyHidden>
       </Box>
     </Tooltip>
   );

@@ -130,25 +130,17 @@ test.describe("focus order (WCAG 2.4.3)", () => {
 
     // Walk the page's tab order and assert every stop comes AFTER the previous
     // one in DOM order — i.e. keyboard traversal matches the reading sequence.
-    await page.evaluate(() => {
-      (document.activeElement as HTMLElement | null)?.blur();
-      document.body.focus();
-    });
-    let prev = await page.evaluateHandle(() => document.body as Element);
-    for (let i = 0; i < 15; i++) {
-      await page.keyboard.press("Tab");
-      const result = await page.evaluate((prevEl) => {
-        const cur = document.activeElement;
-        if (!cur || cur === document.body) return { done: true, inOrder: true };
-        const inOrder =
-          prevEl === document.body || Boolean(prevEl.compareDocumentPosition(cur) & Node.DOCUMENT_POSITION_FOLLOWING);
-        return { done: false, inOrder, label: (cur as HTMLElement).innerText?.slice(0, 60) };
-      }, prev);
-      if (result.done) break; // wrapped around — traversal complete
-      expect(result.inOrder, `tab stop #${i + 1} (${result.label ?? "?"}) follows the previous stop in DOM order`).toBe(
-        true
-      );
-      prev = await page.evaluateHandle(() => document.activeElement as Element);
+    // tabSequence captures each stop's DOM index atomically per press, so the
+    // comparison never touches a node React may have detached between presses.
+    const stops = await tabSequence(page, 15);
+    let prevIndex = -1;
+    for (const [i, stop] of stops.entries()) {
+      if (stop.tag === "body") break; // wrapped around — traversal complete
+      expect(
+        stop.domIndex > prevIndex,
+        `tab stop #${i + 1} (${stop.text || stop.ariaLabel || "?"}) follows the previous stop in DOM order`
+      ).toBe(true);
+      prevIndex = stop.domIndex;
     }
   });
 });

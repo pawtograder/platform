@@ -259,7 +259,7 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                 variant="flushed"
                 border="none"
                 // Visible focus indicator (WCAG 2.4.7) — was suppressed entirely.
-                _focusVisible={{ outline: "2px solid", outlineColor: "focus", outlineOffset: "-2px" }}
+                _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "-2px" }}
                 size="md"
                 flex="1"
               />

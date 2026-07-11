@@ -183,21 +183,13 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
         // AltGr on international layouts reports altKey=true while the user is
         // just typing a character — never hijack it (WCAG 2.1.1 / 2.1.4).
         if (e.getModifierState("AltGraph")) return;
+        // A modal dialog's focus trap reclaims any focus moved outside it, so a
+        // landmark jump would silently do nothing — leave the keystroke alone.
+        if (e.target instanceof HTMLElement && e.target.closest('[role="dialog"], [role="alertdialog"]')) return;
         const k = e.key.toLowerCase();
         const landmark = LANDMARK_TABLE.find((l) => l.key === k);
         if (landmark) {
           e.preventDefault();
-          if (landmark.landmarkId === "skip-links") {
-            // The skip-links nav reveals a link only while that LINK has focus
-            // (the container itself stays visually hidden), so jump to the
-            // first anchor rather than the <nav> — focusing the container
-            // showed nothing, which made Alt+K appear broken.
-            const firstSkipLink = document.querySelector<HTMLAnchorElement>("#skip-links a");
-            if (firstSkipLink) {
-              firstSkipLink.focus();
-              return;
-            }
-          }
           focusLandmark(landmark.landmarkId);
         }
         return;

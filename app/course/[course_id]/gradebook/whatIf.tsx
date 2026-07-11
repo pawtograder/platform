@@ -79,9 +79,12 @@ function WhatIfScoreCell({
   // Editing is user-initiated, so the autoFocus move is legitimate (WCAG 3.2.1);
   // when the editor closes, focus returns to the edit button that opened it.
   const editButtonId = `whatif-edit-${column.id}`;
-  const closeEditor = () => {
+  const stopEditing = () => {
     setIsEditing(false);
     modifiedColumnsRef.current.clear();
+  };
+  const closeEditor = () => {
+    stopEditing();
     requestAnimationFrame(() => document.getElementById(editButtonId)?.focus());
   };
   if (isEditing && whatIfEnabled) {
@@ -104,10 +107,8 @@ function WhatIfScoreCell({
               modifiedColumnsRef.current.delete(column.id);
             }
           }}
-          onBlur={() => {
-            setIsEditing(false);
-            modifiedColumnsRef.current.clear();
-          }}
+          // Blur means focus already moved elsewhere, so close without stealing it back.
+          onBlur={stopEditing}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === "Escape") {
               e.preventDefault();
@@ -201,7 +202,7 @@ function WhatIfScoreCell({
         // Keyboard path into what-if editing (WCAG 2.1.1): the card-level click
         // handler is a pointer convenience; this button is the operable control.
         <IconButton
-          id={`whatif-edit-${column.id}`}
+          id={editButtonId}
           aria-label={`Edit hypothetical grade for ${column.name}`}
           size="2xs"
           variant="ghost"
@@ -450,14 +451,13 @@ function GroupHeader({
   return (
     // A real <button> (WCAG 2.1.1/4.1.2): keyboard focusable/operable with the
     // expanded state announced — the clickable-div version locked keyboard users
-    // out of expanding gradebook groups entirely.
+    // out of expanding gradebook groups entirely. type="button" pins the default
+    // away from type=submit so a form ancestor never treats toggling as a submit.
     <Card.Root
-      as="button"
-      aria-expanded={!isCollapsed}
+      asChild
       w="100%"
       bg="bg.subtle"
       cursor="pointer"
-      onClick={onToggle}
       borderRadius="none"
       borderBottom="none"
       textAlign="left"
@@ -465,14 +465,17 @@ function GroupHeader({
       py={2}
       _hover={{ bg: "bg.info" }}
     >
-      <HStack justifyContent="space-between" alignItems="center">
-        <HStack gap={2}>
-          <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
-          <Text fontWeight="bold" fontSize="sm" color="fg.muted">
-            {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
-          </Text>
+      <button type="button" aria-expanded={!isCollapsed} onClick={onToggle}>
+        {/* Buttons only permit phrasing content, so the layout wrappers render as spans. */}
+        <HStack as="span" justifyContent="space-between" alignItems="center">
+          <HStack as="span" gap={2}>
+            <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
+            <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
+              {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
+            </Text>
+          </HStack>
         </HStack>
-      </HStack>
+      </button>
     </Card.Root>
   );
 }

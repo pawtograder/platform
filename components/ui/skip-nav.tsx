@@ -32,6 +32,16 @@ export function focusLandmark(id: string): boolean {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>(`#${CSS.escape(id)}, [data-landmark="${id}"]`));
   const target = candidates.find(isVisible) ?? candidates[0];
   if (!target) return false;
+  if (id === "skip-links") {
+    // Our own container: the CSS below reveals a link only while that LINK has
+    // focus (the <nav> itself stays visually hidden), so land on the first
+    // anchor — focusing the container would show nothing.
+    const firstLink = target.querySelector<HTMLElement>("a");
+    if (firstLink) {
+      firstLink.focus();
+      return true;
+    }
+  }
   if (!target.hasAttribute("tabindex") && !/^(A|BUTTON|INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) {
     target.setAttribute("tabindex", "-1");
   }
