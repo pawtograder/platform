@@ -376,32 +376,42 @@ export type FocusStop = {
   ariaLabel: string | null;
   testId: string | null;
   text: string;
-  /** Index of the stop within document.querySelectorAll("*") at capture time
-   *  (-1 for body/none). Captured atomically with the rest of the descriptor,
-   *  so cross-press DOM-order comparisons never touch detached nodes. */
-  domIndex: number;
+  /** Whether this stop comes after the previous stop in DOM order, judged via
+   *  compareDocumentPosition inside a single evaluate (no handles persist, so
+   *  detached nodes are never compared). `null` when unjudgeable: the first
+   *  stop, or the previous stop unmounted between presses (realtime re-render).
+   *  Robust against unrelated DOM insertions/removals, which shift document
+   *  indices but not the relative order of two connected nodes. */
+  followsPrevious: boolean | null;
 };
+
+const TAB_STOP_STAMP = "data-e2e-prev-tab-stop";
 
 /**
  * Presses Tab `count` times from a body-focused state and returns a descriptor
  * of `document.activeElement` after each press. Use to assert focus order
- * (WCAG 2.4.3) — e.g. that the sequence of stops matches the visual/reading
- * order of a page region, or that `domIndex` is strictly increasing.
+ * (WCAG 2.4.3) — e.g. that `followsPrevious` is never `false`.
  */
 export async function tabSequence(page: Page, count: number): Promise<FocusStop[]> {
-  await page.evaluate(() => {
+  await page.evaluate((stamp) => {
     (document.activeElement as HTMLElement | null)?.blur();
     document.body.focus();
-  });
+    document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp));
+  }, TAB_STOP_STAMP);
 
   const stops: FocusStop[] = [];
   for (let i = 0; i < count; i++) {
     await page.keyboard.press("Tab");
-    const stop = await page.evaluate<FocusStop>(() => {
+    const stop = await page.evaluate<FocusStop, string>((stamp) => {
       const el = document.activeElement as HTMLElement | null;
+      const prev = document.querySelector(`[${stamp}]`);
       if (!el || el === document.body) {
-        return { tag: "body", id: null, role: null, ariaLabel: null, testId: null, text: "", domIndex: -1 };
+        return { tag: "body", id: null, role: null, ariaLabel: null, testId: null, text: "", followsPrevious: null };
       }
+      const followsPrevious =
+        prev && prev !== el ? Boolean(prev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null;
+      prev?.removeAttribute(stamp);
+      el.setAttribute(stamp, "");
       return {
         tag: el.tagName.toLowerCase(),
         id: el.id || null,
@@ -409,11 +419,17 @@ export async function tabSequence(page: Page, count: number): Promise<FocusStop[
         ariaLabel: el.getAttribute("aria-label"),
         testId: el.getAttribute("data-testid"),
         text: (el.innerText ?? "").trim().slice(0, 80),
-        domIndex: Array.prototype.indexOf.call(document.querySelectorAll("*"), el)
+        followsPrevious
       };
-    });
+    }, TAB_STOP_STAMP);
     stops.push(stop);
   }
+  await page
+    .evaluate(
+      (stamp) => document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp)),
+      TAB_STOP_STAMP
+    )
+    .catch(() => {});
   return stops;
 }
 

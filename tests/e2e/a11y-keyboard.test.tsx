@@ -130,17 +130,17 @@ test.describe("focus order (WCAG 2.4.3)", () => {
 
     // Walk the page's tab order and assert every stop comes AFTER the previous
     // one in DOM order — i.e. keyboard traversal matches the reading sequence.
-    // tabSequence captures each stop's DOM index atomically per press, so the
-    // comparison never touches a node React may have detached between presses.
+    // tabSequence judges each adjacent pair atomically per press (stamped
+    // previous element + compareDocumentPosition in one evaluate), so realtime
+    // re-renders between presses can only make a pair unjudgeable (null),
+    // never wrongly ordered.
     const stops = await tabSequence(page, 15);
-    let prevIndex = -1;
     for (const [i, stop] of stops.entries()) {
       if (stop.tag === "body") break; // wrapped around — traversal complete
       expect(
-        stop.domIndex > prevIndex,
+        stop.followsPrevious !== false,
         `tab stop #${i + 1} (${stop.text || stop.ariaLabel || "?"}) follows the previous stop in DOM order`
       ).toBe(true);
-      prevIndex = stop.domIndex;
     }
   });
 });
