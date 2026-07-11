@@ -138,11 +138,10 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
       const cs = window.getComputedStyle(el);
       return { matchesFocusVisible: el.matches(":focus-visible"), outline: cs.outlineStyle, shadow: cs.boxShadow };
     });
-    if (focusRing.matchesFocusVisible) {
-      expect(
-        focusRing.outline !== "none" || focusRing.shadow !== "none",
-        `focused search input has a visible indicator (outline=${focusRing.outline}, shadow=${focusRing.shadow})`
-      ).toBe(true);
-    }
+    expect(focusRing.matchesFocusVisible, "search input matches :focus-visible after keyboard focus").toBe(true);
+    expect(
+      focusRing.outline !== "none" || focusRing.shadow !== "none",
+      `focused search input has a visible indicator (outline=${focusRing.outline}, shadow=${focusRing.shadow})`
+    ).toBe(true);
   });
 });

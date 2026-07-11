@@ -854,7 +854,12 @@ function ConnectionStatusIndicator() {
   // transient join cycles never reach screen readers (WCAG 4.1.3 without the spam).
   const [announcedText, setAnnouncedText] = useState("");
   useEffect(() => {
-    if (!statusText) return;
+    if (!statusText) {
+      // Status gone (controller teardown) — clear immediately so a remount
+      // never resurrects a stale "connections active" message.
+      setAnnouncedText("");
+      return;
+    }
     const timer = setTimeout(() => setAnnouncedText(statusText), 3000);
     return () => clearTimeout(timer);
   }, [statusText]);
