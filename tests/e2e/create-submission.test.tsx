@@ -145,7 +145,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - future deadline files");
   });
@@ -200,7 +200,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - extended due date files");
   });
@@ -218,7 +218,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentWithNotGraded!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - not graded files");
   });

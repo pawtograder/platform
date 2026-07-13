@@ -143,7 +143,7 @@ test.describe("Student grade view", () => {
     await expect(page.getByRole("heading", { name: "Autograder", exact: true })).toBeVisible();
 
     // The "Grade" tab is active in the sub-nav.
-    await expect(page.getByRole("button", { name: "Grade", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Grade", exact: true })).toBeVisible();
 
     // The grading sidebar is dropped on the Grade tab (the ledger replaces it).
     await expect(page.locator("[data-grading-summary-aside]")).toHaveCount(0);

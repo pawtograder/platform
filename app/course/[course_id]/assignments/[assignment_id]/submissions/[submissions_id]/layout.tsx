@@ -2494,47 +2494,59 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
-        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
-          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+        {/* Button asChild renders ONE styled <a>: a <button> nested inside a link
+            is invalid (nested-interactive) and gives keyboard users two tab stops
+            per tab (WCAG 2.4.3 / 4.1.2). */}
+        <Button asChild variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "grade", searchParams)}
+            aria-current={activeSubPage === "grade" ? "page" : undefined}
+          >
             <Icon as={FaCheckCircle} />
             Grade
-          </Button>
-        </NextLink>
-        <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
-          <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
+          </NextLink>
+        </Button>
+        <Button asChild variant={activeSubPage === "results" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "results", searchParams)}
+            aria-current={activeSubPage === "results" ? "page" : undefined}
+          >
             <Icon as={FaRobot} />
             Autograder Detail
-          </Button>
-        </NextLink>
-        <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
-          <Button variant={activeSubPage === "files" ? "solid" : "ghost"}>
+          </NextLink>
+        </Button>
+        <Button asChild variant={activeSubPage === "files" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "files", searchParams)}
+            aria-current={activeSubPage === "files" ? "page" : undefined}
+          >
             <Icon as={FaFile} />
             Files
-          </Button>
-        </NextLink>
+          </NextLink>
+        </Button>
         {isPrSubmission && (
           <>
-            <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
-              <Button variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+            <Button asChild variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+              <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
                 <Icon as={FaTasks} />
                 Checks
-              </Button>
-            </NextLink>
-            <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
-              <Button variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+              </NextLink>
+            </Button>
+            <Button asChild variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+              <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
                 <Icon as={FaRocket} />
                 Deployments
-              </Button>
-            </NextLink>
+              </NextLink>
+            </Button>
           </>
         )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
-          <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
-            <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+          <Button asChild variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+            <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
               <Icon as={FaGithub} />
               Repo Analytics
-            </Button>
-          </NextLink>
+            </NextLink>
+          </Button>
         )}
       </Box>
       {useGradingShell ? (

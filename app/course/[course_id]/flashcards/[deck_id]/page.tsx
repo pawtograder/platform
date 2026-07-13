@@ -2,7 +2,7 @@
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import Link from "@/components/ui/link";
+import NextLink from "next/link";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
@@ -600,12 +600,12 @@ export default function FlashcardsDeckPage() {
 
   const backToDecks = (
     <HStack>
-      <Link href={`/course/${courseId}/flashcards`}>
-        <Button variant="outline" size="sm">
+      <Button asChild variant="outline" size="sm">
+        <NextLink href={`/course/${courseId}/flashcards`}>
           <FaArrowLeft />
           Back to Decks
-        </Button>
-      </Link>
+        </NextLink>
+      </Button>
     </HStack>
   );
 
