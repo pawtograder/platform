@@ -1,7 +1,14 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
-import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
+import {
+  createClass,
+  createUsersInClass,
+  insertAssignment,
+  insertPreBakedSubmission,
+  loginAsUser,
+  TestingUser
+} from "./TestingUtils";
 import { assertLandmarkJump, tabSequence } from "./axeStudentA11y";
 
 /**
@@ -15,6 +22,8 @@ import { assertLandmarkJump, tabSequence } from "./axeStudentA11y";
 let course: Course;
 let student: TestingUser;
 let instructor: TestingUser;
+let assignment: Awaited<ReturnType<typeof insertAssignment>>;
+let submissionId: number;
 
 test.beforeAll(async () => {
   course = await createClass({ name: "E2E A11y Keyboard Class" });
@@ -22,12 +31,18 @@ test.beforeAll(async () => {
     { role: "student", class_id: course.id, name: "Keyboard Student", useMagicLink: true },
     { role: "instructor", class_id: course.id, name: "Keyboard Instructor", useMagicLink: true }
   ]);
-  await insertAssignment({
+  assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course.id,
     name: "Keyboard Nav Assignment",
     assignment_slug: `e2e-a11y-keyboard-${course.id}`
   });
+  const sub = await insertPreBakedSubmission({
+    student_profile_id: student.private_profile_id,
+    assignment_id: assignment.id,
+    class_id: course.id
+  });
+  submissionId = sub.submission_id;
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
@@ -115,6 +130,56 @@ test.describe("nav submenus open from the keyboard (WCAG 2.1.1/4.1.2)", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menuitem", { name: /enrollments/i })).toBeVisible();
     await page.keyboard.press("Escape");
+  });
+});
+
+test.describe("submission-tabs skip link (WCAG 2.4.1)", () => {
+  test("submission pages expose 'Skip to submission tabs' and it reaches the tab links", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/results`);
+    await expect(page.locator("#submission-tabs")).toBeVisible();
+
+    // Contextual link renders after the three global skip links.
+    const stops = await tabSequence(page, 4);
+    expect(stops[3].text).toMatch(/skip to submission tabs/i);
+
+    // Activating it focuses the tab bar; the next Tab enters the first tab link.
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    const onTabLink = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return Boolean(el && el.closest("#submission-tabs") && el.tagName === "A");
+    });
+    expect(onTabLink, "Tab after the skip lands on the first submission tab link").toBe(true);
+  });
+
+  test("non-submission pages do not render the contextual link", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.getByRole("heading", { name: /assignments/i }).first()).toBeVisible();
+    await expect(page.locator("#skip-links a", { hasText: /submission tabs/i })).toHaveCount(0);
+  });
+});
+
+test.describe("route-change focus management (WCAG 2.4.3)", () => {
+  test("navigation that unmounts the focused element moves focus to main content", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    const assignmentLink = page.getByRole("link", { name: /keyboard nav assignment/i }).first();
+    await expect(assignmentLink).toBeVisible();
+
+    // Keyboard-activate a link that lives in the page body: it unmounts on
+    // navigation, which used to drop focus to <body> (next Tab restarted from
+    // the top of the page). RouteFocusReset must land it on #main-content.
+    await assignmentLink.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForURL(new RegExp(`/course/${course.id}/assignments/${assignment.id}`));
+    await expect
+      .poll(async () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id ?? "(none)"), {
+        timeout: 10000,
+        message: "focus moves to the main-content landmark after the route change"
+      })
+      .toBe("main-content");
   });
 });
 

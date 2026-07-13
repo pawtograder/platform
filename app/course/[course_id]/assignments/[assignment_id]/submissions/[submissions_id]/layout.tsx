@@ -2486,6 +2486,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       <Box
         as="nav"
         aria-label="Submission tabs"
+        id="submission-tabs"
         p={0}
         m={0}
         borderBottomColor="border.emphasized"

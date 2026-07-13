@@ -9,12 +9,30 @@
  * a missing id are filtered out at click time.
  */
 import { Box, HStack } from "@chakra-ui/react";
+import { usePathname } from "next/navigation";
 import * as React from "react";
 
 const TARGETS: { id: string; label: string }[] = [
   { id: "main-content", label: "Skip to main content" },
   { id: "primary-nav", label: "Skip to navigation" },
   { id: "user-menu", label: "Skip to user menu" }
+];
+
+/**
+ * Route-scoped targets: rendered only when the current route mounts the
+ * landmark, so other pages never expose a skip link that goes nowhere.
+ * Matched on pathname (not the DOM) so the link is stable while the page's
+ * data is still loading.
+ */
+const CONTEXTUAL_TARGETS: { id: string; label: string; pattern: RegExp }[] = [
+  {
+    // The submission sub-tab bar (Grade / Autograder Detail / Files) sits
+    // behind ~7 header controls; without this, reaching it takes that many
+    // Tab presses on every submission page.
+    id: "submission-tabs",
+    label: "Skip to submission tabs",
+    pattern: /^\/course\/[^/]+\/assignments\/[^/]+\/submissions\/[^/]+/
+  }
 ];
 
 function isVisible(el: HTMLElement) {
@@ -51,6 +69,9 @@ export function focusLandmark(id: string): boolean {
 }
 
 export default function SkipNav() {
+  const pathname = usePathname() ?? "";
+  const targets = [...TARGETS, ...CONTEXTUAL_TARGETS.filter((t) => t.pattern.test(pathname))];
+
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, id: string) => {
     if (typeof document === "undefined") return;
     e.preventDefault();
@@ -117,7 +138,7 @@ export default function SkipNav() {
           }
         }}
       >
-        {TARGETS.map(({ id, label }) => (
+        {targets.map(({ id, label }) => (
           <li key={id}>
             <a href={`#${id}`} onClick={(e) => handleClick(e, id)}>
               {label}
