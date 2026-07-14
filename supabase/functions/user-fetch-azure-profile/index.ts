@@ -51,6 +51,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!authHeader) {
       throw new Error("Missing Authorization header");
     }
+    // [DEBUG] Inspect the forwarded token so we can tell an anon key (role=anon,
+    // no `sub`) apart from a real user session token (has `sub`). Logs decoded
+    // claims only — never the signature / full token.
+    try {
+      const rawTok = authHeader.replace(/^Bearer\s+/i, "");
+      const parts = rawTok.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+        console.log(
+          "[azure-profile DEBUG] forwarded token claims:",
+          JSON.stringify({ sub: payload.sub ?? null, role: payload.role, iss: payload.iss, aud: payload.aud, exp: payload.exp })
+        );
+      } else {
+        console.log("[azure-profile DEBUG] Authorization is not a 3-part JWT; segments =", parts.length);
+      }
+    } catch (e) {
+      console.log("[azure-profile DEBUG] token decode failed:", (e as Error)?.message);
+    }
 
     const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
       global: { headers: { Authorization: authHeader } }
@@ -62,6 +80,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       error: authError
     } = await supabase.auth.getUser();
     if (authError || !user) {
+      // [DEBUG] Full auth failure detail (the Bugsink context serialized as
+      // "[Object]"; log it explicitly). Includes which SUPABASE_URL was dialed.
+      console.error(
+        "[azure-profile DEBUG] getUser failed:",
+        JSON.stringify({ authError, hasUser: !!user, supabaseUrl: Deno.env.get("SUPABASE_URL") })
+      );
       scope?.setContext("auth_error", { error: authError });
       throw new Error("Authentication failed");
     }
