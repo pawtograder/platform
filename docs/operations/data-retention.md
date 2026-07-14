@@ -3,7 +3,7 @@
 Where Pawtograder keeps application data, how to size storage for it, and how
 you would enforce an age-based retention policy ("delete data older than N
 years"). It complements [`disaster-recovery.md`](./disaster-recovery.md) (which
-is about *not losing* data). This doc is about *bounding* and *removing* it.
+is about _not losing_ data). This doc is about _bounding_ and _removing_ it.
 
 > **State of play.** There is **no automated deletion or read-only policy
 > today.** Only the audit log self-prunes (90-day partitions, §5). Everything
@@ -20,17 +20,18 @@ is about *not losing* data). This doc is about *bounding* and *removing* it.
 Application data spans three independent stores. A retention action on a class
 touches **all three**; deleting from one orphans the others.
 
-| Plane | What | Anchor |
-|-------|------|--------|
-| **Postgres** (in-cluster) | Row metadata + inline grader text (scores, run summaries, workflow events, discussion, gradebook, audit) | `public.classes` |
-| **S3** (`storage.s3.bucket`) | Submission files, grader artifacts, grader bundles, uploads, avatars | `classes/{class_id}/` prefix |
-| **GitHub org repos** | Student / handout / grader repositories | the class's `github_org` |
+| Plane                        | What                                                                                                     | Anchor                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| **Postgres** (in-cluster)    | Row metadata + inline grader text (scores, run summaries, workflow events, discussion, gradebook, audit) | `public.classes`             |
+| **S3** (`storage.s3.bucket`) | Submission files, grader artifacts, grader bundles, uploads, avatars                                     | `classes/{class_id}/` prefix |
+| **GitHub org repos**         | Student / handout / grader repositories                                                                  | the class's `github_org`     |
 
 `public.classes` is the tenant root. Note there is **no separate term/course
-table** — a class row *is* the offering, and `classes.semester` (a `smallint`)
+table** — a class row _is_ the offering, and `classes.semester` (a `smallint`)
 plus `classes.created_at` are the only age signals at the tenant level.
 
 ### Postgres — the bulk-growth tables
+
 Every table below carries a `class_id` FK and a `created_at timestamptz`, so
 age- and tenant-scoped deletion is feasible per table.
 
@@ -43,6 +44,7 @@ age- and tenant-scoped deletion is feasible per table.
 - **`notifications`**, **`discussion_threads`**, **`gradebook_column_students`** (one row per student per column), **`repository_check_runs`**, **`emails`/`email_batches`**, and the usage logs (**`llm_inference_usage`**, **`api_gateway_calls`**, **`assignment_dashboard_views`**, **`student_help_activity`**).
 
 ### S3 — one physical bucket, logical prefixes
+
 `charts/pawtograder/templates/storage.yaml` sets `GLOBAL_S3_BUCKET` from
 `storage.s3.bucket` (default `pawtograder`; prod `pawtograder-prod-storage`).
 Supabase "buckets" are logical prefixes inside that one bucket:
@@ -66,6 +68,7 @@ object age comes from the owning DB row (`submissions.created_at` /
 `submission_files.created_at`) or the S3 object's `LastModified`.
 
 ### PII / grades
+
 `profiles` (`name`, `sortable_name`, `sis_user_id`, `avatar_url`, per class),
 `users` (`github_username`), `user_roles` (`canvas_id`); grades in
 `gradebook_column_students` (`score`, `score_override`), `grader_results.score`,
@@ -103,14 +106,14 @@ start at 200Gi and grow rather than over-provisioning.
 
 **Three S3 pools, sized and kept separate** (all versioned):
 
-| Pool | Values key | Ceiling |
-|------|-----------|---------|
-| App storage | `storage.s3.bucket` | full retention window (see formula above) |
-| Nightly dumps | `backup.s3.bucket` | ≈ compressed `pg_dump` × `backup.retentionDays` (14 default / 30 prod) |
-| WAL-G / PITR | `postgres.walg.s3Prefix` | ≈ `keepBackups` × base-backup + WAL over `intervalHours × keepBackups` (~8 days) |
+| Pool          | Values key               | Ceiling                                                                          |
+| ------------- | ------------------------ | -------------------------------------------------------------------------------- |
+| App storage   | `storage.s3.bucket`      | full retention window (see formula above)                                        |
+| Nightly dumps | `backup.s3.bucket`       | ≈ compressed `pg_dump` × `backup.retentionDays` (14 default / 30 prod)           |
+| WAL-G / PITR  | `postgres.walg.s3Prefix` | ≈ `keepBackups` × base-backup + WAL over `intervalHours × keepBackups` (~8 days) |
 
 Keep the WAL-G prefix in its **own bucket** — the nightly-dump job installs a
-*bucket-wide* ILM expiry rule, which would otherwise prune WAL-G objects and
+_bucket-wide_ ILM expiry rule, which would otherwise prune WAL-G objects and
 break PITR. See [`production-install.md`](./production-install.md) §3.
 
 ## 3. Operationalizing "delete data older than N years"
