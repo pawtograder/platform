@@ -274,7 +274,10 @@ spec:
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 ---
-# ServiceMonitor: edge-functions. /metrics on the http port.
+# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
+# (deno_http_requests_total, pawtograder_*) at /metrics on the http port, but
+# gated by a Bearer token — the runtime enforces the METRICS_TOKEN env value.
+# Prometheus must present it or every scrape 401s and the pods flap "up==0".
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -291,6 +294,11 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.edgeFunctions }}
+          key: METRICS_TOKEN
 ---
 # ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
 # port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in
