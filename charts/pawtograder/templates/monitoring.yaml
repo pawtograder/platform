@@ -256,7 +256,12 @@ spec:
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 ---
-# ServiceMonitor: storage-api. /metrics on the http port.
+# ServiceMonitor: storage-api. /metrics on the http port. Toggleable via
+# monitoring.serviceMonitors.storage: storage-api only exposes /metrics on its
+# admin app (ADMIN_PORT) or in multitenant mode — a single-tenant deploy serving
+# only :5000 returns 404, so Prometheus would flag it perpetually down. Set the
+# toggle false there.
+{{- if dig "serviceMonitors" "storage" true .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -273,6 +278,7 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
 ---
 # ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
 # (deno_http_requests_total, pawtograder_*) at /metrics on the http port, but

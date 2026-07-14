@@ -1306,6 +1306,14 @@ monitoring:
   scrapeInterval: 30s
   scrapeTimeout: 10s
 
+  # Per-component ServiceMonitor toggles (all default on). Set one false when a
+  # component doesn't expose a scrapeable /metrics endpoint in your topology, so
+  # Prometheus doesn't flag it perpetually "down". e.g. storage-api serves
+  # /metrics only on its admin app / in multitenant mode; disable it on a
+  # single-tenant deploy.
+  serviceMonitors:
+    storage: true
+
   # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
   # staleness, ExternalSecret sync failure, and TLS cert expiry — the
   # operational alerts PRODUCTION-READINESS deferred to cluster monitoring.
