@@ -319,6 +319,12 @@ postgres:
     storageClass: "" # e.g. "local-path" or "ceph-rbd"
     size: 50Gi
     accessMode: ReadWriteOnce
+    # Annotations stamped on the PVC (provisioner reads them at create time).
+    # On NetApp Trident + root-squashed NFS, set the volume world-writable so a
+    # non-root (uid 101) postgres can create PGDATA on the fresh mount:
+    #   annotations:
+    #     trident.netapp.io/unixPermissions: "0777"
+    annotations: {}
 
   # postgresql.conf overrides — bumped for Realtime fan-out + supavisor.
   config:
@@ -412,6 +418,8 @@ postgres:
       storageClass: ""
       size: 50Gi
       accessMode: ReadWriteOnce
+      # Same as postgres.persistence.annotations (e.g. Trident unixPermissions).
+      annotations: {}
     resources:
       requests: { cpu: "500m", memory: "2Gi" }
       limits:   { cpu: "2",    memory: "8Gi" }

@@ -299,6 +299,13 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        {{- with .Values.postgres.persistence.annotations }}
+        # Provisioner hints applied at PVC-creation time — e.g. NetApp Trident
+        # `trident.netapp.io/unixPermissions` so a non-root (uid 101) postgres
+        # can create PGDATA on a fresh root-squashed NFS volume.
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       spec:
         accessModes:
           - {{ .Values.postgres.persistence.accessMode }}
