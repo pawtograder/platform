@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { Database } from "./SupabaseTypes";
 import { sessionCookieOptions } from "../channels";
+import { withProfiling } from "./ssrProfile";
 
 export const createClient = async () => {
   const cookieStore = await cookies();
@@ -13,6 +14,8 @@ export const createClient = async () => {
       // Scope auth cookies to the parent zone for cross-channel-host sessions.
       // Derived from the channel host suffix; see utils/channels.ts.
       ...sessionCookieOptions(),
+      // SSR latency/directness profiling (no-op unless SSR_PROFILE is set).
+      global: { fetch: withProfiling("ssr-user") },
       cookies: {
         getAll() {
           return cookieStore.getAll();

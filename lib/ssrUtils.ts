@@ -3,6 +3,7 @@ import "server-only";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
+import { withProfiling } from "@/utils/supabase/ssrProfile";
 import { cookies } from "next/headers";
 import type {
   Assignment,
@@ -77,20 +78,24 @@ export type AssignmentControllerInitialData = {
   rubricCheckReferences?: RubricCheckReference[];
 };
 
-export const createFetch =
-  (options: Pick<RequestInit, "next" | "cache">) => (url: RequestInfo | URL, init?: RequestInit) => {
-    return fetch(url, {
+export const createFetch = (options: Pick<RequestInit, "next" | "cache">) => {
+  const base = (url: RequestInfo | URL, init?: RequestInit) =>
+    fetch(url, {
       ...init,
       ...options
     });
-  };
+  // SSR latency/directness profiling (no-op unless SSR_PROFILE is set).
+  return withProfiling("ssr-cached", base);
+};
 export async function createClientWithCaching({ revalidate, tags }: { revalidate?: number; tags?: string[] } = {}) {
   if (revalidate === 0) {
     if (tags) {
       throw new Error("Cannot create client with no caching and tags");
     }
     // If revalidate is 0, we do NO caching
-    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      global: { fetch: withProfiling("ssr-nocache") }
+    });
   }
   const client = await createClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
