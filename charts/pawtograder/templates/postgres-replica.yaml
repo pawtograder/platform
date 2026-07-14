@@ -80,12 +80,15 @@ spec:
         - name: pg-basebackup
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
-          # Run as root so we can fix ownership/perms to what postgres requires
-          # (data dir must be 0700, owned by uid 999). The main container's
-          # entrypoint also chowns, but we set it here so pg_basebackup's own
-          # write succeeds under fsGroup.
-          securityContext:
-            runAsUser: 0
+          # Inherit the pod-level securityContext (pawtograder.podSecurityContext)
+          # so pg_basebackup runs as the SAME user the postgres container will —
+          # the supabase/postgres user (uid 101), NOT root. That matters on
+          # root-squashed NFS (e.g. NetApp): a root process is squashed to the
+          # anon uid and can neither chown nor own PGDATA, so a root init here
+          # made the standby unstartable. pg_basebackup writes PGDATA as its own
+          # uid, so no post-hoc chown is needed; we only chmod 700 (the running
+          # user owns the dir). On non-squashing storage the default pod context
+          # (root) still works — the main container entrypoint chowns as before.
           command:
             - bash
             - -c
@@ -130,7 +133,11 @@ spec:
                 # refuses read connections and never becomes Ready.
                 echo "hot_standby = on"
               } >> "$PGDATA/postgresql.auto.conf"
-              chown -R 999:999 "$PGDATA"
+              # No chown: pg_basebackup already wrote PGDATA as the running user
+              # (the postgres uid), which is what the server requires. The former
+              # recursive chown to 999:999 here was both the wrong uid (supabase
+              # postgres is 101) and impossible under NFS root_squash. Postgres
+              # only requires the dir be mode 0700, which its owner can set.
               chmod 700 "$PGDATA"
               echo "[bootstrap] standby prepared"
           env:
