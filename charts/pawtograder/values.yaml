@@ -292,9 +292,11 @@ postgres:
   # The supabase/postgres entrypoint starts as root, chowns PGDATA, and
   # su's to postgres — it needs the default capability set, so the global
   # drop-ALL containerSecurityContext is opted out here. fsGroup keeps the
-  # PVC group-writable for uid 999.
+  # PVC group-writable for the supabase/postgres group (gid 102). (An overlay
+  # that runs the pod as uid 101 — e.g. for root-squashed NFS — should set
+  # runAsUser/runAsGroup here too; see examples/values-prod.yaml.)
   podSecurityContext:
-    fsGroup: 999
+    fsGroup: 102
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext: {}

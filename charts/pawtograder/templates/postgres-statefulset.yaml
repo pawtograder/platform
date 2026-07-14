@@ -38,7 +38,7 @@ spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
-      {{- /* fsGroup 999 + seccomp; see postgres.podSecurityContext in values */}}
+      {{- /* fsGroup 102 (supabase/postgres group) + seccomp; see postgres.podSecurityContext in values */}}
       {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
       # Long grace so a busy postgres can checkpoint + flush WAL instead of
       # being SIGKILLed 30s into a drain and paying a recovery replay on the
