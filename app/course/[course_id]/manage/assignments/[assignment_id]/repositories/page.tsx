@@ -245,6 +245,47 @@ function SyncButton({
   );
 }
 
+function RetryRepoCreationButton({
+  repoId,
+  tableController
+}: {
+  repoId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
+}) {
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    const supabase = createClient();
+    setIsRetrying(true);
+    try {
+      const { error } = await supabase.rpc("retry_repository_creation", {
+        p_repository_id: repoId
+      });
+      if (error) throw error;
+      toaster.success({
+        title: "Creation Re-queued",
+        description: "Repository creation has been re-queued. This page will automatically update."
+      });
+      await tableController?.invalidate(repoId);
+    } catch (error) {
+      console.error(error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to re-queue creation"
+      });
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+  return (
+    <Button size="xs" variant="outline" colorPalette="orange" onClick={handleRetry} loading={isRetrying}>
+      <Icon as={RefreshCw} />
+      Retry creation
+    </Button>
+  );
+}
+
 function FixRepoPermissionsButton({
   courseId,
   assignmentId,
@@ -698,6 +739,19 @@ export default function RepositoriesPage() {
                 <Icon as={CheckIcon} color="green.500" />
                 <Text color="green.600">Ready</Text>
               </>
+            ) : row.original.creation_error ? (
+              // Deterministic creation failure (e.g. empty/missing template). Surface the reason and
+              // let the instructor re-queue after fixing the config.
+              <VStack gap={1} alignItems="flex-start">
+                <HStack>
+                  <Icon as={FaTimes} color="red.500" />
+                  <Text color="red.600">Creation failed</Text>
+                </HStack>
+                <Text fontSize="xs" color="fg.muted" maxW="360px" wordBreak="break-word">
+                  {row.original.creation_error}
+                </Text>
+                <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />
+              </VStack>
             ) : row.original.assignment_group_id != null ? (
               // Group repo: there is no single student's org membership to read
               // (user_roles is joined via profile_id, which is null for group

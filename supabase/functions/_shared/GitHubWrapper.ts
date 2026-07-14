@@ -31,6 +31,19 @@ export class PrimaryRateLimitError extends Error {
   }
 }
 
+/**
+ * Deterministic, non-retryable repo-creation failure — e.g. the template/source repo is empty or
+ * missing, so no amount of retrying will produce a populated student repo. The async worker treats
+ * this specially: it records the reason on the repository row and sends the job to the DLQ WITHOUT
+ * tripping the shared circuit breaker (which is reserved for systemic failures like rate limits).
+ */
+export class NonRetryableRepoError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableRepoError";
+  }
+}
+
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 import {
@@ -1006,6 +1019,181 @@ function stubFakeSha(prefix: string, keyForHash: string): string {
   return `${prefix}${safe}`;
 }
 
+/**
+ * True when a repo has no commits on its default branch (genuinely empty). GitHub returns 409
+ * "Git Repository is empty" (or 404 on the ref) for a repo with no commits; anything else means it
+ * has content. Callers use this only for repos already known to exist.
+ */
+export async function isRepoEmpty(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  const meta = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const defaultBranch = meta.data.default_branch || "main";
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${defaultBranch}`
+    });
+    return false;
+  } catch (e) {
+    if (e instanceof RequestError && (e.status === 409 || e.status === 404)) {
+      return true;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Throws NonRetryableRepoError when the source template/fork repo has nothing to copy (missing or
+ * empty). This turns the true root cause of a blank student repo into a precise, non-retryable
+ * error instead of an endless delete/regenerate loop.
+ */
+export async function assertSourceNotEmpty(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sourceFullName: string
+): Promise<void> {
+  let empty: boolean;
+  try {
+    empty = await isRepoEmpty(octokit, owner, repo);
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      throw new NonRetryableRepoError(`Source repository ${sourceFullName} was not found`);
+    }
+    throw e;
+  }
+  if (empty) {
+    throw new NonRetryableRepoError(
+      `Source repository ${sourceFullName} is empty (no commits on its default branch); cannot create a student repo from it`
+    );
+  }
+}
+
+/**
+ * True when a repo create/generate/fork request failed because the target name is already taken.
+ * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
+ * top-level message OR inside response.data.errors[], so check both rather than a single brittle
+ * substring against message alone.
+ */
+function isRepoNameAlreadyExistsError(e: unknown): boolean {
+  if (!(e instanceof RequestError)) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string; field?: string };
+        haystacks.push(eo.message ?? "", eo.field ?? "");
+      }
+    }
+  }
+  const joined = haystacks.join(" ").toLowerCase();
+  return joined.includes("name already exists") || joined.includes("already exists on this account");
+}
+
+/**
+ * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
+ * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
+ * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
+ */
+async function finalizeRepo(
+  octokit: Octokit,
+  org: string,
+  repoName: string,
+  opts: { is_template_repo?: boolean; branch_protection?: BranchProtectionConfig },
+  scope?: Sentry.Scope
+): Promise<string> {
+  const { is_template_repo, branch_protection = DEFAULT_BRANCH_PROTECTION } = opts;
+  // Enable squash merging; set template flag when applicable. These are non-essential settings on an
+  // otherwise-usable repo, and this finalize runs on idempotent re-runs against already-existing
+  // (adopted) repos too — so log-and-continue on failure rather than failing the whole creation,
+  // matching the enable-Actions and ruleset steps below.
+  scope?.setTag("github_operation", "patch_repo_settings");
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("PATCH /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName,
+          allow_squash_merge: true,
+          is_template: is_template_repo ? true : false
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+  } catch (patchErr) {
+    console.error("Error patching repo settings (squash merge / template flag)", patchErr);
+    scope?.setTag("patch_repo_settings_failed", "true");
+    Sentry.captureException(patchErr, scope);
+  }
+  // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+  scope?.setTag("github_operation", "enable_actions");
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+          owner: org,
+          repo: repoName,
+          enabled: true,
+          allowed_actions: "all"
+        }),
+      3,
+      1000,
+      scope
+    );
+  } catch (actionsErr) {
+    console.error("Error enabling GitHub Actions", actionsErr);
+    scope?.setTag("enable_actions_failed", "true");
+    Sentry.captureException(actionsErr, scope);
+  }
+  // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
+  // UPSTREAM's default branch (which may be `master`), and a template-generated repo inherits the
+  // template's. Hardcoding `heads/main` would 404 the ref lookup for any such repo.
+  scope?.setTag("github_operation", "get_default_branch");
+  const repoMeta = await retryWithBackoff(
+    () =>
+      octokit.request("GET /repos/{owner}/{repo}", {
+        owner: org,
+        repo: repoName
+      }),
+    3, // maxRetries
+    1000, // baseDelayMs
+    scope
+  );
+  const defaultBranch = repoMeta.data.default_branch || "main";
+  scope?.setTag("default_branch", defaultBranch);
+  scope?.setTag("github_operation", "get_head_sha");
+  scope?.setTag("ref", `heads/${defaultBranch}`);
+  const heads = await retryWithBackoff(
+    () =>
+      octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+        owner: org,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`
+      }),
+    5, // maxRetries
+    3000, // baseDelayMs
+    scope
+  );
+  scope?.setTag("head_sha", heads.data.object.sha);
+
+  // Apply branch protection ruleset per the assignment's configuration.
+  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  try {
+    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
+  } catch (rulesetError) {
+    // Log but don't fail repo creation if ruleset creation fails
+    console.error("Error applying branch protection ruleset", rulesetError);
+    scope?.setTag("ruleset_creation_failed", "true");
+    Sentry.captureException(rulesetError, scope);
+  }
+
+  return heads.data.object.sha as string;
+}
+
 export async function createRepo(
   org: string,
   repoName: string,
@@ -1048,13 +1236,12 @@ export async function createRepo(
   const owner = template_repo.split("/")[0];
   const repo = template_repo.split("/")[1];
 
-  try {
-    scope?.setTag("github_operation", "create_repo_request");
-    scope?.setTag("template_repo", template_repo);
-    scope?.setTag("template_owner", owner);
-    scope?.setTag("repo_name", repoName);
-    scope?.setTag("org", org);
-    console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
+  // Runs the create step (generate or fork) then blocks until GitHub finishes populating the repo.
+  // Both APIs mirror content asynchronously, so we must wait for size>0 before reading the head SHA
+  // (previously only the fork path waited — the generate path could read an empty ref and fail, or
+  // return before content landed). Shared by the fresh-create path and the delete+regenerate repair
+  // path so the two never drift.
+  const createAndWaitReady = async (): Promise<void> => {
     if (creation_method === "fork") {
       // Fork the upstream into our org with the chosen name. Forks are
       // asynchronous on GitHub's side, so we poll for size > 0 below.
@@ -1071,7 +1258,6 @@ export async function createRepo(
         5000, // baseDelayMs
         scope
       );
-      await waitForRepoReady(octokit, org, repoName, scope);
     } else {
       const resp = await retryWithBackoff(
         () =>
@@ -1088,181 +1274,77 @@ export async function createRepo(
       );
       console.log(JSON.stringify(resp.headers, null, 2));
     }
-    scope?.setTag("github_operation", "create_repo_request_done");
-    // Enable squash merging; set template flag when applicable
-    scope?.setTag("github_operation", "patch_repo_settings");
-    await retryWithBackoff(
-      () =>
-        octokit.request("PATCH /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName,
-          allow_squash_merge: true,
-          is_template: is_template_repo ? true : false
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
-    );
-    // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
-    scope?.setTag("github_operation", "enable_actions");
-    try {
-      await retryWithBackoff(
-        () =>
-          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-            owner: org,
-            repo: repoName,
-            enabled: true,
-            allowed_actions: "all"
-          }),
-        3,
-        1000,
-        scope
-      );
-    } catch (actionsErr) {
-      console.error("Error enabling GitHub Actions", actionsErr);
-      scope?.setTag("enable_actions_failed", "true");
-      Sentry.captureException(actionsErr, scope);
-    }
-    //Get the head SHA. Resolve the repo's actual default branch rather than
-    // assuming `main`: a FORK inherits the UPSTREAM's default branch (which may be
-    // `master`), and a template-generated repo inherits the template's. Hardcoding
-    // `heads/main` 404s the ref lookup for any such repo, so retryWithBackoff
-    // exhausts its 5 retries and throws, failing the whole student's repo creation
-    // even though the repo itself was created fine. Mirrors mergeForkUpstream's
-    // `repoMeta.data.default_branch` resolution.
-    scope?.setTag("github_operation", "get_default_branch");
-    const repoMeta = await retryWithBackoff(
-      () =>
-        octokit.request("GET /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
-    );
-    const defaultBranch = repoMeta.data.default_branch || "main";
-    scope?.setTag("default_branch", defaultBranch);
-    scope?.setTag("github_operation", "get_head_sha");
-    scope?.setTag("ref", `heads/${defaultBranch}`);
-    const heads = await retryWithBackoff(
-      () =>
-        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          owner: org,
-          repo: repoName,
-          ref: `heads/${defaultBranch}`
-        }),
-      5, // maxRetries
-      3000, // baseDelayMs
-      scope
-    );
-    scope?.setTag("head_sha", heads.data.object.sha);
+    await waitForRepoReady(octokit, org, repoName, scope);
+  };
 
-    // Apply branch protection ruleset per the assignment's configuration.
-    scope?.setTag("github_operation", "create_branch_protection_ruleset");
-    try {
-      await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
-    } catch (rulesetError) {
-      // Log but don't fail repo creation if ruleset creation fails
-      console.error("Error applying branch protection ruleset", rulesetError);
-      scope?.setTag("ruleset_creation_failed", "true");
-      Sentry.captureException(rulesetError, scope);
-    }
+  scope?.setTag("github_operation", "create_repo_request");
+  scope?.setTag("template_repo", template_repo);
+  scope?.setTag("template_owner", owner);
+  scope?.setTag("repo_name", repoName);
+  scope?.setTag("org", org);
+  console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
 
-    return heads.data.object.sha as string;
-  } catch (e) {
-    console.error("Error creating repo", e);
-    if (e instanceof RequestError) {
-      if (e.message.includes("Name already exists on this account")) {
-        // Repo already exists, get the head SHA. Resolve its default branch (may be
-        // `master`, not `main`) for the same reason as the fresh-create path above.
-        scope?.setTag("repo_already_exists", "true");
-        scope?.setTag("github_operation", "get_existing_repo_default_branch");
-        const existingMeta = await retryWithBackoff(
-          () =>
-            octokit.request("GET /repos/{owner}/{repo}", {
-              owner: org,
-              repo: repoName
-            }),
-          3, // maxRetries
-          1000, // baseDelayMs
-          scope
-        );
-        const existingDefaultBranch = existingMeta.data.default_branch || "main";
-        scope?.setTag("default_branch", existingDefaultBranch);
-        scope?.setTag("github_operation", "get_existing_repo_head_sha");
-        scope?.setTag("ref", `heads/${existingDefaultBranch}`);
-        const heads = await retryWithBackoff(
-          () =>
-            octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-              owner: org,
-              repo: repoName,
-              ref: `heads/${existingDefaultBranch}`
-            }),
-          3, // maxRetries
-          1000, // baseDelayMs
-          scope
-        );
-        scope?.setTag("head_sha", heads.data.object.sha);
-        // Match settings we apply on fresh creates (e.g. squash merge).
-        try {
-          await retryWithBackoff(
-            () =>
-              octokit.request("PATCH /repos/{owner}/{repo}", {
-                owner: org,
-                repo: repoName,
-                allow_squash_merge: true,
-                is_template: is_template_repo ? true : false
-              }),
-            3,
-            1000,
-            scope
-          );
-        } catch (patchErr) {
-          console.error("Error patching repo settings for pre-existing repo", patchErr);
-          scope?.setTag("patch_existing_repo_settings_failed", "true");
-          Sentry.captureException(patchErr, scope);
+  try {
+    await createAndWaitReady();
+  } catch (createErr) {
+    if (isRepoNameAlreadyExistsError(createErr)) {
+      // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If
+      // it is EMPTY, a previous attempt left it half-created — REPAIR it by deleting and
+      // regenerating rather than adopting a blank repo forever (the old, broken behavior).
+      scope?.setTag("repo_already_exists", "true");
+      const empty = await isRepoEmpty(octokit, org, repoName);
+      scope?.setTag("existing_repo_empty", empty.toString());
+      if (empty) {
+        // Diagnose the source first: a genuinely-broken template must yield a precise,
+        // non-retryable error instead of an endless delete/regenerate loop.
+        await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+        // Safety invariant: only ever delete a VERIFIED-EMPTY repo, and never the template/source.
+        if (org === owner && repoName === repo) {
+          throw new NonRetryableRepoError(`Refusing to delete ${org}/${repoName}: it is the template/source repo`);
         }
-        // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
-        scope?.setTag("github_operation", "enable_actions");
+        scope?.setTag("github_operation", "delete_empty_repo_for_repair");
         try {
-          await retryWithBackoff(
-            () =>
-              octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-                owner: org,
-                repo: repoName,
-                enabled: true,
-                allowed_actions: "all"
-              }),
-            3,
-            1000,
-            scope
-          );
-        } catch (actionsErr) {
-          console.error("Error enabling GitHub Actions for pre-existing repo", actionsErr);
-          scope?.setTag("enable_actions_failed", "true");
-          Sentry.captureException(actionsErr, scope);
+          await octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName });
+        } catch (delErr) {
+          if (!(delErr instanceof RequestError) || delErr.status !== 404) throw delErr;
         }
-        // Apply branch protection on the pre-existing repo too — the fresh-create
-        // branch does this just before returning (line ~973). Without this call,
-        // re-running repo creation against an already-existing repo would leave
-        // its ruleset stale relative to the assignment config.
-        scope?.setTag("github_operation", "create_branch_protection_ruleset_existing");
+        // GitHub frees the name shortly after deletion; give it a moment before regenerating.
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         try {
-          await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
-        } catch (rulesetError) {
-          console.error("Error applying branch protection ruleset on existing repo", rulesetError);
-          scope?.setTag("ruleset_creation_failed", "true");
-          Sentry.captureException(rulesetError, scope);
+          await createAndWaitReady();
+        } catch (repairErr) {
+          // If the regenerated repo still never receives content, diagnose the source. A genuinely
+          // empty/missing template makes assertSourceNotEmpty throw a terminal NonRetryableRepoError.
+          // If the source is HEALTHY, the repo has simply not finished mirroring yet — a transient
+          // condition, so let the original readiness error propagate as retryable rather than
+          // dead-lettering a slow-but-fine repo on the first attempt.
+          if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
+            console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
+            await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+          }
+          throw repairErr;
         }
-        return heads.data.object.sha as string;
-      } else {
-        throw e;
       }
+      // else: existing non-empty repo — fall through to the shared finalize block to adopt it.
+    } else if (createErr instanceof UserVisibleError && createErr.message.includes("did not become ready")) {
+      // The create call succeeded but the repo has not received content yet. Diagnose the source: a
+      // genuinely empty/missing template makes assertSourceNotEmpty throw a terminal
+      // NonRetryableRepoError. If the source is HEALTHY, GitHub has simply not finished mirroring — a
+      // transient condition, so re-throw the original readiness error as retryable rather than
+      // dead-lettering a slow-but-fine repo on the first attempt.
+      console.error("Repo did not become ready after create", createErr);
+      await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+      throw createErr;
     } else {
-      throw e;
+      console.error("Error creating repo", createErr);
+      throw createErr;
     }
   }
+
+  scope?.setTag("github_operation", "create_repo_request_done");
+  // Shared finalize (settings, Actions, head SHA, branch protection) for fresh, repaired, and
+  // adopted-pre-existing repos alike.
+  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope);
 }
 
 /**
@@ -1508,7 +1590,7 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new UserVisibleError(`Fork ${org}/${repoName} did not become ready in time`);
+  throw new UserVisibleError(`Repo ${org}/${repoName} did not become ready in time`);
 }
 async function listFilesInRepoDirectory(
   octokit: Octokit,
