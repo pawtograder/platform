@@ -15,16 +15,47 @@
 -- config in 20260528120000_lti_1_3_integration.sql:
 --     ALTER DATABASE postgres SET app.settings.default_handout_template_repo  = 'my-org/handout';
 --     ALTER DATABASE postgres SET app.settings.default_solution_template_repo = 'my-org/grader';
--- (new connections pick it up; run `SELECT pg_reload_conf();` is not required for a DATABASE-level
--- SET, but existing sessions must reconnect.)
+-- (existing sessions must reconnect to pick up a DATABASE-level SET).
 --
--- current_setting(..., true) returns NULL when the GUC is unset, so a deployment that never sets it
--- behaves exactly as before (falls through to the pawtograder/* constant). The TS constants in
--- supabase/functions/_shared/GitHubSyncHelpers.ts remain the last-resort literal and are unchanged;
--- resolve_class_template_repos stays the source of truth.
+-- The resolution + the "owner/repo" validation (previously duplicated per call site) are centralized
+-- in one STABLE helper, public.resolve_effective_template_repo, so the GUC name, the format check,
+-- and the hardcoded constant live in a single place. The helper validates the GUC value the same
+-- way admin-supplied overrides are validated (set_class_template_overrides / admin_upsert_github_org):
+-- a deployment typo (missing slash, stray whitespace) is ignored and falls through to the constant
+-- rather than silently propagating an invalid repo string into the repo-creation edge functions.
 --
--- Only the final COALESCE fallback of each resolver changes below; all guards/security/return
--- shapes are reproduced verbatim from 20260529140000.
+-- The TS constants in supabase/functions/_shared/GitHubSyncHelpers.ts remain the last-resort literal
+-- and are unchanged; resolve_class_template_repos stays the source of truth.
+
+----------------------------------------------------------------------------------------
+-- Shared resolver: override -> org default -> validated GUC -> constant
+----------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.resolve_effective_template_repo(
+    p_override text,
+    p_org_default text,
+    p_guc_name text,
+    p_constant text
+) RETURNS text
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+    SELECT COALESCE(
+        p_override,
+        p_org_default,
+        -- Only honor the GUC when it's a well-formed "owner/repo"; otherwise ignore it so a
+        -- deployment typo can't propagate an invalid repo string (matches the override validation).
+        CASE
+            WHEN current_setting(p_guc_name, true) ~ '^[^/[:space:]]+/[^/[:space:]]+$'
+            THEN current_setting(p_guc_name, true)
+        END,
+        p_constant
+    );
+$$;
+
+COMMENT ON FUNCTION public.resolve_effective_template_repo(text, text, text, text) IS
+    'Resolve a template repo: per-class/admin override -> org default -> validated app.settings GUC -> hardcoded constant.';
 
 ----------------------------------------------------------------------------------------
 -- resolve_class_template_repos: the hot path used by the edge functions when creating repos.
@@ -46,18 +77,12 @@ BEGIN
 
     RETURN QUERY
     SELECT
-        COALESCE(
-            c.handout_template_repo,
-            go.default_handout_template_repo,
-            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
-            'pawtograder/template-assignment-handout'
-        ),
-        COALESCE(
-            c.solution_template_repo,
-            go.default_solution_template_repo,
-            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
-            'pawtograder/template-assignment-grader'
-        )
+        public.resolve_effective_template_repo(
+            c.handout_template_repo, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            c.solution_template_repo, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
     FROM public.classes c
     LEFT JOIN public.github_orgs go ON go.org_name = c.github_org
     WHERE c.id = p_class_id;
@@ -96,16 +121,12 @@ BEGIN
     )
     SELECT
         o.org_name,
-        COALESCE(
-            go.default_handout_template_repo,
-            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
-            'pawtograder/template-assignment-handout'
-        ),
-        COALESCE(
-            go.default_solution_template_repo,
-            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
-            'pawtograder/template-assignment-grader'
-        ),
+        public.resolve_effective_template_repo(
+            NULL, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            NULL, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         (SELECT COUNT(*) FROM public.classes c WHERE c.github_org = o.org_name)::bigint,
         (go.org_name IS NOT NULL) AS is_configured,
         go.created_at,
@@ -156,30 +177,22 @@ BEGIN
         updated_by
     ) VALUES (
         trim(p_org_name),
-        COALESCE(
-            NULLIF(trim(p_handout), ''),
-            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
-            'pawtograder/template-assignment-handout'
-        ),
-        COALESCE(
-            NULLIF(trim(p_solution), ''),
-            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
-            'pawtograder/template-assignment-grader'
-        ),
+        public.resolve_effective_template_repo(
+            NULLIF(trim(p_handout), ''), NULL,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            NULLIF(trim(p_solution), ''), NULL,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         auth.uid(),
         auth.uid()
     )
     ON CONFLICT (org_name) DO UPDATE SET
-        default_handout_template_repo = COALESCE(
-            NULLIF(trim(p_handout), ''),
-            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
-            'pawtograder/template-assignment-handout'
-        ),
-        default_solution_template_repo = COALESCE(
-            NULLIF(trim(p_solution), ''),
-            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
-            'pawtograder/template-assignment-grader'
-        ),
+        default_handout_template_repo = public.resolve_effective_template_repo(
+            NULLIF(trim(p_handout), ''), NULL,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        default_solution_template_repo = public.resolve_effective_template_repo(
+            NULLIF(trim(p_solution), ''), NULL,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         updated_by = auth.uid(),
         updated_at = now();
 END;
@@ -217,21 +230,23 @@ BEGIN
         COALESCE(c.archived, false),
         c.handout_template_repo,
         c.solution_template_repo,
-        COALESCE(
-            c.handout_template_repo,
-            go.default_handout_template_repo,
-            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
-            'pawtograder/template-assignment-handout'
-        ),
-        COALESCE(
-            c.solution_template_repo,
-            go.default_solution_template_repo,
-            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
-            'pawtograder/template-assignment-grader'
-        )
+        public.resolve_effective_template_repo(
+            c.handout_template_repo, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            c.solution_template_repo, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
     FROM public.classes c
     LEFT JOIN public.github_orgs go ON go.org_name = c.github_org
     WHERE c.github_org = p_org_name
     ORDER BY c.name;
 END;
 $$;
+
+----------------------------------------------------------------------------------------
+-- Grants: the helper is called from within SECURITY DEFINER functions (so it runs with the
+-- definer's rights there), but grant execute explicitly for directness/consistency.
+----------------------------------------------------------------------------------------
+
+REVOKE EXECUTE ON FUNCTION public.resolve_effective_template_repo(text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.resolve_effective_template_repo(text, text, text, text) TO authenticated, service_role;

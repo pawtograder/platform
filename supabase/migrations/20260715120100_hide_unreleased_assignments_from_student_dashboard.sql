@@ -18,8 +18,11 @@
 -- assignments TableController's `.from("assignments").select("*")`), which are unaffected, so staff
 -- still see unreleased assignments in their management views.
 --
--- Everything below is copied verbatim from 20260529120000_dashboard_rpc_gate_grading_release.sql
--- except the final WHERE clause.
+-- Everything below is copied verbatim from the latest definition
+-- (20260608120000_dashboard_rpc_prefer_active_submission.sql — which prefers the ACTIVE submission
+-- via the `is_active DESC` ordering in the two per-mode LATERALs and the chosen_submission
+-- DISTINCT ON) except the final WHERE clause. Basing on that version preserves the
+-- active-submission preference; only the release gate is new.
 
 CREATE OR REPLACE FUNCTION public.get_assignments_for_student_dashboard(
   p_class_id bigint,
@@ -135,7 +138,9 @@ BEGIN
         WHERE s.assignment_id = a.id
           AND s.profile_id = ur.student_profile_id
           AND s.assignment_group_id IS NULL
-        ORDER BY s.created_at DESC
+        -- Prefer the active submission; fall back to most recent. The grade shown should be
+        -- the active/graded submission's, not a later not-for-grading scratch submission's.
+        ORDER BY s.is_active DESC, s.created_at DESC
         LIMIT 1
     ) s_ind ON TRUE
   ), student_group AS (
@@ -160,7 +165,8 @@ BEGIN
         FROM public.submissions s
         WHERE s.assignment_id = sg.assignment_id
           AND s.assignment_group_id = sg.assignment_group_id
-        ORDER BY s.created_at DESC
+        -- Prefer the active submission; fall back to most recent (see individual branch above).
+        ORDER BY s.is_active DESC, s.created_at DESC
         LIMIT 1
     ) s_grp ON TRUE
   ), chosen_submission AS (
@@ -180,7 +186,11 @@ BEGIN
                lgs.submission_created_at, lgs.submission_is_active, lgs.submission_ordinal
         FROM latest_group_submission lgs
     ) x
-    ORDER BY assignment_id, student_profile_id, submission_created_at DESC NULLS LAST
+    -- A student is in at most one mode per assignment, so exactly one branch yields a real
+    -- row (the other has NULLs). NULLS LAST keeps the real row; the is_active tiebreaker
+    -- matches the per-mode LATERAL preference for the active submission.
+    ORDER BY assignment_id, student_profile_id,
+             submission_is_active DESC NULLS LAST, submission_created_at DESC NULLS LAST
   ), grader_result_for_submission AS (
     SELECT cs.assignment_id,
            cs.student_profile_id,
