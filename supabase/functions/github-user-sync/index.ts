@@ -855,7 +855,7 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   }
   const { data: classRows, error: classError } = await supabase
     .from("classes")
-    .select("github_org, user_roles!inner(user_id, disabled)")
+    .select("github_org, user_roles!inner(user_id, disabled, github_org_confirmed)")
     .eq("user_roles.user_id", user.id)
     .eq("user_roles.disabled", false)
     .not("github_org", "is", "null");
@@ -868,6 +868,16 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("User not in any classes");
   }
 
+  // Force past syncGitHubUser's 24h recent-sync throttle when the user still has an unconfirmed
+  // org enrollment. syncGitHubUser stamps last_github_user_sync before reconciling, so a run that
+  // failed part-way (e.g. a transient error in ensureAllReposExist) would otherwise leave the user
+  // throttled with github_org_confirmed = false — the "accept your invitation" banner stuck for 24h.
+  // Deciding force server-side from github_org_confirmed (not a client flag) keeps the throttle's
+  // anti-spam guarantee for already-reconciled users while letting a stuck user retry each login.
+  const hasUnconfirmedEnrollment = (classRows ?? []).some((c) =>
+    (c.user_roles ?? []).some((r) => r.github_org_confirmed === false)
+  );
+
   // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see
   // ensureAllReposExist + ensureStaffOrgMembership), so a single successful call covers every org.
   // The org argument only selects which org's GitHub App installation resolves the login from the
@@ -876,7 +886,7 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   let lastError: unknown;
   for (const org of orgs) {
     try {
-      return await syncGitHubUser(user.id, org, false, scope);
+      return await syncGitHubUser(user.id, org, hasUnconfirmedEnrollment, scope);
     } catch (e) {
       lastError = e;
       scope?.addBreadcrumb({
