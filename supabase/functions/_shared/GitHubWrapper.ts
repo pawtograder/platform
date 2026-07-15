@@ -2099,13 +2099,13 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     if (structurallyAlreadyMember || textuallyAlreadyMember) {
       scope?.addBreadcrumb({
         category: "github",
-        message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`,
+        message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${resolvedSlug}`,
         level: "info"
       });
-      //Add them to the team directly...
+      //Add them to the team directly (use the team's actual slug, not the requested class slug)...
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
-        team_slug,
+        team_slug: resolvedSlug,
         username: githubUsername,
         role: "member"
       });
