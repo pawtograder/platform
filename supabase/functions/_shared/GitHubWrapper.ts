@@ -1939,7 +1939,10 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     level: "info"
   });
 
-  // Check if user is already in the team
+  // Check if user is already in the team. Keep ONLY the membership *check* inside this try, so a
+  // failure to read team members degrades to "proceed with invitation" — but the confirmation write
+  // below is deliberately outside it (see next block).
+  let isUserInTeam = false;
   try {
     scope?.addBreadcrumb({
       category: "github",
@@ -1956,36 +1959,33 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
       message: `Found ${teamMembers.length} members in team ${resolvedSlug}`,
       level: "info"
     });
-
-    const isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
-    if (isUserInTeam) {
-      scope?.addBreadcrumb({
-        category: "github",
-        message: `User ${githubUsername} is already in team ${resolvedSlug}`,
-        level: "info"
-      });
-      // Guarantee our side reflects reality regardless of the caller: a user already in the team
-      // must have github_org_confirmed set, or the "accept your invitation" banner never clears.
-      // Isolate this write so a transient DB error is reported accurately and doesn't fall through
-      // to the invite flow (which would misattribute it as a membership-check failure and send a
-      // redundant invite to a user already in the team).
-      try {
-        await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
-      } catch (confirmErr) {
-        console.log(`Error marking org-confirmed for ${githubUsername} in team ${team_slug}: ${confirmErr}`);
-        Sentry.captureException(confirmErr, scope);
-      }
-      return false;
-    }
-    scope?.addBreadcrumb({
-      category: "github",
-      message: `User ${githubUsername} is not in team ${team_slug}, proceeding with invitation`,
-      level: "info"
-    });
+    isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
   } catch (error) {
     console.log(`Error checking team membership: ${error}`);
     // Continue with invitation if we can't check membership
   }
+
+  if (isUserInTeam) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} is already in team ${resolvedSlug}; marking org-confirmed`,
+      level: "info"
+    });
+    // Guarantee our side reflects reality regardless of the caller: a user already in the team must
+    // have github_org_confirmed set, or the "accept your invitation" banner never clears. Let a
+    // failure here PROPAGATE rather than returning false: reporting a successful reconciliation when
+    // the confirmation write didn't stick would let the async team sync (whose intended-member query
+    // filters on github_org_confirmed = true) drop this already-present user from the team. Because
+    // this runs outside the membership-check try above, the throw isn't misattributed as a
+    // membership-check failure and doesn't fall through to the (redundant) invite flow.
+    await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+    return false;
+  }
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `User ${githubUsername} is not in team ${resolvedSlug}, proceeding with invitation`,
+    level: "info"
+  });
 
   // Proactively check whether the user is already an active member of the org.
   // GitHub's POST /orgs/{org}/invitations endpoint only works for non-members; for users that are

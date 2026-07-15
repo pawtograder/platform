@@ -884,11 +884,20 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   // github_user_id — so try each until one succeeds, ensuring one mis-installed org doesn't block
   // reconciliation of the rest.
   let lastError: unknown;
-  for (const org of orgs) {
+  for (let i = 0; i < orgs.length; i++) {
+    const org = orgs[i];
+    // The first attempt respects the throttle decision (hasUnconfirmedEnrollment). RETRIES force
+    // past it: syncGitHubUser stamps last_github_user_sync before reconciling, so a first attempt
+    // that throws mid-reconcile would leave a retry hitting the 24h recent-sync gate — which returns
+    // a benign "synced recently" response that would mask the real failure and report a repair that
+    // never happened. Forcing retries makes them actually run (and surface a real error if they too
+    // fail).
+    const force = i === 0 ? hasUnconfirmedEnrollment : true;
     try {
-      return await syncGitHubUser(user.id, org, hasUnconfirmedEnrollment, scope);
+      return await syncGitHubUser(user.id, org, force, scope);
     } catch (e) {
       lastError = e;
+      Sentry.captureException(e, scope);
       scope?.addBreadcrumb({
         category: "github",
         level: "warning",
