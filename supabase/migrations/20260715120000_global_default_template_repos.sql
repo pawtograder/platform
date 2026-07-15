@@ -244,9 +244,15 @@ END;
 $$;
 
 ----------------------------------------------------------------------------------------
--- Grants: the helper is called from within SECURITY DEFINER functions (so it runs with the
--- definer's rights there), but grant execute explicitly for directness/consistency.
+-- Grants: DO NOT expose this helper as a PostgREST RPC. It returns current_setting(p_guc_name)
+-- for a caller-supplied GUC name, so granting it to `authenticated` would let any signed-in user
+-- read arbitrary GUC-stored settings — including secrets like app.settings.lti_cron_secret that
+-- happen to match the owner/repo shape. The SECURITY DEFINER resolver/admin functions above call it
+-- as the function owner, so no role grant is needed for internal use. Revoke the default PUBLIC
+-- EXECUTE so it is not reachable via the API.
 ----------------------------------------------------------------------------------------
 
-REVOKE EXECUTE ON FUNCTION public.resolve_effective_template_repo(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.resolve_effective_template_repo(text, text, text, text) TO authenticated, service_role;
+-- Revoke from the API roles explicitly (not just PUBLIC): CREATE OR REPLACE preserves prior ACLs,
+-- so this guarantees the owner-only end state even if an earlier revision granted these roles.
+REVOKE ALL ON FUNCTION public.resolve_effective_template_repo(text, text, text, text)
+    FROM PUBLIC, anon, authenticated, service_role;

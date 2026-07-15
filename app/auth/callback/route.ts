@@ -90,13 +90,15 @@ export async function GET(request: Request) {
           // forever. Reconciliation is idempotent; errors are logged, never surfaced to login.
           after(async () => {
             try {
-              const { data: unconfirmed } = await supabase
+              const { data: unconfirmed, error: fetchError } = await supabase
                 .from("user_roles")
                 .select("id")
                 .eq("user_id", userId)
                 .eq("disabled", false)
                 .eq("github_org_confirmed", false)
                 .limit(1);
+              // Supabase queries don't throw; surface the error so the catch reports it to Sentry.
+              if (fetchError) throw fetchError;
               if (unconfirmed && unconfirmed.length > 0) {
                 await syncGitHubAccount(supabase);
               }
