@@ -63,6 +63,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
+// Distinguishes a score assigned to a non-submitter (e.g. `0*`) from an earned one.
+const NOT_SUBMITTED_MARKER = "*";
+
+// Marker beside a graded non-submitter's score. Uses a native title (not a
+// Chakra Tooltip) to avoid colliding with the row's "view submission" tooltip.
+function NonSubmissionMarker() {
+  return (
+    <Text
+      as="span"
+      color="orange.500"
+      fontWeight="bold"
+      cursor="help"
+      title="Graded without a submission — this student never submitted."
+      aria-label="Graded without a submission"
+    >
+      {NOT_SUBMITTED_MARKER}
+    </Text>
+  );
+}
+
 /**
  * "Grade anyway" action for a student/group with no active submission. Creates
  * an empty (`submitted_via='manual'`) stub submission on demand, then navigates
@@ -287,6 +307,7 @@ function TotalScoreCellUnknownStudent({
         course_id={course_id}
         assignment_id={assignment_id}
       />
+      {row.original.is_non_submission && displayScore !== null && displayScore !== undefined && <NonSubmissionMarker />}
       {hasIndividual && tooltipContent !== "" && (
         <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
           <Text fontSize="xs" color="fg.info" cursor="help">
@@ -339,6 +360,7 @@ function TotalScoreCellWithStudent({
         course_id={course_id}
         assignment_id={assignment_id}
       />
+      {row.original.is_non_submission && displayScore !== null && displayScore !== undefined && <NonSubmissionMarker />}
       {showTooltip && (
         <Tooltip content={tooltipContent}>
           <Text fontSize="xs" color="fg.info" cursor="help">

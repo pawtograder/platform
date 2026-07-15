@@ -11420,6 +11420,7 @@ export type Database = {
           hours: number | null;
           id: number | null;
           individual_scores: Json | null;
+          is_non_submission: boolean | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
