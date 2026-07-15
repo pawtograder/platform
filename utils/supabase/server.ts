@@ -8,7 +8,9 @@ export const createClient = async () => {
   const cookieStore = await cookies();
 
   return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    // Server-side: prefer SUPABASE_URL (may point in-cluster/internal); the public
+    // NEXT_PUBLIC_SUPABASE_URL is the browser-facing fallback. Anon key stays public.
+    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       // Scope auth cookies to the parent zone for cross-channel-host sessions.

@@ -93,12 +93,16 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
       throw new Error("Cannot create client with no caching and tags");
     }
     // If revalidate is 0, we do NO caching
-    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-      global: { fetch: withProfiling("ssr-nocache") }
-    });
+    return createClient<Database>(
+      process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        global: { fetch: withProfiling("ssr-nocache") }
+      }
+    );
   }
   const client = await createClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       global: {
