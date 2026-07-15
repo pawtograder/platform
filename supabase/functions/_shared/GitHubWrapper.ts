@@ -1,5 +1,5 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { bottleneckRedisOptions } from "./Redis.ts";
+import { bottleneckRedisOptions, getBottleneckConnection } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -351,37 +351,13 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
     level: "info"
   });
   if (installations.length === 0) {
-    let connection: Bottleneck.IORedisConnection | undefined;
-    // Back the GitHub API throttle with the shared Redis whenever ANY backend is
-    // configured (REDIS_URL first, then Upstash), via the same env-based factory
-    // the rest of the app uses. Previously this only built a connection when
-    // UPSTASH_* was set; on a REDIS_URL-only deployment `connection` stayed
-    // undefined, so @octokit/plugin-throttling fell back to a LOCAL per-isolate
-    // limiter — the GitHub rate limit was NOT coordinated across the (12-20)
-    // edge replicas, and no `b_pawtograder-production_*` state landed in the
-    // shared Redis for the metrics function to read. (The old UPSTASH_* branch
-    // also referenced an unimported `Redis` identifier, so it would have thrown
-    // a ReferenceError if ever taken.)
-    const throttleRedisOpts = bottleneckRedisOptions();
-    if (throttleRedisOpts) {
-      connection = new Bottleneck.IORedisConnection({
-        clientOptions: throttleRedisOpts.clientOptions,
-        Redis: throttleRedisOpts.Redis
-      });
-      try {
-        // Log connection lifecycle for verification
-        connection.ready
-          .then(() => {
-            console.log("IORedisConnection ready for GitHub throttling");
-          })
-          .catch((e: unknown) => {
-            console.error("IORedisConnection failed to initialize", e);
-          });
-        connection.on("error", (err: Error) => console.error(err));
-      } catch (e) {
-        console.error("Failed to attach IORedisConnection logging", e);
-      }
-    }
+    // Back the GitHub API throttle with the SAME shared Redis connection every
+    // limiter uses (getBottleneckConnection), so the throttle coordinates the
+    // GitHub rate limit across the 12-20 edge replicas and lands
+    // `b_pawtograder-production_*` state in Redis for the metrics function —
+    // without opening yet another connection pair. Undefined when no backend is
+    // configured (@octokit/plugin-throttling then falls back to a local limiter).
+    const connection: Bottleneck.IORedisConnection | undefined = getBottleneckConnection() ?? undefined;
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
       const orgLogin = i.account?.login || "";
