@@ -109,10 +109,14 @@ export default function LinkAccount() {
           mr="0"
           colorPalette="green"
           onClick={async () => {
+            // Route through /auth/callback (not straight to the course page) so the first-login
+            // org-membership reconciliation runs for users who link GitHub from this banner; the
+            // callback then forwards to the course page via `next`.
+            const next = encodeURIComponent(`/course/${course.id}`);
             const { error } = await supabase.auth.linkIdentity({
               provider: "github",
               options: {
-                redirectTo: `${window.location.origin}/course/${course.id}`
+                redirectTo: `${window.location.origin}/auth/callback?next=${next}`
               }
             });
             if (error) {

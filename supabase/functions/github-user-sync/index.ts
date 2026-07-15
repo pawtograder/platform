@@ -125,6 +125,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   }
 
   let madeChanges = false;
+  const errorMessages: string[] = [];
 
   for (const c of classes) {
     if (c!.classes.github_org) {
@@ -133,14 +134,22 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug! + "-students"}`,
         level: "info"
       });
-      const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug! + "-students", githubUsername);
-      madeChanges = madeChanges || resp;
-      if (!resp) {
-        await adminSupabase
-          .from("user_roles")
-          .update({ github_org_confirmed: true })
-          .eq("user_id", userID)
-          .eq("class_id", c!.class_id);
+      // Reconcile each enrolled org independently: a failure in one org (broken installation,
+      // transient GitHub/DB error) must not abort reconciliation of the user's other orgs. Record
+      // and continue rather than throwing out of the whole sync.
+      try {
+        const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug! + "-students", githubUsername);
+        madeChanges = madeChanges || resp;
+        if (!resp) {
+          await adminSupabase
+            .from("user_roles")
+            .update({ github_org_confirmed: true })
+            .eq("user_id", userID)
+            .eq("class_id", c!.class_id);
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        errorMessages.push(`Error reconciling org membership for ${c!.classes.github_org}/${c!.classes.slug}-students`);
       }
     }
   }
@@ -177,7 +186,6 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
 
-  const errorMessages: string[] = [];
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
     classes.flatMap((c) =>
