@@ -1,0 +1,237 @@
+-- Per-deployment (site-wide) default handout/solution template repos.
+--
+-- Background: 20260529140000_github_org_templates.sql introduced a three-tier resolution for the
+-- handout/solution template repos: per-class override -> per-GitHub-org default -> hardcoded
+-- constant ('pawtograder/template-assignment-handout' / '-grader'). On a fresh deployment that runs
+-- its own GitHub org, neither a per-class override nor a github_orgs row exists yet, so every class
+-- falls all the way through to the pawtograder/* constants baked into the migration. Changing that
+-- default meant editing a migration.
+--
+-- This migration inserts a new "site default" tier, read from a Postgres GUC, BETWEEN the org
+-- default and the hardcoded constant:
+--     class override -> org default -> app.settings.default_*_template_repo (GUC) -> constant
+--
+-- The GUC is the "env var to the Postgres pod" equivalent, set per-deployment exactly like the LTI
+-- config in 20260528120000_lti_1_3_integration.sql:
+--     ALTER DATABASE postgres SET app.settings.default_handout_template_repo  = 'my-org/handout';
+--     ALTER DATABASE postgres SET app.settings.default_solution_template_repo = 'my-org/grader';
+-- (new connections pick it up; run `SELECT pg_reload_conf();` is not required for a DATABASE-level
+-- SET, but existing sessions must reconnect.)
+--
+-- current_setting(..., true) returns NULL when the GUC is unset, so a deployment that never sets it
+-- behaves exactly as before (falls through to the pawtograder/* constant). The TS constants in
+-- supabase/functions/_shared/GitHubSyncHelpers.ts remain the last-resort literal and are unchanged;
+-- resolve_class_template_repos stays the source of truth.
+--
+-- Only the final COALESCE fallback of each resolver changes below; all guards/security/return
+-- shapes are reproduced verbatim from 20260529140000.
+
+----------------------------------------------------------------------------------------
+-- resolve_class_template_repos: the hot path used by the edge functions when creating repos.
+-- The GUC tier only matters here when a class has no per-class override AND no github_orgs row,
+-- i.e. the fresh-deployment case.
+----------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.resolve_class_template_repos(p_class_id bigint)
+RETURNS TABLE (handout_template_repo text, solution_template_repo text)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT (auth.role() = 'service_role' OR public.authorizeforclassinstructor(p_class_id)) THEN
+        RAISE EXCEPTION 'Access denied: instructor role required for class %', p_class_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        COALESCE(
+            c.handout_template_repo,
+            go.default_handout_template_repo,
+            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
+            'pawtograder/template-assignment-handout'
+        ),
+        COALESCE(
+            c.solution_template_repo,
+            go.default_solution_template_repo,
+            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
+            'pawtograder/template-assignment-grader'
+        )
+    FROM public.classes c
+    LEFT JOIN public.github_orgs go ON go.org_name = c.github_org
+    WHERE c.id = p_class_id;
+END;
+$$;
+
+----------------------------------------------------------------------------------------
+-- admin_get_github_orgs: reports each org's effective default; the GUC tier applies to orgs
+-- that don't yet have a github_orgs row (is_configured = false).
+----------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.admin_get_github_orgs()
+RETURNS TABLE (
+    org_name text,
+    default_handout_template_repo text,
+    default_solution_template_repo text,
+    course_count bigint,
+    is_configured boolean,
+    created_at timestamptz,
+    updated_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT public.authorize_for_admin() THEN
+        RAISE EXCEPTION 'Access denied: Admin role required';
+    END IF;
+
+    RETURN QUERY
+    WITH orgs AS (
+        SELECT go.org_name FROM public.github_orgs go
+        UNION
+        SELECT DISTINCT c.github_org AS org_name FROM public.classes c WHERE c.github_org IS NOT NULL
+    )
+    SELECT
+        o.org_name,
+        COALESCE(
+            go.default_handout_template_repo,
+            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
+            'pawtograder/template-assignment-handout'
+        ),
+        COALESCE(
+            go.default_solution_template_repo,
+            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
+            'pawtograder/template-assignment-grader'
+        ),
+        (SELECT COUNT(*) FROM public.classes c WHERE c.github_org = o.org_name)::bigint,
+        (go.org_name IS NOT NULL) AS is_configured,
+        go.created_at,
+        go.updated_at
+    FROM orgs o
+    LEFT JOIN public.github_orgs go ON go.org_name = o.org_name
+    ORDER BY o.org_name;
+END;
+$$;
+
+----------------------------------------------------------------------------------------
+-- admin_upsert_github_org: when the admin leaves a default blank, materialize the site default
+-- (GUC) rather than the hardcoded constant, so a fresh org inherits the deployment's default.
+----------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.admin_upsert_github_org(
+    p_org_name text,
+    p_handout text DEFAULT NULL,
+    p_solution text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT public.authorize_for_admin() THEN
+        RAISE EXCEPTION 'Access denied: Admin role required';
+    END IF;
+
+    IF p_org_name IS NULL OR trim(p_org_name) = '' THEN
+        RAISE EXCEPTION 'Org name is required';
+    END IF;
+
+    -- A non-empty default must be exactly "owner/repo" (NULL/empty falls back to site default -> constant).
+    IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
+        RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
+    END IF;
+    IF NULLIF(trim(p_solution), '') IS NOT NULL AND trim(p_solution) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
+        RAISE EXCEPTION 'Invalid solution template repo "%": expected "owner/repo"', p_solution;
+    END IF;
+
+    INSERT INTO public.github_orgs (
+        org_name,
+        default_handout_template_repo,
+        default_solution_template_repo,
+        created_by,
+        updated_by
+    ) VALUES (
+        trim(p_org_name),
+        COALESCE(
+            NULLIF(trim(p_handout), ''),
+            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
+            'pawtograder/template-assignment-handout'
+        ),
+        COALESCE(
+            NULLIF(trim(p_solution), ''),
+            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
+            'pawtograder/template-assignment-grader'
+        ),
+        auth.uid(),
+        auth.uid()
+    )
+    ON CONFLICT (org_name) DO UPDATE SET
+        default_handout_template_repo = COALESCE(
+            NULLIF(trim(p_handout), ''),
+            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
+            'pawtograder/template-assignment-handout'
+        ),
+        default_solution_template_repo = COALESCE(
+            NULLIF(trim(p_solution), ''),
+            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
+            'pawtograder/template-assignment-grader'
+        ),
+        updated_by = auth.uid(),
+        updated_at = now();
+END;
+$$;
+
+----------------------------------------------------------------------------------------
+-- admin_get_org_courses: effective (resolved) templates per course, mirroring the resolver.
+----------------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.admin_get_org_courses(p_org_name text)
+RETURNS TABLE (
+    id bigint,
+    name text,
+    term integer,
+    archived boolean,
+    handout_template_repo text,
+    solution_template_repo text,
+    effective_handout_template_repo text,
+    effective_solution_template_repo text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT public.authorize_for_admin() THEN
+        RAISE EXCEPTION 'Access denied: Admin role required';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        c.id,
+        c.name,
+        c.term,
+        COALESCE(c.archived, false),
+        c.handout_template_repo,
+        c.solution_template_repo,
+        COALESCE(
+            c.handout_template_repo,
+            go.default_handout_template_repo,
+            NULLIF(current_setting('app.settings.default_handout_template_repo', true), ''),
+            'pawtograder/template-assignment-handout'
+        ),
+        COALESCE(
+            c.solution_template_repo,
+            go.default_solution_template_repo,
+            NULLIF(current_setting('app.settings.default_solution_template_repo', true), ''),
+            'pawtograder/template-assignment-grader'
+        )
+    FROM public.classes c
+    LEFT JOIN public.github_orgs go ON go.org_name = c.github_org
+    WHERE c.github_org = p_org_name
+    ORDER BY c.name;
+END;
+$$;
