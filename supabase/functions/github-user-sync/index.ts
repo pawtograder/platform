@@ -882,8 +882,11 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   // throttled with github_org_confirmed = false — the "accept your invitation" banner stuck for 24h.
   // Deciding force server-side from github_org_confirmed (not a client flag) keeps the throttle's
   // anti-spam guarantee for already-reconciled users while letting a stuck user retry each login.
+  // Treat NULL github_org_confirmed as unconfirmed too (the column is nullable): the invitation
+  // banner shows whenever github_org_confirmed is falsy, so `!== true` keeps this force decision
+  // aligned with the banner instead of skipping NULL rows that still show the stuck banner.
   const hasUnconfirmedEnrollment = (classRows ?? []).some((c) =>
-    (c.user_roles ?? []).some((r) => r.github_org_confirmed === false)
+    (c.user_roles ?? []).some((r) => r.github_org_confirmed !== true)
   );
 
   // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see
@@ -900,7 +903,7 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
     // a benign "synced recently" response that would mask the real failure and report a repair that
     // never happened. Forcing retries makes them actually run (and surface a real error if they too
     // fail).
-    const force = i === 0 ? hasUnconfirmedEnrollment : true;
+    const force = i > 0 || hasUnconfirmedEnrollment;
     try {
       return await syncGitHubUser(user.id, org, force, scope);
     } catch (e) {

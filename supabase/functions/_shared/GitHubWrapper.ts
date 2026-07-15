@@ -1817,7 +1817,9 @@ export async function syncTeam(
     });
     members = data;
   } catch (e) {
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
+    // Match on the 404 status, not the message text (GitHub rewords "Not Found"), consistent with
+    // getTeamAndCreateIfNeeded's status-based checks.
+    if (e instanceof RequestError && e.status === 404) {
       console.log(`Team ${resolvedSlug} not found`);
       console.log(e);
       //This seems to happen when there are no members in the team?
@@ -1959,7 +1961,9 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
       message: `Found ${teamMembers.length} members in team ${resolvedSlug}`,
       level: "info"
     });
-    isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
+    // GitHub logins are case-insensitive; compare lowercased (as syncTeam does) so a casing
+    // difference between the members endpoint and githubUsername doesn't miss an existing member.
+    isUserInTeam = teamMembers.some((member) => member.login.toLowerCase() === githubUsername.toLowerCase());
   } catch (error) {
     console.log(`Error checking team membership: ${error}`);
     // Continue with invitation if we can't check membership

@@ -2,6 +2,7 @@ import { createClient } from "@/utils/supabase/server";
 import { NextResponse, after } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { syncGitHubAccount, userFetchAzureProfile } from "@/lib/edgeFunctions";
+import { findGithubIdentity } from "@/lib/githubIdentity";
 
 export async function GET(request: Request) {
   // The `/auth/callback` route is required for the server-side auth flow implemented
@@ -11,6 +12,27 @@ export async function GET(request: Request) {
   const code = searchParams.get("code");
   const nextParam = searchParams.get("next") ?? "/";
   const next = nextParam.startsWith("/") ? nextParam : "/";
+  // Resolve the redirect host once: behind the load balancer, prefer X-Forwarded-Host.
+  const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer
+  const isLocalEnv = process.env.NODE_ENV === "development";
+  // Local dev has no load balancer, so X-Forwarded-Host doesn't apply.
+  const redirectBase = isLocalEnv ? origin : forwardedHost ? `https://${forwardedHost}` : origin;
+
+  // OAuth/link providers redirect back with `error`/`error_description` (and no `code`) when the user
+  // cancels or denies the flow. Since the course GitHub-link banner (components/github/link-account.tsx)
+  // now redirects here with `next=/course/{id}` — and its UI renders `error_description` — forward
+  // those params back to `next` so the user lands on the originating page with the actionable message.
+  // Only do this when a specific `next` page was requested; a plain login error (no `next`) still goes
+  // to the dedicated /auth/auth-code-error page below.
+  const authError = searchParams.get("error");
+  const authErrorDescription = searchParams.get("error_description");
+  if (!code && authError && next !== "/") {
+    const dest = new URL(next, redirectBase);
+    dest.searchParams.set("error", authError);
+    if (authErrorDescription) dest.searchParams.set("error_description", authErrorDescription);
+    return NextResponse.redirect(dest);
+  }
+
   if (code) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -76,7 +98,7 @@ export async function GET(request: Request) {
         // provider.
         const providers = data.session.user.app_metadata?.providers;
         const hasGitHubIdentity =
-          data.session.user.identities?.some((i) => i.provider === "github") ||
+          !!findGithubIdentity(data.session.user.identities) ||
           data.session.user.app_metadata?.provider === "github" ||
           (Array.isArray(providers) && providers.includes("github"));
 
@@ -90,12 +112,20 @@ export async function GET(request: Request) {
           // forever. Reconciliation is idempotent; errors are logged, never surfaced to login.
           after(async () => {
             try {
+              // Only reconcile when the user has an unconfirmed enrollment in a class that actually
+              // uses GitHub (github_org is set). Without the github_org filter, a GitHub-linked user
+              // enrolled only in non-GitHub classes keeps github_org_confirmed = false forever, so this
+              // would invoke github-user-sync on every login just for it to throw "User not in any
+              // classes" (wasted round-trip + Sentry noise). Treat NULL github_org_confirmed as
+              // unconfirmed too (the column is nullable), matching the invitation banner's own condition
+              // (resend-org-invitation.tsx hides only when github_org_confirmed is truthy).
               const { data: unconfirmed, error: fetchError } = await supabase
-                .from("user_roles")
-                .select("id")
-                .eq("user_id", userId)
-                .eq("disabled", false)
-                .eq("github_org_confirmed", false)
+                .from("classes")
+                .select("id, user_roles!inner(id)")
+                .not("github_org", "is", null)
+                .eq("user_roles.user_id", userId)
+                .eq("user_roles.disabled", false)
+                .not("user_roles.github_org_confirmed", "is", true)
                 .limit(1);
               // Supabase queries don't throw; surface the error so the catch reports it to Sentry.
               if (fetchError) throw fetchError;
@@ -112,17 +142,8 @@ export async function GET(request: Request) {
         console.log("No Azure session data returned");
       }
 
-      const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer
-      const isLocalEnv = process.env.NODE_ENV === "development";
-      if (isLocalEnv) {
-        // we can be sure that there is no load balancer in between, so no need to watch for X-Forwarded-Host
-        return NextResponse.redirect(`${origin}${next}`);
-      } else if (forwardedHost) {
-        return NextResponse.redirect(`https://${forwardedHost}${next}`);
-      } else {
-        return NextResponse.redirect(`${origin}${next}`);
-      }
+      return NextResponse.redirect(`${redirectBase}${next}`);
     }
   }
-  return NextResponse.redirect(`${origin}/auth/auth-code-error`);
+  return NextResponse.redirect(`${redirectBase}/auth/auth-code-error`);
 }
