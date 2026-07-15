@@ -22,12 +22,15 @@ const { assertSourceNotEmpty, getTeamAndCreateIfNeeded, isRepoEmpty, isTeamAlrea
 type Handler = (params: Record<string, unknown>) => unknown;
 
 function fakeOctokit(handlers: Record<string, Handler>): Octokit {
+  const call = async (route: string, params: Record<string, unknown>) => {
+    const h = handlers[route];
+    if (!h) throw new Error(`unexpected route: ${route}`);
+    return await h(params);
+  };
   return {
-    request: async (route: string, params: Record<string, unknown>) => {
-      const h = handlers[route];
-      if (!h) throw new Error(`unexpected route: ${route}`);
-      return await h(params);
-    }
+    request: call,
+    // paginate returns the concatenated items; our list handlers return the array directly.
+    paginate: async (route: string, params: Record<string, unknown>) => await call(route, params)
   } as unknown as Octokit;
 }
 
@@ -186,6 +189,42 @@ Deno.test("getTeamAndCreateIfNeeded: unexpected 500 on GET rethrows", async () =
   const octokit = fakeOctokit({
     "GET /orgs/{org}/teams/{team_slug}": () => {
       throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);
+});
+
+// Out-of-band team whose GitHub-normalized slug differs from the requested name: GET by the
+// requested slug 404s, POST 422s, re-GET 404s, so we locate it in the org team list and return it
+// under its ACTUAL slug (so callers issue subsequent member calls against the right slug).
+Deno.test("getTeamAndCreateIfNeeded: 422 then slug mismatch -> resolves via org team list", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (p.team_slug === "cs101-staff") throw requestError(404, "Not Found");
+      return { data: { id: 88, slug: p.team_slug } };
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 88, slug: "cs-101-staff", name: "cs101-staff" }]
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 88);
+  assertEquals(team.data.slug, "cs-101-staff");
+});
+
+// A transient (non-404) failure on the post-422 re-fetch must propagate, not be masked by the
+// full-team-scan fallback.
+Deno.test("getTeamAndCreateIfNeeded: 422 then non-404 on re-fetch -> rethrows", async () => {
+  let getCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      getCalls++;
+      if (getCalls === 1) throw requestError(404, "Not Found");
+      throw requestError(500, "Server Error");
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
     }
   });
   await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);

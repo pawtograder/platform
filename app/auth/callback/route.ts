@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/server";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { syncGitHubAccount, userFetchAzureProfile } from "@/lib/edgeFunctions";
 
@@ -63,29 +63,48 @@ export async function GET(request: Request) {
           }
         }
 
-        // First GitHub login: reconcile the user's existing org/team memberships. A user who is
-        // already a member of the course's GitHub org (e.g. joined via another class, or added
-        // out-of-band) would otherwise be stuck on the "accept your invitation" banner forever,
-        // because they can't accept an invite that can't be sent to an existing member. Invoking
-        // github-user-sync runs the same reconciliation as the manual "Sync GitHub Account" button
-        // (it spans all of the user's enrolled orgs and flips github_org_confirmed for orgs they're
-        // already in). Gate on last_github_user_sync so we only pay the GitHub round-trips once, on
-        // first login; never block login on failure (a NULL sync timestamp is retried next login).
-        if (data.session.user.app_metadata?.provider === "github") {
-          try {
-            const { data: userData } = await supabase
-              .from("users")
-              .select("last_github_user_sync")
-              .eq("user_id", data.session.user.id)
-              .single();
-            if (!userData?.last_github_user_sync) {
-              await syncGitHubAccount(supabase);
+        // Reconcile the user's existing GitHub org/team memberships on login. A user already a
+        // member of the course's GitHub org (joined via another class, or added out-of-band) would
+        // otherwise be stuck on the "accept your invitation" banner forever, since an invite can't
+        // be sent to an existing member. Invoking github-user-sync runs the same reconciliation as
+        // the manual "Sync GitHub Account" button (spans all enrolled orgs, flips
+        // github_org_confirmed for orgs they're already in).
+        //
+        // Detect a *linked* GitHub identity, not just the primary login provider: SSO/email users
+        // who later link GitHub (linkGitHubAction -> linkIdentity) come back through this callback
+        // with GitHub as a secondary identity while app_metadata.provider stays their original
+        // provider.
+        const providers = data.session.user.app_metadata?.providers;
+        const hasGitHubIdentity =
+          data.session.user.identities?.some((i) => i.provider === "github") ||
+          data.session.user.app_metadata?.provider === "github" ||
+          (Array.isArray(providers) && providers.includes("github"));
+
+        if (hasGitHubIdentity) {
+          const userId = data.session.user.id;
+          // Run in the background (after the response) so the several GitHub round-trips never delay
+          // the login redirect and can't cause auth timeouts. Gate on the presence of an
+          // unconfirmed enrollment — the banner's own condition — rather than a synced-timestamp, so
+          // a run that failed part-way (e.g. a transient GitHub error after github-user-sync already
+          // stamped last_github_user_sync) is retried on the next login instead of being skipped
+          // forever. Reconciliation is idempotent; errors are logged, never surfaced to login.
+          after(async () => {
+            try {
+              const { data: unconfirmed } = await supabase
+                .from("user_roles")
+                .select("id")
+                .eq("user_id", userId)
+                .eq("disabled", false)
+                .eq("github_org_confirmed", false)
+                .limit(1);
+              if (unconfirmed && unconfirmed.length > 0) {
+                await syncGitHubAccount(supabase);
+              }
+            } catch (error) {
+              console.error("Background GitHub org reconciliation failed:", error);
+              Sentry.captureException(error);
             }
-          } catch (error) {
-            console.error("Error reconciling GitHub org membership on first login:", error);
-            Sentry.captureException(error);
-            // Continue with login even if reconciliation fails; the manual sync path remains.
-          }
+          });
         }
       } else {
         console.log("No Azure session data returned");

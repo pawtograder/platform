@@ -1803,18 +1803,22 @@ export async function syncTeam(
     return;
   }
   const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
-  console.log(`Using team ${team_slug} with id ${team.data.id}`);
+  // Use the team's ACTUAL slug for every subsequent team endpoint: if the team was resolved
+  // out-of-band, GitHub's normalized slug can differ from the requested name, and the member
+  // endpoints would 404 on the requested slug.
+  const resolvedSlug = team.data.slug ?? team_slug;
+  console.log(`Using team ${resolvedSlug} with id ${team.data.id}`);
   let members: Endpoints["GET /orgs/{org}/teams/{team_slug}/members"]["response"]["data"][] = [];
   try {
     const data = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       per_page: 100
     });
     members = data;
   } catch (e) {
     if (e instanceof RequestError && e.message.includes("Not Found")) {
-      console.log(`Team ${team_slug} not found`);
+      console.log(`Team ${resolvedSlug} not found`);
       console.log(e);
       //This seems to happen when there are no members in the team?
       members = [];
@@ -1826,15 +1830,15 @@ export async function syncTeam(
   const existingMembers = members.map((m) => m.login.toLowerCase());
   const newMembers = githubUsernames.filter((u) => u && !existingMembers.includes(u));
   const removeMembers = existingMembers.filter((u) => u && !githubUsernames.includes(u));
-  console.log(`Class team: ${team_slug} intended members: ${githubUsernames.join(", ")}`);
-  console.log(`Existing members in team ${team_slug}: ${members.map((m) => m.login).join(", ")}`);
+  console.log(`Class team: ${resolvedSlug} intended members: ${githubUsernames.join(", ")}`);
+  console.log(`Existing members in team ${resolvedSlug}: ${members.map((m) => m.login).join(", ")}`);
   console.log(`New members to add: ${newMembers.join(", ")}`);
   console.log(`Members to remove: ${removeMembers.join(", ")}`);
   for (const username of newMembers) {
     try {
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
-        team_slug,
+        team_slug: resolvedSlug,
         username,
         role: "member"
       });
@@ -1850,10 +1854,10 @@ export async function syncTeam(
   for (const username of removeMembers) {
     const newScope = scope?.clone();
     newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing member from team ${team_slug}`, newScope);
+    Sentry.captureMessage(`Removing member from team ${resolvedSlug}`, newScope);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       username
     });
   }
@@ -1887,7 +1891,12 @@ export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, o
     console.log(`Team ${team_slug} already exists, resolving existing team`);
     try {
       return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
-    } catch {
+    } catch (refetchErr) {
+      // Only treat a 404 as a slug-normalization mismatch worth a full team scan. A transient
+      // error (5xx, rate limit, network) must propagate rather than be masked by the fallback.
+      if (!(refetchErr instanceof RequestError && refetchErr.status === 404)) {
+        throw refetchErr;
+      }
       // GitHub may have normalized the slug differently from the name — find it by name/slug.
       const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
       const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
@@ -1915,6 +1924,10 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     throw new Error("No octokit found for organization " + org);
   }
   const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
+  // Use the team's ACTUAL slug for GitHub team endpoints (see syncTeam). Keep the requested
+  // team_slug for markUserRoleOrgConfirmedForTeam, which derives the class slug from our naming
+  // convention (`{classSlug}-staff|-students`), not GitHub's normalization.
+  const resolvedSlug = team.data.slug ?? team_slug;
   const user = await octokit.request("GET /users/{username}", {
     username: githubUsername
   });
@@ -1922,7 +1935,7 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   const teamID = team.data.id;
   scope?.addBreadcrumb({
     category: "github",
-    message: `Team ${team_slug} has id ${teamID}`,
+    message: `Team ${resolvedSlug} has id ${teamID}`,
     level: "info"
   });
 
@@ -1930,17 +1943,17 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   try {
     scope?.addBreadcrumb({
       category: "github",
-      message: `Checking if user ${githubUsername} is already in team ${team_slug}...`,
+      message: `Checking if user ${githubUsername} is already in team ${resolvedSlug}...`,
       level: "info"
     });
     const teamMembers = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       per_page: 100 // Optimize for large teams
     });
     scope?.addBreadcrumb({
       category: "github",
-      message: `Found ${teamMembers.length} members in team ${team_slug}`,
+      message: `Found ${teamMembers.length} members in team ${resolvedSlug}`,
       level: "info"
     });
 
@@ -1948,12 +1961,20 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     if (isUserInTeam) {
       scope?.addBreadcrumb({
         category: "github",
-        message: `User ${githubUsername} is already in team ${team_slug}`,
+        message: `User ${githubUsername} is already in team ${resolvedSlug}`,
         level: "info"
       });
       // Guarantee our side reflects reality regardless of the caller: a user already in the team
       // must have github_org_confirmed set, or the "accept your invitation" banner never clears.
-      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+      // Isolate this write so a transient DB error is reported accurately and doesn't fall through
+      // to the invite flow (which would misattribute it as a membership-check failure and send a
+      // redundant invite to a user already in the team).
+      try {
+        await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+      } catch (confirmErr) {
+        console.log(`Error marking org-confirmed for ${githubUsername} in team ${team_slug}: ${confirmErr}`);
+        Sentry.captureException(confirmErr, scope);
+      }
       return false;
     }
     scope?.addBreadcrumb({
@@ -2007,12 +2028,12 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   if (isAlreadyActiveOrgMember) {
     scope?.addBreadcrumb({
       category: "github",
-      message: `User ${githubUsername} is already in org ${org}; adding directly to team ${team_slug}`,
+      message: `User ${githubUsername} is already in org ${org}; adding directly to team ${resolvedSlug}`,
       level: "info"
     });
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       username: githubUsername,
       role: "member"
     });
