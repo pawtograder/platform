@@ -643,6 +643,41 @@ auth:
         requests: { cpu: "10m", memory: "16Mi" }
         limits: { memory: "64Mi" }
 
+  # Custom GoTrue transactional email templates (invite / confirmation /
+  # recovery / magic-link / email-change). GoTrue's mailer fetches templates
+  # over http(s) only (no file://), so when enabled the chart runs a tiny
+  # `mail-templates` sidecar in the auth pod that serves the bundled HTML on
+  # 127.0.0.1; gotrue points GOTRUE_MAILER_TEMPLATES_* at it. On any fetch
+  # error gotrue falls back to its built-in defaults.
+  mailer:
+    templates:
+      enabled: false
+      server:
+        image:
+          repository: busybox
+          tag: "1.37"
+          pullPolicy: IfNotPresent
+        # Localhost port the sidecar serves on (must be >1024 for non-root).
+        port: 8081
+        resources:
+          requests: { cpu: "5m", memory: "8Mi" }
+          limits: { memory: "32Mi" }
+      # Per-template raw-HTML overrides. Empty → use the chart-bundled file
+      # under email-templates/. Bodies are Go html/template with GoTrue vars.
+      files:
+        invite: ""
+        confirmation: ""
+        recovery: ""
+        magicLink: ""
+        emailChange: ""
+      # Optional custom subject lines (plain strings). Empty → GoTrue defaults.
+      subjects:
+        invite: ""
+        confirmation: ""
+        recovery: ""
+        magicLink: ""
+        emailChange: ""
+
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "500m", memory: "512Mi" }

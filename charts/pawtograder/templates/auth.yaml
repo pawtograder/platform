@@ -40,6 +40,11 @@ spec:
     metadata:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 8 }}
+      {{- if .Values.auth.mailer.templates.enabled }}
+      annotations:
+        # Roll the auth pods when the email-template ConfigMap content changes.
+        checksum/email-templates: {{ include (print $.Template.BasePath "/auth-email-templates.yaml") . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
@@ -265,6 +270,32 @@ spec:
                   name: {{ .Values.secrets.names.smtp }}
                   key: SMTP_PASS
             {{- end }}
+            {{- if .Values.auth.mailer.templates.enabled }}
+            {{- /*
+            Custom email-template bodies. GoTrue fetches each over HTTP from the
+            `mail-templates` sidecar on 127.0.0.1 (mailme has no file:// support).
+            On any fetch error GoTrue falls back to its built-in default template,
+            so a sidecar hiccup degrades gracefully rather than blocking email.
+            */ -}}
+            {{- $tplPort := .Values.auth.mailer.templates.server.port }}
+            - name: GOTRUE_MAILER_TEMPLATES_INVITE
+              value: "http://127.0.0.1:{{ $tplPort }}/invite.html"
+            - name: GOTRUE_MAILER_TEMPLATES_CONFIRMATION
+              value: "http://127.0.0.1:{{ $tplPort }}/confirmation.html"
+            - name: GOTRUE_MAILER_TEMPLATES_RECOVERY
+              value: "http://127.0.0.1:{{ $tplPort }}/recovery.html"
+            - name: GOTRUE_MAILER_TEMPLATES_MAGIC_LINK
+              value: "http://127.0.0.1:{{ $tplPort }}/magic-link.html"
+            - name: GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE
+              value: "http://127.0.0.1:{{ $tplPort }}/email-change.html"
+            {{- /* Optional custom subjects (plain strings; unset → GoTrue defaults). */ -}}
+            {{- range $k, $v := .Values.auth.mailer.templates.subjects }}
+            {{- if $v }}
+            - name: GOTRUE_MAILER_SUBJECTS_{{ $k | snakecase | upper }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -279,6 +310,36 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.auth.resources | nindent 12 }}
+        {{- if .Values.auth.mailer.templates.enabled }}
+        # Serves the custom email-template HTML to gotrue over 127.0.0.1.
+        # Kept in-pod (no Service) so gotrue reaches it on localhost with no
+        # NetworkPolicy or cross-pod dependency. busybox httpd is static-only.
+        - name: mail-templates
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.auth.mailer.templates.server.image) }}
+          imagePullPolicy: {{ .Values.auth.mailer.templates.server.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.auth) | nindent 10 }}
+          command: ["/bin/busybox", "httpd", "-f", "-v", "-p", "{{ .Values.auth.mailer.templates.server.port }}", "-h", "/srv/email-templates"]
+          ports:
+            - name: mail-tpl
+              containerPort: {{ .Values.auth.mailer.templates.server.port }}
+          volumeMounts:
+            - name: email-templates
+              mountPath: /srv/email-templates
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: mail-tpl
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.auth.mailer.templates.server.resources | nindent 12 }}
+        {{- end }}
+      {{- if .Values.auth.mailer.templates.enabled }}
+      volumes:
+        - name: email-templates
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "auth-email-templates") }}
+      {{- end }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.auth)) }}
       nodeSelector:
         {{- . | nindent 8 }}

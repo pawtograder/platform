@@ -424,6 +424,36 @@ Register that exact URL in the provider's OAuth app (override per provider with
 worked example (Google + Microsoft + GitHub) is in
 [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
 
+### Custom email templates
+
+GoTrue's transactional emails (invite / confirmation / recovery / magic-link /
+email-change) can be branded per deployment. Enable it with:
+
+```yaml
+auth:
+  mailer:
+    templates:
+      enabled: true
+```
+
+This runs a tiny `mail-templates` sidecar in the auth pod that serves the
+template HTML on `127.0.0.1`, and points GoTrue's `GOTRUE_MAILER_TEMPLATES_*`
+at it. A sidecar is required because GoTrue's mailer fetches templates over
+**http(s) only — there is no `file://` support**, so a bare ConfigMap mount
+does not work. If a fetch ever fails, GoTrue falls back to its built-in
+default template, so email delivery degrades gracefully.
+
+Defaults are the chart-bundled files under
+[`email-templates/`](./email-templates); their links route through the web
+app's own `/auth/*` pages via `token_hash` (e.g.
+`{{ .SiteURL }}/auth/reset-password?token_hash={{ .TokenHash }}&type=email`).
+Override any body with raw HTML via `auth.mailer.templates.files.<name>`
+(`invite`, `confirmation`, `recovery`, `magicLink`, `emailChange`), and set
+custom subject lines via `auth.mailer.templates.subjects.<name>` (empty →
+GoTrue's default subject). Bodies are Go `html/template` with GoTrue's
+variables (`{{ .ConfirmationURL }}`, `{{ .TokenHash }}`, `{{ .SiteURL }}`,
+`{{ .Email }}`, `{{ .NewEmail }}`, …).
+
 ## Deploying production
 
 Start from `examples/values-prod.yaml` — it is a documented template, not a
