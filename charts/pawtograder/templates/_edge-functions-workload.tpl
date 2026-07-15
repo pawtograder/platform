@@ -47,6 +47,16 @@ metadata:
   namespace: {{ $ctx.Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
+  {{- if $ctx.Values.edgeFunctions.reloader.enabled }}
+  annotations:
+    # Stakater Reloader: roll this Deployment when a referenced Secret changes.
+    # The edge-functions env (incl. GITHUB_PRIVATE_KEY_STRING) comes from a
+    # SealedSecret applied OUTSIDE helm, so a rotation does NOT change the pod
+    # template — without this annotation the pods keep the stale value until a
+    # manual `kubectl rollout restart`. Requires the Reloader controller to be
+    # installed cluster-wide; harmless (ignored) if it is not.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
 spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}

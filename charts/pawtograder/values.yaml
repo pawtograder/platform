@@ -917,6 +917,12 @@ redis:
     # safe for a cache + limiter store.
     maxmemory: "768mb"
     maxmemoryPolicy: "allkeys-lru"
+    # Close client connections idle for this many seconds (0 = never). Non-zero
+    # reaps sockets leaked by clients that open a connection and don't close it,
+    # so they can't accumulate to maxclients ("ERR max number of clients
+    # reached"). ioredis auto-reconnects, so reaping an idle connection is
+    # transparent.
+    timeout: 300
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
       limits: { cpu: "1", memory: "1Gi" }
@@ -951,6 +957,15 @@ redis:
 edgeFunctions:
   enabled: true
   replicas: 2
+  # Stakater Reloader integration. When enabled, the Deployment is annotated
+  # reloader.stakater.com/auto: "true" so it rolls automatically when a Secret
+  # it references changes. Important here because the edge-functions env comes
+  # from a SealedSecret applied outside helm — a rotation won't change the pod
+  # template, so without Reloader the pods keep the stale value until a manual
+  # restart. Requires the Reloader controller cluster-wide; the annotation is
+  # ignored (harmless) if it is not installed.
+  reloader:
+    enabled: true
   # End-to-end / load-test gates. Pawtograder edge functions check these
   # to enable test-only privileged paths (e2e helpers) and to mock the
   # GitHub integration so k6 runs don't actually call github.com.
