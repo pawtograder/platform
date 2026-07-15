@@ -1094,6 +1094,28 @@ function isRepoNameAlreadyExistsError(e: unknown): boolean {
 }
 
 /**
+ * True when a `POST /orgs/{org}/teams` failed because a team with that name already exists.
+ * GitHub returns 422 with `errors: [{ resource: "Team", code: "already_exists", field: "name" }]`;
+ * the human message varies ("already exists", "Name must be unique for this org"), so check the
+ * structured `code` first and fall back to the message. This lets team creation be idempotent under
+ * concurrent syncs (two workers both 404 on GET, both POST, one 422s) and when a same-named team was
+ * created out-of-band.
+ */
+export function isTeamAlreadyExistsError(e: unknown): boolean {
+  if (!(e instanceof RequestError) || e.status !== 422) return false;
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (err && typeof err === "object" && (err as { code?: string }).code === "already_exists") {
+        return true;
+      }
+    }
+  }
+  const msg = (e.message ?? "").toLowerCase();
+  return msg.includes("already exists") || msg.includes("name must be unique");
+}
+
+/**
  * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
  * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
  * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
@@ -1780,27 +1802,8 @@ export async function syncTeam(
     console.warn("No octokit found for organization " + org);
     return;
   }
-  let team_id: number;
-  try {
-    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
-      org,
-      team_slug
-    });
-    team_id = team.data.id;
-    console.log(`Found team ${team_slug} with id ${team_id}`);
-  } catch (e) {
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
-      // Team doesn't exist, create it
-      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
-        org,
-        name: team_slug
-      });
-      team_id = newTeam.data.id;
-      console.log(`Created team ${team_slug} with id ${team_id}`);
-    } else {
-      throw e;
-    }
-  }
+  const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
+  console.log(`Using team ${team_slug} with id ${team.data.id}`);
   let members: Endpoints["GET /orgs/{org}/teams/{team_slug}/members"]["response"]["data"][] = [];
   try {
     const data = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
@@ -1855,24 +1858,44 @@ export async function syncTeam(
     });
   }
 }
-async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit: Octokit) {
+/**
+ * Idempotently resolve a team by slug, creating it if it doesn't exist yet. Tolerates the race /
+ * pre-existing cases where `GET` 404s but `POST` then 422s ("already_exists"): on that 422 we
+ * re-fetch by slug, and if the existing team's slug differs from the requested name we locate it in
+ * the org's team list. Callers use `.data.id` / `.data.slug`.
+ */
+export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit: Octokit) {
+  // Fast path: the team already exists under this slug.
   try {
-    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
-      org,
-      team_slug
-    });
-    return team;
+    return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
   } catch (e) {
-    console.log(`Team ${team_slug} not found, creating it`);
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
-      // Team doesn't exist, create it
-      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
-        org,
-        name: team_slug
-      });
-      return newTeam;
+    if (!(e instanceof RequestError && e.status === 404)) {
+      throw e;
     }
-    throw e;
+  }
+
+  // Not found by slug — create it.
+  console.log(`Team ${team_slug} not found, creating it`);
+  try {
+    return await octokit.request("POST /orgs/{org}/teams", { org, name: team_slug });
+  } catch (e) {
+    if (!isTeamAlreadyExistsError(e)) {
+      throw e;
+    }
+    // A team with this name already exists (concurrent create won, or created out-of-band).
+    // Re-fetch by slug; the created slug usually matches the requested name.
+    console.log(`Team ${team_slug} already exists, resolving existing team`);
+    try {
+      return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+    } catch {
+      // GitHub may have normalized the slug differently from the name — find it by name/slug.
+      const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
+      const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
+      if (!match) {
+        throw e;
+      }
+      return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: match.slug });
+    }
   }
 }
 
@@ -1928,6 +1951,9 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
         message: `User ${githubUsername} is already in team ${team_slug}`,
         level: "info"
       });
+      // Guarantee our side reflects reality regardless of the caller: a user already in the team
+      // must have github_org_confirmed set, or the "accept your invitation" banner never clears.
+      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
       return false;
     }
     scope?.addBreadcrumb({

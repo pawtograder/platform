@@ -853,22 +853,40 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: classData, error: classError } = await supabase
+  const { data: classRows, error: classError } = await supabase
     .from("classes")
     .select("github_org, user_roles!inner(user_id, disabled)")
     .eq("user_roles.user_id", user.id)
     .eq("user_roles.disabled", false)
-    .not("github_org", "is", "null")
-    .limit(1)
-    .single();
+    .not("github_org", "is", "null");
   if (classError) {
     Sentry.captureException(classError, scope);
     throw new UserVisibleError("Error fetching class");
   }
-  if (!classData) {
+  const orgs = [...new Set((classRows ?? []).map((c) => c.github_org).filter((o): o is string => Boolean(o)))];
+  if (orgs.length === 0) {
     throw new UserVisibleError("User not in any classes");
   }
-  return await syncGitHubUser(user.id, classData.github_org!, false, scope);
+
+  // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see
+  // ensureAllReposExist + ensureStaffOrgMembership), so a single successful call covers every org.
+  // The org argument only selects which org's GitHub App installation resolves the login from the
+  // github_user_id — so try each until one succeeds, ensuring one mis-installed org doesn't block
+  // reconciliation of the rest.
+  let lastError: unknown;
+  for (const org of orgs) {
+    try {
+      return await syncGitHubUser(user.id, org, false, scope);
+    } catch (e) {
+      lastError = e;
+      scope?.addBreadcrumb({
+        category: "github",
+        level: "warning",
+        message: `GitHub sync via org ${org} failed, trying next org if any: ${e}`
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new UserVisibleError("Error syncing GitHub account");
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

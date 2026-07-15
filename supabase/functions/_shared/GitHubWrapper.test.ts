@@ -16,7 +16,8 @@ import { Octokit, RequestError } from "npm:octokit";
 // helpers under test never authenticate, so set a placeholder before importing the module (dynamic
 // import so the env is set first — static imports would hoist above this).
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertSourceNotEmpty, isRepoEmpty, NonRetryableRepoError } = await import("./GitHubWrapper.ts");
+const { assertSourceNotEmpty, getTeamAndCreateIfNeeded, isRepoEmpty, isTeamAlreadyExistsError, NonRetryableRepoError } =
+  await import("./GitHubWrapper.ts");
 
 type Handler = (params: Record<string, unknown>) => unknown;
 
@@ -30,11 +31,18 @@ function fakeOctokit(handlers: Record<string, Handler>): Octokit {
   } as unknown as Octokit;
 }
 
-function requestError(status: number, message = "error"): RequestError {
+function requestError(status: number, message = "error", data: unknown = {}): RequestError {
   return new RequestError(message, status, {
     request: { method: "GET", url: "https://api.github.com/x", headers: {} },
     // deno-lint-ignore no-explicit-any
-    response: { status, url: "https://api.github.com/x", headers: {}, data: {} } as any
+    response: { status, url: "https://api.github.com/x", headers: {}, data } as any
+  });
+}
+
+// GitHub's 422 for a duplicate team name: structured `code: "already_exists"` on a Team resource.
+function teamAlreadyExistsError(): RequestError {
+  return requestError(422, "Validation Failed", {
+    errors: [{ resource: "Team", code: "already_exists", field: "name" }]
   });
 }
 
@@ -112,4 +120,73 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
     NonRetryableRepoError
   );
   assertEquals(err.message.includes("not found"), true);
+});
+
+// --- Idempotent team creation (getTeamAndCreateIfNeeded) ---
+
+Deno.test("isTeamAlreadyExistsError: 422 already_exists -> true", () => {
+  assertEquals(isTeamAlreadyExistsError(teamAlreadyExistsError()), true);
+});
+
+Deno.test("isTeamAlreadyExistsError: 422 with 'Name must be unique' message -> true", () => {
+  assertEquals(isTeamAlreadyExistsError(requestError(422, "Name must be unique for this org")), true);
+});
+
+Deno.test("isTeamAlreadyExistsError: unrelated 422 / 404 / non-RequestError -> false", () => {
+  assertEquals(isTeamAlreadyExistsError(requestError(422, "Some other validation error")), false);
+  assertEquals(isTeamAlreadyExistsError(requestError(404, "Not Found")), false);
+  assertEquals(isTeamAlreadyExistsError(new Error("already exists")), false);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: team exists -> returns it without creating", async () => {
+  let posted = false;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => ({ data: { id: 7, slug: "cs101-staff" } }),
+    "POST /orgs/{org}/teams": () => {
+      posted = true;
+      return { data: { id: 999 } };
+    }
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 7);
+  assertEquals(posted, false);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: 404 then create -> returns new team", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "POST /orgs/{org}/teams": () => ({ data: { id: 42, slug: "cs101-staff" } })
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 42);
+});
+
+// The regression: GET 404s (race / slug mismatch) but POST then 422s because the team already
+// exists. Previously this threw; now it re-fetches the existing team instead.
+Deno.test("getTeamAndCreateIfNeeded: 404 then 422-already-exists -> re-fetches existing team", async () => {
+  let getCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      getCalls++;
+      if (getCalls === 1) throw requestError(404, "Not Found");
+      return { data: { id: 55, slug: "cs101-staff" } };
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
+    }
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 55);
+  assertEquals(getCalls, 2);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: unexpected 500 on GET rethrows", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);
 });

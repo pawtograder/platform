@@ -1,7 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { userFetchAzureProfile } from "@/lib/edgeFunctions";
+import { syncGitHubAccount, userFetchAzureProfile } from "@/lib/edgeFunctions";
 
 export async function GET(request: Request) {
   // The `/auth/callback` route is required for the server-side auth flow implemented
@@ -60,6 +60,31 @@ export async function GET(request: Request) {
             console.error("Error checking/updating Azure profile:", error);
             Sentry.captureException(error);
             // Continue with login even if profile check fails
+          }
+        }
+
+        // First GitHub login: reconcile the user's existing org/team memberships. A user who is
+        // already a member of the course's GitHub org (e.g. joined via another class, or added
+        // out-of-band) would otherwise be stuck on the "accept your invitation" banner forever,
+        // because they can't accept an invite that can't be sent to an existing member. Invoking
+        // github-user-sync runs the same reconciliation as the manual "Sync GitHub Account" button
+        // (it spans all of the user's enrolled orgs and flips github_org_confirmed for orgs they're
+        // already in). Gate on last_github_user_sync so we only pay the GitHub round-trips once, on
+        // first login; never block login on failure (a NULL sync timestamp is retried next login).
+        if (data.session.user.app_metadata?.provider === "github") {
+          try {
+            const { data: userData } = await supabase
+              .from("users")
+              .select("last_github_user_sync")
+              .eq("user_id", data.session.user.id)
+              .single();
+            if (!userData?.last_github_user_sync) {
+              await syncGitHubAccount(supabase);
+            }
+          } catch (error) {
+            console.error("Error reconciling GitHub org membership on first login:", error);
+            Sentry.captureException(error);
+            // Continue with login even if reconciliation fails; the manual sync path remains.
           }
         }
       } else {
