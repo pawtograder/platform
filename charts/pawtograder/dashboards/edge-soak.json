@@ -13,10 +13,20 @@
   "templating": {
     "list": [
       {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": ""
+      },
+      {
         "name": "ns",
         "label": "Namespace",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
         "query": "label_values(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=\"pawtograder-functions\"}, namespace)",
         "refresh": 2,
         "includeAll": false,
@@ -30,40 +40,40 @@
     { "type": "row", "title": "Capacity & scaling", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
     {
       "type": "timeseries", "title": "Edge HPA replicas (current / desired / min / max)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "current" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "desired" },
-        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_horizontalpodautoscaler_spec_min_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "min" },
-        { "refId": "D", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "max" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "current" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "desired" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "kube_horizontalpodautoscaler_spec_min_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "min" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"$ns\",horizontalpodautoscaler=\"pawtograder-functions\"}", "legendFormat": "max" }
       ]
     },
     {
       "type": "timeseries", "title": "Edge HPA memory utilization vs target (%)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 * sum(container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}) / sum(kube_pod_container_resource_requests{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})", "legendFormat": "avg mem util %" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "100 * sum(container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}) / sum(kube_pod_container_resource_requests{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})", "legendFormat": "avg mem util %" }
       ],
       "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
     },
     { "type": "row", "title": "Memory (the resilience signal)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
     {
       "type": "timeseries", "title": "Per-pod edge memory (MiB) — should plateau, not ramp",
-      "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 9, "w": 16, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 9, "w": 16, "x": 0, "y": 10 },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}/1048576", "legendFormat": "{{pod}}" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(kube_pod_container_resource_limits{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})/1048576", "legendFormat": "pod limit" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}/1048576", "legendFormat": "{{pod}}" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(kube_pod_container_resource_limits{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})/1048576", "legendFormat": "pod limit" }
       ],
       "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] }
     },
     {
       "type": "stat", "title": "OOMKills (last 1h)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" }, "gridPos": { "h": 9, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 9, "w": 8, "x": 16, "y": 10 },
       "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
       "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name", "orientation": "vertical" },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$ns\",container=\"functions\"}[1h]))", "legendFormat": "fn restarts" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(kube_pod_container_status_last_terminated_reason{namespace=\"$ns\",reason=\"OOMKilled\"} == 1) or vector(0)", "legendFormat": "OOMKilled pods" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$ns\",container=\"functions\"}[1h]))", "legendFormat": "fn restarts" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "count(kube_pod_container_status_last_terminated_reason{namespace=\"$ns\",reason=\"OOMKilled\"} == 1) or vector(0)", "legendFormat": "OOMKilled pods" }
       ]
     },
     { "type": "row", "title": "Worker lifecycle (Loki logs)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 } },
