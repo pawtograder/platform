@@ -16,8 +16,14 @@ import { Octokit, RequestError } from "npm:octokit";
 // helpers under test never authenticate, so set a placeholder before importing the module (dynamic
 // import so the env is set first — static imports would hoist above this).
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertSourceNotEmpty, getTeamAndCreateIfNeeded, isRepoEmpty, isTeamAlreadyExistsError, NonRetryableRepoError } =
-  await import("./GitHubWrapper.ts");
+const {
+  assertSourceNotEmpty,
+  getTeamAndCreateIfNeeded,
+  isRepoEmpty,
+  isTeamAlreadyExistsError,
+  NonRetryableRepoError,
+  resolveExistingTeamSlug
+} = await import("./GitHubWrapper.ts");
 
 type Handler = (params: Record<string, unknown>) => unknown;
 
@@ -228,4 +234,45 @@ Deno.test("getTeamAndCreateIfNeeded: 422 then non-404 on re-fetch -> rethrows", 
     }
   });
   await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);
+});
+
+// --- Non-creating slug resolution (resolveExistingTeamSlug) ---
+// Uses a distinct org/slug per test since resolution is memoized per (org, requestedSlug).
+
+Deno.test("resolveExistingTeamSlug: team exists under requested slug -> returns actual slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => ({ data: { id: 1, slug: p.team_slug } })
+  });
+  assertEquals(await resolveExistingTeamSlug("org-a", "cs101-staff", octokit), "cs101-staff");
+});
+
+Deno.test("resolveExistingTeamSlug: 404 then normalized slug in org list -> returns normalized slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 2, slug: "cs-101-students", name: "cs101-students" }]
+  });
+  assertEquals(await resolveExistingTeamSlug("org-b", "cs101-students", octokit), "cs-101-students");
+});
+
+Deno.test("resolveExistingTeamSlug: 404 and no match -> falls back to requested slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 3, slug: "unrelated-team", name: "unrelated-team" }]
+  });
+  assertEquals(await resolveExistingTeamSlug("org-c", "cs101-staff", octokit), "cs101-staff");
+});
+
+// A transient (non-404) error must propagate rather than trigger the team-list fallback, so callers
+// don't silently sync against the wrong (fallback literal) slug on a blip.
+Deno.test("resolveExistingTeamSlug: non-404 error -> rethrows", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => resolveExistingTeamSlug("org-d", "cs101-staff", octokit), RequestError);
 });

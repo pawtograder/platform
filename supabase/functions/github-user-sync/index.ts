@@ -128,17 +128,20 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const errorMessages: string[] = [];
 
   for (const c of classes) {
-    if (c!.classes.github_org) {
+    // Require both org and slug: the student team name is derived as `${slug}-students`, so a class
+    // with github_org set but slug still NULL would reconcile against a bogus `null-students` team.
+    // Mirrors the staff loop above and the team-sync migration (20260611120001).
+    if (c!.classes.github_org && c!.classes.slug) {
       Sentry.addBreadcrumb({
         category: "github",
-        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug! + "-students"}`,
+        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug + "-students"}`,
         level: "info"
       });
       // Reconcile each enrolled org independently: a failure in one org (broken installation,
       // transient GitHub/DB error) must not abort reconciliation of the user's other orgs. Record
       // and continue rather than throwing out of the whole sync.
       try {
-        const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug! + "-students", githubUsername);
+        const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug + "-students", githubUsername);
         madeChanges = madeChanges || resp;
         if (!resp) {
           await adminSupabase

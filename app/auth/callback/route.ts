@@ -130,10 +130,17 @@ export async function GET(request: Request) {
               // classes" (wasted round-trip + Sentry noise). Treat NULL github_org_confirmed as
               // unconfirmed too (the column is nullable), matching the invitation banner's own condition
               // (resend-org-invitation.tsx hides only when github_org_confirmed is truthy).
+              //
+              // Also require a non-null `slug`: github-user-sync derives team names as
+              // `${slug}-students`/`-staff`, so a partially-configured class (github_org set, slug
+              // still NULL) would otherwise reconcile against a bogus `null-students` team. This
+              // matches the team-sync migration (20260611120001) that skips when org or slug is
+              // missing.
               const { data: unconfirmed, error: fetchError } = await supabase
                 .from("classes")
                 .select("id, user_roles!inner(id)")
                 .not("github_org", "is", null)
+                .not("slug", "is", null)
                 .eq("user_roles.user_id", userId)
                 .eq("user_roles.disabled", false)
                 .not("user_roles.github_org_confirmed", "is", true)

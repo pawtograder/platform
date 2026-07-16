@@ -1910,6 +1910,42 @@ export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, o
   }
 }
 
+const teamSlugCache = new Map<string, Promise<string>>();
+
+/**
+ * Resolve a team's actual GitHub slug, tolerating the case where GitHub normalized the team's slug
+ * differently from the `${courseSlug}-…` name we derive (e.g. a team created out-of-band). GET by the
+ * requested slug; on 404, scan the org's teams for one whose slug or name matches. Falls back to the
+ * requested slug when the team can't be found, so callers behave exactly as before in the common case
+ * (course slugs are already GitHub-normalized). Unlike getTeamAndCreateIfNeeded this never creates a
+ * team, so it's safe on read/permission paths that must not materialize an unwanted team. Cached per
+ * (org, requestedSlug) so repeated per-repo permission syncs don't refetch.
+ */
+export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
+  const cacheKey = org + "-" + team_slug;
+  if (!teamSlugCache.has(cacheKey)) {
+    teamSlugCache.set(
+      cacheKey,
+      (async () => {
+        try {
+          const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+          return team.data.slug ?? team_slug;
+        } catch (e) {
+          if (!(e instanceof RequestError && e.status === 404)) {
+            throw e;
+          }
+          const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
+          return teams.find((t) => t.slug === team_slug || t.name === team_slug)?.slug ?? team_slug;
+        }
+      })().catch((err) => {
+        teamSlugCache.delete(cacheKey);
+        throw err;
+      })
+    );
+  }
+  return teamSlugCache.get(cacheKey)!;
+}
+
 export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "reinvite_to_team");
   scope?.setTag("org", org);
@@ -2263,7 +2299,10 @@ export async function syncRepoPermissions(
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
-  const team_slug = `${courseSlug}-staff`;
+  // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
+  // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
+  // members/repo-access endpoints below, silently leaving repos without staff access.
+  const team_slug = await resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit);
   if (!staffTeamCache.has(org + "-" + courseSlug)) {
     staffTeamCache.set(
       org + "-" + courseSlug,
@@ -2320,8 +2359,9 @@ export async function syncRepoPermissions(
       permission: "maintain"
     });
   }
-  // Optionally grant the students team read access (mode 2 handout repos).
-  const studentsTeamSlug = `${courseSlug}-students`;
+  // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
+  // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
+  const studentsTeamSlug = await resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit);
   if (options.studentTeamPermission) {
     const hasStudentsTeam = teamsWithAccess.some(
       (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
