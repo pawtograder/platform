@@ -1,31 +1,27 @@
 -- Placeholder submissions: stored flag + roster exposure.
 --
--- An instructor/grader "grade anyway" for a student who never submitted creates
--- a content-less stub; once graded it is indistinguishable from an earned score
--- in the roster. Mark those stubs with an explicit submissions.is_placeholder
--- column set at creation time and expose it on the grader roster view.
---
--- no_submission-mode auto-created stubs keep the default false (their creators
--- call the internal helper with the 3-arg form), so presentation/oral-exam
--- rosters — where every student is a stub by design — are not flagged.
+-- Every instructor/grader-created stub (submitted_via='manual', no repo/sha) is
+-- a placeholder: content-less, created so a grade can be applied without a real
+-- student submission. This covers "grade anyway" stubs on normal assignments
+-- and the auto-created stubs on no_submission assignments (presentations, oral
+-- exams). create_manual_submission_internal is the only insert point for such
+-- stubs, so flag every one there. Real submissions (git / uploaded files) keep
+-- the default false.
 
 alter table public.submissions
   add column if not exists is_placeholder boolean not null default false;
 
 comment on column public.submissions.is_placeholder is
-  'True for instructor/grader-created stub submissions made to grade a student who never submitted. Set by create_manual_submission and create_manual_submissions_for_non_submitters.';
+  'True for instructor/grader-created stub submissions (submitted_via=''manual'') that stand in for a real student submission so a grade can be applied.';
 
 -- ============================================================================
--- Single insert point: add p_is_placeholder (default false).
+-- Flag every manual stub as a placeholder at its single insert point.
 -- ============================================================================
-
-drop function if exists public.create_manual_submission_internal(bigint, uuid, bigint);
 
 create or replace function public.create_manual_submission_internal(
   p_assignment_id bigint,
   p_profile_id uuid default null,
-  p_assignment_group_id bigint default null,
-  p_is_placeholder boolean default false
+  p_assignment_group_id bigint default null
 ) returns bigint
 language plpgsql
 security definer
@@ -113,7 +109,7 @@ begin
     repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via, is_placeholder
   ) values (
     p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
-    null, null, 1, v_ordinal, v_ordinal, true, 'manual', p_is_placeholder
+    null, null, 1, v_ordinal, v_ordinal, true, 'manual', true
   )
   returning id into v_submission_id;
 
@@ -121,167 +117,9 @@ begin
 end;
 $$;
 
-revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint, boolean) from public;
-revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint, boolean) from authenticated;
-grant execute on function public.create_manual_submission_internal(bigint, uuid, bigint, boolean) to postgres;
-
--- ============================================================================
--- Grade-anyway RPCs: flag their stubs as placeholders.
--- ============================================================================
-
-create or replace function public.create_manual_submission(
-  p_assignment_id bigint,
-  p_profile_id uuid default null,
-  p_assignment_group_id bigint default null
-) returns bigint
-language plpgsql
-security definer
-set search_path = public, pg_temp
-as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_class_id bigint;
-  v_group_assignment_id bigint;
-begin
-  if v_user_id is null then
-    raise exception 'Must be authenticated' using errcode = '42501';
-  end if;
-
-  if (p_profile_id is null) = (p_assignment_group_id is null) then
-    raise exception 'Exactly one of p_profile_id or p_assignment_group_id must be provided';
-  end if;
-
-  select a.class_id
-    into v_class_id
-    from public.assignments a
-   where a.id = p_assignment_id;
-
-  if v_class_id is null then
-    raise exception 'Assignment % not found', p_assignment_id;
-  end if;
-
-  if not exists (
-    select 1 from public.user_privileges up
-    where up.user_id = auth.uid()
-      and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role in ('instructor', 'grader')))
-  ) then
-    raise exception 'Access denied: only instructors and graders can create manual submissions for class %', v_class_id
-      using errcode = '42501';
-  end if;
-
-  if p_profile_id is not null then
-    if not exists (
-      select 1 from public.user_roles ur
-      where ur.class_id = v_class_id
-        and ur.private_profile_id = p_profile_id
-        and ur.role = 'student'
-        and ur.disabled = false
-    ) then
-      raise exception 'Profile % is not an active student enrolled in class %', p_profile_id, v_class_id
-        using errcode = '42501';
-    end if;
-  end if;
-
-  if p_assignment_group_id is not null then
-    select ag.assignment_id into v_group_assignment_id
-      from public.assignment_groups ag
-     where ag.id = p_assignment_group_id;
-    if v_group_assignment_id is null then
-      raise exception 'Assignment group % not found', p_assignment_group_id;
-    end if;
-    if v_group_assignment_id <> p_assignment_id then
-      raise exception 'Assignment group % belongs to assignment %, not %',
-        p_assignment_group_id, v_group_assignment_id, p_assignment_id;
-    end if;
-  end if;
-
-  return public.create_manual_submission_internal(p_assignment_id, p_profile_id, p_assignment_group_id, true);
-end;
-$$;
-
-grant execute on function public.create_manual_submission(bigint, uuid, bigint) to authenticated;
-
-create or replace function public.create_manual_submissions_for_non_submitters(
-  p_assignment_id bigint,
-  p_profile_ids uuid[] default '{}',
-  p_assignment_group_ids bigint[] default '{}'
-) returns bigint[]
-language plpgsql
-security definer
-set search_path = public, pg_temp
-as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_class_id bigint;
-  v_profile_id uuid;
-  v_group_id bigint;
-  v_group_assignment_id bigint;
-  v_submission_id bigint;
-  v_result bigint[] := '{}';
-begin
-  if v_user_id is null then
-    raise exception 'Must be authenticated' using errcode = '42501';
-  end if;
-
-  select a.class_id
-    into v_class_id
-    from public.assignments a
-   where a.id = p_assignment_id;
-
-  if v_class_id is null then
-    raise exception 'Assignment % not found', p_assignment_id;
-  end if;
-
-  if not exists (
-    select 1 from public.user_privileges up
-    where up.user_id = auth.uid()
-      and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role in ('instructor', 'grader')))
-  ) then
-    raise exception 'Access denied: only instructors and graders can create manual submissions for class %', v_class_id
-      using errcode = '42501';
-  end if;
-
-  if p_profile_ids is not null then
-    foreach v_profile_id in array p_profile_ids
-    loop
-      if not exists (
-        select 1 from public.user_roles ur
-        where ur.class_id = v_class_id
-          and ur.private_profile_id = v_profile_id
-          and ur.role = 'student'
-          and ur.disabled = false
-      ) then
-        raise exception 'Profile % is not an active student enrolled in class %', v_profile_id, v_class_id
-          using errcode = '42501';
-      end if;
-      v_submission_id := public.create_manual_submission_internal(p_assignment_id, v_profile_id, null, true);
-      v_result := array_append(v_result, v_submission_id);
-    end loop;
-  end if;
-
-  if p_assignment_group_ids is not null then
-    foreach v_group_id in array p_assignment_group_ids
-    loop
-      select ag.assignment_id into v_group_assignment_id
-        from public.assignment_groups ag
-       where ag.id = v_group_id;
-      if v_group_assignment_id is null then
-        raise exception 'Assignment group % not found', v_group_id;
-      end if;
-      if v_group_assignment_id <> p_assignment_id then
-        raise exception 'Assignment group % belongs to assignment %, not %',
-          v_group_id, v_group_assignment_id, p_assignment_id;
-      end if;
-      v_submission_id := public.create_manual_submission_internal(p_assignment_id, null, v_group_id, true);
-      v_result := array_append(v_result, v_submission_id);
-    end loop;
-  end if;
-
-  return v_result;
-end;
-$$;
-
-grant execute on function public.create_manual_submissions_for_non_submitters(bigint, uuid[], bigint[]) to authenticated;
+revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from public;
+revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from authenticated;
+grant execute on function public.create_manual_submission_internal(bigint, uuid, bigint) to postgres;
 
 -- ============================================================================
 -- Roster view: expose the stored is_placeholder column.

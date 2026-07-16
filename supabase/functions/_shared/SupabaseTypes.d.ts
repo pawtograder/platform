@@ -12372,7 +12372,6 @@ export type Database = {
         Args: {
           p_assignment_group_id?: number;
           p_assignment_id: number;
-          p_is_placeholder?: boolean;
           p_profile_id?: string;
         };
         Returns: number;

@@ -784,7 +784,7 @@ export default function AssignmentsTable({
         enableColumnFilter: true,
         cell: (props) =>
           props.row.original.is_placeholder ? (
-            <Tooltip content="Graded without a submission — this student never submitted.">
+            <Tooltip content="Placeholder submission created for grading — no student-submitted work.">
               <Badge colorPalette="orange" cursor="help">
                 Yes
               </Badge>

@@ -17,9 +17,8 @@ import {
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Verifies the stored is_placeholder flag distinguishes an instructor
-// "grade anyway" stub from an earned score, and that no_submission-mode
-// stubs (auto-created by design) are not flagged.
+// Verifies the stored is_placeholder flag distinguishes an instructor-created
+// stub (grade-anyway or no_submission auto-stub) from a real submission.
 test.describe("Assignment roster: is_placeholder flag", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -124,17 +123,9 @@ test.describe("Assignment roster: is_placeholder flag", () => {
     expect(await viewFlag(normalAssignment.id, realSubmitter.private_profile_id)).toBe(false);
   });
 
-  test("stub on a no_submission assignment is NOT flagged (design-normal)", async () => {
-    // The assignment's release date is in the past, so every enrolled student
-    // already has an auto-created (unflagged) stub; the idempotent RPC returns
-    // it rather than creating a new placeholder.
-    await createManualStub(noSubmissionAssignment.id, nonSubmitter.private_profile_id);
-    expect(await viewFlag(noSubmissionAssignment.id, nonSubmitter.private_profile_id)).toBe(false);
-  });
-
-  test("auto-created no_submission stub (no manual grade-anyway) is NOT flagged", async () => {
-    // realSubmitter got an auto-created stub on the released no_submission
-    // assignment; it is design-normal, not an instructor placeholder.
-    expect(await viewFlag(noSubmissionAssignment.id, realSubmitter.private_profile_id)).toBe(false);
+  test("no_submission stub is flagged (also a placeholder)", async () => {
+    // Every stub on a no_submission assignment is a placeholder too. realSubmitter
+    // got an auto-created stub at release; it carries the flag.
+    expect(await viewFlag(noSubmissionAssignment.id, realSubmitter.private_profile_id)).toBe(true);
   });
 });
