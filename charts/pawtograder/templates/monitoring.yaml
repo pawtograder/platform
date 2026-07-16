@@ -103,15 +103,26 @@ data:
             description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
 
     pg_stat_statements_top:
+      # Aggregate by queryid. pg_stat_statements holds one row PER
+      # (userid, dbid, toplevel, queryid), so selecting queryid + query text
+      # directly yields several rows with the same (queryid, query_preview)
+      # label set whenever a statement runs under more than one role/db. The
+      # exporter's client library rejects duplicate series with "collected
+      # before with the same name and label values" and returns HTTP 500 for
+      # the ENTIRE /metrics endpoint — taking down all postgres metrics. Summing
+      # per queryid collapses those rows to one unique series each; mean is
+      # recomputed as the weighted total/calls. Skip NULL queryids (untracked).
       query: |
         SELECT queryid::text,
-               LEFT(query, 80) AS query_preview,
-               calls,
-               total_exec_time,
-               mean_exec_time,
-               rows
+               LEFT(MIN(query), 80) AS query_preview,
+               SUM(calls) AS calls,
+               SUM(total_exec_time) AS total_exec_time,
+               SUM(total_exec_time) / NULLIF(SUM(calls), 0) AS mean_exec_time,
+               SUM(rows) AS rows
         FROM pg_stat_statements
-        ORDER BY total_exec_time DESC
+        WHERE queryid IS NOT NULL
+        GROUP BY queryid
+        ORDER BY SUM(total_exec_time) DESC
         LIMIT 20
       metrics:
         - queryid:
