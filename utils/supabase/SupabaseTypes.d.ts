@@ -9653,6 +9653,7 @@ export type Database = {
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
+          is_placeholder: boolean;
           ordinal: number;
           pr_number: number | null;
           pr_state: string | null;
@@ -9678,6 +9679,7 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
+          is_placeholder?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;
@@ -9703,6 +9705,7 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
+          is_placeholder?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;
@@ -11420,7 +11423,7 @@ export type Database = {
           hours: number | null;
           id: number | null;
           individual_scores: Json | null;
-          is_non_submission: boolean | null;
+          is_placeholder: boolean | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
@@ -12369,6 +12372,7 @@ export type Database = {
         Args: {
           p_assignment_group_id?: number;
           p_assignment_id: number;
+          p_is_placeholder?: boolean;
           p_profile_id?: string;
         };
         Returns: number;

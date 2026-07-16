@@ -17,9 +17,10 @@ import {
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Verifies the roster view's is_non_submission flag distinguishes a graded
-// "grade anyway" stub from an earned score.
-test.describe("Assignment roster: is_non_submission flag", () => {
+// Verifies the stored is_placeholder flag distinguishes an instructor
+// "grade anyway" stub from an earned score, and that no_submission-mode
+// stubs (auto-created by design) are not flagged.
+test.describe("Assignment roster: is_placeholder flag", () => {
   test.describe.configure({ mode: "serial" });
 
   const runPrefix = getTestRunPrefix();
@@ -45,16 +46,16 @@ test.describe("Assignment roster: is_non_submission flag", () => {
   async function viewFlag(assignmentId: number, studentId: string): Promise<boolean | null> {
     const { data, error } = await supabase
       .from("submissions_with_grades_for_assignment_nice")
-      .select("is_non_submission")
+      .select("is_placeholder")
       .eq("assignment_id", assignmentId)
       .eq("student_private_profile_id", studentId)
       .single();
     if (error) throw new Error(`Failed to read roster view: ${error.message}`);
-    return data.is_non_submission;
+    return data.is_placeholder;
   }
 
   test.beforeAll(async () => {
-    course = await createClass({ name: `Roster NonSub ${runPrefix}` });
+    course = await createClass({ name: `Roster Placeholder ${runPrefix}` });
     [instructor, nonSubmitter, realSubmitter] = await createUsersInClass([
       {
         name: "Roster Instructor",
@@ -99,16 +100,17 @@ test.describe("Assignment roster: is_non_submission flag", () => {
     });
   });
 
-  test("grade-anyway stub on a normal assignment is flagged is_non_submission", async () => {
+  test("grade-anyway stub on a normal assignment is flagged is_placeholder", async () => {
     const stubId = await createManualStub(normalAssignment.id, nonSubmitter.private_profile_id);
     const { data: stub } = await supabase
       .from("submissions")
-      .select("submitted_via, repository, sha")
+      .select("submitted_via, repository, sha, is_placeholder")
       .eq("id", stubId)
       .single();
     expect(stub?.submitted_via).toBe("manual");
     expect(stub?.repository).toBeNull();
     expect(stub?.sha).toBeNull();
+    expect(stub?.is_placeholder).toBe(true);
 
     expect(await viewFlag(normalAssignment.id, nonSubmitter.private_profile_id)).toBe(true);
   });
@@ -123,12 +125,16 @@ test.describe("Assignment roster: is_non_submission flag", () => {
   });
 
   test("stub on a no_submission assignment is NOT flagged (design-normal)", async () => {
+    // The assignment's release date is in the past, so every enrolled student
+    // already has an auto-created (unflagged) stub; the idempotent RPC returns
+    // it rather than creating a new placeholder.
     await createManualStub(noSubmissionAssignment.id, nonSubmitter.private_profile_id);
     expect(await viewFlag(noSubmissionAssignment.id, nonSubmitter.private_profile_id)).toBe(false);
   });
 
-  test("a non-submitter with no active submission is NOT flagged (nothing graded yet)", async () => {
-    // realSubmitter never submitted the no_submission assignment and has no stub there.
+  test("auto-created no_submission stub (no manual grade-anyway) is NOT flagged", async () => {
+    // realSubmitter got an auto-created stub on the released no_submission
+    // assignment; it is design-normal, not an instructor placeholder.
     expect(await viewFlag(noSubmissionAssignment.id, realSubmitter.private_profile_id)).toBe(false);
   });
 });

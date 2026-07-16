@@ -37,6 +37,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
+  Badge,
   Box,
   Button,
   HStack,
@@ -62,26 +63,6 @@ import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
-
-// Distinguishes a score assigned to a non-submitter (e.g. `0*`) from an earned one.
-const NOT_SUBMITTED_MARKER = "*";
-
-// Marker beside a graded non-submitter's score. Uses a native title (not a
-// Chakra Tooltip) to avoid colliding with the row's "view submission" tooltip.
-function NonSubmissionMarker() {
-  return (
-    <Text
-      as="span"
-      color="orange.500"
-      fontWeight="bold"
-      cursor="help"
-      title="Graded without a submission — this student never submitted."
-      aria-label="Graded without a submission"
-    >
-      {NOT_SUBMITTED_MARKER}
-    </Text>
-  );
-}
 
 /**
  * "Grade anyway" action for a student/group with no active submission. Creates
@@ -307,7 +288,6 @@ function TotalScoreCellUnknownStudent({
         course_id={course_id}
         assignment_id={assignment_id}
       />
-      {row.original.is_non_submission && displayScore !== null && displayScore !== undefined && <NonSubmissionMarker />}
       {hasIndividual && tooltipContent !== "" && (
         <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
           <Text fontSize="xs" color="fg.info" cursor="help">
@@ -360,7 +340,6 @@ function TotalScoreCellWithStudent({
         course_id={course_id}
         assignment_id={assignment_id}
       />
-      {row.original.is_non_submission && displayScore !== null && displayScore !== undefined && <NonSubmissionMarker />}
       {showTooltip && (
         <Tooltip content={tooltipContent}>
           <Text fontSize="xs" color="fg.info" cursor="help">
@@ -434,7 +413,8 @@ export default function AssignmentsTable({
       created_at: false,
       gradername: true,
       checkername: false,
-      grading_complete: false
+      grading_complete: false,
+      placeholder: true
     };
   });
 
@@ -794,6 +774,28 @@ export default function AssignmentsTable({
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           const isReleased = row.original.released;
           const status = isReleased ? "Released" : "Not Released";
+          return values.includes(status);
+        }
+      },
+      {
+        id: "placeholder",
+        accessorKey: "is_placeholder",
+        header: "Placeholder",
+        enableColumnFilter: true,
+        cell: (props) =>
+          props.row.original.is_placeholder ? (
+            <Tooltip content="Graded without a submission — this student never submitted.">
+              <Badge colorPalette="orange" cursor="help">
+                Yes
+              </Badge>
+            </Tooltip>
+          ) : (
+            <Text color="fg.muted">—</Text>
+          ),
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const status = row.original.is_placeholder ? "Yes" : "No";
           return values.includes(status);
         }
       }
@@ -1159,6 +1161,12 @@ export default function AssignmentsTable({
             >
               Grading Complete
             </Checkbox>
+            <Checkbox
+              checked={columnVisibility.placeholder}
+              onCheckedChange={() => toggleColumnVisibility("placeholder")}
+            >
+              Placeholder
+            </Checkbox>
           </HStack>
         </Box>
         <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
@@ -1394,6 +1402,21 @@ export default function AssignmentsTable({
                                   { label: "Not Released", value: "Not Released" }
                                 ]}
                                 placeholder="Filter by release status..."
+                              />
+                            )}
+                            {header.id === "placeholder" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Yes", value: "Yes" },
+                                  { label: "No", value: "No" }
+                                ]}
+                                placeholder="Filter by placeholder..."
                               />
                             )}
                             {header.id === "created_at" && (
