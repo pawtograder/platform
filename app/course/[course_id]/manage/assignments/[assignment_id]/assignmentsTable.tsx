@@ -414,7 +414,7 @@ export default function AssignmentsTable({
       gradername: true,
       checkername: false,
       grading_complete: false,
-      placeholder: true
+      placeholder: false
     };
   });
 
@@ -790,7 +790,7 @@ export default function AssignmentsTable({
               </Badge>
             </Tooltip>
           ) : (
-            <Text color="fg.muted">—</Text>
+            <Text color="fg.muted">No</Text>
           ),
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
