@@ -91,6 +91,20 @@ spec:
 
                   psql -d postgres -c "CREATE DATABASE \"$SCRATCH\";"
 
+                  # SAFETY: disable ALL triggers for every connection to the
+                  # scratch DB before restoring. A full -Fc restore into an empty
+                  # DB already creates triggers in the post-data phase (after the
+                  # COPY), so app row triggers (audit / notifications / pg_net
+                  # webhooks) don't fire on the restored rows. This makes that a
+                  # HARD guarantee independent of dump layout: if the dump ever
+                  # became --data-only (restoring into pre-existing triggered
+                  # tables), COPY would otherwise fire every side-effecting
+                  # trigger against live infrastructure. session_replication_role
+                  # = replica set at the database level covers pg_restore's own
+                  # connections too. FK triggers are off as well, which is fine —
+                  # this is a recoverability drill, not an integrity check.
+                  psql -d postgres -c "ALTER DATABASE \"$SCRATCH\" SET session_replication_role = replica;"
+
                   # Real restore into the scratch DB. --no-owner/--no-acl so the
                   # restore doesn't depend on every role existing; this is a
                   # recoverability check, not a byte-for-byte clone.
