@@ -185,14 +185,25 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const assignments = allAssignments.filter(
     (a) =>
       a.template_repo?.includes("/") &&
+      // Skip assignments in classes that aren't GitHub-ready (no org, or slug still NULL): the repo
+      // name is built from `${slug}-...` and the row from `${github_org}/...`, so a partially
+      // configured class would produce bogus `null-*` repos. Mirrors the invite-loop guard above.
+      a.classes?.github_org &&
+      a.classes?.slug &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
 
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
-    classes.flatMap((c) =>
-      c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
+    classes.flatMap((c) => {
+      // Skip classes that aren't GitHub-ready (no org, or slug still NULL): repo names/rows below are
+      // built from `${slug}-...` / `${github_org}/...`, so a partially configured class would create
+      // bogus `null-*` repositories. Mirrors the invite-loop guard above.
+      if (!c!.classes.github_org || !c!.classes.slug) {
+        return [];
+      }
+      return c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
@@ -298,8 +309,8 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           Sentry.captureException(e, scope);
           errorMessages.push(`Error syncing repo permissions for ${repoName}`);
         }
-      })
-    )
+      });
+    })
   );
 
   const requests = assignments!
