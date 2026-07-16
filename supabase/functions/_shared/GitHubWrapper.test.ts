@@ -256,14 +256,30 @@ Deno.test("resolveExistingTeamSlug: 404 then normalized slug in org list -> retu
   assertEquals(await resolveExistingTeamSlug("org-b", "cs101-students", octokit), "cs-101-students");
 });
 
-Deno.test("resolveExistingTeamSlug: 404 and no match -> falls back to requested slug", async () => {
+Deno.test("resolveExistingTeamSlug: 404 and no match -> falls back to requested slug, not cached", async () => {
+  // Team doesn't exist yet on the first call, then a later team-sync creates it. The no-match
+  // fallback must NOT be cached, so the retry in the same isolate picks up the real slug.
+  let teamExists = false;
   const octokit = fakeOctokit({
-    "GET /orgs/{org}/teams/{team_slug}": () => {
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (teamExists) return { data: { id: 3, slug: p.team_slug } };
       throw requestError(404, "Not Found");
     },
-    "GET /orgs/{org}/teams": () => [{ id: 3, slug: "unrelated-team", name: "unrelated-team" }]
+    "GET /orgs/{org}/teams": () => (teamExists ? [{ id: 3, slug: "cs101-staff", name: "cs101-staff" }] : [])
   });
   assertEquals(await resolveExistingTeamSlug("org-c", "cs101-staff", octokit), "cs101-staff");
+  teamExists = true;
+  assertEquals(await resolveExistingTeamSlug("org-c", "cs101-staff", octokit), "cs101-staff");
+});
+
+// Ambiguous string concatenation (org "a-b" + "-" + "c" === org "a" + "-" + "b-c") must not collide:
+// each course resolves to its own team even in a warm isolate sharing the cache.
+Deno.test("resolveExistingTeamSlug: distinct org/slug pairs don't collide in cache", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => ({ data: { id: 9, slug: `${p.org}::${p.team_slug}` } })
+  });
+  assertEquals(await resolveExistingTeamSlug("a-b", "c", octokit), "a-b::c");
+  assertEquals(await resolveExistingTeamSlug("a", "b-c", octokit), "a::b-c");
 });
 
 // A transient (non-404) error must propagate rather than trigger the team-list fallback, so callers

@@ -1918,32 +1918,50 @@ const teamSlugCache = new Map<string, Promise<string>>();
  * requested slug; on 404, scan the org's teams for one whose slug or name matches. Falls back to the
  * requested slug when the team can't be found, so callers behave exactly as before in the common case
  * (course slugs are already GitHub-normalized). Unlike getTeamAndCreateIfNeeded this never creates a
- * team, so it's safe on read/permission paths that must not materialize an unwanted team. Cached per
- * (org, requestedSlug) so repeated per-repo permission syncs don't refetch.
+ * team, so it's safe on read/permission paths that must not materialize an unwanted team.
+ *
+ * Only a *genuine* resolution (the team was found) is cached, keyed per (org, requestedSlug) so
+ * repeated per-repo permission syncs don't refetch. A no-match fallback is NOT cached: the team may
+ * simply not exist yet, and a later team-sync could create it within the same warm isolate — caching
+ * the miss would keep every retry hitting the wrong slug until cold start.
  */
 export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
-  const cacheKey = org + "-" + team_slug;
-  if (!teamSlugCache.has(cacheKey)) {
-    teamSlugCache.set(
-      cacheKey,
-      (async () => {
-        try {
-          const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
-          return team.data.slug ?? team_slug;
-        } catch (e) {
-          if (!(e instanceof RequestError && e.status === 404)) {
-            throw e;
-          }
-          const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
-          return teams.find((t) => t.slug === team_slug || t.name === team_slug)?.slug ?? team_slug;
-        }
-      })().catch((err) => {
-        teamSlugCache.delete(cacheKey);
-        throw err;
-      })
-    );
+  // JSON tuple, not `org + "-" + team_slug`: string concat is ambiguous (org "a-b"/slug "c" would
+  // collide with org "a"/slug "b-c") and could reuse one course's resolved slug for another.
+  const cacheKey = JSON.stringify([org, team_slug]);
+  const cached = teamSlugCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
-  return teamSlugCache.get(cacheKey)!;
+  const pending = (async () => {
+    let slug = team_slug;
+    let resolved = false;
+    try {
+      const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+      slug = team.data.slug ?? team_slug;
+      resolved = true;
+    } catch (e) {
+      if (!(e instanceof RequestError && e.status === 404)) {
+        throw e;
+      }
+      const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
+      const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
+      if (match?.slug) {
+        slug = match.slug;
+        resolved = true;
+      }
+    }
+    // Don't retain a no-match fallback so a retry re-checks once the team exists.
+    if (!resolved) {
+      teamSlugCache.delete(cacheKey);
+    }
+    return slug;
+  })().catch((err) => {
+    teamSlugCache.delete(cacheKey);
+    throw err;
+  });
+  teamSlugCache.set(cacheKey, pending);
+  return pending;
 }
 
 export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
