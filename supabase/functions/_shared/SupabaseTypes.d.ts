@@ -9653,7 +9653,6 @@ export type Database = {
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
-          is_placeholder: boolean;
           ordinal: number;
           pr_number: number | null;
           pr_state: string | null;
@@ -9679,7 +9678,6 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
-          is_placeholder?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;
@@ -9705,7 +9703,6 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
-          is_placeholder?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;

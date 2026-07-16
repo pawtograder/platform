@@ -1,128 +1,19 @@
--- Placeholder submissions: stored flag + roster exposure.
+-- Placeholder indicator on the grader roster.
 --
--- Every instructor/grader-created stub (submitted_via='manual', no repo/sha) is
--- a placeholder: content-less, created so a grade can be applied without a real
--- student submission. This covers "grade anyway" stubs on normal assignments
+-- An instructor/grader stub (submitted_via='manual', no repo/sha) is a
+-- placeholder: content-less, created so a grade can be applied without a real
+-- student submission. That covers "grade anyway" stubs on normal assignments
 -- and the auto-created stubs on no_submission assignments (presentations, oral
--- exams). create_manual_submission_internal is the only insert point for such
--- stubs, so flag every one there. Real submissions (git / uploaded files) keep
--- the default false.
+-- exams). submitted_via='manual' already marks exactly these, so the roster
+-- derives is_placeholder from it rather than storing a duplicate column.
 
-alter table public.submissions
-  add column if not exists is_placeholder boolean not null default false;
-
-comment on column public.submissions.is_placeholder is
-  'True for instructor/grader-created stub submissions (submitted_via=''manual'') that stand in for a real student submission so a grade can be applied.';
+-- Refresh the (now stale) submitted_via comment: manual stubs are no longer
+-- limited to no_submission assignments.
+comment on column public.submissions.submitted_via is
+  'Submission origin marker: null/git for repo-pushed submissions, "upload" for no-repo file uploads, "pr" for pull-request ingests, "manual" for instructor/grader-created placeholder stubs (grade-anyway or no_submission auto-stubs; no repo/sha). Used by graders to route processing and to flag placeholders in the roster.';
 
 -- ============================================================================
--- Flag every manual stub as a placeholder at its single insert point.
--- ============================================================================
-
-create or replace function public.create_manual_submission_internal(
-  p_assignment_id bigint,
-  p_profile_id uuid default null,
-  p_assignment_group_id bigint default null
-) returns bigint
-language plpgsql
-security definer
-set search_path = public, pg_temp
-as $$
-declare
-  v_class_id bigint;
-  v_existing bigint;
-  v_submission_id bigint;
-  v_ordinal int;
-begin
-  if (p_profile_id is null) = (p_assignment_group_id is null) then
-    raise exception 'Exactly one of p_profile_id or p_assignment_group_id must be provided';
-  end if;
-
-  select a.class_id into v_class_id from public.assignments a where a.id = p_assignment_id;
-  if v_class_id is null then
-    raise exception 'Assignment % not found', p_assignment_id;
-  end if;
-
-  -- Serialize concurrent creates for this assignment + submitter scope so we
-  -- can't produce duplicate ordinals or end up with multiple active rows.
-  perform pg_advisory_xact_lock(
-    hashtextextended(
-      format(
-        'create_manual_submission:%s:%s:%s',
-        p_assignment_id,
-        coalesce(p_assignment_group_id::text, ''),
-        coalesce(p_profile_id::text, '')
-      ),
-      0
-    )
-  );
-
-  -- Idempotent: reuse the existing active submission if one is already in place.
-  select id into v_existing
-    from public.submissions
-   where assignment_id = p_assignment_id
-     and is_active = true
-     and (
-       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
-     )
-   limit 1;
-  if v_existing is not null then
-    return v_existing;
-  end if;
-
-  -- Deactivate any conflicting active submission in the *other* scope for the
-  -- same target, so a student can't end up with both a per-profile and a
-  -- per-group active submission on this assignment.
-  if p_assignment_group_id is not null then
-    update public.submissions s
-       set is_active = false
-     where s.assignment_id = p_assignment_id
-       and s.is_active = true
-       and s.assignment_group_id is null
-       and s.profile_id in (
-         select agm.profile_id
-           from public.assignment_groups_members agm
-          where agm.assignment_group_id = p_assignment_group_id
-       );
-  else
-    update public.submissions s
-       set is_active = false
-     where s.assignment_id = p_assignment_id
-       and s.is_active = true
-       and s.assignment_group_id in (
-         select agm.assignment_group_id
-           from public.assignment_groups_members agm
-          where agm.profile_id = p_profile_id
-       );
-  end if;
-
-  select coalesce(max(ordinal), 0) + 1 into v_ordinal
-    from public.submissions
-   where assignment_id = p_assignment_id
-     and (
-       (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-       or (p_assignment_group_id is null and profile_id = p_profile_id and assignment_group_id is null)
-     );
-
-  insert into public.submissions(
-    assignment_id, class_id, profile_id, assignment_group_id,
-    repository, sha, run_attempt, run_number, ordinal, is_active, submitted_via, is_placeholder
-  ) values (
-    p_assignment_id, v_class_id, p_profile_id, p_assignment_group_id,
-    null, null, 1, v_ordinal, v_ordinal, true, 'manual', true
-  )
-  returning id into v_submission_id;
-
-  return v_submission_id;
-end;
-$$;
-
-revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from public;
-revoke all on function public.create_manual_submission_internal(bigint, uuid, bigint) from authenticated;
-grant execute on function public.create_manual_submission_internal(bigint, uuid, bigint) to postgres;
-
--- ============================================================================
--- Roster view: expose the stored is_placeholder column.
+-- Roster view: expose is_placeholder, derived from submitted_via='manual'.
 -- ============================================================================
 
 DROP VIEW IF EXISTS public.submissions_with_grades_for_assignment_nice;
@@ -221,7 +112,7 @@ CREATE VIEW public.submissions_with_grades_for_assignment_nice WITH (security_in
     swe.assignment_slug, swe.class_section_id,
     cs.name AS class_section_name,
     swe.lab_section_id, ls.name AS lab_section_name,
-    COALESCE(s.is_placeholder, false) AS is_placeholder
+    COALESCE(s.submitted_via = 'manual', false) AS is_placeholder
    FROM submissions_with_extensions swe
      JOIN public.profiles p ON ((p.id = swe.private_profile_id))
      LEFT JOIN public.submissions s ON ((s.id = swe.submission_id))

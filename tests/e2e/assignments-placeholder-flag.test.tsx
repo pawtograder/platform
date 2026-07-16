@@ -103,13 +103,12 @@ test.describe("Assignment roster: is_placeholder flag", () => {
     const stubId = await createManualStub(normalAssignment.id, nonSubmitter.private_profile_id);
     const { data: stub } = await supabase
       .from("submissions")
-      .select("submitted_via, repository, sha, is_placeholder")
+      .select("submitted_via, repository, sha")
       .eq("id", stubId)
       .single();
     expect(stub?.submitted_via).toBe("manual");
     expect(stub?.repository).toBeNull();
     expect(stub?.sha).toBeNull();
-    expect(stub?.is_placeholder).toBe(true);
 
     expect(await viewFlag(normalAssignment.id, nonSubmitter.private_profile_id)).toBe(true);
   });
