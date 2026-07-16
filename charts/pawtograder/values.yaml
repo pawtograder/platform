@@ -1316,6 +1316,32 @@ backup:
     # public.classes exists on every install (a live prod DB has >= 1 class).
     assertTable: "public.classes"
     assertMinRows: 1
+  # PITR DRILL: the ONLY check that proves point-in-time recovery. verify +
+  # restoreDrill exercise the logical-dump path; this exercises wal-g base
+  # backup + WAL replay. Fetches the newest base backup into a throwaway
+  # ephemeral volume, replays WAL to `targetLagMinutes` in the past, promotes,
+  # and asserts (1) a core table restored with data and (2) — when recencyTable
+  # is set — that NO rows newer than the target replayed (real point-in-time
+  # cutoff). Requires postgres.walg.enabled. Starts archive_mode=off so the
+  # scratch cluster can never wal-push into the live prefix. Off by default.
+  pitrDrill:
+    enabled: false
+    schedule: "0 9 * * 1" # weekly, after restoreDrill (08:00)
+    activeDeadlineSeconds: 5400
+    startingDeadlineSeconds: 1800
+    startupTimeoutSeconds: 3600
+    # Scratch volume must hold a full copy of PGDATA. Size >= live DB size.
+    scratchSize: 100Gi
+    # How far back to target. Must exceed archiver lag (seconds) with margin.
+    targetLagMinutes: 15
+    assertTable: "public.classes"
+    assertMinRows: 1
+    # Optional point-in-time precision check: a table with a monotonic
+    # timestamptz column that sees frequent writes. When set, the drill asserts
+    # ZERO rows newer than the recovery target. Leave empty to skip (row-count
+    # only). e.g. recencyTable "public.audit", recencyColumn "created_at".
+    recencyTable: ""
+    recencyColumn: ""
   # `mc` (MinIO client) is downloaded at runtime because the
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
