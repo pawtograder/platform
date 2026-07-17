@@ -48,14 +48,23 @@ spec:
           {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
           # Run as the postgres uid the supabase image uses (101): pg_ctl refuses
           # to run as root, and wal-g backup-fetch must own the scratch PGDATA.
+          # Satisfies restricted PodSecurity (rootless, no caps) so the drill
+          # survives if the namespace ever enforces `restricted`.
           securityContext:
             runAsUser: 101
             runAsGroup: 101
             fsGroup: 101
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: pitr-drill
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
               imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
               command:
                 - bash
                 - -c
