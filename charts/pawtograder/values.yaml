@@ -1415,6 +1415,23 @@ monitoring:
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
 
+  # Alertmanager routing SCAFFOLD (templates/alertmanager-config.yaml). Renders a
+  # prometheus-operator AlertmanagerConfig CR that Grafana Alloy's
+  # mimir.alerts.kubernetes syncs into Mimir. Routes by the `severity` label our
+  # rules set; ships placeholder webhook receivers reading URLs from a Secret.
+  # Off by default. Enable, set `labels` to match Alloy's alertmanagerconfig_
+  # selector, create the webhook Secret, and swap receivers for the real channel.
+  alertmanagerConfig:
+    enabled: false
+    labels: {}                       # e.g. { alertmanager: mimir } — match Alloy's selector
+    webhookSecretName: pawtograder-alertmanager
+    groupWait: "30s"
+    groupInterval: "5m"
+    repeatInterval:
+      default: "4h"
+      critical: "1h"
+      warning: "12h"
+
   # postgres_exporter sidecar in the postgres pod. Connects via TCP to
   # localhost:5432 with supabase_admin. The custom queries ConfigMap is
   # rendered by templates/monitoring.yaml (label

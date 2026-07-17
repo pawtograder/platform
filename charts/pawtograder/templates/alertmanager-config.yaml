@@ -1,0 +1,77 @@
+{{- /*
+Alertmanager routing SCAFFOLD (monitoring.alertmanagerConfig.enabled).
+
+A prometheus-operator AlertmanagerConfig CR — the resource Grafana Alloy's
+`mimir.alerts.kubernetes` watches (alertmanagerconfig_selector) and syncs into
+Mimir's per-tenant Alertmanager. The Alloy component supplies the base/global
+config separately; this CR contributes the route tree + receivers.
+
+This is a SCAFFOLD: it routes by the `severity` label our PrometheusRules
+already set (critical / warning) and ships placeholder webhook receivers whose
+URLs come from a Secret (keys default-url / critical-url / warning-url). Swap
+the webhookConfigs for slackConfigs / emailConfigs / pagerdutyConfigs once the
+destination is chosen. Off by default.
+
+Routing is agnostic to WHICH rules fire, so it covers both the infra alerts in
+prometheus-rules.yaml and any KPI-threshold alerts added later — provided they
+carry a `severity` label. See docs/operations/monitoring-alerting.md.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.alertmanagerConfig.enabled }}
+{{- $am := .Values.monitoring.alertmanagerConfig }}
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alerts") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alerts") | nindent 4 }}
+    {{- /* Extra labels so Alloy's alertmanagerconfig_selector matches this CR. */}}
+    {{- with $am.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  route:
+    receiver: pawtograder-default
+    groupBy: ["alertname", "namespace"]
+    groupWait: {{ $am.groupWait | default "30s" | quote }}
+    groupInterval: {{ $am.groupInterval | default "5m" | quote }}
+    repeatInterval: {{ $am.repeatInterval.default | default "4h" | quote }}
+    routes:
+      # Critical → page-worthy receiver, repeat more often.
+      - receiver: pawtograder-critical
+        matchers:
+          - name: severity
+            value: critical
+            matchType: "="
+        repeatInterval: {{ $am.repeatInterval.critical | default "1h" | quote }}
+      # Warning → lower-urgency receiver.
+      - receiver: pawtograder-warning
+        matchers:
+          - name: severity
+            value: warning
+            matchType: "="
+        repeatInterval: {{ $am.repeatInterval.warning | default "12h" | quote }}
+  receivers:
+    # PLACEHOLDER receivers. Each reads its webhook URL from the Secret
+    # `{{ $am.webhookSecretName }}` (create it out-of-band with keys
+    # default-url / critical-url / warning-url), OR replace webhookConfigs with
+    # slackConfigs / emailConfigs / pagerdutyConfigs for the real destination.
+    - name: pawtograder-default
+      webhookConfigs:
+        - sendResolved: true
+          urlSecret:
+            name: {{ $am.webhookSecretName }}
+            key: default-url
+    - name: pawtograder-critical
+      webhookConfigs:
+        - sendResolved: true
+          urlSecret:
+            name: {{ $am.webhookSecretName }}
+            key: critical-url
+    - name: pawtograder-warning
+      webhookConfigs:
+        - sendResolved: true
+          urlSecret:
+            name: {{ $am.webhookSecretName }}
+            key: warning-url
+{{- end }}
