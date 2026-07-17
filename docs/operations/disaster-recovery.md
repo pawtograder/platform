@@ -192,9 +192,12 @@ the newest object and fails loudly on three conditions. Triage by the log line:
 | `newest backup is older than 48h`         | Backups stopped producing output | The CronJob isn't running or its jobs are failing. Check for suspended CronJob, failed jobs, or the ARC/`dind` runner-style infra issues that stall scheduled work.                                               |
 
 `backup-verify` is a **structural** check (TOC parse + freshness); it does not
-prove the data restores. The weekly `restoreDrill` CronJob does the real
-rehearsal automatically (full restore into a scratch DB, asserts `assertTable`
-has ≥ `assertMinRows`), but still run procedure A by hand before each term.
+prove the data restores. **When enabled** (`backup.restoreDrill.enabled`, off by
+default), the weekly `restoreDrill` CronJob does the real rehearsal
+automatically (full restore into a scratch DB, asserts `assertTable` has ≥
+`assertMinRows`). In a default install it is **not** running, so recoverability
+is not being continuously tested — enable it in prod, and either way run
+procedure A by hand before each term.
 
 ## Restore-drill: expected errors and the FK-integrity caveat
 
@@ -212,8 +215,13 @@ always emits some benign errors. Two classes are expected and ignored:
   logical-replication import does) — the orphan rows were inserted, or their
   parents deleted, without the FK trigger firing, yet the constraint stayed
   `convalidated=t`. **This is a real production data-integrity signal, not a
-  drill bug.** Clean the orphans at the source per the FK's own `ON DELETE`
-  semantics, then the next dump restores clean:
+  drill bug** — but note the drill does **not** fail on it: because success is
+  gated on the row-count assertion (above), an FK error is logged while the Job
+  still succeeds, so `PawtograderBackupVerifyJobFailed` does **not** fire. Treat
+  FK errors as a **manual log-review signal** — scan the drill's logs
+  (`kubectl -n "$NS" logs job/<restore-drill-job>`) for `violates foreign key
+  constraint`; the alert will not surface them. Clean the orphans at the source
+  per the FK's own `ON DELETE` semantics, then the next dump restores clean:
 
   ```sql
   -- find them (VALID constraint + violating rows):

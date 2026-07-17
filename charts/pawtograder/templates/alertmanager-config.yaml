@@ -35,7 +35,7 @@ spec:
     groupBy: ["alertname", "namespace"]
     groupWait: {{ $am.groupWait | default "30s" | quote }}
     groupInterval: {{ $am.groupInterval | default "5m" | quote }}
-    repeatInterval: {{ $am.repeatInterval.default | default "4h" | quote }}
+    repeatInterval: {{ dig "repeatInterval" "default" "4h" $am | quote }}
     routes:
       # Critical → page-worthy receiver, repeat more often.
       - receiver: pawtograder-critical
@@ -43,14 +43,14 @@ spec:
           - name: severity
             value: critical
             matchType: "="
-        repeatInterval: {{ $am.repeatInterval.critical | default "1h" | quote }}
+        repeatInterval: {{ dig "repeatInterval" "critical" "1h" $am | quote }}
       # Warning → lower-urgency receiver.
       - receiver: pawtograder-warning
         matchers:
           - name: severity
             value: warning
             matchType: "="
-        repeatInterval: {{ $am.repeatInterval.warning | default "12h" | quote }}
+        repeatInterval: {{ dig "repeatInterval" "warning" "12h" $am | quote }}
   receivers:
     # PLACEHOLDER receivers. Each reads its webhook URL from the Secret
     # `{{ $am.webhookSecretName }}` (create it out-of-band with keys
