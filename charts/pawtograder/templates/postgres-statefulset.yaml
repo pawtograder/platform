@@ -33,7 +33,16 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/postgres-config.yaml") . | sha256sum }}
+        # Hash only the CONFIG content, not the chart-version-carrying metadata
+        # labels (helm.sh/chart, app.kubernetes.io/version) that
+        # pawtograder.componentLabels stamps on the rendered ConfigMap. Without
+        # the strip, every chart-version bump changed this hash and needlessly
+        # rolled the primary StatefulSet — a brief write outage that also
+        # cascaded into false `helm --wait` failures on dependent tiers. Proven:
+        # with the strip the hash is identical across versions yet still changes
+        # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
+        # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (include (print $.Template.BasePath "/postgres-config.yaml") .) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
