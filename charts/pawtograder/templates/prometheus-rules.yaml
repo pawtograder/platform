@@ -189,6 +189,69 @@ spec:
               sessions or scale down connection consumers immediately. Runbook:
               docs/operations/monitoring-alerting.md.
     {{- end }}
+    # App-level KPI alerts. Converted from the Ripley Grafana-managed rules
+    # (k8s/apps/monitoring/alerting/rules.yaml — reference only; a SEPARATE
+    # deployment, so no cutover/double-fire concern). Fire on app-emitted metrics
+    # (async worker queue, its dead-letter queue, gradebook recalc backlog),
+    # scoped to this release's namespace. They require those metrics to be
+    # scraped in THIS deployment; without a scrape target the series are absent
+    # and the alerts stay dormant (no false pages). All page (severity: critical),
+    # matching the Ripley rules' uniform routing to Pawtograder On Call.
+    - name: pawtograder.app
+      rules:
+        # Gradebook row-recalculate queue is backed up — recalculation is not
+        # keeping pace, so student-visible grades go stale.
+        - alert: PawtograderRecalcStalled
+          expr: |
+            pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"} > 1000
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder gradebook recalc queue is stalled"
+            description: >-
+              The gradebook row-recalculate queue in {{ $ns }} has exceeded 1000
+              for 3m — recalculation is not keeping pace and student-visible grades
+              may be stale.
+        # Async dead-letter queue is filling — webhook/repo/async jobs are failing
+        # repeatedly and landing in the DLQ.
+        - alert: PawtograderAsyncDLQGrowing
+          expr: |
+            pawtograder_async_dlq_size{namespace="{{ $ns }}"} > 200
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async DLQ is growing"
+            description: >-
+              The async dead-letter queue in {{ $ns }} has exceeded 200 for 1m —
+              jobs are failing repeatedly. Inspect the DLQ and the failing job class.
+        # Async worker queue has a large backlog — enqueue rate outpaces workers.
+        - alert: PawtograderAsyncQueueBacklog
+          expr: |
+            pawtograder_async_queue_size{namespace="{{ $ns }}"} > 1000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async queue backlog is high"
+            description: >-
+              The async worker queue in {{ $ns }} has exceeded 1000 for 5m — the
+              enqueue rate is outpacing worker drain. Check worker health/scaling.
+        # Async worker queue is not draining — a small backlog that persists for an
+        # hour means stuck/starved workers rather than a burst.
+        - alert: PawtograderAsyncQueueStuck
+          expr: |
+            pawtograder_async_queue_size{namespace="{{ $ns }}"} > 10
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async queue is not draining"
+            description: >-
+              The async worker queue in {{ $ns }} has held above 10 for 1h — the
+              workers are stuck or starved rather than handling a burst. Check
+              worker liveness.
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and
