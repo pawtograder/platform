@@ -16,25 +16,42 @@ import { Octokit, RequestError } from "npm:octokit";
 // helpers under test never authenticate, so set a placeholder before importing the module (dynamic
 // import so the env is set first — static imports would hoist above this).
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertSourceNotEmpty, isRepoEmpty, NonRetryableRepoError } = await import("./GitHubWrapper.ts");
+const {
+  assertSourceNotEmpty,
+  getTeamAndCreateIfNeeded,
+  isRepoEmpty,
+  isTeamAlreadyExistsError,
+  NonRetryableRepoError,
+  resolveExistingTeamSlug
+} = await import("./GitHubWrapper.ts");
 
 type Handler = (params: Record<string, unknown>) => unknown;
 
 function fakeOctokit(handlers: Record<string, Handler>): Octokit {
+  const call = async (route: string, params: Record<string, unknown>) => {
+    const h = handlers[route];
+    if (!h) throw new Error(`unexpected route: ${route}`);
+    return await h(params);
+  };
   return {
-    request: async (route: string, params: Record<string, unknown>) => {
-      const h = handlers[route];
-      if (!h) throw new Error(`unexpected route: ${route}`);
-      return await h(params);
-    }
+    request: call,
+    // paginate returns the concatenated items; our list handlers return the array directly.
+    paginate: async (route: string, params: Record<string, unknown>) => await call(route, params)
   } as unknown as Octokit;
 }
 
-function requestError(status: number, message = "error"): RequestError {
+function requestError(status: number, message = "error", data: unknown = {}): RequestError {
   return new RequestError(message, status, {
     request: { method: "GET", url: "https://api.github.com/x", headers: {} },
     // deno-lint-ignore no-explicit-any
-    response: { status, url: "https://api.github.com/x", headers: {}, data: {} } as any
+    response: { status, url: "https://api.github.com/x", headers: {}, data } as any
+  });
+}
+
+// GitHub's 422 for a duplicate team name: structured `code: "already_exists"` on a Team resource.
+function teamAlreadyExistsError(): RequestError {
+  return requestError(422, "Validation Failed", {
+    errors: [{ resource: "Team", code: "already_exists", field: "name" }]
   });
 }
 
@@ -112,4 +129,166 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
     NonRetryableRepoError
   );
   assertEquals(err.message.includes("not found"), true);
+});
+
+// --- Idempotent team creation (getTeamAndCreateIfNeeded) ---
+
+Deno.test("isTeamAlreadyExistsError: 422 already_exists -> true", () => {
+  assertEquals(isTeamAlreadyExistsError(teamAlreadyExistsError()), true);
+});
+
+Deno.test("isTeamAlreadyExistsError: 422 with 'Name must be unique' message -> true", () => {
+  assertEquals(isTeamAlreadyExistsError(requestError(422, "Name must be unique for this org")), true);
+});
+
+Deno.test("isTeamAlreadyExistsError: unrelated 422 / 404 / non-RequestError -> false", () => {
+  assertEquals(isTeamAlreadyExistsError(requestError(422, "Some other validation error")), false);
+  assertEquals(isTeamAlreadyExistsError(requestError(404, "Not Found")), false);
+  assertEquals(isTeamAlreadyExistsError(new Error("already exists")), false);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: team exists -> returns it without creating", async () => {
+  let posted = false;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => ({ data: { id: 7, slug: "cs101-staff" } }),
+    "POST /orgs/{org}/teams": () => {
+      posted = true;
+      return { data: { id: 999 } };
+    }
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 7);
+  assertEquals(posted, false);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: 404 then create -> returns new team", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "POST /orgs/{org}/teams": () => ({ data: { id: 42, slug: "cs101-staff" } })
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 42);
+});
+
+// The regression: GET 404s (race / slug mismatch) but POST then 422s because the team already
+// exists. Previously this threw; now it re-fetches the existing team instead.
+Deno.test("getTeamAndCreateIfNeeded: 404 then 422-already-exists -> re-fetches existing team", async () => {
+  let getCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      getCalls++;
+      if (getCalls === 1) throw requestError(404, "Not Found");
+      return { data: { id: 55, slug: "cs101-staff" } };
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
+    }
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 55);
+  assertEquals(getCalls, 2);
+});
+
+Deno.test("getTeamAndCreateIfNeeded: unexpected 500 on GET rethrows", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);
+});
+
+// Out-of-band team whose GitHub-normalized slug differs from the requested name: GET by the
+// requested slug 404s, POST 422s, re-GET 404s, so we locate it in the org team list and return it
+// under its ACTUAL slug (so callers issue subsequent member calls against the right slug).
+Deno.test("getTeamAndCreateIfNeeded: 422 then slug mismatch -> resolves via org team list", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (p.team_slug === "cs101-staff") throw requestError(404, "Not Found");
+      return { data: { id: 88, slug: p.team_slug } };
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 88, slug: "cs-101-staff", name: "cs101-staff" }]
+  });
+  const team = await getTeamAndCreateIfNeeded("org", "cs101-staff", octokit);
+  assertEquals(team.data.id, 88);
+  assertEquals(team.data.slug, "cs-101-staff");
+});
+
+// A transient (non-404) failure on the post-422 re-fetch must propagate, not be masked by the
+// full-team-scan fallback.
+Deno.test("getTeamAndCreateIfNeeded: 422 then non-404 on re-fetch -> rethrows", async () => {
+  let getCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      getCalls++;
+      if (getCalls === 1) throw requestError(404, "Not Found");
+      throw requestError(500, "Server Error");
+    },
+    "POST /orgs/{org}/teams": () => {
+      throw teamAlreadyExistsError();
+    }
+  });
+  await assertRejects(() => getTeamAndCreateIfNeeded("org", "cs101-staff", octokit), RequestError);
+});
+
+// --- Non-creating slug resolution (resolveExistingTeamSlug) ---
+// Uses a distinct org/slug per test since resolution is memoized per (org, requestedSlug).
+
+Deno.test("resolveExistingTeamSlug: team exists under requested slug -> returns actual slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => ({ data: { id: 1, slug: p.team_slug } })
+  });
+  assertEquals(await resolveExistingTeamSlug("org-a", "cs101-staff", octokit), "cs101-staff");
+});
+
+Deno.test("resolveExistingTeamSlug: 404 then normalized slug in org list -> returns normalized slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 2, slug: "cs-101-students", name: "cs101-students" }]
+  });
+  assertEquals(await resolveExistingTeamSlug("org-b", "cs101-students", octokit), "cs-101-students");
+});
+
+Deno.test("resolveExistingTeamSlug: 404 and no match -> falls back to requested slug, not cached", async () => {
+  // Team doesn't exist yet on the first call, then a later team-sync creates it. The no-match
+  // fallback must NOT be cached, so the retry in the same isolate picks up the real slug.
+  let teamExists = false;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (teamExists) return { data: { id: 3, slug: p.team_slug } };
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => (teamExists ? [{ id: 3, slug: "cs101-staff", name: "cs101-staff" }] : [])
+  });
+  assertEquals(await resolveExistingTeamSlug("org-c", "cs101-staff", octokit), "cs101-staff");
+  teamExists = true;
+  assertEquals(await resolveExistingTeamSlug("org-c", "cs101-staff", octokit), "cs101-staff");
+});
+
+// Ambiguous string concatenation (org "a-b" + "-" + "c" === org "a" + "-" + "b-c") must not collide:
+// each course resolves to its own team even in a warm isolate sharing the cache.
+Deno.test("resolveExistingTeamSlug: distinct org/slug pairs don't collide in cache", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => ({ data: { id: 9, slug: `${p.org}::${p.team_slug}` } })
+  });
+  assertEquals(await resolveExistingTeamSlug("a-b", "c", octokit), "a-b::c");
+  assertEquals(await resolveExistingTeamSlug("a", "b-c", octokit), "a::b-c");
+});
+
+// A transient (non-404) error must propagate rather than trigger the team-list fallback, so callers
+// don't silently sync against the wrong (fallback literal) slug on a blip.
+Deno.test("resolveExistingTeamSlug: non-404 error -> rethrows", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => resolveExistingTeamSlug("org-d", "cs101-staff", octokit), RequestError);
 });
