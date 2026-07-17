@@ -202,7 +202,7 @@ procedure A by hand before each term.
 ## Restore-drill: expected errors and the FK-integrity caveat
 
 The `restoreDrill` judges recoverability by the **row-count assertion**, not by
-`pg_restore`'s exit code, because a logical restore into a *renamed* scratch DB
+`pg_restore`'s exit code, because a logical restore into a _renamed_ scratch DB
 always emits some benign errors. Two classes are expected and ignored:
 
 - **pg_cron** — the extension can only be created in the DB named by
@@ -220,7 +220,7 @@ always emits some benign errors. Two classes are expected and ignored:
   still succeeds, so `PawtograderBackupVerifyJobFailed` does **not** fire. Treat
   FK errors as a **manual log-review signal** — scan the drill's logs
   (`kubectl -n "$NS" logs job/<restore-drill-job>`) for `violates foreign key
-  constraint`; the alert will not surface them. Clean the orphans at the source
+constraint`; the alert will not surface them. Clean the orphans at the source
   per the FK's own `ON DELETE` semantics, then the next dump restores clean:
 
   ```sql

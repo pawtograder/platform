@@ -76,10 +76,10 @@ the age of the last backup) and confirm a human actually gets paged.
 | `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | below                                                    |
 | `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
 | `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                              | below                                                    |
-| `PawtograderRecalcStalled`                | critical | gradebook row-recalculate queue > 1000 for 3m — grades going stale                                                              | below                                                    |
-| `PawtograderAsyncDLQGrowing`              | critical | async dead-letter queue > 200 for 1m — jobs failing repeatedly                                                                  | below                                                    |
-| `PawtograderAsyncQueueBacklog`            | critical | async worker queue > 1000 for 5m — enqueue outpacing drain                                                                      | below                                                    |
-| `PawtograderAsyncQueueStuck`              | critical | async worker queue > 10 for 1h — workers stuck/starved                                                                          | below                                                    |
+| `PawtograderRecalcStalled`                | critical | gradebook row-recalculate queue > 1000 for 3m — grades going stale                                                               | below                                                    |
+| `PawtograderAsyncDLQGrowing`              | critical | async dead-letter queue > 200 for 1m — jobs failing repeatedly                                                                   | below                                                    |
+| `PawtograderAsyncQueueBacklog`            | critical | async worker queue > 1000 for 5m — enqueue outpacing drain                                                                       | below                                                    |
+| `PawtograderAsyncQueueStuck`              | critical | async worker queue > 10 for 1h — workers stuck/starved                                                                           | below                                                    |
 
 The last four (group `pawtograder.app`) are app-level KPI alerts, converted from
 the Grafana-managed rules that run against staging, so the same thresholds now
@@ -144,9 +144,9 @@ relying on the alert.
 > `pg_stat_statements_top` custom query is aggregated by `queryid`.
 > `pg_stat_statements` holds one row per `(userid, dbid, toplevel, queryid)`, so
 > selecting `queryid` + query text directly produced duplicate `(queryid,
-> query_preview)` label sets whenever a statement ran under more than one
+query_preview)` label sets whenever a statement ran under more than one
 > role/db — which made the exporter's client library return **HTTP 500 for the
-> entire `/metrics` endpoint**, taking down *all* postgres metrics (the target
+> entire `/metrics` endpoint**, taking down _all_ postgres metrics (the target
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
 

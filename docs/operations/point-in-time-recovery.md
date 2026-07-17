@@ -250,8 +250,8 @@ Off by default. Enable in prod:
 backup:
   pitrDrill:
     enabled: true
-    schedule: "0 9 * * 1"   # weekly, after the dump restoreDrill (08:00)
-    scratchSize: 60Gi        # ≥ physical PGDATA size (all DBs + WAL)
+    schedule: "0 9 * * 1" # weekly, after the dump restoreDrill (08:00)
+    scratchSize: 60Gi # ≥ physical PGDATA size (all DBs + WAL)
     # Optional point-in-time precision assertion: a busy timestamptz column.
     # When set, asserts ZERO rows newer than the target (replay stopped AT it).
     # recencyTable: "public.audit"
@@ -273,8 +273,8 @@ volume.
 **Why it reads params from the control file.** Hot-standby recovery requires
 `max_connections` (and `max_worker_processes`, `max_wal_senders`,
 `max_prepared_transactions`, `max_locks_per_transaction`) be **≥ the primary's
-values at backup time**, else postgres FATALs with *"recovery aborted because of
-insufficient parameter settings"*. The primary sets these via a mounted config
+values at backup time**, else postgres FATALs with _"recovery aborted because of
+insufficient parameter settings"_. The primary sets these via a mounted config
 the drill doesn't use, so the drill reads the recorded values from
 `pg_controldata "$PGDATA"` and writes them into `postgresql.auto.conf` — no
 hardcoding, always matches the backup.
