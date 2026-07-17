@@ -192,8 +192,45 @@ the newest object and fails loudly on three conditions. Triage by the log line:
 | `newest backup is older than 48h`         | Backups stopped producing output | The CronJob isn't running or its jobs are failing. Check for suspended CronJob, failed jobs, or the ARC/`dind` runner-style infra issues that stall scheduled work.                                               |
 
 `backup-verify` is a **structural** check (TOC parse + freshness); it does not
-prove the data restores. Run the scratch restore (procedure A) by hand before
-each term as the real rehearsal.
+prove the data restores. The weekly `restoreDrill` CronJob does the real
+rehearsal automatically (full restore into a scratch DB, asserts `assertTable`
+has ≥ `assertMinRows`), but still run procedure A by hand before each term.
+
+## Restore-drill: expected errors and the FK-integrity caveat
+
+The `restoreDrill` judges recoverability by the **row-count assertion**, not by
+`pg_restore`'s exit code, because a logical restore into a *renamed* scratch DB
+always emits some benign errors. Two classes are expected and ignored:
+
+- **pg_cron** — the extension can only be created in the DB named by
+  `cron.database_name` (`postgres`), so restoring into `restore_drill_*` errors
+  on `CREATE EXTENSION pg_cron` and its `cron.*` COPYs. Always benign.
+- **FK violations on constraint re-add** — if production holds rows that violate
+  a constraint that is nonetheless marked `VALID`, re-adding it during a clean
+  rebuild re-validates and fails. This is the signature of data loaded with
+  triggers bypassed (`session_replication_role = replica`, as a `pg_restore` or
+  logical-replication import does) — the orphan rows were inserted, or their
+  parents deleted, without the FK trigger firing, yet the constraint stayed
+  `convalidated=t`. **This is a real production data-integrity signal, not a
+  drill bug.** Clean the orphans at the source per the FK's own `ON DELETE`
+  semantics, then the next dump restores clean:
+
+  ```sql
+  -- find them (VALID constraint + violating rows):
+  SELECT conname, convalidated FROM pg_constraint WHERE conname = '<fkey>';
+  -- fix per ON DELETE: CASCADE -> DELETE the orphans; SET NULL -> NULL the column.
+  ```
+
+  Two such orphans were found and cleaned in July 2026
+  (`auth.mfa_amr_claims.session_id`, ON DELETE CASCADE → deleted;
+  `public.assignment_leaderboard.submission_id`, ON DELETE SET NULL → nulled),
+  from the initial trigger-bypassed load into this instance.
+
+Two safety properties of the drill: it sets `session_replication_role = replica`
+on the scratch DB **before** restoring, so no app triggers (audit, notifications,
+`pg_net` webhooks) fire against live infrastructure; and it drops the scratch DB
+`WITH (FORCE)`, so a run killed mid-restore never orphans a full-size copy on the
+primary's PVC (a prior no-FORCE run left a 27 GB orphan until the next reap).
 
 ## Alerting
 

@@ -234,6 +234,56 @@ the live database. The lowest-risk path is to treat the recovered data dir as a
 
 ---
 
+## Automated PITR drill (`backup.pitrDrill`)
+
+`backup-verify` and the dump `restoreDrill` (see [disaster-recovery.md](./disaster-recovery.md))
+exercise the **logical dump** path — they never replay WAL, so neither proves
+PITR. The `pitrDrill` CronJob is the only check that does: it fetches the newest
+wal-g base backup into a **throwaway generic-ephemeral volume** (never the live
+`PGDATA`), replays archived WAL to a target `targetLagMinutes` in the past,
+promotes, asserts `assertTable` has ≥ `assertMinRows`, then tears down (the
+ephemeral PVC dies with the pod).
+
+Off by default. Enable in prod:
+
+```yaml
+backup:
+  pitrDrill:
+    enabled: true
+    schedule: "0 9 * * 1"   # weekly, after the dump restoreDrill (08:00)
+    scratchSize: 60Gi        # ≥ physical PGDATA size (all DBs + WAL)
+    # Optional point-in-time precision assertion: a busy timestamptz column.
+    # When set, asserts ZERO rows newer than the target (replay stopped AT it).
+    # recencyTable: "public.audit"
+    # recencyColumn: "created_at"
+```
+
+Run on demand:
+
+```bash
+kubectl -n "$NS" create job pitr-adhoc --from=cronjob/<release>-backup-pitr-drill
+kubectl -n "$NS" logs -f job/pitr-adhoc   # want: "PITR DRILL PASSED"
+```
+
+**Safety:** the scratch cluster starts `archive_mode=off` with a no-op
+`archive_command`, so it can never `wal-push` into the live `WALG_S3_PREFIX`; it
+only `wal-fetch`es (reads). It binds `127.0.0.1:5433` and is torn down with its
+volume.
+
+**Why it reads params from the control file.** Hot-standby recovery requires
+`max_connections` (and `max_worker_processes`, `max_wal_senders`,
+`max_prepared_transactions`, `max_locks_per_transaction`) be **≥ the primary's
+values at backup time**, else postgres FATALs with *"recovery aborted because of
+insufficient parameter settings"*. The primary sets these via a mounted config
+the drill doesn't use, so the drill reads the recorded values from
+`pg_controldata "$PGDATA"` and writes them into `postgresql.auto.conf` — no
+hardcoding, always matches the backup.
+
+Validated on prod: recovers to the target commit, promotes to a new timeline,
+asserts row count, cleans up — no orphan scratch DB or volume.
+
+---
+
 ## Operational notes
 
 - **Retention window ≈ `baseBackup.intervalHours × keepBackups`.** WAL older than

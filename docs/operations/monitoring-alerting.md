@@ -40,10 +40,21 @@ deploys neither Prometheus nor Grafana). Two pieces:
 >       release: kube-prometheus-stack # ← your kps release name
 > ```
 
-Routing (who gets paged, which channel) is Alertmanager config and lives with
-the cluster monitoring stack, not this chart. Map `severity: critical` to a page
-and `severity: warning` to a chat channel per your on-call setup — see
-[incident-response.md](./incident-response.md).
+Routing (who gets paged, which channel) is Alertmanager config. Map
+`severity: critical` to a page and `severity: warning` to a chat channel per
+your on-call setup — see [incident-response.md](./incident-response.md).
+
+The chart ships an **off-by-default routing scaffold** at
+`monitoring.alertmanagerConfig` (`templates/alertmanager-config.yaml`): a
+prometheus-operator `AlertmanagerConfig` CR that routes by the `severity` label
+(critical → `1h` repeat, warning → `12h`) with placeholder webhook receivers
+reading their URLs from a Secret. It's the resource Grafana Alloy's
+`mimir.alerts.kubernetes` syncs into Mimir. To use it: set
+`alertmanagerConfig.enabled=true`, set `labels` to match Alloy's
+`alertmanagerconfig_selector`, create the webhook Secret, and swap the
+`webhookConfigs` for `slackConfigs`/`emailConfigs`/`discordConfigs`/etc. The
+route tree is agnostic to which rules fire, so it covers the infra and
+`pawtograder.app` alerts alike.
 
 A selected rule is still inert if no receiver matches it, and nothing in the
 chart can detect that. Before go-live, prove the path end-to-end once: fire a
@@ -65,6 +76,15 @@ the age of the last backup) and confirm a human actually gets paged.
 | `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | below                                                    |
 | `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
 | `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                              | below                                                    |
+| `PawtograderRecalcStalled`                | critical | gradebook row-recalculate queue > 1000 for 3m — grades going stale                                                              | below                                                    |
+| `PawtograderAsyncDLQGrowing`              | critical | async dead-letter queue > 200 for 1m — jobs failing repeatedly                                                                  | below                                                    |
+| `PawtograderAsyncQueueBacklog`            | critical | async worker queue > 1000 for 5m — enqueue outpacing drain                                                                      | below                                                    |
+| `PawtograderAsyncQueueStuck`              | critical | async worker queue > 10 for 1h — workers stuck/starved                                                                          | below                                                    |
+
+The last four (group `pawtograder.app`) are app-level KPI alerts, converted from
+the Grafana-managed rules that run against staging, so the same thresholds now
+evaluate in Prometheus/Mimir. All page (`critical`), matching the originals'
+uniform routing.
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`).
@@ -105,10 +125,30 @@ Each alert's expression depends on an exporter being present in the cluster:
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`
   (`certmanager_certificate_expiration_timestamp_seconds`).
+- app KPI alerts (`pawtograder.app`) → the **`metrics` edge function**
+  (`pawtograder_async_queue_size`, `pawtograder_async_dlq_size`,
+  `pawtograder_gradebook_row_recalculate_queue_size`). These are **not**
+  postgres_exporter series — they are served at `/metrics` on the edge-functions
+  service and scraped by the `edge-functions` ServiceMonitor. That endpoint is
+  gated by a `Bearer` token **only when `METRICS_TOKEN` is set** (the function
+  serves open `/metrics` otherwise); the ServiceMonitor sends the token from the
+  edge-functions Secret with `optional: true`, so an install without the token
+  still scrapes. If you set `METRICS_TOKEN` but the ServiceMonitor can't read it,
+  the target 401s and the whole `pawtograder.app` group goes dark.
 
 If an exporter is absent, that series is simply missing and the alert never
 fires (it does not error). Confirm the series exist in your Prometheus before
 relying on the alert.
+
+> **Scrape-target gotcha (fixed):** the postgres_exporter's
+> `pg_stat_statements_top` custom query is aggregated by `queryid`.
+> `pg_stat_statements` holds one row per `(userid, dbid, toplevel, queryid)`, so
+> selecting `queryid` + query text directly produced duplicate `(queryid,
+> query_preview)` label sets whenever a statement ran under more than one
+> role/db — which made the exporter's client library return **HTTP 500 for the
+> entire `/metrics` endpoint**, taking down *all* postgres metrics (the target
+> read "down"). Summing per `queryid` keeps each series unique. If you add custom
+> queries, ensure their label sets are unique or you will re-break the endpoint.
 
 ---
 
@@ -117,10 +157,10 @@ relying on the alert.
 After install (see [production-install.md](./production-install.md)):
 
 1. **Rules loaded.** In Prometheus → Status → Rules, the `pawtograder.backup`,
-   `pawtograder.secrets`, and `pawtograder.certs` groups appear, plus
-   `pawtograder.walg` when `postgres.walg` is enabled and `pawtograder.postgres`
-   when `postgres` is deployed. If they don't, the `prometheusRules.labels`
-   selector doesn't match — fix it first.
+   `pawtograder.secrets`, `pawtograder.certs`, and `pawtograder.app` groups
+   appear, plus `pawtograder.walg` when `postgres.walg` is enabled and
+   `pawtograder.postgres` when `postgres` is deployed. If they don't, the
+   `prometheusRules.labels` selector doesn't match — fix it first.
 2. **Series exist.** Query each metric above in Prometheus and confirm it
    returns data for the release namespace.
 3. **Fire a test.** Delete a synced Secret (or point an ExternalSecret at a bad
