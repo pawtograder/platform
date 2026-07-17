@@ -140,13 +140,13 @@ If an exporter is absent, that series is simply missing and the alert never
 fires (it does not error). Confirm the series exist in your Prometheus before
 relying on the alert.
 
-> **Scrape-target gotcha (fixed):** the postgres_exporter's
+> **Scrape-target gotcha (fixed):** the postgres*exporter's
 > `pg_stat_statements_top` custom query is aggregated by `queryid`.
 > `pg_stat_statements` holds one row per `(userid, dbid, toplevel, queryid)`, so
 > selecting `queryid` + query text directly produced duplicate `(queryid,
 query_preview)` label sets whenever a statement ran under more than one
 > role/db — which made the exporter's client library return **HTTP 500 for the
-> entire `/metrics` endpoint**, taking down _all_ postgres metrics (the target
+> entire `/metrics` endpoint**, taking down \_all* postgres metrics (the target
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
 
