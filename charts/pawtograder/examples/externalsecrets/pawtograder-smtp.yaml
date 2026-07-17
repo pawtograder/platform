@@ -1,7 +1,7 @@
 # Operator-authored ExternalSecret for the base `pawtograder-smtp` Secret.
 # Not chart-rendered; apply before the first helm upgrade.
 #
-# GoTrue reads these four keys by name (templates/auth.yaml). The sender name
+# GoTrue reads these five keys by name (templates/auth.yaml). The sender name
 # is set from auth.smtp.senderName in values, not from this Secret, so
 # SMTP_SENDER_NAME is intentionally absent.
 apiVersion: external-secrets.io/v1

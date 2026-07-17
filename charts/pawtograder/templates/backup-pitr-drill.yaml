@@ -38,6 +38,13 @@ spec:
     spec:
       backoffLimit: 1
       activeDeadlineSeconds: {{ .Values.backup.pitrDrill.activeDeadlineSeconds | default 5400 }}
+      # Delete the finished Job — and with it the pod and the generic ephemeral
+      # scratch PVC (scratchSize, 100Gi by default) — shortly after it ends,
+      # instead of letting successfulJobsHistoryLimit + failedJobsHistoryLimit
+      # (up to 6 Jobs) pin that many full-size volumes. The window still leaves
+      # a failed run's logs inspectable. `dig` (not `| default`) so 0 (delete
+      # immediately) is settable — sprig's `default` would treat 0 as empty.
+      ttlSecondsAfterFinished: {{ dig "ttlSecondsAfterFinished" 3600 .Values.backup.pitrDrill }}
       template:
         metadata:
           labels:

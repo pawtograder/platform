@@ -112,8 +112,8 @@ permissions. Grant exactly these (least privilege):
 
 **Account permissions**
 
-| Permission          | Access | Why                                                                 |
-| ------------------- | ------ | ------------------------------------------------------------------- |
+| Permission          | Access | Why                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Email addresses** | Read   | **Required for sign-in.** GoTrue's GitHub provider calls `GET /user/emails` on every login/identity-link. Without this, GitHub returns `403 Resource not accessible by integration`, GoTrue answers `500 Error getting user profile from external provider`, and the user is bounced back with `?error=server_error&error_code=unexpected_failure`. |
 
 > Because Pawtograder authenticates users through the **GitHub App** (not a

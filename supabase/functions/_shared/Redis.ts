@@ -211,9 +211,7 @@ export function getBottleneckConnection(): Bottleneck.IORedisConnection | null {
     clientOptions: opts.clientOptions,
     Redis: opts.Redis
   });
-  sharedBottleneckConnection.on("error", (e: Error) =>
-    console.error("shared Bottleneck Redis connection error", e)
-  );
+  sharedBottleneckConnection.on("error", (e: Error) => console.error("shared Bottleneck Redis connection error", e));
   return sharedBottleneckConnection;
 }
 

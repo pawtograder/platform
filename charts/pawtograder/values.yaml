@@ -1330,6 +1330,10 @@ backup:
     activeDeadlineSeconds: 5400
     startingDeadlineSeconds: 1800
     startupTimeoutSeconds: 3600
+    # Reclaim the finished Job + its full-size ephemeral scratch PVC this many
+    # seconds after completion (0 = delete immediately), so retained Job history
+    # doesn't pin multiple 100Gi scratch volumes.
+    ttlSecondsAfterFinished: 3600
     # Scratch volume must hold a full copy of PGDATA. Size >= live DB size.
     scratchSize: 100Gi
     # How far back to target. Must exceed archiver lag (seconds) with margin.

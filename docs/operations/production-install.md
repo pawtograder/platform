@@ -56,7 +56,7 @@ without their secrets and storage. Do them in this order.
       release, synced via ESO: deploy the instance from
       [`charts/pawtograder/examples/shared-redis/`](../../charts/pawtograder/examples/shared-redis/)
       and populate its OpenBao path with `setup-openbao-redis-shared.sh
-    --bao-path apps/pawtograder/redis-production` (it defaults to the
+--bao-path apps/pawtograder/redis-production` (it defaults to the
       `redis-shared` path, so pass `--bao-path`); the chart then syncs it into
       `pawtograder-redis` via `templates/redis-externalsecret.yaml`. Redis state
       is reconstructable either way — losing it is not data loss.
