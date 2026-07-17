@@ -201,18 +201,26 @@ the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
 realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
 in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
-### Edge-function credentials via OpenBao + ESO
+### Integration credentials via OpenBao + ESO
 
-`pawtograder-edge-functions` carries every external-integration secret the
-edge runtime consumes — GitHub App, AWS Chime, Discord, Canvas, SIS,
-SMTP, MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways
-to provision it:
+`pawtograder-web` carries Next.js / GoTrue runtime secrets (OAuth client
+credentials, LTI, Discord webhook public keys, web-only LLM config).
+`pawtograder-edge-functions` carries every external-integration secret the edge
+runtime consumes — GitHub App, AWS Chime, Discord bot, Canvas, SIS, SMTP,
+MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways to provision
+them:
 
 1. **OpenBao + External Secrets Operator** (recommended for staging/prod).
    One operator step per integration ("bundle") per environment:
 
    ```sh
-   # github-app bundle
+   # Web-app bundle (GoTrue OAuth, LTI, Discord public keys, etc.)
+   scripts/setup-openbao-edge-functions.sh \
+     --env production \
+     --bundle web \
+     --from-file .secrets/web-production.env
+
+   # github-app bundle for edge functions
    scripts/setup-openbao-edge-functions.sh \
      --env preview \
      --bundle github-app \
@@ -246,26 +254,29 @@ to provision it:
    secrets:
      externalSecret:
        enabled: true
-       env: preview
-       bundles:
+       env: production
+       webBundles:
+         - web
+       edgeFunctionsBundles:
          - github-app
          - aws-chime
    ```
 
-   The chart renders one `ExternalSecret` with a `dataFrom: extract`
-   entry per bundle. ESO syncs them all into
-   `pawtograder-edge-functions` with `creationPolicy: Owner`. Adding a
-   new env var to an existing bundle is "edit the script's
-   `BUNDLE_KEYS`, rerun the script" — no chart change.
+   The chart renders one `ExternalSecret` per target Secret. Each has a
+   `dataFrom: extract` entry per bundle. ESO syncs web bundles into
+   `pawtograder-web` and edge bundles into `pawtograder-edge-functions` with
+   `creationPolicy: Owner`. Adding a new env var to an existing bundle is
+   "edit the script's `BUNDLE_KEYS`, rerun the script" — no chart change.
 
    When `externalSecret.enabled=true` the chart's stub-generation path
    (for E2E previews) is automatically suppressed so ESO is the
    unambiguous owner.
 
-2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.).
-   Just make sure `pawtograder-edge-functions` exists in the release
-   namespace with whichever env vars your deploy uses; the edge runtime
-   checks every integration before use, so missing keys are tolerated.
+2. **Hand-provisioned Secrets** (sealed-secrets, `kubectl create`, etc.).
+   Just make sure `pawtograder-web` and/or `pawtograder-edge-functions` exist in
+   the release namespace with whichever env vars your deploy uses. The web and
+   edge pods mount those Secrets by name; optional integrations tolerate missing
+   keys until their feature path is used.
 
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }
@@ -413,21 +424,53 @@ Register that exact URL in the provider's OAuth app (override per provider with
 worked example (Google + Microsoft + GitHub) is in
 [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
 
+### Custom email templates
+
+GoTrue's transactional emails (invite / confirmation / recovery / magic-link /
+email-change) can be branded per deployment. Enable it with:
+
+```yaml
+auth:
+  mailer:
+    templates:
+      enabled: true
+```
+
+This runs a tiny `mail-templates` sidecar in the auth pod that serves the
+template HTML on `127.0.0.1`, and points GoTrue's `GOTRUE_MAILER_TEMPLATES_*`
+at it. A sidecar is required because GoTrue's mailer fetches templates over
+**http(s) only — there is no `file://` support**, so a bare ConfigMap mount
+does not work. If a fetch ever fails, GoTrue falls back to its built-in
+default template, so email delivery degrades gracefully.
+
+Defaults are the chart-bundled files under
+[`email-templates/`](./email-templates); their links route through the web
+app's own `/auth/*` pages via `token_hash` (e.g.
+`{{ .SiteURL }}/auth/reset-password?token_hash={{ .TokenHash }}&type=email`).
+Override any body with raw HTML via `auth.mailer.templates.files.<name>`
+(`invite`, `confirmation`, `recovery`, `magicLink`, `emailChange`), and set
+custom subject lines via `auth.mailer.templates.subjects.<name>` (empty →
+GoTrue's default subject). Bodies are Go `html/template` with GoTrue's
+variables (`{{ .ConfirmationURL }}`, `{{ .TokenHash }}`, `{{ .SiteURL }}`,
+`{{ .Email }}`, `{{ .NewEmail }}`, …).
+
 ## Deploying production
 
 Start from `examples/values-prod.yaml` — it is a documented template, not a
 deployable file: copy it into your deployment repo and fill in the hostname,
-storage classes, S3 endpoints, and pinned image tags. The full gap analysis
-that drove the production hardening (and the items still deferred — postgres
-HA, WAL archiving/PITR) lives in [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
+storage classes, S3 endpoints, alert labels, and pinned image tags. The full
+gap analysis that drove the production hardening (and the items still
+deferred — automatic postgres failover, per-service metrics auth) lives in
+[PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**
   (`templates/validations.yaml`): the chart refuses to render with e2e
   bypasses, `secrets.create`/`autogenerate`, `seed.enabled`,
-  `migrations.resetOnDrift`, floating `-latest` image tags, or a Studio
-  ingress without basic-auth. Staging arms a smaller subset.
+  `migrations.resetOnDrift`, floating or unpinned image tags, an empty
+  `postgres.persistence.storageClass`, unset/blank PrometheusRule labels, or
+  a Studio ingress without basic-auth. Staging arms a smaller subset.
 - **NetworkPolicies** (`networkPolicy.enabled=true`): default-deny ingress
   to every release pod, with allows for intra-release traffic, the ingress
   controller's namespace (→ web/kong/studio), and the monitoring namespace.
@@ -454,11 +497,13 @@ box (3 pods × ~1 GiB each). Raise `realtime.replicas` to scale further; pods
 discover each other through the headless Service for fan-out across the
 cluster.
 
-## Postgres replica (planned)
+## Postgres standby
 
-The current release ships a single-primary postgres. A read replica will be
-added in a future minor release; for now, scale realtime/rest horizontally
-and rely on supavisor to absorb connection bursts.
+The chart can run an optional streaming standby (`postgres.replica`) backed by
+WAL-G archiving (`postgres.walg`). It is a warm manual failover target and
+read-only service, not automatic HA: promotion is operator-driven to avoid
+split-brain against the shared WAL archive. See
+[`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md).
 
 ## Required postgres extensions
 
@@ -550,7 +595,7 @@ these metric names directly.
 
 ### Dashboards
 
-Five dashboards land in the Grafana **Pawtograder** folder when
+Seven dashboards land in the Grafana **Pawtograder** folder when
 `monitoring.enabled=true`:
 
 | UID                              | Title              | Covers                                    |
@@ -560,10 +605,12 @@ Five dashboards land in the Grafana **Pawtograder** folder when
 | `pawtograder-realtime`           | Realtime Fanout    | connection churn, broadcast rate, Erlang VM load |
 | `pawtograder-edge-functions`     | Edge Functions     | per-function RPS / p95 / errors           |
 | `pawtograder-app-business`       | App Business       | submissions/min, grading actions, queue depth, per-class views |
+| `pawtograder-rate-limiting`      | Rate Limiting & Queues | GitHub Bottleneck backpressure, circuit-breaker state, async worker + dead-letter queue depths |
+| `pawtograder-edge-soak`          | Edge Soak / Resilience | edge HPA scaling, per-pod memory / OOMKills, worker cancel/kill events, function errors + throughput |
 
 Toggle individual dashboards via `monitoring.dashboards.{stackOverview,
-postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness}: false` if your
-platform team owns them out-of-band.
+postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness, rateLimiting,
+edgeSoak}: false` if your platform team owns them out-of-band.
 
 ### Logs
 

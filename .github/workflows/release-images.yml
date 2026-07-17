@@ -449,6 +449,9 @@ jobs:
             --wait-for-jobs \
             --timeout 15m
 
+      - name: helm smoke test pawtograder (staging)
+        run: helm test pawtograder -n pawtograder-staging --timeout 10m
+
       - name: Post-deploy status
         if: always()
         run: helm status pawtograder -n pawtograder-staging --kubeconfig "$HOME/.kube/config" || true

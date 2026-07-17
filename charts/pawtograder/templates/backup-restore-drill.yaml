@@ -1,0 +1,165 @@
+{{- /*
+Restore DRILL — the full-restore rehearsal that backup-verify deliberately
+stops short of. PRODUCTION-READINESS §1.4 shipped backup-verify (downloads the
+newest dump + `pg_restore --list` = TOC/integrity check, no scratch DB). That
+proves the archive parses, NOT that it restores into a working database. A dump
+can list cleanly yet fail to restore (missing role, extension ordering, a
+partial object). This CronJob closes that gap: it restores the newest dump into
+a throwaway database ON THE LIVE POSTGRES, asserts a sane row count in a core
+table, then drops the scratch DB.
+
+Off by default (it writes to the primary, briefly, under a unique DB name).
+Enable in production and schedule it well clear of the backup window. It is the
+automated form of the pre-term manual drill in docs/operations/disaster-recovery.md.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.backup.enabled .Values.backup.restoreDrill.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "backup-restore-drill") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-restore-drill") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.restoreDrill.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.backup.restoreDrill.startingDeadlineSeconds | default 1800 }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ .Values.backup.restoreDrill.activeDeadlineSeconds | default 3600 }}
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-restore-drill") | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: restore-drill
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              # bash, not sh — see backup.yaml (dash rejects pipefail).
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  # Same runtime mc install as backup.yaml (SHA-pinned).
+                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+                  curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
+                  echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
+                  chmod +x /usr/local/bin/mc
+                  mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+
+                  # Newest object (timestamped names sort chronologically).
+                  # `|| true`: under `set -euo pipefail`, a no-match grep exits 1
+                  # and pipefail would abort the script AT this assignment, before
+                  # the friendly guard below ever runs. Swallow it so an empty
+                  # bucket reaches the diagnostic instead of dying silently.
+                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
+                  if [ -z "$LATEST" ]; then
+                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"
+                    exit 1
+                  fi
+                  echo "[drill] restoring newest backup: $LATEST"
+                  mc cp "s3/${S3_BUCKET}/${LATEST}" /tmp/latest.dump
+
+                  # Reap ALL leftover scratch DBs from prior runs, not just this
+                  # run's name. A run SIGKILLed after CREATE DATABASE (deadline /
+                  # eviction / OOM) skips the EXIT trap and leaves a full-size
+                  # restore_drill_* copy on the LIVE primary; because each run
+                  # picks a NEW timestamped name, a per-name drop would never
+                  # reap those orphans and they would accumulate until the PVC
+                  # fills. Match by prefix and drop every one before starting.
+                  # WITH (FORCE): the scratch DB can hold lingering connections
+                  # (autovacuum, a background worker) that made a plain DROP fail
+                  # with "database is being accessed by other users", orphaning a
+                  # full-size copy. FORCE terminates them first (PG13+).
+                  psql -d postgres -v ON_ERROR_STOP=1 -tAc \
+                    "SELECT 'DROP DATABASE IF EXISTS \"' || datname || '\" WITH (FORCE);' FROM pg_database WHERE datname LIKE 'restore_drill_%';" \
+                    | psql -d postgres -v ON_ERROR_STOP=1 -f -
+
+                  # Unique scratch DB name so a leftover from a killed run never
+                  # collides with the current one.
+                  SCRATCH="restore_drill_$(date -u +%Y%m%d%H%M%S)"
+                  echo "[drill] scratch database: $SCRATCH"
+                  cleanup() { psql -d postgres -c "DROP DATABASE IF EXISTS \"$SCRATCH\" WITH (FORCE);" || true; }
+                  trap cleanup EXIT
+
+                  psql -d postgres -c "CREATE DATABASE \"$SCRATCH\";"
+
+                  # SAFETY: disable ALL triggers for every connection to the
+                  # scratch DB before restoring. A full -Fc restore into an empty
+                  # DB already creates triggers in the post-data phase (after the
+                  # COPY), so app row triggers (audit / notifications / pg_net
+                  # webhooks) don't fire on the restored rows. This makes that a
+                  # HARD guarantee independent of dump layout: if the dump ever
+                  # became --data-only (restoring into pre-existing triggered
+                  # tables), COPY would otherwise fire every side-effecting
+                  # trigger against live infrastructure. session_replication_role
+                  # = replica set at the database level covers pg_restore's own
+                  # connections too. FK triggers are off as well, which is fine —
+                  # this is a recoverability drill, not an integrity check.
+                  psql -d postgres -c "ALTER DATABASE \"$SCRATCH\" SET session_replication_role = replica;"
+
+                  # Real restore into the scratch DB. --no-owner/--no-acl so the
+                  # restore doesn't depend on every role existing; this is a
+                  # recoverability check, not a byte-for-byte clone.
+                  #
+                  # pg_restore exits non-zero if ANY object errored, but a logical
+                  # restore into a RENAMED db always errors on objects that only
+                  # live in the real `postgres` db (pg_cron + its cron.* tables),
+                  # and re-adding constraints prod holds as NOT VALID re-validates
+                  # and can fail. Neither means the data is unrecoverable — so
+                  # don't let pg_restore's exit code red the gate. Judge
+                  # recoverability by the row-count assertion below; a genuinely
+                  # empty/broken restore still fails there.
+                  pg_restore --no-owner --no-acl -d "$SCRATCH" /tmp/latest.dump \
+                    || echo "[drill] pg_restore reported ignored errors (above); validating via row count"
+
+                  # Assert the restored DB actually holds data: a core table must
+                  # exist and have a plausible row count. An empty/half restore
+                  # (that still listed cleanly) fails HERE, which is the point.
+                  TABLE="{{ .Values.backup.restoreDrill.assertTable }}"
+                  MIN="{{ .Values.backup.restoreDrill.assertMinRows }}"
+                  COUNT=$(psql -d "$SCRATCH" -tAc "SELECT count(*) FROM ${TABLE};")
+                  echo "[drill] restored ${TABLE} rows: ${COUNT} (require >= ${MIN})"
+                  if [ "${COUNT}" -lt "${MIN}" ]; then
+                    echo "[drill] FATAL: ${TABLE} has ${COUNT} rows (< ${MIN}) — restore is empty or incomplete"
+                    exit 1
+                  fi
+                  echo "[drill] restore drill PASSED for $LATEST"
+              env:
+                - name: PGHOST
+                  value: {{ include "pawtograder.postgres.host" . }}
+                - name: PGPORT
+                  value: {{ .Values.postgres.service.port | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database | quote }}
+                # supabase_admin: same superuser the restore runbook uses, so
+                # CREATE DATABASE + extension restores don't hit permission walls.
+                - name: PGUSER
+                  value: supabase_admin
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.postgres }}
+                      key: POSTGRES_PASSWORD
+                - name: S3_ENDPOINT
+                  value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ required "backup.s3.bucket is required when backup.enabled=true" .Values.backup.s3.bucket | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_SECRET_ACCESS_KEY
+{{- end }}

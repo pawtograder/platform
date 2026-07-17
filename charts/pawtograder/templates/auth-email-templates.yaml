@@ -1,0 +1,31 @@
+{{- if and .Values.auth.enabled .Values.auth.mailer.templates.enabled }}
+{{- /*
+GoTrue custom email templates, served to the auth pod over HTTP by the
+`mail-templates` sidecar (see auth.yaml). GoTrue's mailer (mailme) can only
+fetch templates over http(s) — it has no file:// transport — so a ConfigMap
+mount alone is not enough; the sidecar serves this ConfigMap on 127.0.0.1.
+
+Each entry defaults to the chart-bundled file under email-templates/ and can
+be overridden with raw HTML via auth.mailer.templates.files.<name>. Template
+bodies are Go html/template with GoTrue's variables ({{`{{ .ConfirmationURL }}`}},
+{{`{{ .TokenHash }}`}}, {{`{{ .SiteURL }}`}}, {{`{{ .Email }}`}}, {{`{{ .NewEmail }}`}}, …).
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "auth-email-templates") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
+data:
+  invite.html: |
+{{ .Values.auth.mailer.templates.files.invite | default (.Files.Get "email-templates/invite.html") | indent 4 }}
+  confirmation.html: |
+{{ .Values.auth.mailer.templates.files.confirmation | default (.Files.Get "email-templates/confirmation.html") | indent 4 }}
+  recovery.html: |
+{{ .Values.auth.mailer.templates.files.recovery | default (.Files.Get "email-templates/recovery.html") | indent 4 }}
+  magic-link.html: |
+{{ .Values.auth.mailer.templates.files.magicLink | default (.Files.Get "email-templates/magic-link.html") | indent 4 }}
+  email-change.html: |
+{{ .Values.auth.mailer.templates.files.emailChange | default (.Files.Get "email-templates/email-change.html") | indent 4 }}
+{{- end }}

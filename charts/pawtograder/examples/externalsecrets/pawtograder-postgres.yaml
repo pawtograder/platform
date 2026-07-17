@@ -1,0 +1,27 @@
+# Operator-authored ExternalSecret for the base `pawtograder-postgres` Secret.
+# Not chart-rendered; apply before the first helm upgrade.
+#
+# POSTGRES_PASSWORD is the superuser password; PAWTOGRADER_PASSWORD is the app
+# role. The streaming standby reuses POSTGRES_PASSWORD for
+# supabase_replication_admin, so no separate replication password is needed.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pawtograder-postgres
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao
+    kind: ClusterSecretStore
+  target:
+    name: pawtograder-postgres
+    creationPolicy: Owner
+  data:
+    - secretKey: POSTGRES_PASSWORD
+      remoteRef:
+        key: apps/pawtograder/postgres-production
+        property: POSTGRES_PASSWORD
+    - secretKey: PAWTOGRADER_PASSWORD
+      remoteRef:
+        key: apps/pawtograder/postgres-production
+        property: PAWTOGRADER_PASSWORD

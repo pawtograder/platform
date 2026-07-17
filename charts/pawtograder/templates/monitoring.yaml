@@ -42,16 +42,87 @@ data:
             usage: "GAUGE"
             description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
 
+    # WAL-G continuous archiving health. With postgres.walg.enabled the primary
+    # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
+    # piles up in pg_wal and can fill the volume (write outage). last_attempt_failed
+    # drives the PawtograderWALArchiveFailing alert; wal_dir_bytes is for
+    # dashboards. Harmless when archiving is off (archiver counters stay 0).
+    # Query key = metric prefix, so metrics are pawtograder_wal_archiving_*.
+    pawtograder_wal_archiving:
+      query: |
+        SELECT
+          archived_count::float AS archived_count,
+          failed_count::float AS failed_count,
+          CASE
+            WHEN last_failed_time IS NOT NULL
+             AND (last_archived_time IS NULL OR last_failed_time > last_archived_time)
+            THEN 1 ELSE 0
+          END::float AS last_attempt_failed,
+          COALESCE((SELECT SUM(size) FROM pg_ls_waldir()), 0)::float AS wal_dir_bytes
+        FROM pg_stat_archiver
+      master: true
+      metrics:
+        - archived_count:
+            usage: "COUNTER"
+            description: "WAL segments successfully archived since stats reset"
+        - failed_count:
+            usage: "COUNTER"
+            description: "Failed archive attempts since stats reset"
+        - last_attempt_failed:
+            usage: "GAUGE"
+            description: "1 if the most recent archive_command attempt failed (last_failed_time newer than last_archived_time)"
+        - wal_dir_bytes:
+            usage: "GAUGE"
+            description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
+
+    # Connection-budget saturation. Counts client backends against max_connections;
+    # PostgREST pools (rest.dbPool × replicas), supavisor, GoTrue, realtime,
+    # storage and this exporter all share the budget (postgres.config.max_connections,
+    # default 400). The backend_type filter matters: walsenders, autovacuum
+    # workers, and parallel workers draw from their own pools (max_wal_senders,
+    # autovacuum_max_workers, max_worker_processes), so counting them would
+    # inflate the ratio and page for saturation that isn't there. Drives the
+    # PawtograderPostgresConnections* alerts. master:true so auto-discovered
+    # per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES) don't re-export
+    # the cluster-wide count under different `server` labels.
+    pawtograder_db_connections:
+      query: |
+        SELECT (SELECT COUNT(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::float AS used,
+               (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max,
+               (SELECT setting::float FROM pg_settings WHERE name = 'superuser_reserved_connections') AS reserved
+      master: true
+      metrics:
+        - used:
+            usage: "GAUGE"
+            description: "Current client backends across all databases (the connections max_connections governs)"
+        - max:
+            usage: "GAUGE"
+            description: "max_connections setting — the hard ceiling on total backends"
+        - reserved:
+            usage: "GAUGE"
+            description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
+
     pg_stat_statements_top:
+      # Aggregate by queryid. pg_stat_statements holds one row PER
+      # (userid, dbid, toplevel, queryid), so selecting queryid + query text
+      # directly yields several rows with the same (queryid, query_preview)
+      # label set whenever a statement runs under more than one role/db. The
+      # exporter's client library rejects duplicate series with "collected
+      # before with the same name and label values" and returns HTTP 500 for
+      # the ENTIRE /metrics endpoint — taking down all postgres metrics. Summing
+      # per queryid collapses those rows to one unique series each; mean is
+      # recomputed as the weighted total/calls. Skip NULL queryids (untracked).
       query: |
         SELECT queryid::text,
-               LEFT(query, 80) AS query_preview,
-               calls,
-               total_exec_time,
-               mean_exec_time,
-               rows
+               LEFT(MIN(query), 80) AS query_preview,
+               SUM(calls) AS calls,
+               SUM(total_exec_time) AS total_exec_time,
+               SUM(total_exec_time) / NULLIF(SUM(calls), 0) AS mean_exec_time,
+               SUM(rows) AS rows
         FROM pg_stat_statements
-        ORDER BY total_exec_time DESC
+        WHERE queryid IS NOT NULL
+        GROUP BY queryid
+        ORDER BY SUM(total_exec_time) DESC
         LIMIT 20
       metrics:
         - queryid:
@@ -196,7 +267,12 @@ spec:
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 ---
-# ServiceMonitor: storage-api. /metrics on the http port.
+# ServiceMonitor: storage-api. /metrics on the http port. Toggleable via
+# monitoring.serviceMonitors.storage: storage-api only exposes /metrics on its
+# admin app (ADMIN_PORT) or in multitenant mode — a single-tenant deploy serving
+# only :5000 returns 404, so Prometheus would flag it perpetually down. Set the
+# toggle false there.
+{{- if dig "serviceMonitors" "storage" true .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -213,8 +289,17 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
 ---
-# ServiceMonitor: edge-functions. /metrics on the http port.
+# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
+# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
+# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
+# when that env value is set (metrics/index.ts: no token => open /metrics).
+# The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
+# (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
+# without optional, the missing Secret key makes the Prometheus Operator reject
+# this whole ServiceMonitor, silently dropping the edge target (rate-limiting
+# dashboard goes dark). When the key IS present, the token is sent as required.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -231,6 +316,12 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.edgeFunctions }}
+          key: METRICS_TOKEN
+          optional: true
 ---
 # ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
 # port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in

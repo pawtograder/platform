@@ -13,19 +13,32 @@
 #  [ ] Replicated storage class for postgres (Ceph RBD, EBS, …) — NOT
 #      local-path: node loss must not be data loss.
 #  [ ] Production image builds: the web image bakes NEXT_PUBLIC_SUPABASE_URL
-#      and the cluster's ANON_KEY at build time. Build web/edge/migrations
-#      images against the PROD hostname + prod anon key (release-images.yml
-#      workflow_dispatch with explicit inputs), then pin the tags below.
+#      and the cluster's ANON_KEY at build time. Build web/edge/migrations via
+#      release-images.yml workflow_dispatch with web_hostname/api_hostname set
+#      to the prod host(s) and namespace set to the prod namespace; the build
+#      reads ANON_KEY live from <namespace>/pawtograder-jwt (needs the CI secret
+#      KUBECONFIG_BASE64 able to reach the prod cluster). Then pin the tags below.
 #  [ ] OpenBao/ESO paths populated for every bundle you enable
 #      (scripts/setup-openbao-edge-functions.sh) + JWT bundle from
 #      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.
+#      This template has the chart render ExternalSecrets for the web and
+#      edge-functions integration Secrets; keep `webBundles` /
+#      `edgeFunctionsBundles` below in sync with what you populate.
 #  [ ] S3 buckets (storage + backups) with versioning; verify the
 #      backup-verify CronJob goes green after the first nightly backup.
-#  [ ] Alert on: kube_job_status_failed{job_name=~".*backup.*"}, ESO
-#      externalsecret_status_condition, and the Studio ingress cert.
+#  [ ] monitoring.prometheusRules.labels set to your cluster Prometheus's
+#      ruleSelector (kube-prometheus-stack: `release: <its release name>`) —
+#      the chart's alerts are inert without it, and the render fails if you
+#      leave it blank.
+#  [ ] An Alertmanager receiver that actually pages someone for
+#      severity: critical — the chart ships alert RULES only; routing lives
+#      with the cluster monitoring stack. Fire a test alert end-to-end.
+#      See docs/operations/monitoring-alerting.md.
 #  [ ] PriorityClasses created cluster-side if you set them below.
-#  [ ] A documented restore runbook:
-#      pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>
+#  [ ] Rehearse the restore + standby-promotion runbooks against this
+#      cluster before term start (docs/operations/disaster-recovery.md,
+#      docs/operations/point-in-time-recovery.md) so RTO is measured, not
+#      guessed.
 
 global:
   environment: production
@@ -76,6 +89,28 @@ secrets:
     smtp: pawtograder-smtp
     web: pawtograder-web
     edgeFunctions: pawtograder-edge-functions
+  externalSecret:
+    enabled: true
+    env: production
+    # `web` is the web-app bundle: GoTrue OAuth credentials, LTI secrets,
+    # Discord public keys, and other Next.js-only runtime env.
+    # `llm` carries the LLM-hint provider API keys (OPENAI_API_KEY,
+    # ANTHROPIC_API_KEY, ...) read by app/api/llm-hint/route.ts — without it the
+    # LLM-hint route returns 500 "API key is required".
+    webBundles:
+      - web
+      - llm
+    # Edge runtime bundles. These all land in pawtograder-edge-functions.
+    # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
+    # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths
+    # are populated and used in this environment.
+    edgeFunctionsBundles:
+      - github-app
+      - discord
+      - canvas
+      - mcp
+      - sentry
+      - misc
 
 # ----- Postgres: durable, protected ------------------------------------------
 postgres:
@@ -89,6 +124,32 @@ postgres:
     requests: { cpu: "2", memory: 8Gi }
     limits: { cpu: "8", memory: 24Gi }
 
+  # WAL-G continuous archiving → PITR: recovery to any second in the retention
+  # window instead of the nightly dump (~24 h RPO without it). This is the
+  # PRIMARY recovery path the runbooks assume — see
+  # docs/operations/point-in-time-recovery.md. Keep the walg prefix DISTINCT
+  # from the nightly-dump bucket path (backup.s3).
+  walg:
+    enabled: true
+    s3Prefix: ""        # ← e.g. s3://pawtograder-prod-backups/walg
+    s3Endpoint: ""      # ← your S3 endpoint (blank = real AWS)
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8    # ~8 days of PITR window
+
+  # Streaming standby: warm failover target + read scaling. Promotion is
+  # MANUAL (see the PITR runbook) — do a promotion drill before term start.
+  # The standby's own volume can be node-local; spreadAcrossNodes keeps it
+  # off the primary's node.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: ""  # ← any per-node class is fine (own volume, other node)
+      size: 200Gi
+
 # ----- Stateless tier ---------------------------------------------------------
 # Chart defaults already give every multi-replica tier: PDB (minAvailable 1),
 # zero-downtime rollouts (maxUnavailable 0), soft node-spread, preStop
@@ -100,12 +161,6 @@ web:
     tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
   e2e:
     enabled: false
-  envFromSecrets:
-    - pawtograder-github-app
-    - pawtograder-discord
-    - pawtograder-canvas
-    - pawtograder-llm
-    - pawtograder-sentry
 
 edgeFunctions:
   policy: per_request
@@ -122,12 +177,6 @@ edgeFunctions:
   e2e:
     enabled: false
     mockGitHub: false
-  envFromSecrets:
-    - pawtograder-github-app
-    - pawtograder-discord
-    - pawtograder-canvas
-    - pawtograder-llm
-    - pawtograder-sentry
 
 migrations:
   image:
@@ -146,10 +195,14 @@ auth:
     enabled: true
     senderName: "Pawtograder"
 
-# No shared preview Redis in prod — the chart deploys its own (auth on,
-# in-memory; the data is reconstructable rate-limiter/cache state).
+# Prod Redis should be ESO-backed, not chart-generated, so no Redis password
+# lands in Helm release state. Point this at a managed or cluster-level Redis
+# you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
+# mounts it into web + edge-functions.
 redis:
-  provider: internal
+  provider: shared
+  shared:
+    path: apps/pawtograder/redis-production
 
 supavisor:
   enabled: false        # match staging: everything dials postgres directly
@@ -185,7 +238,21 @@ backup:
   verify:
     enabled: true
     schedule: "0 6 * * 1"
+  # Weekly full restore into a scratch DB + row-count assertion — the only
+  # automated proof a dump actually RESTORES, not just parses. Runs on the
+  # primary's node budget; schedule it off-peak, after verify.
+  restoreDrill:
+    enabled: true
+    schedule: "0 8 * * 1"
 
 # ----- Observability -------------------------------------------------------------
 monitoring:
   enabled: true
+  # REQUIRED: labels the cluster Prometheus's ruleSelector matches, or every
+  # shipped alert (backup failure/staleness, WAL-G, ESO sync, cert expiry) is
+  # silently inert. kube-prometheus-stack defaults to `release: <its release
+  # name>`. The chart refuses to render production with this left empty.
+  # See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    labels:
+      release: ""       # ← your kube-prometheus-stack release name

@@ -33,12 +33,21 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/postgres-config.yaml") . | sha256sum }}
+        # Hash only the CONFIG content, not the chart-version-carrying metadata
+        # labels (helm.sh/chart, app.kubernetes.io/version) that
+        # pawtograder.componentLabels stamps on the rendered ConfigMap. Without
+        # the strip, every chart-version bump changed this hash and needlessly
+        # rolled the primary StatefulSet — a brief write outage that also
+        # cascaded into false `helm --wait` failures on dependent tiers. Proven:
+        # with the strip the hash is identical across versions yet still changes
+        # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
+        # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (include (print $.Template.BasePath "/postgres-config.yaml") .) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
-      {{- /* fsGroup 999 + seccomp; see postgres.podSecurityContext in values */}}
+      {{- /* fsGroup 102 (supabase/postgres group) + seccomp; see postgres.podSecurityContext in values */}}
       {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
       # Long grace so a busy postgres can checkpoint + flush WAL instead of
       # being SIGKILLed 30s into a drain and paying a recovery replay on the
@@ -86,6 +95,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_SECRET
+            {{- if .Values.postgres.walg.enabled }}
+            # wal-g config for archive_command (postgres runs it, inheriting
+            # this env). Shared with the base-backup sidecar + replica.
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
@@ -142,6 +156,61 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
+        {{- if and .Values.postgres.walg.enabled .Values.postgres.walg.baseBackup.enabled }}
+        # Base-backup sidecar. wal-g backup-push reads the data directory
+        # directly, so it must run co-located with PGDATA (shares the `data`
+        # volume, same pod). A plain interval loop — postgres has no cron for
+        # this — takes a full backup every intervalHours, then prunes so only
+        # keepBackups remain (wal-g delete also drops WAL older than the oldest
+        # retained base backup). Uses the postgres socket in /var/run/postgresql
+        # to read control data; connects as the local supabase_admin.
+        - name: base-backup
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - |
+              set -uo pipefail
+              export PGDATA=/var/lib/postgresql/data/pgdata
+              INTERVAL=$(( {{ .Values.postgres.walg.baseBackup.intervalHours | default 24 }} * 3600 ))
+              KEEP={{ .Values.postgres.walg.baseBackup.keepBackups | default 8 }}
+              echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s (keep ${KEEP})"
+              sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
+              while true; do
+                echo "[base-backup] $(date -u +%FT%TZ) wal-g backup-push"
+                if wal-g backup-push "$PGDATA"; then
+                  # Retention: keep the newest ${KEEP} full backups; --confirm
+                  # actually deletes (dry-run without it). Non-fatal if it fails
+                  # — a failed prune must not stop future backups.
+                  wal-g delete retain FULL "${KEEP}" --confirm || echo "[base-backup] WARN: retention prune failed"
+                else
+                  echo "[base-backup] ERROR: backup-push failed; will retry next cycle"
+                fi
+                sleep "${INTERVAL}"
+              done
+          env:
+            # Connect over TCP to the postgres container in the same pod. Per
+            # pg_hba.conf, 127.0.0.1/32 is `trust`, so backup-push's connection
+            # (pg_backup_start/stop) needs no password.
+            - name: PGHOST
+              value: "127.0.0.1"
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+          volumeMounts:
+            # Read-only view of the data dir wal-g backs up (same PVC as the
+            # primary — safe because backup-push only reads it).
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              readOnly: true
+          resources:
+            {{- toYaml .Values.postgres.walg.baseBackup.resources | nindent 12 }}
+        {{- end }}
         {{- if .Values.monitoring.enabled }}
         # postgres_exporter sidecar — connects via TCP to localhost (the
         # postgres container in the same pod). pg_stat_statements is
@@ -239,6 +308,13 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        {{- with .Values.postgres.persistence.annotations }}
+        # Provisioner hints applied at PVC-creation time — e.g. NetApp Trident
+        # `trident.netapp.io/unixPermissions` so a non-root (uid 101) postgres
+        # can create PGDATA on a fresh root-squashed NFS volume.
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       spec:
         accessModes:
           - {{ .Values.postgres.persistence.accessMode }}
