@@ -81,7 +81,11 @@ spec:
             # "ERR max number of clients reached". ioredis auto-reconnects, so
             # reaping a genuinely-idle connection is transparent to callers.
             - --timeout
-            - {{ $r.timeout | default 300 | quote }}
+            # `dig` (not `| default 300`): sprig's `default` treats numeric 0 as
+            # empty and would force 300, making the documented `timeout: 0`
+            # ("0 = never") impossible to set. `dig` returns the actual value when
+            # the key is present — including 0 — and only falls back when absent.
+            - {{ dig "timeout" 300 $r | quote }}
             {{- if $r.auth.enabled }}
             # Password interpolated from the env var below (k8s expands $(VAR)).
             - --requirepass

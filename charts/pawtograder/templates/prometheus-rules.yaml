@@ -82,32 +82,37 @@ spec:
               No pg_dump Job in {{ $ns }} has completed in the last
               {{ $backupMaxAge }}h. The CronJob may be suspended or its runs
               failing to start. Runbook: docs/operations/disaster-recovery.md.
-        # A backup-verify or restore-drill Job failed. These prove the newest
-        # dump actually restores (verify = TOC parse; drill = full restore into a
-        # scratch DB), so a failure means recoverability is in doubt even when the
-        # dump itself is fresh — serious, but distinct from the dump pipeline
-        # being down, so it pages at warning with its own scope. Recency-guarded
-        # like the dump alert.
+        # A backup-verify, restore-drill, or pitr-drill Job failed. These prove
+        # the newest backup actually restores (verify = TOC parse; restore-drill =
+        # full logical restore into a scratch DB; pitr-drill = wal-g base backup +
+        # WAL replay to a target time — the ONLY check that proves point-in-time
+        # recovery), so a failure means recoverability is in doubt even when the
+        # dump itself is fresh — serious, but distinct from the dump pipeline being
+        # down, so it pages at warning with its own scope. The regex covers all
+        # three drill Job types ({{ $backupJob }}-{verify,restore-drill,pitr-drill}-
+        # <timestamp>) while still excluding the dump Job ({{ $backupJob }}-<digit>).
+        # Recency-guarded like the dump alert.
         - alert: PawtograderBackupVerifyJobFailed
           expr: |
             (
               max by (job_name, namespace) (
-                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill)-[0-9].*"}
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
               ) > 0
             )
             and on (job_name, namespace) (
-              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill)-[0-9].*"}
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
                 > time() - {{ $backupMaxAge }} * 3600
             )
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "Pawtograder backup verify/restore-drill failed ({{`{{ $labels.job_name }}`}})"
+            summary: "Pawtograder backup verify/restore-drill/pitr-drill failed ({{`{{ $labels.job_name }}`}})"
             description: >-
-              A backup-verify or restore-drill Job in {{ $ns }} failed — the
-              newest dump parsed or restored incorrectly, so recoverability is in
-              doubt even if the dump is fresh. Runbook:
+              A backup-verify, restore-drill, or pitr-drill Job in {{ $ns }} failed
+              — the newest dump parsed or restored incorrectly, or point-in-time
+              recovery could not replay to its target, so recoverability is in doubt
+              even if the dump is fresh. Runbook:
               docs/operations/disaster-recovery.md ("When backup-verify goes red").
     {{- end }}
     {{- if .Values.postgres.walg.enabled }}

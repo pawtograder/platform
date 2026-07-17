@@ -55,7 +55,10 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
 spec:
   serviceName: {{ include "pawtograder.postgres.replica.host" . }}
-  replicas: {{ .Values.postgres.replica.replicas | default 1 }}
+  {{- /* `dig` (not `| default 1`): sprig's `default` treats 0 as empty and would
+     force 1, blocking a values-driven scale-to-zero (pause the standby, keep its
+     PVC/config). `dig` honors an explicit 0. */}}
+  replicas: {{ dig "replicas" 1 .Values.postgres.replica }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 6 }}

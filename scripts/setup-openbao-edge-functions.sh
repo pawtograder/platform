@@ -13,6 +13,14 @@
 #                                        LTI_STATE_SECRET, LTI_CRON_SHARED_SECRET,
 #                                        CACHE_INVALIDATION_SECRET, AZURE_OPENAI_ENDPOINT,
 #                                        OPENAI_MODEL
+#   apps/pawtograder/llm-<env>           OPENAI_API_KEY, ANTHROPIC_API_KEY,
+#                                        OPENROUTER_API_KEY, AZURE_OPENAI_KEY
+#                                        (LLM-hint provider keys read by the web app in
+#                                        app/api/llm-hint/route.ts. Kept in their own
+#                                        bundle so the web ExternalSecret pulls them via
+#                                        webBundles; per-account keys like
+#                                        OPENAI_API_KEY_<acct> can be added to this same
+#                                        Bao path and flow through the verbatim extract.)
 #   apps/pawtograder/github-app-<env>    GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING,
 #                                        GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET,
 #                                        GITHUB_WEBHOOK_SECRET, EVENTBRIDGE_SECRET
@@ -71,6 +79,7 @@ set -euo pipefail
 
 declare -A BUNDLE_KEYS=(
   [web]="GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET AZURE_OAUTH_CLIENT_ID AZURE_OAUTH_CLIENT_SECRET DISCORD_OAUTH_CLIENT_ID DISCORD_OAUTH_CLIENT_SECRET DISCORD_PUBLIC_KEY DISCORD_WEBHOOK_PUBLIC_KEY LTI_KEY_ENCRYPTION_SECRET LTI_TOOL_ISSUER LTI_STATE_SECRET LTI_CRON_SHARED_SECRET CACHE_INVALIDATION_SECRET AZURE_OPENAI_ENDPOINT OPENAI_MODEL"
+  [llm]="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY AZURE_OPENAI_KEY"
   [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
   [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"

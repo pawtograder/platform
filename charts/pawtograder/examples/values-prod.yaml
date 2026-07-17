@@ -94,8 +94,12 @@ secrets:
     env: production
     # `web` is the web-app bundle: GoTrue OAuth credentials, LTI secrets,
     # Discord public keys, and other Next.js-only runtime env.
+    # `llm` carries the LLM-hint provider API keys (OPENAI_API_KEY,
+    # ANTHROPIC_API_KEY, ...) read by app/api/llm-hint/route.ts — without it the
+    # LLM-hint route returns 500 "API key is required".
     webBundles:
       - web
+      - llm
     # Edge runtime bundles. These all land in pawtograder-edge-functions.
     # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
     # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths

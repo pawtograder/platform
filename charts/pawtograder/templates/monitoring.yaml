@@ -292,9 +292,14 @@ spec:
 {{- end }}
 ---
 # ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port, but
-# gated by a Bearer token — the runtime enforces the METRICS_TOKEN env value.
-# Prometheus must present it or every scrape 401s and the pods flap "up==0".
+# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
+# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
+# when that env value is set (metrics/index.ts: no token => open /metrics).
+# The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
+# (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
+# without optional, the missing Secret key makes the Prometheus Operator reject
+# this whole ServiceMonitor, silently dropping the edge target (rate-limiting
+# dashboard goes dark). When the key IS present, the token is sent as required.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -316,6 +321,7 @@ spec:
         credentials:
           name: {{ .Values.secrets.names.edgeFunctions }}
           key: METRICS_TOKEN
+          optional: true
 ---
 # ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
 # port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in
