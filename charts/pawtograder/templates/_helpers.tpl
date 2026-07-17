@@ -417,5 +417,12 @@ Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web
 {{- with .component.updateStrategy }}
 strategy:
   {{- toYaml . | nindent 2 }}
-{{- end -}}
+{{- end }}
+{{- /* Deployment progress deadline. Default 1200s, not the k8s default 600s:
+     a chart-version bump rolls the postgres StatefulSet (its pod template
+     checksums postgres-config.yaml, whose labels carry the chart version), and
+     dependent tiers wait on postgres to come back — which on slow (NFS) storage
+     can exceed 600s and make `helm --wait` report a false failure even though
+     the rollout converges seconds later. Per-component overridable. */}}
+progressDeadlineSeconds: {{ .component.progressDeadlineSeconds | default 1200 }}
 {{- end -}}
