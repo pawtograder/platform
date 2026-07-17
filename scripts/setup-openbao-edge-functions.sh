@@ -16,11 +16,9 @@
 #   apps/pawtograder/llm-<env>           OPENAI_API_KEY, ANTHROPIC_API_KEY,
 #                                        OPENROUTER_API_KEY, AZURE_OPENAI_KEY
 #                                        (LLM-hint provider keys read by the web app in
-#                                        app/api/llm-hint/route.ts. Kept in their own
+#                                        app/api/llm-hint/route.ts, kept in their own
 #                                        bundle so the web ExternalSecret pulls them via
-#                                        webBundles; per-account keys like
-#                                        OPENAI_API_KEY_<acct> can be added to this same
-#                                        Bao path and flow through the verbatim extract.)
+#                                        webBundles.)
 #   apps/pawtograder/github-app-<env>    GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING,
 #                                        GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET,
 #                                        GITHUB_WEBHOOK_SECRET, EVENTBRIDGE_SECRET
