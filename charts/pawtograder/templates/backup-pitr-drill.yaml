@@ -74,6 +74,24 @@ spec:
                   echo "[pitr] fetching newest base backup"
                   wal-g backup-fetch "${PGDATA}" LATEST
 
+                  # Hot-standby / recovery requires these params be >= the
+                  # primary's values at backup time, else postgres FATALs with
+                  # "recovery aborted because of insufficient parameter settings".
+                  # The primary sets them via a mounted config we don't use here,
+                  # so the restored in-PGDATA postgresql.conf carries the image
+                  # defaults. Read the primary's actual values from the control
+                  # file (recorded in the base backup) and echo them into
+                  # auto.conf. Control-file labels differ from the GUC names, so
+                  # map explicitly.
+                  CDATA=$(pg_controldata "${PGDATA}")
+                  cd_get() { echo "${CDATA}" | grep -iE "^$1 setting:" | awk -F: '{gsub(/ /,"",$2); print $2}'; }
+                  MAXCONN=$(cd_get "max_connections")
+                  MAXWORKERS=$(cd_get "max_worker_processes")
+                  MAXSENDERS=$(cd_get "max_wal_senders")
+                  MAXPREP=$(cd_get "max_prepared_xacts")
+                  MAXLOCKS=$(cd_get "max_locks_per_xact")
+                  echo "[pitr] primary params from control file: conn=${MAXCONN} workers=${MAXWORKERS} senders=${MAXSENDERS} prep=${MAXPREP} locks=${MAXLOCKS}"
+
                   # Overrides win over the restored postgresql.conf (auto.conf is
                   # read last). archive_mode=off is the SAFETY guard — the scratch
                   # must never wal-push into the live prefix.
@@ -86,6 +104,11 @@ spec:
                   port = ${PORT}
                   listen_addresses = '127.0.0.1'
                   hot_standby = on
+                  max_connections = ${MAXCONN}
+                  max_worker_processes = ${MAXWORKERS}
+                  max_wal_senders = ${MAXSENDERS}
+                  max_prepared_transactions = ${MAXPREP}
+                  max_locks_per_transaction = ${MAXLOCKS}
                   EOF
                   touch "${PGDATA}/recovery.signal"
 
