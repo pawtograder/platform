@@ -346,6 +346,68 @@ const DATE_MASKER_INIT = () => {
   else document.addEventListener("DOMContentLoaded", start);
 };
 
+// Persistent rubric-sidebar expander. The rubric sidebar is a SCROLL CONTAINER; its checks/comments
+// stream in via realtime and re-render (sometimes remounting) the sidebar AFTER a test positions its
+// scroll, so a one-shot "scroll the rubric to the top" (stabilizeRubricSidebar) lands at a
+// non-deterministic offset run-to-run — the capture shows this rubric's header on some runs and an
+// over-scrolled window into the next rubric on others (~95k-px flake). Chasing/pinning the scroll is
+// fragile because the re-render wipes it. Instead we EXPAND the sidebar's scroll container so all its
+// content renders inline with NO scrollbar: with nothing to scroll there is no scroll position to
+// vary. A MutationObserver re-applies this after every re-render/remount (the same durable pattern as
+// the date masker), and the guard is `isScrollable` itself — once expanded the container is no longer
+// scrollable, so it is skipped until a re-render resets it. Mirrors the existing
+// `[data-grading-summary-aside]` expand in VISUAL_TEST_CSS, but for the (unattributed) rubric scroller.
+const RUBRIC_EXPANDER_INIT = () => {
+  const w = window as unknown as { __rubricExpanderInstalled?: boolean };
+  if (w.__rubricExpanderInstalled) return;
+  w.__rubricExpanderInstalled = true;
+  const isScrollable = (el: HTMLElement) => {
+    const overflowY = window.getComputedStyle(el).overflowY;
+    return (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") && el.scrollHeight > el.clientHeight;
+  };
+  const expandFor = (region: HTMLElement) => {
+    let node: HTMLElement | null = region.parentElement;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (isScrollable(node)) {
+        node.style.setProperty("max-height", "none", "important");
+        node.style.setProperty("height", "auto", "important");
+        node.style.setProperty("overflow", "visible", "important");
+        node.scrollTop = 0;
+        return; // first scrollable ancestor is the sidebar scroller — don't expand the page itself
+      }
+      node = node.parentElement;
+    }
+  };
+  const expand = () => {
+    try {
+      if (!document.documentElement.hasAttribute("data-visual-tests")) return;
+      document.querySelectorAll<HTMLElement>('[role="region"][aria-label*="Rubric"]').forEach(expandFor);
+    } catch {
+      /* defensive: never let this break a test */
+    }
+  };
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      expand();
+    }, 80);
+  };
+  const start = () => {
+    expand();
+    new MutationObserver(schedule).observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style", "class"]
+    });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
+};
+
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
   // Best-effort: this fires from a `domcontentloaded` handler, so an in-flight
@@ -377,6 +439,10 @@ const injectVisualTestSetup = async (page: Page) => {
     });
   // Catch-all date masker (idempotent; installs a MutationObserver on first run).
   await page.evaluate(DATE_MASKER_INIT).catch(() => {
+    /* navigation destroyed the context — the next domcontentloaded re-injects */
+  });
+  // Persistent rubric-sidebar expander (idempotent; installs a MutationObserver on first run).
+  await page.evaluate(RUBRIC_EXPANDER_INIT).catch(() => {
     /* navigation destroyed the context — the next domcontentloaded re-injects */
   });
 };
@@ -461,6 +527,9 @@ export const test = base.extend<E2EFixtures>({
 
     // Install the catch-all date masker at document start on every fresh load.
     await page.addInitScript(DATE_MASKER_INIT);
+
+    // Install the persistent rubric-sidebar expander at document start on every fresh load.
+    await page.addInitScript(RUBRIC_EXPANDER_INIT);
 
     // Listen for all navigations and re-inject the setup
     page.on("domcontentloaded", async () => {
