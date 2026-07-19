@@ -284,6 +284,68 @@ const DICEBEAR_AVATAR_ROUTE = "**/api.dicebear.com/**";
 const DETERMINISTIC_AVATAR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#718096"/></svg>';
 
+// Catch-all date/time masker. The per-element `data-visual-test="transparent"` tagging only masks
+// dates on components that REMEMBERED to tag themselves (TimeZoneAwareDate + a hand-maintained list).
+// New/updated components that render a date via date-fns `format`/`formatDistance`/`formatRelative`
+// without the tag leak a volatile, VARIABLE-WIDTH date string into the screenshot — stable within a
+// day but different across calendar days (single vs double digit day, short vs long month, "in 3 days"
+// vs "2 months ago"), so the same view diffs across CI builds run on different days (root cause of the
+// grading/self-review/regrade Argos flake cluster). This runs in visual-test mode and auto-tags any
+// LEAF element whose text is (predominantly) a date/time, so the existing placeholder CSS masks it —
+// coverage no longer depends on perfect manual tagging. Conservative (strong date signal + length cap +
+// leaf-only) to avoid masking real prose.
+const DATE_MASKER_INIT = () => {
+  const w = window as unknown as { __dateMaskerInstalled?: boolean; __maskDates?: () => void };
+  if (w.__dateMaskerInstalled) return;
+  w.__dateMaskerInstalled = true;
+  const REL =
+    /^(?:in\s+(?:about\s+|almost\s+|over\s+)?(?:a|an|\d+)\s+(?:second|minute|hour|day|week|month|year)s?|(?:about\s+|almost\s+|over\s+|less than\s+)?(?:a|an|\d+)\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|less than a minute ago|just now|yesterday|today|tomorrow)(?:\s+at\s+.+)?$/i;
+  const ABS =
+    /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp][Mm])?\b/;
+  const isRel = (t: string) => REL.test(t);
+  const isDateish = (raw: string) => {
+    const t = raw.trim();
+    if (t.length < 3 || t.length > 48) return false;
+    return REL.test(t) || ABS.test(t);
+  };
+  const maskDates = () => {
+    try {
+      if (!document.documentElement.hasAttribute("data-visual-tests")) return;
+      const nodes = document.querySelectorAll<HTMLElement>(
+        "body *:not([data-visual-test]):not(script):not(style):not(svg):not(path)"
+      );
+      for (const el of nodes) {
+        if (el.childElementCount > 0) continue; // leaf text only — never mask a container of real content
+        if (el.closest("[data-visual-test]")) continue; // already inside a masked region
+        const text = el.textContent || "";
+        if (!isDateish(text)) continue;
+        el.setAttribute("data-visual-test", "transparent");
+        if (!el.getAttribute("data-visual-placeholder")) {
+          el.setAttribute("data-visual-placeholder", isRel(text.trim()) ? "relative-time" : "date");
+        }
+      }
+    } catch {
+      /* defensive: never let masking break a test */
+    }
+  };
+  w.__maskDates = maskDates;
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      maskDates();
+    }, 100);
+  };
+  const start = () => {
+    maskDates();
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
+};
+
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
   // Best-effort: this fires from a `domcontentloaded` handler, so an in-flight
@@ -313,6 +375,10 @@ const injectVisualTestSetup = async (page: Page) => {
     .catch(() => {
       /* navigation destroyed the context — the next domcontentloaded re-injects */
     });
+  // Catch-all date masker (idempotent; installs a MutationObserver on first run).
+  await page.evaluate(DATE_MASKER_INIT).catch(() => {
+    /* navigation destroyed the context — the next domcontentloaded re-injects */
+  });
 };
 
 type E2EFixtures = {
@@ -392,6 +458,9 @@ export const test = base.extend<E2EFixtures>({
         }
       }
     }, VISUAL_TEST_CSS);
+
+    // Install the catch-all date masker at document start on every fresh load.
+    await page.addInitScript(DATE_MASKER_INIT);
 
     // Listen for all navigations and re-inject the setup
     page.on("domcontentloaded", async () => {

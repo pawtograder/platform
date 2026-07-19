@@ -162,6 +162,58 @@ export async function waitForVisualIdle(page: Page) {
         // test's domain assertions when it matters.
       });
   }
+
+  // Blinking text carets make a full-page capture a function of animation phase: the same view
+  // alternates between caret-visible and caret-hidden run-to-run, a pure phase diff, not a content
+  // change. The culprit in the rubric views is the comment box (@uiw/react-md-editor); the Monaco
+  // submission viewer can blink too. Freeze all CSS animations/transitions and hide carets before
+  // capture. Mirrors the freeze the repo already applies for the axe accessibility scan; cosmetic-
+  // only (no layout/height impact, unlike the sticky freeze) so it is left in place.
+  await freezeAnimationsAndCaret(page);
+}
+
+/**
+ * Zero out CSS animations/transitions and hide text carets so a full-page capture is not a function
+ * of animation phase. Injects one idempotent <style> tag rather than mutating each node, so it is
+ * cheap and safe to call repeatedly (waitForVisualIdle runs both standalone and inside
+ * beforeScreenshot). Cosmetic-only: it changes no geometry, so there is nothing to restore. NOT a
+ * masking fix — it removes a genuinely non-deterministic blink, it does not widen a diff threshold
+ * or hide real content.
+ */
+async function freezeAnimationsAndCaret(page: Page) {
+  await page
+    .evaluate(() => {
+      const id = "vt-freeze-animations";
+      if (document.getElementById(id)) return;
+      const style = document.createElement("style");
+      style.id = id;
+      style.textContent = `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0s !important;
+          transition-delay: 0s !important;
+          caret-color: transparent !important;
+        }
+        .monaco-editor .cursor,
+        .monaco-editor .cursors-layer > .cursor { visibility: hidden !important; }
+        /* @uiw/react-md-editor (comment boxes) overlays a <textarea> whose text is hidden via
+           -webkit-text-fill-color:transparent while color stays inherited — so its blinking CARET
+           stays visible and, in WebKit, follows 'color' (WebKit ignores caret-color here). The
+           visible text is painted by the <pre> behind, so zeroing the textarea's own color only
+           removes the caret, nothing else. */
+        .w-md-editor-text-input,
+        .w-md-editor-text > textarea,
+        textarea.w-md-editor-text-input {
+          color: transparent !important;
+          caret-color: transparent !important;
+        }
+      `;
+      document.head.appendChild(style);
+    })
+    .catch(() => {
+      /* navigation/context race — nothing to freeze */
+    });
 }
 
 export async function stabilizeRubricSidebar(page: Page, rubricName: string | RegExp) {
