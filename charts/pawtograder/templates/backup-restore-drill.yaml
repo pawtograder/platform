@@ -51,17 +51,22 @@ spec:
           restartPolicy: OnFailure
           serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
           {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
-          # fsGroup 102 (supabase/postgres group) so the postgres user can write
-          # the ephemeral PGDATA. The image entrypoint starts as root and drops
-          # to the postgres user itself (initdb), same as the primary — so no
-          # runAsNonRoot here (mirrors postgres.podSecurityContext = {}).
+          # Per-container securityContext (NOT pod-level runAsUser): the
+          # fetch-dump init container needs root (apt installs mc), but the main
+          # container must run as uid 101 so the postgres entrypoint SKIPS its
+          # root chown — on an all_squash/anon export a squashed-root chown fails
+          # ("Operation not permitted"), and running as 101 also means PGDATA is
+          # owned by 101 (preserved by root_squash), which postgres requires.
+          # fsGroup 101 so the group matches for the ephemeral volume.
           securityContext:
-            fsGroup: 102
+            fsGroup: 101
           initContainers:
             # Fetch the newest dump. Separate container because installing `mc`
             # needs root (apt), but the postgres container must not run as root.
             - name: fetch-dump
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              securityContext:
+                runAsUser: 0
               command:
                 - bash
                 - -c
@@ -94,6 +99,11 @@ spec:
             - name: restore-drill
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
               imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              # uid 101 so the postgres entrypoint runs entirely as the postgres
+              # user (no root chown; PGDATA owned by 101 as required).
+              securityContext:
+                runAsUser: 101
+                runAsGroup: 101
               # The image entrypoint (postgres) boots a fresh cluster on the empty
               # ephemeral PGDATA, running the mounted init scripts (roles/pgsodium)
               # exactly like the primary. We background it, wait for readiness, then
@@ -104,8 +114,13 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=supabase_admin
-                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  # Do NOT export PGHOST here: the image entrypoint's init scripts
+                  # (migrate.sh, zy-app-role.sh, …) run while postgres listens on
+                  # the UNIX SOCKET only (no TCP yet). Exporting PGHOST=127.0.0.1
+                  # makes those scripts try TCP → "connection refused" → the
+                  # entrypoint aborts init. Leave the env clean so they use the
+                  # socket (as on the primary); set connection params only AFTER
+                  # the real server is up, for our own restore commands below.
                   echo "[drill] booting throwaway postgres on ephemeral volume ($(cat /work/dump-name))"
                   docker-entrypoint.sh postgres \
                     -c config_file=/etc/postgresql/postgresql.conf \
@@ -122,6 +137,8 @@ spec:
                   pg_isready -q -h 127.0.0.1 -U supabase_admin -d postgres \
                     || { echo "[drill] FATAL: instance never became ready"; exit 1; }
 
+                  # Server is up on TCP now — safe to point our restore at it.
+                  export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=supabase_admin PGPASSWORD="$POSTGRES_PASSWORD"
                   SCRATCH="restore_drill"
                   psql -d postgres -c "CREATE DATABASE \"$SCRATCH\";"
                   # Triggers off for the whole restore (defense in depth: no audit/
