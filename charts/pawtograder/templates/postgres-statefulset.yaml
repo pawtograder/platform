@@ -30,8 +30,16 @@ spec:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
+      # Version-STABLE labels only (selector labels, not componentLabels): the
+      # full labels carry helm.sh/chart + app.kubernetes.io/version, which change
+      # on every chart bump. Since a StatefulSet rolls its pods whenever the pod
+      # template changes, using componentLabels here rolled the PRIMARY on every
+      # version bump (even with no real config change) — a needless restart that,
+      # combined with the sidecars' slow SIGTERM, took the DB down for ~10 min.
+      # With selector labels + the version-independent checksum/config annotation,
+      # the template changes only when the actual postgres config does.
       labels:
-        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
+        {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
       annotations:
         # Hash only the CONFIG content, not the chart-version-carrying metadata
         # labels (helm.sh/chart, app.kubernetes.io/version) that
@@ -175,19 +183,29 @@ spec:
               export PGDATA=/var/lib/postgresql/data/pgdata
               INTERVAL=$(( {{ .Values.postgres.walg.baseBackup.intervalHours | default 24 }} * 3600 ))
               KEEP={{ .Values.postgres.walg.baseBackup.keepBackups | default 8 }}
+              # Exit promptly on SIGTERM. Every long op runs as a backgrounded
+              # child that we `wait` on, and the trap kills it and exits. Without
+              # this, bash defers the signal until the foreground `sleep ${INTERVAL}`
+              # (up to intervalHours) returns — so on a pod roll postgres shuts
+              # down cleanly but this sidecar pins the pod in Terminating until the
+              # 600s grace SIGKILL, stalling the StatefulSet's replacement primary
+              # (and cascading DB_HOST=nxdomain crashes in dependents).
+              CHILD=""
+              trap 'echo "[base-backup] SIGTERM — exiting"; [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null; exit 0' TERM INT
+              run() { "$@" & CHILD=$!; wait "$CHILD"; }
               echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s (keep ${KEEP})"
-              sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
+              run sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
               while true; do
                 echo "[base-backup] $(date -u +%FT%TZ) wal-g backup-push"
-                if wal-g backup-push "$PGDATA"; then
+                if run wal-g backup-push "$PGDATA"; then
                   # Retention: keep the newest ${KEEP} full backups; --confirm
                   # actually deletes (dry-run without it). Non-fatal if it fails
                   # — a failed prune must not stop future backups.
-                  wal-g delete retain FULL "${KEEP}" --confirm || echo "[base-backup] WARN: retention prune failed"
+                  run wal-g delete retain FULL "${KEEP}" --confirm || echo "[base-backup] WARN: retention prune failed"
                 else
                   echo "[base-backup] ERROR: backup-push failed; will retry next cycle"
                 fi
-                sleep "${INTERVAL}"
+                run sleep "${INTERVAL}"
               done
           env:
             # Connect over TCP to the postgres container in the same pod. Per

@@ -64,8 +64,10 @@ spec:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 6 }}
   template:
     metadata:
+      # Version-STABLE labels only — see postgres-statefulset.yaml: componentLabels
+      # carry the chart version, which would roll the standby on every chart bump.
       labels:
-        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-replica") | nindent 8 }}
+        {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/postgres-config.yaml") . | sha256sum }}
     spec:
