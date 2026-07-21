@@ -363,7 +363,9 @@ const RUBRIC_EXPANDER_INIT = () => {
   w.__rubricExpanderInstalled = true;
   const isScrollable = (el: HTMLElement) => {
     const overflowY = window.getComputedStyle(el).overflowY;
-    return (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") && el.scrollHeight > el.clientHeight;
+    return (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") && el.scrollHeight > el.clientHeight
+    );
   };
   const expandFor = (region: HTMLElement) => {
     let node: HTMLElement | null = region.parentElement;
