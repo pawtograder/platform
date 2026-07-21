@@ -190,7 +190,7 @@ spec:
                       trident.netapp.io/unixPermissions: "0777"
                   spec:
                     accessModes: ["ReadWriteOnce"]
-                    storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+                    storageClassName: {{ .Values.backup.pitrDrill.storageClass | default .Values.postgres.persistence.storageClass | quote }}
                     resources:
                       requests:
                         storage: {{ .Values.backup.pitrDrill.scratchSize | quote }}

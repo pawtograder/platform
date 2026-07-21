@@ -1310,8 +1310,16 @@ backup:
   restoreDrill:
     enabled: false
     schedule: "0 8 * * 1" # weekly, after verify
-    activeDeadlineSeconds: 3600
+    activeDeadlineSeconds: 5400
     startingDeadlineSeconds: 1800
+    startupTimeoutSeconds: 900 # max wait for the throwaway instance to finish init
+    # Restore runs in a FRESH throwaway postgres instance on its own ephemeral
+    # volume (not the live primary). scratchSize holds a full copy of the restored
+    # DB; storageClass empty → inherit postgres.persistence.storageClass (set a
+    # cheaper class, e.g. netapp-economy, to keep restore I/O off the fast tier).
+    scratchSize: 100Gi
+    storageClass: ""
+    ttlSecondsAfterFinished: 3600 # reclaim the finished Job + its scratch PVC
     # Core table + minimum row count proving the restore holds real data.
     # public.classes exists on every install (a live prod DB has >= 1 class).
     assertTable: "public.classes"
@@ -1336,6 +1344,10 @@ backup:
     ttlSecondsAfterFinished: 3600
     # Scratch volume must hold a full copy of PGDATA. Size >= live DB size.
     scratchSize: 100Gi
+    # StorageClass for the ephemeral scratch PVC. Empty → inherit
+    # postgres.persistence.storageClass. Set to a cheaper/slower class (e.g.
+    # netapp-economy) to keep the drill's restore I/O off the primary's fast tier.
+    storageClass: ""
     # How far back to target. Must exceed archiver lag (seconds) with margin.
     targetLagMinutes: 15
     assertTable: "public.classes"
