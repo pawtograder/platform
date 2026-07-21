@@ -284,6 +284,132 @@ const DICEBEAR_AVATAR_ROUTE = "**/api.dicebear.com/**";
 const DETERMINISTIC_AVATAR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#718096"/></svg>';
 
+// Catch-all date/time masker. The per-element `data-visual-test="transparent"` tagging only masks
+// dates on components that REMEMBERED to tag themselves (TimeZoneAwareDate + a hand-maintained list).
+// New/updated components that render a date via date-fns `format`/`formatDistance`/`formatRelative`
+// without the tag leak a volatile, VARIABLE-WIDTH date string into the screenshot — stable within a
+// day but different across calendar days (single vs double digit day, short vs long month, "in 3 days"
+// vs "2 months ago"), so the same view diffs across CI builds run on different days (root cause of the
+// grading/self-review/regrade Argos flake cluster). This runs in visual-test mode and auto-tags any
+// LEAF element whose text is (predominantly) a date/time, so the existing placeholder CSS masks it —
+// coverage no longer depends on perfect manual tagging. Conservative (strong date signal + length cap +
+// leaf-only) to avoid masking real prose.
+const DATE_MASKER_INIT = () => {
+  const w = window as unknown as { __dateMaskerInstalled?: boolean; __maskDates?: () => void };
+  if (w.__dateMaskerInstalled) return;
+  w.__dateMaskerInstalled = true;
+  const REL =
+    /^(?:in\s+(?:about\s+|almost\s+|over\s+)?(?:a|an|\d+)\s+(?:second|minute|hour|day|week|month|year)s?|(?:about\s+|almost\s+|over\s+|less than\s+)?(?:a|an|\d+)\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|less than a minute ago|just now|yesterday|today|tomorrow)(?:\s+at\s+.+)?$/i;
+  const ABS =
+    /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp][Mm])?\b/;
+  const isRel = (t: string) => REL.test(t);
+  const isDateish = (raw: string) => {
+    const t = raw.trim();
+    if (t.length < 3 || t.length > 48) return false;
+    return REL.test(t) || ABS.test(t);
+  };
+  const maskDates = () => {
+    try {
+      if (!document.documentElement.hasAttribute("data-visual-tests")) return;
+      const nodes = document.querySelectorAll<HTMLElement>(
+        "body *:not([data-visual-test]):not(script):not(style):not(svg):not(path)"
+      );
+      for (const el of nodes) {
+        if (el.childElementCount > 0) continue; // leaf text only — never mask a container of real content
+        if (el.closest("[data-visual-test]")) continue; // already inside a masked region
+        const text = el.textContent || "";
+        if (!isDateish(text)) continue;
+        el.setAttribute("data-visual-test", "transparent");
+        if (!el.getAttribute("data-visual-placeholder")) {
+          el.setAttribute("data-visual-placeholder", isRel(text.trim()) ? "relative-time" : "date");
+        }
+      }
+    } catch {
+      /* defensive: never let masking break a test */
+    }
+  };
+  w.__maskDates = maskDates;
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      maskDates();
+    }, 100);
+  };
+  const start = () => {
+    maskDates();
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
+};
+
+// Persistent rubric-sidebar expander. The rubric sidebar is a SCROLL CONTAINER; its checks/comments
+// stream in via realtime and re-render (sometimes remounting) the sidebar AFTER a test positions its
+// scroll, so a one-shot "scroll the rubric to the top" (stabilizeRubricSidebar) lands at a
+// non-deterministic offset run-to-run — the capture shows this rubric's header on some runs and an
+// over-scrolled window into the next rubric on others (~95k-px flake). Chasing/pinning the scroll is
+// fragile because the re-render wipes it. Instead we EXPAND the sidebar's scroll container so all its
+// content renders inline with NO scrollbar: with nothing to scroll there is no scroll position to
+// vary. A MutationObserver re-applies this after every re-render/remount (the same durable pattern as
+// the date masker), and the guard is `isScrollable` itself — once expanded the container is no longer
+// scrollable, so it is skipped until a re-render resets it. Mirrors the existing
+// `[data-grading-summary-aside]` expand in VISUAL_TEST_CSS, but for the (unattributed) rubric scroller.
+const RUBRIC_EXPANDER_INIT = () => {
+  const w = window as unknown as { __rubricExpanderInstalled?: boolean };
+  if (w.__rubricExpanderInstalled) return;
+  w.__rubricExpanderInstalled = true;
+  const isScrollable = (el: HTMLElement) => {
+    const overflowY = window.getComputedStyle(el).overflowY;
+    return (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") && el.scrollHeight > el.clientHeight
+    );
+  };
+  const expandFor = (region: HTMLElement) => {
+    let node: HTMLElement | null = region.parentElement;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (isScrollable(node)) {
+        node.style.setProperty("max-height", "none", "important");
+        node.style.setProperty("height", "auto", "important");
+        node.style.setProperty("overflow", "visible", "important");
+        node.scrollTop = 0;
+        return; // first scrollable ancestor is the sidebar scroller — don't expand the page itself
+      }
+      node = node.parentElement;
+    }
+  };
+  const expand = () => {
+    try {
+      if (!document.documentElement.hasAttribute("data-visual-tests")) return;
+      document.querySelectorAll<HTMLElement>('[role="region"][aria-label*="Rubric"]').forEach(expandFor);
+    } catch {
+      /* defensive: never let this break a test */
+    }
+  };
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      expand();
+    }, 80);
+  };
+  const start = () => {
+    expand();
+    new MutationObserver(schedule).observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style", "class"]
+    });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
+};
+
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
   // Best-effort: this fires from a `domcontentloaded` handler, so an in-flight
@@ -313,6 +439,14 @@ const injectVisualTestSetup = async (page: Page) => {
     .catch(() => {
       /* navigation destroyed the context — the next domcontentloaded re-injects */
     });
+  // Catch-all date masker (idempotent; installs a MutationObserver on first run).
+  await page.evaluate(DATE_MASKER_INIT).catch(() => {
+    /* navigation destroyed the context — the next domcontentloaded re-injects */
+  });
+  // Persistent rubric-sidebar expander (idempotent; installs a MutationObserver on first run).
+  await page.evaluate(RUBRIC_EXPANDER_INIT).catch(() => {
+    /* navigation destroyed the context — the next domcontentloaded re-injects */
+  });
 };
 
 type E2EFixtures = {
@@ -392,6 +526,12 @@ export const test = base.extend<E2EFixtures>({
         }
       }
     }, VISUAL_TEST_CSS);
+
+    // Install the catch-all date masker at document start on every fresh load.
+    await page.addInitScript(DATE_MASKER_INIT);
+
+    // Install the persistent rubric-sidebar expander at document start on every fresh load.
+    await page.addInitScript(RUBRIC_EXPANDER_INIT);
 
     // Listen for all navigations and re-inject the setup
     page.on("domcontentloaded", async () => {
