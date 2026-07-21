@@ -1,18 +1,29 @@
 {{- /*
-Restore DRILL — the full-restore rehearsal that backup-verify deliberately
-stops short of. PRODUCTION-READINESS §1.4 shipped backup-verify (downloads the
-newest dump + `pg_restore --list` = TOC/integrity check, no scratch DB). That
-proves the archive parses, NOT that it restores into a working database. A dump
-can list cleanly yet fail to restore (missing role, extension ordering, a
-partial object). This CronJob closes that gap: it restores the newest dump into
-a throwaway database ON THE LIVE POSTGRES, asserts a sane row count in a core
-table, then drops the scratch DB.
+Restore DRILL — the full-restore rehearsal that backup-verify stops short of.
+backup-verify proves the archive parses; this proves it RESTORES into a working
+database.
 
-Off by default (it writes to the primary, briefly, under a unique DB name).
-Enable in production and schedule it well clear of the backup window. It is the
-automated form of the pre-term manual drill in docs/operations/disaster-recovery.md.
+Reworked to restore into a FRESH, throwaway postgres instance on its own
+ephemeral volume instead of a scratch DB on the LIVE primary. Why:
+  - keeps the ~28 GB restore I/O off the primary's fast tier — the scratch
+    volume uses restoreDrill.storageClass (e.g. netapp-economy);
+  - no contention (CPU/connections/space) on the production primary;
+  - teardown is automatic: the ephemeral PVC dies with the pod, so there is no
+    scratch-DB reap / DROP ... WITH (FORCE) to get right.
+
+A LOGICAL dump restore needs the supabase role + extension baseline to already
+exist (RLS policies reference anon/authenticated/service_role, extensions need
+their binaries + the pgsodium key). So the drill boots a throwaway instance via
+the image's OWN entrypoint (initdb + the same init scripts / pgsodium key the
+primary uses), then restores the dump into a fresh scratch DB on it.
+
+An initContainer fetches the dump (needs root for the `mc` install); the main
+container runs postgres (image entrypoint, drops to the postgres user itself).
+
+Off by default. Enable in prod; schedule clear of the backup window.
 */ -}}
 {{- if and .Values.postgres.enabled .Values.backup.enabled .Values.backup.restoreDrill.enabled }}
+{{- $rd := .Values.backup.restoreDrill }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -21,15 +32,17 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-restore-drill") | nindent 4 }}
 spec:
-  schedule: {{ .Values.backup.restoreDrill.schedule | quote }}
+  schedule: {{ $rd.schedule | quote }}
   concurrencyPolicy: Forbid
-  startingDeadlineSeconds: {{ .Values.backup.restoreDrill.startingDeadlineSeconds | default 1800 }}
+  startingDeadlineSeconds: {{ $rd.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: {{ .Values.backup.restoreDrill.activeDeadlineSeconds | default 3600 }}
+      activeDeadlineSeconds: {{ $rd.activeDeadlineSeconds | default 5400 }}
+      # Reclaim the finished Job + its ephemeral scratch PVC after completion.
+      ttlSecondsAfterFinished: {{ dig "ttlSecondsAfterFinished" 3600 $rd }}
       template:
         metadata:
           labels:
@@ -38,128 +51,147 @@ spec:
           restartPolicy: OnFailure
           serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
           {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
-          containers:
-            - name: restore-drill
+          # fsGroup 102 (supabase/postgres group) so the postgres user can write
+          # the ephemeral PGDATA. The image entrypoint starts as root and drops
+          # to the postgres user itself (initdb), same as the primary — so no
+          # runAsNonRoot here (mirrors postgres.podSecurityContext = {}).
+          securityContext:
+            fsGroup: 102
+          initContainers:
+            # Fetch the newest dump. Separate container because installing `mc`
+            # needs root (apt), but the postgres container must not run as root.
+            - name: fetch-dump
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
-              # bash, not sh — see backup.yaml (dash rejects pipefail).
               command:
                 - bash
                 - -c
                 - |
                   set -euo pipefail
-                  # Same runtime mc install as backup.yaml (SHA-pinned).
                   apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
                   curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
                   echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
                   chmod +x /usr/local/bin/mc
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-
-                  # Newest object (timestamped names sort chronologically).
-                  # `|| true`: under `set -euo pipefail`, a no-match grep exits 1
-                  # and pipefail would abort the script AT this assignment, before
-                  # the friendly guard below ever runs. Swallow it so an empty
-                  # bucket reaches the diagnostic instead of dying silently.
                   LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
                   if [ -z "$LATEST" ]; then
-                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"
-                    exit 1
+                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"; exit 1
                   fi
-                  echo "[drill] restoring newest backup: $LATEST"
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /tmp/latest.dump
+                  echo "[drill] newest backup: $LATEST"
+                  mc cp "s3/${S3_BUCKET}/${LATEST}" /work/latest.dump
+                  echo "$LATEST" > /work/dump-name
+              env:
+                - name: S3_ENDPOINT
+                  value: {{ required "backup.s3.endpoint is required" .Values.backup.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ required "backup.s3.bucket is required" .Values.backup.s3.bucket | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.s3 }}, key: AWS_ACCESS_KEY_ID } }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.s3 }}, key: AWS_SECRET_ACCESS_KEY } }
+              volumeMounts:
+                - { name: work, mountPath: /work }
+          containers:
+            - name: restore-drill
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+              imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              # The image entrypoint (postgres) boots a fresh cluster on the empty
+              # ephemeral PGDATA, running the mounted init scripts (roles/pgsodium)
+              # exactly like the primary. We background it, wait for readiness, then
+              # restore into a fresh scratch DB and assert. archive_mode=off so the
+              # throwaway can never wal-push into the live prefix.
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=supabase_admin
+                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  echo "[drill] booting throwaway postgres on ephemeral volume ($(cat /work/dump-name))"
+                  docker-entrypoint.sh postgres \
+                    -c config_file=/etc/postgresql/postgresql.conf \
+                    -c hba_file=/etc/postgresql/pg_hba.conf \
+                    -c archive_mode=off -c archive_command=/bin/true &
+                  PG_PID=$!
 
-                  # Reap ALL leftover scratch DBs from prior runs, not just this
-                  # run's name. A run SIGKILLed after CREATE DATABASE (deadline /
-                  # eviction / OOM) skips the EXIT trap and leaves a full-size
-                  # restore_drill_* copy on the LIVE primary; because each run
-                  # picks a NEW timestamped name, a per-name drop would never
-                  # reap those orphans and they would accumulate until the PVC
-                  # fills. Match by prefix and drop every one before starting.
-                  # WITH (FORCE): the scratch DB can hold lingering connections
-                  # (autovacuum, a background worker) that made a plain DROP fail
-                  # with "database is being accessed by other users", orphaning a
-                  # full-size copy. FORCE terminates them first (PG13+).
-                  psql -d postgres -v ON_ERROR_STOP=1 -tAc \
-                    "SELECT 'DROP DATABASE IF EXISTS \"' || datname || '\" WITH (FORCE);' FROM pg_database WHERE datname LIKE 'restore_drill_%';" \
-                    | psql -d postgres -v ON_ERROR_STOP=1 -f -
+                  echo "[drill] waiting for the fresh instance to finish init + accept connections"
+                  for i in $(seq 1 {{ $rd.startupTimeoutSeconds | default 900 }}); do
+                    pg_isready -q -h 127.0.0.1 -U supabase_admin -d postgres && break
+                    kill -0 "$PG_PID" 2>/dev/null || { echo "[drill] FATAL: instance exited during init"; exit 1; }
+                    sleep 2
+                  done
+                  pg_isready -q -h 127.0.0.1 -U supabase_admin -d postgres \
+                    || { echo "[drill] FATAL: instance never became ready"; exit 1; }
 
-                  # Unique scratch DB name so a leftover from a killed run never
-                  # collides with the current one.
-                  SCRATCH="restore_drill_$(date -u +%Y%m%d%H%M%S)"
-                  echo "[drill] scratch database: $SCRATCH"
-                  cleanup() { psql -d postgres -c "DROP DATABASE IF EXISTS \"$SCRATCH\" WITH (FORCE);" || true; }
-                  trap cleanup EXIT
-
+                  SCRATCH="restore_drill"
                   psql -d postgres -c "CREATE DATABASE \"$SCRATCH\";"
-
-                  # SAFETY: disable ALL triggers for every connection to the
-                  # scratch DB before restoring. A full -Fc restore into an empty
-                  # DB already creates triggers in the post-data phase (after the
-                  # COPY), so app row triggers (audit / notifications / pg_net
-                  # webhooks) don't fire on the restored rows. This makes that a
-                  # HARD guarantee independent of dump layout: if the dump ever
-                  # became --data-only (restoring into pre-existing triggered
-                  # tables), COPY would otherwise fire every side-effecting
-                  # trigger against live infrastructure. session_replication_role
-                  # = replica set at the database level covers pg_restore's own
-                  # connections too. FK triggers are off as well, which is fine —
-                  # this is a recoverability drill, not an integrity check.
+                  # Triggers off for the whole restore (defense in depth: no audit/
+                  # notification/pg_net side effects fire even if the dump layout
+                  # changed). FK triggers off too — fine, this is a recoverability
+                  # check, and the fresh instance has no live consumers anyway.
                   psql -d postgres -c "ALTER DATABASE \"$SCRATCH\" SET session_replication_role = replica;"
 
-                  # Real restore into the scratch DB. --no-owner/--no-acl so the
-                  # restore doesn't depend on every role existing; this is a
-                  # recoverability check, not a byte-for-byte clone.
-                  #
-                  # pg_restore exits non-zero if ANY object errored, but a logical
-                  # restore into a RENAMED db always errors on objects that only
-                  # live in the real `postgres` db (pg_cron + its cron.* tables),
-                  # and re-adding constraints prod holds as NOT VALID re-validates
-                  # and can fail. Neither means the data is unrecoverable — so
-                  # don't let pg_restore's exit code red the gate. Judge
-                  # recoverability by the row-count assertion below; a genuinely
-                  # empty/broken restore still fails there.
-                  pg_restore --no-owner --no-acl -d "$SCRATCH" /tmp/latest.dump \
+                  # Restore. pg_cron still can't install unless the target DB name
+                  # matches cron.database_name, so a couple of benign pg_cron errors
+                  # remain — judge recoverability by the row-count assertion, same
+                  # as before. (Strict fail-on-error is a follow-up once pg_cron is
+                  # routed cleanly.)
+                  pg_restore --no-owner --no-acl -d "$SCRATCH" /work/latest.dump \
                     || echo "[drill] pg_restore reported ignored errors (above); validating via row count"
 
-                  # Assert the restored DB actually holds data: a core table must
-                  # exist and have a plausible row count. An empty/half restore
-                  # (that still listed cleanly) fails HERE, which is the point.
-                  TABLE="{{ .Values.backup.restoreDrill.assertTable }}"
-                  MIN="{{ .Values.backup.restoreDrill.assertMinRows }}"
+                  TABLE="{{ $rd.assertTable }}"; MIN="{{ $rd.assertMinRows }}"
                   COUNT=$(psql -d "$SCRATCH" -tAc "SELECT count(*) FROM ${TABLE};")
                   echo "[drill] restored ${TABLE} rows: ${COUNT} (require >= ${MIN})"
-                  if [ "${COUNT}" -lt "${MIN}" ]; then
-                    echo "[drill] FATAL: ${TABLE} has ${COUNT} rows (< ${MIN}) — restore is empty or incomplete"
-                    exit 1
-                  fi
-                  echo "[drill] restore drill PASSED for $LATEST"
+                  [ "${COUNT}" -ge "${MIN}" ] || { echo "[drill] FATAL: ${TABLE} has ${COUNT} rows (< ${MIN})"; exit 1; }
+
+                  echo "[drill] restore drill PASSED for $(cat /work/dump-name)"
+                  pg_ctl -D "$PGDATA" -m immediate stop || true
               env:
-                - name: PGHOST
-                  value: {{ include "pawtograder.postgres.host" . }}
-                - name: PGPORT
-                  value: {{ .Values.postgres.service.port | quote }}
-                - name: PGDATABASE
+                - name: POSTGRES_DB
                   value: {{ .Values.postgres.database | quote }}
-                # supabase_admin: same superuser the restore runbook uses, so
-                # CREATE DATABASE + extension restores don't hit permission walls.
-                - name: PGUSER
+                - name: POSTGRES_USER
                   value: supabase_admin
-                - name: PGPASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.secrets.names.postgres }}
-                      key: POSTGRES_PASSWORD
-                - name: S3_ENDPOINT
-                  value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
-                - name: S3_BUCKET
-                  value: {{ required "backup.s3.bucket is required when backup.enabled=true" .Values.backup.s3.bucket | quote }}
-                - name: AWS_ACCESS_KEY_ID
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.secrets.names.s3 }}
-                      key: AWS_ACCESS_KEY_ID
-                - name: AWS_SECRET_ACCESS_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.secrets.names.s3 }}
-                      key: AWS_SECRET_ACCESS_KEY
+                - name: PGDATA
+                  value: /scratch/pgdata
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.postgres }}, key: POSTGRES_PASSWORD } }
+                - name: PAWTOGRADER_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.postgres }}, key: PAWTOGRADER_PASSWORD } }
+                - name: JWT_SECRET
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.jwt }}, key: JWT_SECRET } }
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
+                - { name: work, mountPath: /work }
+                - { name: config, mountPath: /etc/postgresql/postgresql.conf, subPath: postgresql.conf }
+                - { name: config, mountPath: /etc/postgresql/pg_hba.conf, subPath: pg_hba.conf }
+                - { name: config, mountPath: /etc/postgresql/pgsodium_getkey.sh, subPath: pgsodium_getkey.sh }
+                - { name: config, mountPath: /docker-entrypoint-initdb.d/00-supabase-admin.sh, subPath: 00-supabase-admin.sh }
+                - { name: config, mountPath: /docker-entrypoint-initdb.d/zy-app-role.sh, subPath: init-app-role.sh }
+                - { name: config, mountPath: /docker-entrypoint-initdb.d/zz-supabase-passwords.sh, subPath: zz-supabase-passwords.sh }
+                - { name: pgsodium, mountPath: /var/run/secrets/pgsodium, readOnly: true }
+          volumes:
+            # Throwaway PGDATA — its own volume, off the primary's tier.
+            - name: scratch
+              ephemeral:
+                volumeClaimTemplate:
+                  metadata:
+                    annotations:
+                      trident.netapp.io/unixPermissions: "0777"
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ $rd.storageClass | default .Values.postgres.persistence.storageClass | quote }}
+                    resources:
+                      requests:
+                        storage: {{ $rd.scratchSize | default "100Gi" | quote }}
+            - name: work
+              emptyDir: {}
+            - name: config
+              configMap:
+                name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-config") }}
+                defaultMode: 0755
+            - name: pgsodium
+              secret:
+                secretName: {{ .Values.secrets.names.jwt }}
+                defaultMode: 0444
+                items:
+                  - { key: PGSODIUM_ROOT_KEY, path: PGSODIUM_ROOT_KEY, mode: 0444 }
 {{- end }}
