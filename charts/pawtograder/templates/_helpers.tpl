@@ -18,7 +18,11 @@ Usage: {{ include "pawtograder.componentStableLabels" (dict "ctx" . "component" 
 {{ include "pawtograder.selectorLabels" .ctx }}
 app.kubernetes.io/component: {{ .component }}
 app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
-{{- with .ctx.Values.global.commonLabels }}
+{{- /* commonLabels last, but strip the reserved selector keys: this label set
+     goes on a StatefulSet/Deployment pod template, and the selector is immutable
+     and must equal the template labels — a commonLabels override of name/
+     instance/component would break that contract, so drop those keys. */}}
+{{- with omit (.ctx.Values.global.commonLabels | default dict) "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
 {{ toYaml . }}
 {{- end }}
 {{- end -}}
