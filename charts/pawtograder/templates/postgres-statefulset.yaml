@@ -30,16 +30,17 @@ spec:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
-      # Version-STABLE labels only (selector labels, not componentLabels): the
-      # full labels carry helm.sh/chart + app.kubernetes.io/version, which change
-      # on every chart bump. Since a StatefulSet rolls its pods whenever the pod
-      # template changes, using componentLabels here rolled the PRIMARY on every
-      # version bump (even with no real config change) — a needless restart that,
-      # combined with the sidecars' slow SIGTERM, took the DB down for ~10 min.
-      # With selector labels + the version-independent checksum/config annotation,
-      # the template changes only when the actual postgres config does.
+      # Version-STABLE labels: full componentLabels MINUS helm.sh/chart +
+      # app.kubernetes.io/version (which change on every chart bump). A
+      # StatefulSet rolls its pods whenever the template changes, so the full
+      # componentLabels rolled the PRIMARY on every version bump (no real config
+      # change) — a needless restart that, with the sidecars' slow SIGTERM, took
+      # the DB down ~10 min. componentStableLabels keeps the stable common/managed
+      # labels (managed-by, global.commonLabels — needed by policy/cost/admission
+      # selectors) but drops only the version labels; with the version-independent
+      # checksum/config, the template changes only when the postgres config does.
       labels:
-        {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
+        {{- include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
       annotations:
         # Hash only the CONFIG content, not the chart-version-carrying metadata
         # labels (helm.sh/chart, app.kubernetes.io/version) that
@@ -192,7 +193,9 @@ spec:
               # (and cascading DB_HOST=nxdomain crashes in dependents).
               CHILD=""
               trap 'echo "[base-backup] SIGTERM — exiting"; [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null; exit 0' TERM INT
-              run() { "$@" & CHILD=$!; wait "$CHILD"; }
+              # Clear CHILD once the child reaps, so a SIGTERM landing between
+              # `run` calls can't kill an exited/reused PID.
+              run() { "$@" & CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return $rc; }
               echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s (keep ${KEEP})"
               run sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
               while true; do

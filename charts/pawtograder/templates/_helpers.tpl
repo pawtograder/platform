@@ -6,6 +6,24 @@ Expand the name of the chart.
 {{- end -}}
 
 {{/*
+Version-STABLE component labels: the full componentLabels set MINUS the two
+chart-version-carrying lines (helm.sh/chart, app.kubernetes.io/version). Use on
+a StatefulSet POD TEMPLATE so a chart-only version bump does not mutate the
+template and roll the pod, while still carrying the stable common/managed labels
+(app.kubernetes.io/managed-by, global.commonLabels, name/instance/component)
+that policy/cost-allocation/admission selectors rely on.
+Usage: {{ include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres") }}
+*/}}
+{{- define "pawtograder.componentStableLabels" -}}
+{{ include "pawtograder.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
+{{- with .ctx.Values.global.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Fully qualified app name. Truncated to 63 chars (DNS-1123 limit).
 */}}
 {{- define "pawtograder.fullname" -}}
