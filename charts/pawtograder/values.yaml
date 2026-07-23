@@ -252,6 +252,10 @@ secrets:
       # Used only when edgeFunctions.e2e.enabled=true
       endToEndSecret: ""
       edgeFunctionSecret: ""
+      # DB-trigger -> web cache-invalidation secret. Web envFroms pawtograder-e2e
+      # and the migrations Job seeds the vault cache_invalidation_secret from it,
+      # so both sides match. Empty -> invalidation degrades gracefully (off).
+      cacheInvalidationSecret: ""
     smtp:
       host: ""
       port: "587"
