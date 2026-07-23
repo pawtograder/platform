@@ -251,7 +251,8 @@ jobs:
             --from-literal=PAWTOGRADER_PASSWORD="$PAWTOGRADER_PASSWORD"
           kubectl -n "$NS" create secret generic pawtograder-e2e \
             --from-literal=END_TO_END_SECRET="$END_TO_END_SECRET" \
-            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET"
+            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET" \
+            --from-literal=CACHE_INVALIDATION_SECRET="$CACHE_INVALIDATION_SECRET"
           kubectl -n "$NS" create secret generic pawtograder-s3 \
             --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
             --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
