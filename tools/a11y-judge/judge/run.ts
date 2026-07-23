@@ -189,6 +189,26 @@ interface SampleResult {
   evidenceManifestPath: string;
 }
 
+function writeSampleFile(runDir: string, s: SampleResult): void {
+  fs.writeFileSync(
+    path.join(runDir, "samples", `${s.pageId}__${s.criterion}__s${s.sampleIndex}.json`),
+    JSON.stringify(
+      {
+        pageId: s.pageId,
+        criterion: s.criterion,
+        sampleIndex: s.sampleIndex,
+        cached: s.cached,
+        verdict: s.verdict,
+        rejectedFindings: s.rejectedFindings,
+        usage: s.usage,
+        evidenceManifestPath: s.evidenceManifestPath
+      },
+      null,
+      2
+    )
+  );
+}
+
 /** Majority vote across samples; ties resolve to the worse verdict. */
 export function majorityVerdict(values: VerdictValue[]): VerdictValue {
   const counts = new Map<VerdictValue, number>();
@@ -329,7 +349,11 @@ async function main(): Promise<void> {
         });
       }
     } else {
+      let done = 0;
       for (const p of pending) {
+        console.log(
+          `[a11y-judge] ${++done}/${pending.length} judging ${p.task.pageId}/${p.task.criterion} s${p.sampleIndex}…`
+        );
         try {
           const result = client
             ? await judgeBundle({
@@ -351,7 +375,7 @@ async function main(): Promise<void> {
             usage: result.usage
           };
           putCached(p.cacheKey, value);
-          samples.push({
+          const sample: SampleResult = {
             pageId: p.task.pageId,
             criterion: p.task.criterion,
             sampleIndex: p.sampleIndex,
@@ -361,7 +385,12 @@ async function main(): Promise<void> {
             rejectedFindings: value.rejectedFindings,
             usage: value.usage,
             evidenceManifestPath: p.task.manifestPath
-          });
+          };
+          samples.push(sample);
+          // Persist incrementally: a killed/crashed run keeps its finished
+          // judgments visible (the cache already had them; now samples/ too).
+          writeSampleFile(runDir, sample);
+          console.log(`[a11y-judge]   → ${value.verdict.verdict} (${value.verdict.confidence})`);
         } catch (e) {
           errors.push({
             pageId: p.task.pageId,
@@ -369,31 +398,15 @@ async function main(): Promise<void> {
             sampleIndex: p.sampleIndex,
             message: (e as Error).message
           });
+          console.log(`[a11y-judge]   → ERROR: ${(e as Error).message.slice(0, 120)}`);
         }
       }
     }
   }
 
-  // Write sample files.
+  // Write sample files (cache hits; fresh ones were written incrementally).
   for (const s of samples) {
-    const name = `${s.pageId}__${s.criterion}__s${s.sampleIndex}.json`;
-    fs.writeFileSync(
-      path.join(runDir, "samples", name),
-      JSON.stringify(
-        {
-          pageId: s.pageId,
-          criterion: s.criterion,
-          sampleIndex: s.sampleIndex,
-          cached: s.cached,
-          verdict: s.verdict,
-          rejectedFindings: s.rejectedFindings,
-          usage: s.usage,
-          evidenceManifestPath: s.evidenceManifestPath
-        },
-        null,
-        2
-      )
-    );
+    if (s.cached) writeSampleFile(runDir, s);
   }
 
   // Group by (pageId, criterion) and write majority files.
