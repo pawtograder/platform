@@ -177,7 +177,7 @@ const VISUAL_TEST_CSS = `
   }
 
   /*
-   * Width-stabilize "blackout" masks. `data-visual-test="blackout"` is Argos's
+   * Width-stabilize "blackout" masks. The data-visual-test="blackout" attribute is Argos's
    * own built-in convention: Argos paints a solid box over the element's live
    * bounding box at capture time. Unlike "transparent" (which we pin to a fixed
    * inline-size above), a raw blackout box is sized to whatever it wraps — and
@@ -225,6 +225,26 @@ const VISUAL_TEST_CSS = `
     top: auto !important;
     height: auto !important;
     max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /*
+   * The grading-summary aside is expanded above, but it sits inside a fixed-height
+   * overflow:hidden wrapper (a resizable-panel body) that has no stable class/attribute and can
+   * be left at an arbitrary scrollTop by an earlier reveal/focus. Because that wrapper is
+   * overflow:hidden (not auto/scroll), the runtime rubric expander — which only walks auto/scroll/
+   * overlay ancestors — never touches it, so the whole rubric sidebar is captured at a
+   * non-deterministic clip offset (the intermittent "Self-Review Rubric completed" / rubric-column
+   * flakes). Expand the aside's wrapper (and its parent) via :has() so there is no clip and no
+   * scroll offset to vary. Doing it in CSS (not the debounced observer) means a realtime re-render
+   * cannot undo it before capture; scoping to the aside's own ancestors keeps it off the
+   * side-by-side code column (they are separate resizable panels).
+   */
+  html[data-visual-tests] *:has(> [data-grading-summary-aside]),
+  html[data-visual-tests] *:has(> * > [data-grading-summary-aside]) {
+    max-height: none !important;
+    height: auto !important;
+    min-height: 0 !important;
     overflow: visible !important;
   }
 
