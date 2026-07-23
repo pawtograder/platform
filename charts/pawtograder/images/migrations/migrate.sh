@@ -404,3 +404,18 @@ if [ -n "${EDGE_FUNCTION_SECRET:-}" ]; then
   echo "[migrate] vault: setting edge-function-secret (redacted)"
   upsert_vault_secret "edge-function-secret" "${EDGE_FUNCTION_SECRET}"
 fi
+# Cache invalidation: the cache_invalidation_triggers migration POSTs to
+# <vercel_host>/api/cache/invalidate with the x-cache-invalidation-secret header
+# (validated by the web app against CACHE_INVALIDATION_SECRET). vercel_host is a
+# misnomer — it's just the web base URL; point it at the in-cluster web service.
+# Reading the secret from the SAME source the web app does (wired in
+# migrations-job.yaml) guarantees the values match. Absent → skip (invalidation
+# degrades gracefully; the trigger warns and no-ops).
+if [ -n "${CACHE_INVALIDATION_HOST:-}" ]; then
+  echo "[migrate] vault: setting vercel_host=${CACHE_INVALIDATION_HOST}"
+  upsert_vault_secret "vercel_host" "${CACHE_INVALIDATION_HOST}"
+fi
+if [ -n "${CACHE_INVALIDATION_SECRET:-}" ]; then
+  echo "[migrate] vault: setting cache_invalidation_secret (redacted)"
+  upsert_vault_secret "cache_invalidation_secret" "${CACHE_INVALIDATION_SECRET}"
+fi
