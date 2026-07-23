@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED deterministic SR replay spec — do not edit by hand.
- * Task: survey-taking__survey-complete   (generator v1)
- * Source trajectory: e1a83171ec03ca1b09c5c18b1db23d7593c30b71caf962286cd9eeab476feacc (run eval-new-tasks)
+ * Task: regrade-requests__regrade-status   (generator v1)
+ * Source trajectory: 026b4db3cfb5f1c9b33d7fa5ca3685994a0269016148fef0f6e796ee0ee66e2b (run eval-new-tasks)
  * Regenerate: npm run a11y:generate-specs
  *
  * Replays the agent's SR/keyboard command sequence with milestone assertions
@@ -29,108 +29,31 @@ test.use({ bypassCSP: true, video: VIDEO ? "on" : "off" });
 
 const PLAN: ReplayPlan = {
   "generatorVersion": "1",
-  "sourceTrajectoryHash": "e1a83171ec03ca1b09c5c18b1db23d7593c30b71caf962286cd9eeab476feacc",
-  "pageId": "survey-taking",
-  "taskId": "survey-complete",
-  "taskKind": "write",
-  "readNeedleKeys": [],
+  "sourceTrajectoryHash": "026b4db3cfb5f1c9b33d7fa5ca3685994a0269016148fef0f6e796ee0ee66e2b",
+  "pageId": "regrade-requests",
+  "taskId": "regrade-status",
+  "taskKind": "read",
+  "readNeedleKeys": [
+    "assignmentName"
+  ],
   "steps": [
     {
       "command": "moveToNextHeading"
     },
     {
-      "command": "readNext",
-      "arg": "25"
-    },
-    {
-      "command": "readNext",
-      "arg": "20"
-    },
-    {
-      "command": "moveToNextHeading"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "interact",
-      "milestone": "what is your name?"
-    },
-    {
-      "command": "type",
-      "arg": "Ada Lovelace",
-      "milestone": "what is your name?"
-    },
-    {
-      "command": "stopInteracting"
-    },
-    {
       "command": "moveToNextHeading"
     },
     {
       "command": "readNext",
-      "arg": "4"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "act",
-      "milestone": "just right"
-    },
-    {
-      "command": "moveToNextHeading"
+      "arg": "15"
     },
     {
       "command": "readNext",
-      "arg": "5"
+      "arg": "15"
     },
     {
-      "command": "previous"
-    },
-    {
-      "command": "act",
-      "milestone": "graphs"
-    },
-    {
-      "command": "moveToNextHeading"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "interact",
-      "milestone": "any other feedback?"
-    },
-    {
-      "command": "type",
-      "arg": "Great course overall, thank you!",
-      "milestone": "any other feedback?"
-    },
-    {
-      "command": "stopInteracting"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "act",
-      "milestone": "complete"
+      "command": "readNext",
+      "arg": "10"
     }
   ]
 };
@@ -169,7 +92,7 @@ test.afterEach(async ({ page }, testInfo) => {
   );
 });
 
-test("replay: survey-taking__survey-complete", async ({ page }) => {
+test("replay: regrade-requests__regrade-status", async ({ page }) => {
   test.setTimeout(VIDEO ? 600_000 : 300_000);
   const harness = await AtHarness.install(page, { videoOverlay: VIDEO });
   if (MUTATION && (!MUTATION.pageIds || MUTATION.pageIds.includes(PLAN.pageId))) await MUTATION.apply(page);

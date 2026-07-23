@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED deterministic SR replay spec — do not edit by hand.
- * Task: survey-taking__survey-complete   (generator v1)
- * Source trajectory: e1a83171ec03ca1b09c5c18b1db23d7593c30b71caf962286cd9eeab476feacc (run eval-new-tasks)
+ * Task: office-hours__help-request   (generator v1)
+ * Source trajectory: a83a6c476ba21ec9194029faa69b902d3a52d0d070b2a7629c96e360381ee86b (run eval-oh-retry2)
  * Regenerate: npm run a11y:generate-specs
  *
  * Replays the agent's SR/keyboard command sequence with milestone assertions
@@ -29,14 +29,89 @@ test.use({ bypassCSP: true, video: VIDEO ? "on" : "off" });
 
 const PLAN: ReplayPlan = {
   "generatorVersion": "1",
-  "sourceTrajectoryHash": "e1a83171ec03ca1b09c5c18b1db23d7593c30b71caf962286cd9eeab476feacc",
-  "pageId": "survey-taking",
-  "taskId": "survey-complete",
+  "sourceTrajectoryHash": "a83a6c476ba21ec9194029faa69b902d3a52d0d070b2a7629c96e360381ee86b",
+  "pageId": "office-hours",
+  "taskId": "help-request",
   "taskKind": "write",
   "readNeedleKeys": [],
   "steps": [
     {
+      "command": "restartFromTop"
+    },
+    {
       "command": "moveToNextHeading"
+    },
+    {
+      "command": "readNext",
+      "arg": "20"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "readNext",
+      "arg": "20"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "previous"
+    },
+    {
+      "command": "act",
+      "milestone": "new request"
+    },
+    {
+      "command": "restartFromTop"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
     },
     {
       "command": "readNext",
@@ -47,10 +122,35 @@ const PLAN: ReplayPlan = {
       "arg": "20"
     },
     {
-      "command": "moveToNextHeading"
+      "command": "restartFromTop"
     },
     {
-      "command": "next"
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "readNext",
+      "arg": "18"
+    },
+    {
+      "command": "readNext",
+      "arg": "6"
+    },
+    {
+      "command": "readNext",
+      "arg": "10"
     },
     {
       "command": "next"
@@ -60,77 +160,90 @@ const PLAN: ReplayPlan = {
     },
     {
       "command": "interact",
-      "milestone": "what is your name?"
+      "milestone": "help request description"
     },
     {
       "command": "type",
-      "arg": "Ada Lovelace",
-      "milestone": "what is your name?"
+      "arg": "Keyboard-only navigation check: how do I run the autograder locally?",
+      "milestone": "help request description"
     },
     {
       "command": "stopInteracting"
     },
     {
-      "command": "moveToNextHeading"
+      "command": "next"
     },
     {
       "command": "readNext",
-      "arg": "4"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "next"
+      "arg": "25"
     },
     {
       "command": "act",
-      "milestone": "just right"
+      "milestone": "submit request"
     },
     {
-      "command": "moveToNextHeading"
+      "command": "next"
     },
     {
       "command": "readNext",
-      "arg": "5"
+      "arg": "10"
+    },
+    {
+      "command": "restartFromTop"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "readNext",
+      "arg": "20"
+    },
+    {
+      "command": "readNext",
+      "arg": "6"
+    },
+    {
+      "command": "act",
+      "milestone": "privacy (optional)"
+    },
+    {
+      "command": "readNext",
+      "arg": "12"
     },
     {
       "command": "previous"
     },
     {
       "command": "act",
-      "milestone": "graphs"
+      "milestone": "submit request"
     },
     {
-      "command": "moveToNextHeading"
+      "command": "moveToNextLandmark"
     },
     {
-      "command": "next"
+      "command": "readNext",
+      "arg": "25"
     },
     {
-      "command": "next"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "interact",
-      "milestone": "any other feedback?"
-    },
-    {
-      "command": "type",
-      "arg": "Great course overall, thank you!",
-      "milestone": "any other feedback?"
-    },
-    {
-      "command": "stopInteracting"
-    },
-    {
-      "command": "next"
-    },
-    {
-      "command": "act",
-      "milestone": "complete"
+      "command": "readNext",
+      "arg": "25"
     }
   ]
 };
@@ -169,7 +282,7 @@ test.afterEach(async ({ page }, testInfo) => {
   );
 });
 
-test("replay: survey-taking__survey-complete", async ({ page }) => {
+test("replay: office-hours__help-request", async ({ page }) => {
   test.setTimeout(VIDEO ? 600_000 : 300_000);
   const harness = await AtHarness.install(page, { videoOverlay: VIDEO });
   if (MUTATION && (!MUTATION.pageIds || MUTATION.pageIds.includes(PLAN.pageId))) await MUTATION.apply(page);
