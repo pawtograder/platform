@@ -1555,6 +1555,68 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
   }
   return officeHoursQueueData;
 }
+
+/**
+ * Seed a help request directly in the DB (office-hours.test.tsx creates them
+ * through the UI; a11y evidence/agent seeding needs them pre-existing).
+ * Uses the class's auto-created "office-hours" queue unless `help_queue_id`
+ * is given, and links the student via help_request_students.
+ */
+export async function insertHelpRequest({
+  class_id,
+  student_profile_id,
+  request,
+  help_queue_id,
+  status = "open"
+}: {
+  class_id: number;
+  student_profile_id: string;
+  request: string;
+  help_queue_id?: number;
+  status?: "open" | "in_progress" | "resolved" | "closed";
+}): Promise<{ id: number; help_queue_id: number }> {
+  let queueId = help_queue_id;
+  if (!queueId) {
+    const { data: queue, error: queueError } = await supabase
+      .from("help_queues")
+      .select("id")
+      .eq("class_id", class_id)
+      .eq("name", "office-hours")
+      .single();
+    if (queueError || !queue) {
+      throw new Error(`Failed to find office hours queue: ${queueError?.message ?? "not found"}`);
+    }
+    queueId = queue.id;
+  }
+
+  const { data: helpRequest, error: requestError } = await supabase
+    .from("help_requests")
+    .insert({
+      class_id,
+      help_queue: queueId,
+      request,
+      status,
+      created_by: student_profile_id,
+      is_private: false,
+      location_type: "remote"
+    })
+    .select("id")
+    .single();
+  if (requestError || !helpRequest) {
+    throw new Error(`Failed to create help request: ${requestError?.message ?? "no row"}`);
+  }
+
+  const { error: studentLinkError } = await supabase.from("help_request_students").insert({
+    class_id,
+    help_request_id: helpRequest.id,
+    profile_id: student_profile_id
+  });
+  if (studentLinkError) {
+    throw new Error(`Failed to link student to help request: ${studentLinkError.message}`);
+  }
+
+  return { id: helpRequest.id, help_queue_id: queueId };
+}
 const assignmentIdx = {
   lab: 1,
   assignment: 1

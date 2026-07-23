@@ -1,6 +1,16 @@
+import { addDays } from "date-fns";
 import { expect, test } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser } from "./TestingUtils";
+import {
+  createClass,
+  createRegradeRequest,
+  createUsersInClass,
+  insertAssignment,
+  insertHelpRequest,
+  insertPreBakedSubmission,
+  loginAsUser
+} from "./TestingUtils";
 import { assertPageHasLandmarks, assertSkipLinksWork, assertStudentPageAccessible } from "./axeStudentA11y";
+import { A11Y_CODE_FILES, A11Y_CODE_FILE_NAME } from "./a11yAgentSeeding";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -143,5 +153,92 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
       focusRing.outline !== "none" || focusRing.shadow !== "none",
       `focused search input has a visible indicator (outline=${focusRing.outline}, shadow=${focusRing.shadow})`
     ).toBe(true);
+  });
+});
+
+test.describe("a11y smoke — seeded student pages (assignments, files/Monaco, regrade, office hours)", () => {
+  let course: Course;
+  let student: User;
+  let submissionFilesUrl: string;
+
+  test.beforeAll(async () => {
+    course = await createClass();
+    const users = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "A11y Seeded Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "A11y Seeded Instructor", useMagicLink: true }
+    ]);
+    const [seededStudent, instructor] = users;
+    student = seededStudent;
+
+    const assignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "A11y Smoke Assignment",
+      assignment_slug: `e2e-a11y-smoke-${course.id}`
+    });
+    const sub = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id,
+      files: A11Y_CODE_FILES
+    });
+    submissionFilesUrl = `/course/${course.id}/assignments/${assignment.id}/submissions/${sub.submission_id}/files`;
+    await createRegradeRequest(
+      sub.submission_id,
+      assignment.id,
+      student.private_profile_id,
+      instructor.private_profile_id,
+      assignment.rubricChecks[0]!.id,
+      course.id,
+      "opened"
+    );
+    await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student.private_profile_id,
+      request: "Seeded question: my tests pass locally but fail on the autograder."
+    });
+  });
+
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student]);
+  });
+
+  test("assignments list with seeded content passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.getByText("A11y Smoke Assignment").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "assignments list (seeded)");
+    await assertStudentPageAccessible(page, "assignments list (seeded)");
+  });
+
+  test("submission files page (Monaco in scope) passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(submissionFilesUrl);
+    await expect(page.getByText(A11Y_CODE_FILE_NAME).first()).toBeVisible({ timeout: 30_000 });
+    // Monaco is deliberately NOT excluded from this scan — the read-only code
+    // viewer is configured for accessibility (components/ui/code-file-monaco.tsx).
+    await page
+      .locator(".monaco-editor")
+      .first()
+      .waitFor({ state: "visible", timeout: 60_000 })
+      .catch(() => {});
+    await assertPageHasLandmarks(page, "submission files");
+    await assertStudentPageAccessible(page, "submission files");
+  });
+
+  test("regrade requests page passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/regrade-requests`);
+    await expect(page.locator("#main-content, main").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "regrade requests");
+    await assertStudentPageAccessible(page, "regrade requests");
+  });
+
+  test("office hours queue page passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/office-hours`);
+    await expect(page.locator("#main-content, main").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "office hours");
+    await assertStudentPageAccessible(page, "office hours");
   });
 });
