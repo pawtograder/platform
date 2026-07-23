@@ -182,17 +182,25 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    DRILL_NS=pg-promote-drill
    DRILL_PREFIX="s3://pawtograder-drill/$(uuidgen)"   # exact, collision-resistant
    kubectl create namespace "$DRILL_NS"
+
+   # The replica render-guard requires walg.enabled, and both WAL-G and the
+   # storage API read S3 creds from the `pawtograder-s3` Secret — which the
+   # preview overlay's autogenerate path does NOT create. Create it by hand,
+   # pointing at a SCRATCH bucket you can wipe (never a real WALG_S3_PREFIX):
+   kubectl -n "$DRILL_NS" create secret generic pawtograder-s3 \
+     --from-literal=AWS_ACCESS_KEY_ID="$DRILL_S3_KEY" \
+     --from-literal=AWS_SECRET_ACCESS_KEY="$DRILL_S3_SECRET"
+
    helm install drill charts/pawtograder -n "$DRILL_NS" \
      -f charts/pawtograder/examples/values-preview.yaml \
      --set fullnameOverride=drill \
      --set global.hostname="drill.invalid" \
      --set postgres.replica.enabled=true \
      --set postgres.walg.enabled=true \
+     --set postgres.walg.s3Endpoint="$DRILL_S3_ENDPOINT" \
      --set postgres.walg.s3Prefix="$DRILL_PREFIX/walg"
-   # The replica render-guard requires walg.enabled, so point walg at a SCRATCH
-   # bucket + creds (its own pawtograder-s3 secret / --set postgres.walg.* env);
-   # it must not share a real WALG_S3_PREFIX. Wait for drill-postgres-0 and
-   # drill-postgres-replica-0 Ready, then run the "Verifying" queries above.
+   # Wait for drill-postgres-0 and drill-postgres-replica-0 Ready, then run the
+   # "Verifying" queries above to confirm the standby is streaming.
    ```
 
    > The unique, throwaway prefix is the whole safety story: two primaries (the
@@ -237,17 +245,25 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
        SELECT count(*) FROM drill_marker;"                                   # >= 2
    ```
 
-5. **Rebuild a standby of the new primary** (the post-failover
-   rebuild-the-standby step operators most often forget): delete the old
-   primary's PVC and re-create the standby so it re-bootstraps via
-   `pg_basebackup` from the promoted node, then confirm it reaches `streaming`:
+5. **Understand the role-reversal limit (do not create a split brain).** After
+   step 3 the promoted node is `drill-postgres-replica-0`; the `drill-postgres`
+   StatefulSet (scaled to 0) still holds the stale old-primary data. This chart
+   has **no in-place role reversal** — `postgres-statefulset.yaml` always renders
+   a _primary_ and `postgres-replica.yaml` always renders a _standby that
+   bootstraps from the `drill-postgres` Service_. So:
 
-   ```bash
-   kubectl -n "$DRILL_NS" delete pvc data-drill-postgres-0
-   # re-create/point the standby at the new primary per your rebuild step, then:
-   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
-     psql -U supabase_admin -d postgres -c "SELECT state FROM pg_stat_replication;"
-   ```
+   > **Never scale `drill-postgres` back up as-is.** It returns as an independent
+   > primary on divergent data — exactly the split brain the failover runbook
+   > exists to prevent. (Rehearsing this footgun _safely_ in the scratch namespace
+   > is a legitimate part of the drill: confirm you recognize it.)
+
+   A clean "rebuild a standby of the new primary" is therefore a **redeploy /
+   values reconcile**, not an in-place command: in a real incident you promote the
+   recovered data into a rebuilt primary and let a fresh standby bootstrap from it
+   (the [manual failover](#manual-failover-promote-the-standby) rebuild note), and
+   automatic role reversal is the deferred Patroni/CloudNativePG work
+   (PRODUCTION-READINESS §1.1). For the drill, the rehearsal ends at a verified
+   promotion; the standby rebuild is exercised by tearing down and reinstalling.
 
 6. **Tear down** — the namespace and its throwaway archive prefix go together, so
    nothing lingers:

@@ -111,12 +111,15 @@ pull on the new node.
    exactly in step 5:
 
    ```bash
-   # Record what to restore (note replicas AND any HPA min/max), THEN scale down.
+   # Record what to restore (replicas AND the HPA's min/max), THEN scale down.
    kubectl -n "$NS" get deploy,hpa -o wide > /tmp/pg-maint-scale-$(date +%s).txt
+   # edge-functions is HPA-managed. You cannot "pause" it by patching
+   # minReplicas:0/maxReplicas:0 — this chart's HPA scales on Resource CPU/memory
+   # metrics, where minReplicas:0 needs the HPAScaleToZero gate and maxReplicas:0
+   # is rejected outright. DELETE the HPA first (recorded above) so it stops
+   # reconciling, then scale the Deployment:
+   kubectl -n "$NS" delete hpa <release>-functions
    kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=<release> --replicas=0
-   # edge-functions is HPA-managed: pause the HPA or it re-scales the deploy.
-   kubectl -n "$NS" patch hpa <release>-functions \
-     -p '{"spec":{"minReplicas":0,"maxReplicas":0}}' 2>/dev/null || true
    ```
 
 2. **Confirm the standby is caught up** before you disturb the primary — a
@@ -179,15 +182,16 @@ pull on the new node.
 
 5. **Bring the app back** and run the
    [smoke checklist](./production-install.md#smoke-test). Drop the maintenance
-   page. If you scaled down in step 1, restore the recorded replica counts and
-   un-pause the HPA (do **not** hardcode a number — read it back from the file
-   you saved):
+   page. If you scaled down in step 1, restore each Deployment to the replica
+   count you recorded (do **not** hardcode a number — read it back from the saved
+   file) and **recreate the HPA** you deleted, so autoscaling resumes:
 
    ```bash
-   # Restore each Deployment to the replica count recorded in step 1's file,
-   # then restore the functions HPA min/max to their prior values.
-   kubectl -n "$NS" patch hpa <release>-functions \
-     -p '{"spec":{"minReplicas":<recorded-min>,"maxReplicas":<recorded-max>}}'
+   # Restore each Deployment to the replica count recorded in step 1's file, then
+   # recreate the functions HPA from its recorded min/max (a redeploy of the Helm
+   # release also re-creates it from values — the cleaner GitOps path).
+   kubectl -n "$NS" autoscale deploy <release>-functions \
+     --min=<recorded-min> --max=<recorded-max> --cpu-percent=<recorded-target>
    ```
 
 ---
