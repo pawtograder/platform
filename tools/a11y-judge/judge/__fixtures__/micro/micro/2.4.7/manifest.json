@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "page": {
+    "id": "micro",
+    "route": "/micro",
+    "title": "Micro focus-visible fixture",
+    "viewport": {
+      "width": 40,
+      "height": 40
+    },
+    "browser": "chromium"
+  },
+  "criterion": "2.4.7",
+  "collector": {
+    "name": "micro-fixture",
+    "version": "1.0.0"
+  },
+  "collectedAt": "2026-07-13T00:00:00.000Z",
+  "probes": [
+    {
+      "type": "focus-indicator",
+      "id": "focus-2.4.7-micro",
+      "stops": [
+        {
+          "n": 1,
+          "tag": "button",
+          "role": "button",
+          "name": "Submit",
+          "testId": "submit-btn",
+          "outline": "rgb(0, 0, 0) none 0px",
+          "boxShadow": "none",
+          "borderColor": "rgb(209, 213, 219)",
+          "focusVisibleAttr": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 40,
+            "h": 40
+          },
+          "focusedAttachmentId": "att-000-micro-focused.png",
+          "referenceAttachmentId": null
+        }
+      ]
+    }
+  ],
+  "attachments": [
+    {
+      "file": "att-000-micro-focused.png",
+      "sha256": "318573931d405194d146361cde1b827edeafb3cee989d49538b6ccdba5e9842c",
+      "mime": "image/png",
+      "role": "focused",
+      "probeId": "focus-2.4.7-micro"
+    }
+  ],
+  "contentHash": "83b6e392138bc3d09e1d4d74bc2da61356d00cab850ee7fd21134cf5b62305c6"
+}
