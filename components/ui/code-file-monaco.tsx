@@ -1326,6 +1326,15 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             onMount={handleEditorDidMount}
             options={{
               readOnly: true,
+              // Screen-reader support: name the editor after the file, force
+              // SR-optimized output (the simulated/virtual SRs used by our a11y
+              // harness are not detected by "auto"), read in large chunks, and
+              // let Tab move focus out — a read-only viewer must not be a
+              // keyboard trap (WCAG 2.1.2).
+              ariaLabel: currentFile ? `Code viewer: ${currentFile.name}` : "Code viewer",
+              accessibilitySupport: "on",
+              accessibilityPageSize: 100,
+              tabFocusMode: true,
               lineNumbers: "on",
               glyphMargin: true,
               minimap: { enabled: true },

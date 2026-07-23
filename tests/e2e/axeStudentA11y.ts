@@ -5,9 +5,12 @@ import * as path from "node:path";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 
 const DEFAULT_EXCLUDES = [
-  // Third-party / rich editors often fail strict axe rules without affecting core app UX in E2E.
-  ".monaco-editor",
-  ".monaco-mouse-cursor-text",
+  // NOTE: Monaco (`.monaco-editor`) is deliberately NOT excluded. The read-only
+  // code viewer is configured for accessibility (ariaLabel /
+  // accessibilitySupport:"on" / tabFocusMode — components/ui/code-file-monaco.tsx)
+  // and axe scans it like first-party UI. If a scan surfaces a violation inside
+  // Monaco internals we cannot configure away, re-add the *narrowest* selector
+  // here with the axe rule id and reason.
   // SurveyJS emits its own tree with unlabeled buttons and low-contrast palette.
   // Cover both legacy (sv-) and modern (sd-) class prefixes plus its action surfaces.
   "[data-surveyjs]",
