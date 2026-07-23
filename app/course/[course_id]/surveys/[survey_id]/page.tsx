@@ -2,7 +2,7 @@
 
 import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import dynamic from "next/dynamic";
@@ -10,6 +10,8 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
+
+const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -34,6 +36,25 @@ export default function SurveyTakingPage() {
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
+  // that can race the Complete upsert: an autosave carrying is_submitted:false
+  // that lands after the submit upsert silently reverts the submission. The
+  // refs (not state) are needed because the guards must be visible synchronously
+  // inside the SurveyJS event callbacks.
+  const isSubmittingRef = useRef(false);
+  const hasSubmittedRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Load existing response for this user
   useEffect(() => {
@@ -89,6 +110,8 @@ export default function SurveyTakingPage() {
   const saveResponseToDb = useCallback(
     async (responseData: ResponseData, isSubmitted: boolean) => {
       if (!survey || !private_profile_id) return;
+      // Never downgrade a submitted response back to a draft.
+      if (!isSubmitted && hasSubmittedRef.current) return;
 
       const upsertData: {
         survey_id: string;
@@ -135,8 +158,19 @@ export default function SurveyTakingPage() {
       const surveyData = surveyModel.data;
 
       setIsSubmitting(true);
+      isSubmittingRef.current = true;
+      // Cancel any pending autosave and wait out any in-flight one so the
+      // submit upsert is guaranteed to be the last write.
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
       try {
+        if (autosaveInFlightRef.current) {
+          await autosaveInFlightRef.current.catch(() => {});
+        }
         await saveResponseToDb(surveyData, true);
+        hasSubmittedRef.current = true;
 
         toaster.create({
           title: "Survey Submitted",
@@ -157,26 +191,36 @@ export default function SurveyTakingPage() {
         });
       } finally {
         setIsSubmitting(false);
+        isSubmittingRef.current = false;
       }
     },
     [private_profile_id, survey, course_id, router, saveResponseToDb]
   );
 
   const handleValueChanged = useCallback(
-    async (surveyModel: Model, options?: ValueChangedEvent) => {
+    (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
       if (!private_profile_id || !survey || !survey.allow_response_editing) return;
+      if (isSubmittingRef.current || hasSubmittedRef.current) return;
 
       // Extract only the survey data from the model, not the entire model object
       const surveyData = surveyModel.data;
 
-      // Auto-save on value change if editing is allowed
-      try {
-        await saveResponseToDb(surveyData, false);
-      } catch (error) {
-        console.error("Error auto-saving response:", error);
-        // Don't show error toast for auto-save failures to avoid spam
-      }
+      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke
+      // and again on blur; only the trailing edit needs persisting.
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = setTimeout(() => {
+        autosaveTimerRef.current = null;
+        if (isSubmittingRef.current || hasSubmittedRef.current) return;
+        const inFlight = saveResponseToDb(surveyData, false).catch((error) => {
+          console.error("Error auto-saving response:", error);
+          // Don't show error toast for auto-save failures to avoid spam
+        });
+        autosaveInFlightRef.current = inFlight;
+        void inFlight.finally(() => {
+          if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
+        });
+      }, AUTOSAVE_DEBOUNCE_MS);
     },
     [private_profile_id, survey, saveResponseToDb]
   );
