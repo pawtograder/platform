@@ -1,0 +1,16 @@
+-- Enable pg_buffercache so public.database_ram_metrics() (added in
+-- 20260325000000_autovacuum_tuning.sql) can report buffer-cache metrics instead
+-- of RAISEing a WARNING on every call. The metrics edge function
+-- (supabase/functions/metrics/index.ts) invokes database_ram_metrics() on every
+-- Prometheus scrape, so a missing extension spams the postgres log with
+-- "pg_buffercache extension not installed" once per scrape.
+--
+-- MUST be created in `public`: database_ram_metrics() runs with
+-- `SET search_path = pg_catalog, public` and references `pg_buffercache`
+-- unqualified. If the extension were installed elsewhere (e.g. the supabase
+-- `extensions` schema), the pg_extension existence check would pass but the
+-- `FROM pg_buffercache` query would then ERROR — worse than the warning.
+--
+-- pg_buffercache is a lightweight, read-only contrib extension (a view over
+-- shared_buffers); it needs no shared_preload_libraries.
+CREATE EXTENSION IF NOT EXISTS pg_buffercache WITH SCHEMA public;

@@ -69,6 +69,34 @@ spec:
           {{- /* opted out by default (postgres.containerSecurityContext: {});
                renders only if an overlay sets one */}}
           {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 10 }}
+          # Fast shutdown on pod termination. k8s sends SIGTERM, which postgres
+          # treats as SMART shutdown — it waits for existing sessions to close,
+          # and the app holds many long-lived ones (realtime/PostgREST LISTEN),
+          # so termination could ride the full terminationGracePeriodSeconds to a
+          # SIGKILL. This preStop does a FAST shutdown (disconnect clients, roll
+          # back open txns, checkpoint, exit — seconds) BEFORE the SIGTERM, so a
+          # roll / node drain terminates promptly and cleanly.
+          #
+          # pg_ctl REFUSES to run as root. The container may be root (chart
+          # default: containerSecurityContext {} — the entrypoint needs root for
+          # first-boot chown, then drops to postgres itself) or already postgres
+          # (when an overlay sets runAsUser, as values-prod does). Drop to the
+          # postgres user via gosu when root; run directly otherwise. No `|| true`
+          # mask: a failed fast shutdown must surface (k8s proceeds to SIGTERM +
+          # the grace backstop regardless), instead of silently falling back to
+          # the slow smart shutdown this hook exists to avoid.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    if [ "$(id -u)" = "0" ]; then
+                      exec gosu postgres pg_ctl -D "$PGDATA" -m fast -w -t {{ .Values.postgres.fastShutdownTimeoutSeconds | default 120 }} stop
+                    else
+                      exec pg_ctl -D "$PGDATA" -m fast -w -t {{ .Values.postgres.fastShutdownTimeoutSeconds | default 120 }} stop
+                    fi
           ports:
             - name: postgres
               containerPort: 5432
