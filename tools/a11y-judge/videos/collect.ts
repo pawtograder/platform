@@ -123,22 +123,30 @@ export function collectVideos(
   runId: string
 ): { entries: GalleryEntry[]; runDir: string } {
   const sidecars = findSidecars(resultsDir);
-  const metas: VideoMeta[] = [];
+  const metas: (VideoMeta & { sidecarDir: string })[] = [];
   for (const sidecar of sidecars) {
     try {
-      metas.push(JSON.parse(fs.readFileSync(sidecar, "utf8")) as VideoMeta);
+      const meta = JSON.parse(fs.readFileSync(sidecar, "utf8")) as VideoMeta;
+      metas.push({ ...meta, sidecarDir: path.dirname(sidecar) });
     } catch {
       console.warn(`skipping unreadable sidecar: ${sidecar}`);
     }
   }
-  const best = pickBestPerTask(metas);
+  const best = pickBestPerTask(metas) as (VideoMeta & { sidecarDir: string })[];
   const runDir = path.join(outRoot, runId);
   fs.mkdirSync(runDir, { recursive: true });
 
   const entries: GalleryEntry[] = best.map((meta) => {
     const fileName = `${taskKey(meta)}.webm`;
-    if (meta.videoPath && fs.existsSync(meta.videoPath)) {
-      fs.copyFileSync(meta.videoPath, path.join(runDir, fileName));
+    // page.video().path() promises a temp artifacts path; on context close
+    // Playwright MOVES the file into the test's outputDir as video.webm. Try
+    // the promised path first, then the sidecar's sibling video.webm.
+    const candidates = [meta.videoPath, path.join(meta.sidecarDir, "video.webm")].filter((p): p is string =>
+      Boolean(p)
+    );
+    const source = candidates.find((p) => fs.existsSync(p));
+    if (source) {
+      fs.copyFileSync(source, path.join(runDir, fileName));
       return { ...meta, videoFile: fileName };
     }
     return { ...meta, videoFile: null };
