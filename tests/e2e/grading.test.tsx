@@ -460,8 +460,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // discussion" textbox in the same spot, so the leftover cursor lands on it and paints a
     // hover border in some runs but not others (confirmed flaky: soak reps split 3-vs-2 on a
     // ~1056×128 block that is exactly this textbox). Park the cursor off-canvas and drop focus so
-    // the box is captured in its neutral (unhovered, unfocused) state every run.
-    await page.mouse.move(0, 0);
+    // the box is captured in its neutral (unhovered, unfocused) state every run. Use a negative
+    // (off-viewport) coordinate rather than (0,0): (0,0) is the top-left corner, which just moves
+    // the hover onto whatever element sits there — a negative point hit-tests to nothing, so no
+    // element is left hovered (Playwright does not clamp the coordinate).
+    await page.mouse.move(-20, -20);
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await visualScreenshot(page, "Student can add a comment to open the regrade request", {
       stabilizeRubric: "Grading Rubric"
