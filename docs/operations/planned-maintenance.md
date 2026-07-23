@@ -180,19 +180,22 @@ pull on the new node.
    The `PawtograderReplicaNotStreaming` / `PawtograderReplicaLagHigh` alerts
    (when `postgres.replica.enabled`) should clear once the standby reconnects.
 
-5. **Bring the app back** and run the
-   [smoke checklist](./production-install.md#smoke-test). Drop the maintenance
-   page. If you scaled down in step 1, restore each Deployment to the replica
-   count you recorded (do **not** hardcode a number — read it back from the saved
-   file) and **recreate the HPA** you deleted, so autoscaling resumes:
+5. **Bring the app back — restore first, drop the maintenance page last.** With
+   the maintenance gate still up (so users don't hit empty services / 502s while
+   pods start), restore the app, verify health, run the
+   [smoke checklist](./production-install.md#smoke-test), and only then remove the
+   maintenance page. If you scaled down in step 1:
 
-   ```bash
-   # Restore each Deployment to the replica count recorded in step 1's file, then
-   # recreate the functions HPA from its recorded min/max (a redeploy of the Helm
-   # release also re-creates it from values — the cleaner GitOps path).
-   kubectl -n "$NS" autoscale deploy <release>-functions \
-     --min=<recorded-min> --max=<recorded-max> --cpu-percent=<recorded-target>
-   ```
+   - Restore each Deployment to the replica count you recorded (do **not**
+     hardcode a number — read it back from the saved file).
+   - **Recreate the deleted HPA by reconciling the Helm release**
+     (`helm upgrade` with the same values), not `kubectl autoscale`: the chart's
+     `edge-functions-hpa.yaml` is an `autoscaling/v2` HPA with **both** CPU and
+     memory Resource metrics plus custom scale-up/down behavior, none of which a
+     `kubectl autoscale` (CPU-target v1-style) HPA reproduces. Helm owns it, so a
+     reconcile restores it exactly.
+
+   Drop the maintenance page only after the smoke checklist passes.
 
 ---
 

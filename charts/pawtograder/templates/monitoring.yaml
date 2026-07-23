@@ -57,24 +57,34 @@ data:
     # it harmless even if an exporter is ever added to the replica: on a standby
     # the CASE takes the THEN branch and the LSN subquery is never evaluated. The
     # outer SELECT always returns exactly one row so the series is stable.
+    #
+    # PHYSICAL standbys only: pg_stat_replication has one row per WAL sender, which
+    # includes LOGICAL replication clients. This is a wal_level=logical Supabase
+    # stack, and Realtime streams via logical replication as user `supabase_admin`
+    # (realtime.yaml DB_USER) — counting those rows would let a live Realtime
+    # connection mask a dead physical standby, and skew the lag max. The physical
+    # standby authenticates as `supabase_replication_admin` (postgres-replica.yaml
+    # primary_conninfo / postgres-config.yaml), so filter on that role.
     pawtograder_replication:
       query: |
         SELECT
-          (SELECT count(*) FROM pg_stat_replication WHERE state = 'streaming')::float
+          (SELECT count(*) FROM pg_stat_replication
+             WHERE state = 'streaming' AND usename = 'supabase_replication_admin')::float
             AS streaming_standbys,
           COALESCE(
             CASE WHEN pg_is_in_recovery() THEN 0
                  ELSE (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))
-                       FROM pg_stat_replication)
+                       FROM pg_stat_replication
+                       WHERE usename = 'supabase_replication_admin')
             END, 0)::float AS max_replay_lag_bytes
       master: true
       metrics:
         - streaming_standbys:
             usage: "GAUGE"
-            description: "Number of standbys in state=streaming per pg_stat_replication (primary side)"
+            description: "Physical standbys (supabase_replication_admin) in state=streaming per pg_stat_replication (primary side)"
         - max_replay_lag_bytes:
             usage: "GAUGE"
-            description: "Max WAL bytes between the primary's current LSN and any standby's replay_lsn (0 on a standby)"
+            description: "Max WAL bytes between the primary's current LSN and any physical standby's replay_lsn (0 on a standby)"
 
     # WAL-G continuous archiving health. With postgres.walg.enabled the primary
     # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
