@@ -177,6 +177,31 @@ const VISUAL_TEST_CSS = `
   }
 
   /*
+   * Width-stabilize "blackout" masks. The data-visual-test="blackout" attribute is Argos's
+   * own built-in convention: Argos paints a solid box over the element's live
+   * bounding box at capture time. Unlike "transparent" (which we pin to a fixed
+   * inline-size above), a raw blackout box is sized to whatever it wraps — and
+   * the two blackout usages in the app wrap DATES ("· Submitted <relative>",
+   * "commented on MMM d, yyyy"). A date's rendered width depends on the calendar
+   * day, so the blackout box's right edge shifts run-to-run across CI builds run
+   * on different days, and Argos flags the whole view "changed" (the residual
+   * grading/self-review/regrade cluster — carets and rubric scroll aside). The
+   * date TEXT is already hidden; only its WIDTH leaks. Pin blackout elements to a
+   * deterministic inline-size (same mechanism that keeps the 45 "transparent"
+   * dates stable) so the box Argos masks is identical every run. Not a masking
+   * hack — the content is masked by design; this only removes a width wobble.
+   */
+  html[data-visual-tests] [data-visual-test="blackout"] {
+    display: inline-block !important;
+    inline-size: 24ch !important;
+    min-inline-size: 24ch !important;
+    max-inline-size: 24ch !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    vertical-align: baseline !important;
+  }
+
+  /*
    * Remove transient UI entirely. The element remains in the DOM, but does
    * not affect visual layout or screenshots while visual tests are active.
    */
@@ -200,6 +225,26 @@ const VISUAL_TEST_CSS = `
     top: auto !important;
     height: auto !important;
     max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /*
+   * The grading-summary aside is expanded above, but it sits inside a fixed-height
+   * overflow:hidden wrapper (a resizable-panel body) that has no stable class/attribute and can
+   * be left at an arbitrary scrollTop by an earlier reveal/focus. Because that wrapper is
+   * overflow:hidden (not auto/scroll), the runtime rubric expander — which only walks auto/scroll/
+   * overlay ancestors — never touches it, so the whole rubric sidebar is captured at a
+   * non-deterministic clip offset (the intermittent "Self-Review Rubric completed" / rubric-column
+   * flakes). Expand the aside's wrapper (and its parent) via :has() so there is no clip and no
+   * scroll offset to vary. Doing it in CSS (not the debounced observer) means a realtime re-render
+   * cannot undo it before capture; scoping to the aside's own ancestors keeps it off the
+   * side-by-side code column (they are separate resizable panels).
+   */
+  html[data-visual-tests] *:has(> [data-grading-summary-aside]),
+  html[data-visual-tests] *:has(> * > [data-grading-summary-aside]) {
+    max-height: none !important;
+    height: auto !important;
+    min-height: 0 !important;
     overflow: visible !important;
   }
 
