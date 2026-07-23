@@ -89,6 +89,29 @@ export function filterNoise(phrases: string[], patterns: RegExp[] = DEFAULT_NOIS
   return phrases.filter((p) => !patterns.some((re) => re.test(p)));
 }
 
+/**
+ * Pure: collapse CONSECUTIVE identical phrases into one entry with a repeat
+ * count. The virtual screen reader re-announces a persisting live region many
+ * times for a single DOM change (verified against a MutationObserver ground
+ * truth: one toast = 1 text mutation, VSR spoke it 14×) — a simulator
+ * artifact, like the stale checkable announcements (spike s5). A real SR
+ * announces once per change. Raw phrases stay in the step record.
+ */
+export function collapseRepeats(phrases: string[]): string[] {
+  const out: string[] = [];
+  for (const phrase of phrases) {
+    const last = out.length - 1;
+    if (last >= 0 && (out[last] === phrase || out[last].startsWith(`${phrase} (announced `))) {
+      const m = out[last].match(/ \(announced (\d+)×\)$/);
+      const n = m ? parseInt(m[1], 10) + 1 : 2;
+      out[last] = `${phrase} (announced ${n}×)`;
+    } else {
+      out.push(phrase);
+    }
+  }
+  return out;
+}
+
 /** Pure: assemble the observation handed to the agent. */
 export function buildObservation(
   rawSpoken: string[],
@@ -97,7 +120,7 @@ export function buildObservation(
   options: { noisePatterns?: RegExp[]; error?: string; checkableState?: "checked" | "not checked" | null } = {}
 ): AtObservation {
   const observation: AtObservation = {
-    spokenSinceLastAction: filterNoise(rawSpoken, options.noisePatterns ?? DEFAULT_NOISE_PATTERNS),
+    spokenSinceLastAction: collapseRepeats(filterNoise(rawSpoken, options.noisePatterns ?? DEFAULT_NOISE_PATTERNS)),
     currentItem,
     domFocus
   };

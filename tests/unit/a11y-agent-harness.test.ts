@@ -5,6 +5,7 @@
  */
 import {
   buildObservation,
+  collapseRepeats,
   filterNoise,
   DEFAULT_NOISE_PATTERNS,
   READ_NEXT_MAX,
@@ -29,7 +30,28 @@ describe("filterNoise", () => {
   });
 });
 
+describe("collapseRepeats", () => {
+  it("collapses consecutive identical phrases into one entry with a count", () => {
+    expect(collapseRepeats(["Survey Submitted", "Survey Submitted", "Survey Submitted"])).toEqual([
+      "Survey Submitted (announced 3×)"
+    ]);
+  });
+
+  it("keeps non-consecutive repeats separate (legitimate re-announcements)", () => {
+    expect(collapseRepeats(["a", "b", "a"])).toEqual(["a", "b", "a"]);
+  });
+
+  it("passes single phrases through untouched", () => {
+    expect(collapseRepeats(["a", "b"])).toEqual(["a", "b"]);
+  });
+});
+
 describe("buildObservation", () => {
+  it("collapses VSR re-announcement spam of a persisting live region", () => {
+    const obs = buildObservation(Array(14).fill("Survey Submitted, Your survey has been submitted"), "", null);
+    expect(obs.spokenSinceLastAction).toEqual(["Survey Submitted, Your survey has been submitted (announced 14×)"]);
+  });
+
   const raw = ["status, All realtime connections active", "textbox, What is your name?"];
 
   it("filters noise into spokenSinceLastAction but callers keep raw separately", () => {

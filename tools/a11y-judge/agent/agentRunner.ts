@@ -31,7 +31,7 @@ import type { AtBridge } from "./bridge";
 import type { TaskDefinition } from "./tasks";
 
 /** Bump on any charter/prompt change — verdict dirs record it, like R1. */
-export const AGENT_PROMPT_VERSION = "a1.0";
+export const AGENT_PROMPT_VERSION = "a1.1";
 export const AGENT_MODEL = JUDGE_MODEL;
 const MAX_TURNS = 200;
 const TIMEOUT_MS = 20 * 60 * 1000;
@@ -49,6 +49,10 @@ export const AGENT_CHARTER = [
   "live. The simulator has a known limitation: it does not announce checkable state changes and re-reads can",
   "report stale state — trust `checkableState` for radios/checkboxes, and do NOT report missing checked/",
   "unchecked announcements as app barriers (that is the simulator, not the app).",
+  "",
+  'A phrase marked "(announced N×)" means the simulator re-spoke a persisting status message N times for what',
+  "is a SINGLE announcement to a real screen reader — treat it as announced once, and do NOT report the",
+  "repetition as an app barrier (simulator artifact, verified against DOM ground truth).",
   "",
   "Attempt the task honestly. If you hit friction a sighted user would not have — unlabeled controls, focus",
   "jumping somewhere unexpected, actions with no announced result, content you cannot reach — note it precisely",
