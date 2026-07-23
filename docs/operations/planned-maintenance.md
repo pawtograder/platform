@@ -10,7 +10,7 @@ Scope: the `supabase/postgres` StatefulSet deployed by `charts/pawtograder`. `NS
 is the release namespace, `<release>` the Helm release. For an **unplanned**
 primary loss (the primary is gone and not coming back) use the promote path in
 [point-in-time-recovery.md](./point-in-time-recovery.md#manual-failover-promote-the-standby)
-instead — this doc is the *planned* case.
+instead — this doc is the _planned_ case.
 
 ---
 
@@ -21,13 +21,13 @@ primary bounces. For Pawtograder that is a trap: **read-only Postgres is
 effectively "system unavailable", but unpredictably so.** The core user actions
 — submitting, autograder result writes, grade and regrade saves, help-queue
 updates, and even auth/session writes — are all writes. Under a read-only
-database they fail *scattered across the UI*: some pages load, then an action
+database they fail _scattered across the UI_: some pages load, then an action
 500s with `cannot execute INSERT in a read-only transaction`. That is a worse,
 more confusing experience than a clean maintenance page, and it generates more
 support load, not less.
 
 So we prefer honest downtime: put up a maintenance page that says when we'll be
-back, take the short hit, and come back whole. Reads *and* writes resume
+back, take the short hit, and come back whole. Reads _and_ writes resume
 together, with no half-working surface in between.
 
 The standby stays **out of the planned path entirely.** Its job is unplanned
@@ -44,7 +44,7 @@ wedge or a corruption risk:
 
 - **`postgres.pdb.enabled` → a `maxUnavailable: 1` PodDisruptionBudget**
   (`templates/pdb.yaml`). Over a single replica, `minAvailable: 1` would allow
-  *zero* voluntary disruptions and `kubectl drain` would hang on the primary
+  _zero_ voluntary disruptions and `kubectl drain` would hang on the primary
   forever; `maxUnavailable: 1` allows exactly one, so the eviction API lets the
   primary move.
 - **The postgres preStop fast-shutdown** (`templates/postgres-statefulset.yaml`),
@@ -122,7 +122,7 @@ pull on the new node.
 
    With the postgres PDB and preStop fast-shutdown in place, the primary evicts,
    reschedules onto another schedulable node, reattaches its PVC, and restarts as
-   the same primary. If the drain *hangs* on the postgres pod, the PDB is not
+   the same primary. If the drain _hangs_ on the postgres pod, the PDB is not
    enabled in this environment — see [above](#what-makes-the-bounce-safe-and-cheap);
    do **not** force-delete the pod as a habit.
 

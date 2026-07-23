@@ -198,10 +198,10 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
 
 3. **Kill the primary and promote**, following the real
    [manual failover](#manual-failover-promote-the-standby) steps against the
-   `drill-` release (stop writers → confirm the old primary is down → `pg_ctl
-   promote` on `drill-postgres-replica-0` → repoint the `drill-postgres` Service
-   → smoke). Do not shortcut them — running the *actual* steps is the point of
-   the drill.
+   `drill-` release (stop writers → confirm the old primary is down →
+   `pg_ctl promote` on `drill-postgres-replica-0` → repoint the `drill-postgres`
+   Service → smoke). Do not shortcut them — running the _actual_ steps is the
+   point of the drill.
 
 4. **Verify the promotion held:** the promoted node left recovery, accepts
    writes, and has the marker row:
@@ -387,7 +387,7 @@ asserts row count, cleans up — no orphan scratch DB or volume.
 
 ## Related
 
-- [planned-maintenance.md](./planned-maintenance.md) — the *planned* node/DB
+- [planned-maintenance.md](./planned-maintenance.md) — the _planned_ node/DB
   bounce (short full-downtime window, no promotion); when to promote instead.
 - [disaster-recovery.md](./disaster-recovery.md) — the `pg_dump` scheme + restore.
 - [rollback.md](./rollback.md) — app rollback; the migrations re-run note.
