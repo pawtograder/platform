@@ -403,7 +403,24 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
     //Scroll grading rubric to top of its container
     await stabilizeRubricSidebar(page, "Grading Rubric");
-    await visualScreenshot(page, "Student can view their grading results", { stabilizeRubric: "Grading Rubric" });
+    // The code file is a scroll container (overflow:auto). Each annotated line's comment thread —
+    // the grading checks on lines 4-5 and the student's line-15 self-review comment — renders as an
+    // async inline block whose height settles at a different moment. The click on the doMath line
+    // above reveals line 15, but as the line-4/5 threads then expand *above* it the container's
+    // scrollTop no longer frames the same content, so the capture lands on a different thread per
+    // run (confirmed flaky: one rep shows the line-15 comment, another the line-4/5 check — a
+    // near-full-content diff). Wait for both async threads to render, then pin the scroll to a
+    // stable anchor (the unique line-15 self-review comment) as the final action before capture.
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 5" })).toBeVisible();
+    const gradingResultsAnchor = page.getByText(SELF_REVIEW_COMMENT_1).first();
+    await expect(gradingResultsAnchor).toBeVisible();
+    await visualScreenshot(page, "Student can view their grading results", {
+      stabilizeRubric: "Grading Rubric",
+      beforeScreenshot: async () => {
+        await gradingResultsAnchor.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
+      }
+    });
     await assertStudentPageAccessible(page, "grading results submission files");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
