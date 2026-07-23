@@ -82,7 +82,13 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
   // matches the read-only state.
   if (isReadOnly) return null;
   return (
-    <Button variant="ghost" size="sm" onClick={toggleLike} loading={loading}>
+    <Button
+      aria-label={`${likeStatus ? "Unlike" : "Like"} (${thread.likes_count} ${thread.likes_count === 1 ? "like" : "likes"})`}
+      variant="ghost"
+      size="sm"
+      onClick={toggleLike}
+      loading={loading}
+    >
       {thread.likes_count} {likeStatus ? <Icon as={FaHeart} /> : <Icon as={FaRegHeart} />}
     </Button>
   );

@@ -425,7 +425,14 @@ const DiscussionThreadContent = memo(
                       <Link onClick={showReply} color="fg.muted">
                         Reply
                       </Link>
-                      <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
+                      <Button
+                        aria-label={`${likeStatus ? "Unlike" : "Like"} (${thread.likes_count ?? 0} ${(thread.likes_count ?? 0) === 1 ? "like" : "likes"})`}
+                        variant="ghost"
+                        size="xs"
+                        onClick={toggleLike}
+                        loading={likeLoading}
+                        color="fg.muted"
+                      >
                         {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
                       </Button>
                       {canEdit && (
