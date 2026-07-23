@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken, MCPScope } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
@@ -163,7 +163,6 @@ export default function MCPTokensMenu() {
 
   return (
     <>
-      <Toaster />
       <Dialog.Root size="lg" placement="center" open={open} onOpenChange={(e) => setOpen(e.open)}>
         <Dialog.Trigger asChild>
           <Button

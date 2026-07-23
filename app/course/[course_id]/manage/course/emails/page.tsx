@@ -18,7 +18,7 @@ import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
 import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { TZDate } from "@date-fns/tz";
@@ -867,7 +867,6 @@ export default function EmailsPage() {
       <EmailManagementProvider>
         <EmailsInnerPage />
         <HistoryPage />
-        <Toaster />
       </EmailManagementProvider>
     </Box>
   );

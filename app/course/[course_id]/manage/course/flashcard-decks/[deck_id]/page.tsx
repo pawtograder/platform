@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import Markdown from "@/components/ui/markdown";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Heading, HStack, IconButton, Spinner, Text, VStack } from "@chakra-ui/react";
@@ -337,7 +337,6 @@ export default function FlashcardDeckPage() {
         onSuccess={handleDeckUpdated}
       />
 
-      <Toaster />
     </VStack>
   );
 }

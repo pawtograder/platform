@@ -4,7 +4,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useCourseController, useStudentDeadlineExtensions } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { StudentDeadlineExtension } from "@/utils/supabase/DatabaseTypes";
@@ -193,7 +193,6 @@ export default function StudentExtensionsTable() {
         </Dialog.Root>
       )}
 
-      <Toaster />
     </VStack>
   );
 }

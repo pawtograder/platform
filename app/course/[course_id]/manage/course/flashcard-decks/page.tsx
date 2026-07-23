@@ -8,7 +8,6 @@ import { useParams } from "next/navigation";
 import useModalManager from "@/hooks/useModalManager";
 import FlashCardDecksTable from "./flashCardDecksTable";
 import CreateDeckModal from "./createDeckModal";
-import { Toaster } from "@/components/ui/toaster";
 import NextLink from "next/link";
 
 /**
@@ -40,7 +39,6 @@ export default function FlashcardDecksPage() {
 
   return (
     <>
-      <Toaster />
       <VStack align="stretch" w="100%" gap={6} p={6}>
         {/* Header Section */}
         <VStack align="stretch" gap={4}>

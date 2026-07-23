@@ -9,7 +9,7 @@ import { GlobalSearchTrigger } from "@/components/ui/global-search-trigger";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -272,7 +272,6 @@ const DropBoxAvatar = ({
         accept="image/jpeg,image/png"
         onChange={handleFileChange}
       />
-      <Toaster />
       <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
         <Box position="relative" width="100px" height="100px">
           <Menu.Root positioning={{ placement: "bottom" }}>
@@ -479,7 +478,6 @@ const ProfileChangesMenu = () => {
 
   return (
     <>
-      <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
           <Button

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
 import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 import PersonTags from "@/components/ui/person-tags";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
@@ -1624,7 +1624,6 @@ export default function EnrollmentsTable() {
             </NativeSelect.Field>
           </NativeSelect.Root>
         </HStack>
-        <Toaster />
       </VStack>
       {editingUserId && (
         <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>

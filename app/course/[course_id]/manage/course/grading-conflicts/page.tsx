@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Toaster } from "@/components/ui/toaster";
 import { useIsGrader } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { Container, Heading, HStack, Text, VStack } from "@chakra-ui/react";
@@ -27,7 +26,6 @@ export default function GradingConflictsPage() {
 
   return (
     <Container maxW="container.xl" py={4}>
-      <Toaster />
       <HStack justifyContent="space-between" mb={4}>
         <VStack alignItems="flex-start" gap={0}>
           <Heading size="lg">Grading Conflicts</Heading>

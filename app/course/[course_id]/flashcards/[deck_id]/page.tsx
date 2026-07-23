@@ -3,7 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import NextLink from "next/link";
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
@@ -719,7 +719,6 @@ export default function FlashcardsDeckPage() {
         {/* "Got It" pile summary */}
         <GotItPile gotItCards={gotItCards} onReturnCard={handleReturnCard} />
       </VStack>
-      <Toaster />
     </Container>
   );
 }

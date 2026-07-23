@@ -38,7 +38,7 @@ import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/Submis
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   useAssignmentController,
@@ -1184,7 +1184,6 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
           }
         }}
       >
-        <Toaster />
         <Table.Root>
           <Table.Header>
             <Table.Row>
@@ -1822,7 +1821,6 @@ function ReviewActions() {
   }
   return (
     <VStack>
-      <Toaster />
       <ReviewStats />
       {showCompletionActions && !review.completed_at && (
         <VStack>
