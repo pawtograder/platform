@@ -29,6 +29,26 @@ SR-cursor highlight + spoken-caption overlay (outside `document.body`, invisible
 sidecar meta per test, post-run collector → `a11y-videos/<runId>/` + gallery `index.html` for
 async auditor review.
 
+### Verification (2026-07-23, local stack, prod build on :3001)
+
+- 12 a11y unit suites: 100/100 green. tsc clean for all touched files (25 pre-existing error
+  lines on HEAD unchanged).
+- Replay specs: **6/6 green ×3 on fresh seeds** (determinism gate) — including
+  survey-complete at full speed with `test.fixme` removed (autosave-race fix holds); specs
+  promoted (`git add -f`).
+- Seeded axe smoke: 4/4 new pages pass, **Monaco fully in scope — zero re-excludes needed**.
+  Full smoke+keyboard+reflow: 28/28.
+- Evidence collection: 9/9 pages × 7 bundles (office-hours driver needed a named-region ready
+  locator — hidden-node getByText timeout).
+- Video mode: 6/6 videos + gallery (`a11y-videos/verify-videos/`); frame-checked — highlight
+  box + caption bar render correctly. Collector falls back to the sidecar's sibling
+  `video.webm` (Playwright moves the file from the promised artifacts path on context close).
+
+**Still owed (needs LLM runs):** live `a11y:agent` on the 4 new tasks (assignments-overview,
+code-marker, regrade-status, help-request) + their generate→gate→promote cycle; judge sweep
+over the 9-page evidence (`a11y-evidence/verify-2026-07-23`); re-run agent 413 check to confirm
+the submit toast now announces exactly once.
+
 ## V2: Agentic SR-driving (approved 2026-07-14, plan `~/.claude/plans/glowing-sparking-turtle.md`)
 
 An LLM agent drives the app using ONLY a screen-reader view (@guidepup/virtual-screen-reader
@@ -41,16 +61,16 @@ handler.
 
 ### V2 build status
 
-| Wave | Package                                                                  | Status  | Gate result                                                                                          |
-| ---- | ------------------------------------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------- |
-| 0-S2 | `claude -p` ⇄ in-process HTTP MCP round-trip (OAuth, no stdio proxy)     | ✅ done | echo tool + structured output first try; ~$0.21; transport locked: HTTP (`--mcp-config` type:http)  |
-| 0-S1 | VSR injection + scripted (no-LLM) survey completion, SR commands only    | ✅ done | survey submitted (DB-verified); avg 6ms/cmd, Monaco start() 45ms — perf concern retired             |
-| 0-S3 | Spoken-phrase stability across two seeds                                 | ✅ done | normalized logs identical; rules: seed-binding substitution + noise drop + {{number/date/time}}     |
-| 1    | AT harness core (vsrBundle/atHarness/pageReady extraction, unit tests)   | ✅ done | scripted survey via real API 3× green, pairwise logs identical; R1 a11y:collect green post-extract  |
-| 2    | Bridge + agent runner + survey task live                                 | ✅ done | 26/26 unit; 2-sample gate: both success/completed, predicate green, 44–57 turns, ~$1.1–1.2/run      |
-| 3    | Full 6-task suite + reporting                                            | ✅ done | clean sweep 6/6: all completed + predicate green, 0 errors/salvages, 15–37 turns, ~$4.1, 11.8 min   |
-| 4    | Deterministic spec generation (artifact→promote)                         | ✅ done | 5 promoted specs green 3× on fresh seeds (no LLM); red under 246→grade, 412→discussion-reply         |
-| 5    | Evaluation: clean 6×3 + agent mutation gauntlet + ablation vs R1         | ✅ done | clean 18/18 predicate-pass; gauntlet 6 mutations ×3; complementarity ablation (below)                |
+| Wave | Package                                                                | Status  | Gate result                                                                                        |
+| ---- | ---------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| 0-S2 | `claude -p` ⇄ in-process HTTP MCP round-trip (OAuth, no stdio proxy)   | ✅ done | echo tool + structured output first try; ~$0.21; transport locked: HTTP (`--mcp-config` type:http) |
+| 0-S1 | VSR injection + scripted (no-LLM) survey completion, SR commands only  | ✅ done | survey submitted (DB-verified); avg 6ms/cmd, Monaco start() 45ms — perf concern retired            |
+| 0-S3 | Spoken-phrase stability across two seeds                               | ✅ done | normalized logs identical; rules: seed-binding substitution + noise drop + {{number/date/time}}    |
+| 1    | AT harness core (vsrBundle/atHarness/pageReady extraction, unit tests) | ✅ done | scripted survey via real API 3× green, pairwise logs identical; R1 a11y:collect green post-extract |
+| 2    | Bridge + agent runner + survey task live                               | ✅ done | 26/26 unit; 2-sample gate: both success/completed, predicate green, 44–57 turns, ~$1.1–1.2/run     |
+| 3    | Full 6-task suite + reporting                                          | ✅ done | clean sweep 6/6: all completed + predicate green, 0 errors/salvages, 15–37 turns, ~$4.1, 11.8 min  |
+| 4    | Deterministic spec generation (artifact→promote)                       | ✅ done | 5 promoted specs green 3× on fresh seeds (no LLM); red under 246→grade, 412→discussion-reply       |
+| 5    | Evaluation: clean 6×3 + agent mutation gauntlet + ablation vs R1       | ✅ done | clean 18/18 predicate-pass; gauntlet 6 mutations ×3; complementarity ablation (below)              |
 
 ### V2 evaluation results (run `a11y-trajectories/eval-clean/eval.md`)
 
@@ -59,16 +79,16 @@ handler.
 
 **Mutation gauntlet — agent detection (blocked OR barrier with matching WCAG SC) vs the R1 static judge:**
 
-| Mutation | SC | agent detection | R1 static judge | reading |
-| --- | --- | --- | --- | --- |
-| 246-headings-generic | 2.4.6 | 100% | fail 3/3 | both catch |
-| 132-survey-options-first | 1.3.2 | 67% | fail 3/3 | both catch |
-| 413-silent-toast | 4.1.3 | 67% | needs_human 3/3 (**unreachable**) | **agent uniquely reaches** — completes the survey but hears no submit confirmation |
-| 412-strip-labels | 4.1.2 | 33% | fail 3/3 | static judge stronger (agent completes via position/context) |
-| 111-alt-degrade | 1.1.1 | 0% | fail 3/3 | static judge stronger |
-| 247-outline-none | 2.4.7 | 0% | fail 15/15 | **honest scope boundary** — SR cannot perceive a visual focus outline |
+| Mutation                 | SC    | agent detection | R1 static judge                   | reading                                                                            |
+| ------------------------ | ----- | --------------- | --------------------------------- | ---------------------------------------------------------------------------------- |
+| 246-headings-generic     | 2.4.6 | 100%            | fail 3/3                          | both catch                                                                         |
+| 132-survey-options-first | 1.3.2 | 67%             | fail 3/3                          | both catch                                                                         |
+| 413-silent-toast         | 4.1.3 | 67%             | needs_human 3/3 (**unreachable**) | **agent uniquely reaches** — completes the survey but hears no submit confirmation |
+| 412-strip-labels         | 4.1.2 | 33%             | fail 3/3                          | static judge stronger (agent completes via position/context)                       |
+| 111-alt-degrade          | 1.1.1 | 0%              | fail 3/3                          | static judge stronger                                                              |
+| 247-outline-none         | 2.4.7 | 0%              | fail 15/15                        | **honest scope boundary** — SR cannot perceive a visual focus outline              |
 
-**Thesis (complementarity, not redundancy):** agent mode scores *task-level* barriers a real
+**Thesis (complementarity, not redundancy):** agent mode scores _task-level_ barriers a real
 screen-reader user hits and uniquely reaches 413 (visible-but-unannounced, which frozen
 evidence cannot manifest); the static judge uniquely catches visual-only (247) and
 name-quality (412/111) defects a user can complete the task despite. Neither dominates —

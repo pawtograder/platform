@@ -75,10 +75,10 @@ mutation injectors' selectors (they target this app's widgets).
 
 ## Agent mode (v2): drive the app with a screen reader + keyboard
 
-The static judge above scores *frozen evidence*: it can only see what the
+The static judge above scores _frozen evidence_: it can only see what the
 collectors thought to capture. Agent mode closes that gap by letting an LLM
-**drive the app itself** through a screen-reader/keyboard channel and *nothing
-else* — no DOM, no screenshots, no mouse — attempting realistic student tasks.
+**drive the app itself** through a screen-reader/keyboard channel and _nothing
+else_ — no DOM, no screenshots, no mouse — attempting realistic student tasks.
 
 - **AT harness** (`agent/atHarness.ts`): injects `@guidepup/virtual-screen-reader`
   into the page (`addInitScript`, so it survives navigation and the app CSP) and
