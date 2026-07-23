@@ -250,6 +250,12 @@ export default function StudentPage() {
               aria-label="Search assignments"
               data-shortcut="search"
               size="sm"
+              _focusVisible={{
+                outline: "2px solid",
+                outlineColor: "blue.500",
+                outlineOffset: "2px",
+                borderColor: "blue.500"
+              }}
             />
           </InputGroup>
         </Box>
