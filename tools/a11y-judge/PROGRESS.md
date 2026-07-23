@@ -44,10 +44,53 @@ async auditor review.
   box + caption bar render correctly. Collector falls back to the sidecar's sibling
   `video.webm` (Playwright moves the file from the promised artifacts path on context close).
 
-**Still owed (needs LLM runs):** live `a11y:agent` on the 4 new tasks (assignments-overview,
-code-marker, regrade-status, help-request) + their generate→gate→promote cycle; judge sweep
-over the 9-page evidence (`a11y-evidence/verify-2026-07-23`); re-run agent 413 check to confirm
-the submit toast now announces exactly once.
+### Live efficacy evaluation (2026-07-23 evening — LLM runs)
+
+**Agent, 5 tasks exercised (1 sample + 2 office-hours retries): 5/5 predicate-green final.**
+6–90 steps, 0.7–8.4 min/task. assignments-overview & regrade-status clean; code-marker
+completed WITH a sev-4 finding (below); survey-complete green; help-request blocked twice →
+diagnosed (seeding had no active queue staff → New Request disabled; + silent SPA navigation
+misread as no-op) → seeding fixed (`insertHelpQueueAssignment`) + charter a1.2
+(re-orient after activation before concluding failure) → completed, DB predicate green.
+
+**Deterministic specs:** 4 generated from the new trajectories; assignments-overview,
+regrade-status, help-request passed the 3× gate and are promoted (+ survey regenerated, green).
+code-marker FAILED the gate (read-needle never heard on replay — the recorded flow toggles a
+per-user preference; left unpromoted, exactly what the artifact-first policy is for).
+
+**Static judge, 28 cells on the 4 new pages (1 sample, cli backend):** 22 pass / 5
+needs_human (honest, precise gaps) / 1 fail. ~1.5 min & ~$0.20 API-equiv per judgment
+(subscription-covered). The one fail (assignments-list 2.4.3, high confidence) was a
+**collector false positive**: blur() does not reset the sequential-focus-navigation starting
+point, and the focus-indicator collector leaves it mid-page → the tab walk started mid-document
+and the rotation read as a tabindex scramble. Ground-truthed in a real browser (order correct),
+collector now anchors the start point + records `revisited` flags; re-judge → pass (high).
+Rubric untouched. A 2.4.7 needs_human pointed at a REAL recurrence of the invisible-focus-ring
+defect on the assignments search input (raw Chakra Input) — fixed.
+
+**New APP FINDINGS from the live runs (leads for follow-up):**
+
+- Client-side navigation is silent: `/office-hours` auto-redirects to the queue page and
+  view/tab/New-Request-form switches announce nothing (4.1.3, sev 3, agent-experienced twice).
+- Help-request submit failure announces only the bare word "Error" — no description (3.3.1, sev 3).
+- Monaco exposes no code content to the virtual SR even with accessibilitySupport:"on" (content
+  is caret-navigation-only); agent completed the read-task only via the "New editor view"
+  toggle. Toggle now announces the accessible alternative; **real-AT (NVDA/VoiceOver) validation
+  of Monaco caret reading is owed** before filing as a WCAG failure.
+- Disabled "New Request" button offers no accessible explanation of why/how to enable (3.3.2).
+
+**VSR fidelity issues found & compensated (fix-the-harness loop):** re-announcement spam
+(14× for one DOM mutation — MutationObserver ground truth; harness now collapses consecutive
+repeats to "(announced N×)", charter a1.1) and silent-SPA re-orientation (charter a1.2).
+Judge CLI gained per-judgment progress logging + incremental sample persistence (a silent
+multi-hour serial loop was indistinguishable from a hang and lost samples when killed).
+
+**Toast fix verified at DOM level:** exactly one toast region, one "Survey Submitted" text
+mutation per submit. The agent's residual repeat-report was the VSR artifact above.
+
+**Still owed:** judge sweep over the 5 original pages' fresh evidence + samples-3 unanimity
+on the new pages (nightly candidate); real-AT spot check for Monaco; auditor adjudication
+packet (now including the keyboard-nav video gallery).
 
 ## V2: Agentic SR-driving (approved 2026-07-14, plan `~/.claude/plans/glowing-sparking-turtle.md`)
 
