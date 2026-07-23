@@ -195,7 +195,8 @@ test.describe("a11y smoke — seeded student pages (assignments, files/Monaco, r
     await insertHelpRequest({
       class_id: course.id,
       student_profile_id: student.private_profile_id,
-      request: "Seeded question: my tests pass locally but fail on the autograder."
+      request: "Seeded question: my tests pass locally but fail on the autograder.",
+      active_staff_profile_id: instructor.private_profile_id
     });
   });
 

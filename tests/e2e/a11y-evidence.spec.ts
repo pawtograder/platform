@@ -530,11 +530,13 @@ test.beforeAll(async () => {
   );
   regradeRequestsUrl = `/course/${course.id}/regrade-requests`;
 
-  // Office hours: seed one open help request so the queue page has content.
+  // Office hours: seed one open help request so the queue page has content,
+  // with the instructor on duty (enables the New Request button).
   await insertHelpRequest({
     class_id: course.id,
     student_profile_id: student.private_profile_id,
-    request: "Seeded question: my tests pass locally but fail on the autograder."
+    request: "Seeded question: my tests pass locally but fail on the autograder.",
+    active_staff_profile_id: instructor.private_profile_id
   });
   officeHoursUrl = `/course/${course.id}/office-hours`;
 

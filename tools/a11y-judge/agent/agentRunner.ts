@@ -31,7 +31,7 @@ import type { AtBridge } from "./bridge";
 import type { TaskDefinition } from "./tasks";
 
 /** Bump on any charter/prompt change — verdict dirs record it, like R1. */
-export const AGENT_PROMPT_VERSION = "a1.1";
+export const AGENT_PROMPT_VERSION = "a1.2";
 export const AGENT_MODEL = JUDGE_MODEL;
 const MAX_TURNS = 200;
 const TIMEOUT_MS = 20 * 60 * 1000;
@@ -53,6 +53,12 @@ export const AGENT_CHARTER = [
   'A phrase marked "(announced N×)" means the simulator re-spoke a persisting status message N times for what',
   "is a SINGLE announcement to a real screen reader — treat it as announced once, and do NOT report the",
   "repetition as an app barrier (simulator artifact, verified against DOM ground truth).",
+  "",
+  "This app performs CLIENT-SIDE navigation that can be silent: activating a link/tab may change the page",
+  "content without any announcement. After activating anything that should navigate or switch a view, do not",
+  "conclude it failed from silence — restartFromTop and re-read the main region to check whether the content",
+  "actually changed. If it did change silently, continue the task AND report the missing announcement as a",
+  "barrier (4.1.3): a real screen-reader user gets no cue that their action worked.",
   "",
   "Attempt the task honestly. If you hit friction a sighted user would not have — unlabeled controls, focus",
   "jumping somewhere unexpected, actions with no announced result, content you cannot reach — note it precisely",

@@ -159,11 +159,14 @@ export async function seedAgentPages(): Promise<AgentSeed> {
   routes["regrade-requests"] = `/course/${course.id}/regrade-requests`;
 
   // Office hours: one pre-existing open request so the queue page has content;
-  // the write-task creates a NEW request whose text must land in the DB.
+  // the write-task creates a NEW request whose text must land in the DB. The
+  // instructor is put on duty — without active staff the New Request button is
+  // disabled and the write-task is unreachable.
   const helpRequest = await insertHelpRequest({
     class_id: course.id,
     student_profile_id: student.private_profile_id,
-    request: "Seeded question: my tests pass locally but fail on the autograder."
+    request: "Seeded question: my tests pass locally but fail on the autograder.",
+    active_staff_profile_id: instructor.private_profile_id
   });
   routes["office-hours"] = `/course/${course.id}/office-hours`;
   seedValues.seededHelpRequestId = String(helpRequest.id);
