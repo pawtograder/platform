@@ -1430,6 +1430,11 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
+    # fires (only when postgres.replica.enabled). Primary current LSN − standby
+    # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
+    # burst without flapping while still catching a standby that is falling behind.
+    replicationLagBytesWarning: 104857600  # 100 MiB
 
   # Alertmanager routing SCAFFOLD (templates/alertmanager-config.yaml). Renders a
   # prometheus-operator AlertmanagerConfig CR that Grafana Alloy's

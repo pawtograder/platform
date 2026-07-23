@@ -42,6 +42,40 @@ data:
             usage: "GAUGE"
             description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
 
+    # Streaming-standby health, from the PRIMARY side. The chart creates NO
+    # physical replication slot (see docs/operations/point-in-time-recovery.md),
+    # so pg_replication_slots is empty and its lag_bytes series never appears —
+    # standby lag must be read from pg_stat_replication instead. streaming_standbys
+    # drives PawtograderReplicaNotStreaming; max_replay_lag_bytes drives
+    # PawtograderReplicaLagHigh. Emitted as pawtograder_replication_*.
+    #
+    # Standby-safe: pg_current_wal_lsn() ERRORS in recovery and would 500 the
+    # whole /metrics endpoint on a standby. Today only the primary is scraped (the
+    # postgres-exporter Service selects component=postgres; the replica pod is
+    # component=postgres-replica and carries no exporter sidecar), so this runs on
+    # the primary and never in recovery — but the pg_is_in_recovery() guard makes
+    # it harmless even if an exporter is ever added to the replica: on a standby
+    # the CASE takes the THEN branch and the LSN subquery is never evaluated. The
+    # outer SELECT always returns exactly one row so the series is stable.
+    pawtograder_replication:
+      query: |
+        SELECT
+          (SELECT count(*) FROM pg_stat_replication WHERE state = 'streaming')::float
+            AS streaming_standbys,
+          COALESCE(
+            CASE WHEN pg_is_in_recovery() THEN 0
+                 ELSE (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))
+                       FROM pg_stat_replication)
+            END, 0)::float AS max_replay_lag_bytes
+      master: true
+      metrics:
+        - streaming_standbys:
+            usage: "GAUGE"
+            description: "Number of standbys in state=streaming per pg_stat_replication (primary side)"
+        - max_replay_lag_bytes:
+            usage: "GAUGE"
+            description: "Max WAL bytes between the primary's current LSN and any standby's replay_lsn (0 on a standby)"
+
     # WAL-G continuous archiving health. With postgres.walg.enabled the primary
     # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
     # piles up in pg_wal and can fill the volume (write outage). last_attempt_failed

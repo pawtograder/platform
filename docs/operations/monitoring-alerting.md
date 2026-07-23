@@ -72,6 +72,8 @@ the age of the last backup) and confirm a human actually gets paged.
 | `PawtograderBackupMissing`                | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                                       | [disaster-recovery.md](./disaster-recovery.md)           |
 | `PawtograderBackupVerifyJobFailed`        | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)                             | [disaster-recovery.md](./disaster-recovery.md)           |
 | `PawtograderWALArchiveFailing`            | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderReplicaNotStreaming`          | warning  | (`postgres.replica` on) no standby in `state=streaming` for 10m — warm failover target stale                                    | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderReplicaLagHigh`               | warning  | (`postgres.replica` on) standby replay lag exceeds `replicationLagBytesWarning` (default 100 MiB) for 15m — failover RPO growing | [point-in-time-recovery.md](./point-in-time-recovery.md) |
 | `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                  | below                                                    |
 | `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | below                                                    |
 | `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
@@ -87,7 +89,7 @@ evaluate in Prometheus/Mimir. All page (`critical`), matching the originals'
 uniform routing.
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
-(`backupMaxAgeHours`, `certExpiryWarningDays`).
+(`backupMaxAgeHours`, `certExpiryWarningDays`, `replicationLagBytesWarning`).
 
 ### Why these
 
@@ -121,6 +123,9 @@ Each alert's expression depends on an exporter being present in the cluster:
   (`pawtograder_wal_archiving_*`, defined in `templates/monitoring.yaml`).
 - Postgres connection alerts → the chart's own `postgres_exporter` custom query
   (`pawtograder_db_connections_*`, defined in `templates/monitoring.yaml`).
+- replication alerts → the chart's own `postgres_exporter` custom query
+  (`pawtograder_replication_*`, defined in `templates/monitoring.yaml`; read from
+  the **primary's** `pg_stat_replication`, not `pg_replication_slots`).
 - ESO alert → the External Secrets Operator's `/metrics`
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`
@@ -171,8 +176,9 @@ After install (see [production-install.md](./production-install.md)):
 
 Track in your cluster monitoring, out of scope for the chart today:
 
-- Postgres disk near full, and replication slot lag from the
-  `pg_replication_slots` custom query. (Connection-budget saturation is now
-  shipped — see `PawtograderPostgresConnections*` in the alert table above.)
+- Postgres disk near full. (Connection-budget saturation is now shipped — see
+  `PawtograderPostgresConnections*` — and standby streaming/replay lag is now
+  shipped from `pg_stat_replication` — see `PawtograderReplica*` — both in the
+  alert table above.)
 - Web/edge error-rate and latency SLOs off the app `/api/metrics` series.
 - Realtime WebSocket connection churn.
