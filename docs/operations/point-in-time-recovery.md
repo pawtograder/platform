@@ -168,55 +168,86 @@ own isolated archive**, never against prod.
 The drill exercises the operator muscle memory — promote, confirm the node left
 recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
 
-1. **Stand up a scratch release** (primary + standby) in a fresh namespace, with
-   a WAL-G prefix that is **distinct from every real environment's** so nothing
-   the drill does can reach a production archive:
+1. **Stand up a scratch release** (primary + standby) in a fresh namespace. Use
+   the **self-contained preview overlay** (`secrets.autogenerate: true`, no ESO/
+   OpenBao, no `tier=prod-staging` placement) — the staging overlay is _not_
+   self-contained (`secrets.create: false` + fixed secret names) and its pods
+   would never start in a fresh namespace. Set `fullnameOverride=drill` so
+   resources are named `drill-postgres*` (without it the chart's `fullname`
+   helper renders `drill-pawtograder-postgres*`), and a WAL-G prefix **distinct
+   from every real environment's** so nothing the drill does can reach a
+   production archive:
 
    ```bash
    DRILL_NS=pg-promote-drill
+   DRILL_PREFIX="s3://pawtograder-drill/$(uuidgen)"   # exact, collision-resistant
    kubectl create namespace "$DRILL_NS"
    helm install drill charts/pawtograder -n "$DRILL_NS" \
-     -f charts/pawtograder/examples/values-staging.yaml \
-     --set postgres.walg.s3Prefix="s3://pawtograder-drill-$(date +%s)/walg" \
-     --set postgres.replica.enabled=true --set postgres.walg.enabled=true
-   # wait for drill-postgres-0 and drill-postgres-replica-0 to be Ready, and
-   # confirm the standby is streaming (the "Verifying" queries above).
+     -f charts/pawtograder/examples/values-preview.yaml \
+     --set fullnameOverride=drill \
+     --set global.hostname="drill.invalid" \
+     --set postgres.replica.enabled=true \
+     --set postgres.walg.enabled=true \
+     --set postgres.walg.s3Prefix="$DRILL_PREFIX/walg"
+   # The replica render-guard requires walg.enabled, so point walg at a SCRATCH
+   # bucket + creds (its own pawtograder-s3 secret / --set postgres.walg.* env);
+   # it must not share a real WALG_S3_PREFIX. Wait for drill-postgres-0 and
+   # drill-postgres-replica-0 Ready, then run the "Verifying" queries above.
    ```
 
-   > The unique, throwaway `s3Prefix` is the whole safety story: two primaries
-   > (the drill's promoted standby + its restarted old primary, or a real cluster)
-   > must never archive to one prefix. A per-run prefix guarantees isolation. Tear
-   > the bucket path down with the namespace.
+   > The unique, throwaway prefix is the whole safety story: two primaries (the
+   > drill's promoted standby + its restarted old primary, or a real cluster) must
+   > never archive to one prefix. A per-run UUID prefix guarantees isolation;
+   > teardown deletes exactly `$DRILL_PREFIX`, never a broad `*` glob that could
+   > hit a concurrent drill.
 
 2. **Write a marker** so you can prove the promoted node carries the data:
 
    ```bash
    kubectl -n "$DRILL_NS" exec -it drill-postgres-0 -c postgres -- \
-     psql -U supabase_admin -c "CREATE TABLE IF NOT EXISTS drill_marker(t timestamptz);
+     psql -U supabase_admin -d postgres -c "CREATE TABLE IF NOT EXISTS drill_marker(t timestamptz);
        INSERT INTO drill_marker VALUES (now());"
    ```
 
-3. **Kill the primary and promote**, following the real
-   [manual failover](#manual-failover-promote-the-standby) steps against the
-   `drill-` release (stop writers → confirm the old primary is down →
-   `pg_ctl promote` on `drill-postgres-replica-0` → repoint the `drill-postgres`
-   Service → smoke). Do not shortcut them — running the _actual_ steps is the
-   point of the drill.
+3. **Fence the primary, promote, and repoint** — the real
+   [manual failover](#manual-failover-promote-the-standby) steps, run against the
+   `drill-` release so the failure-prone parts are actually rehearsed (do not
+   shortcut them):
+
+   ```bash
+   # (a) Fence the old primary so it can't come back writing.
+   kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
+   # (b) Promote the standby.
+   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
+     pg_ctl promote -D /var/lib/postgresql/data/pgdata
+   # (c) Repoint the write Service at the promoted pod (edit the selector to the
+   #     replica's component label, or scale the old primary sts to 0 as above).
+   kubectl -n "$DRILL_NS" patch svc drill-postgres --type=merge -p \
+     '{"spec":{"selector":{"app.kubernetes.io/component":"postgres-replica"}}}'
+   ```
 
 4. **Verify the promotion held:** the promoted node left recovery, accepts
    writes, and has the marker row:
 
    ```bash
    kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
-     psql -U supabase_admin -tAc "SELECT pg_is_in_recovery();"          # f
+     psql -U supabase_admin -d postgres -tAc "SELECT pg_is_in_recovery();"   # f
    kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
-     psql -U supabase_admin -c "INSERT INTO drill_marker VALUES (now());
-       SELECT count(*) FROM drill_marker;"                              # >= 2
+     psql -U supabase_admin -d postgres -c "INSERT INTO drill_marker VALUES (now());
+       SELECT count(*) FROM drill_marker;"                                   # >= 2
    ```
 
 5. **Rebuild a standby of the new primary** (the post-failover
-   rebuild-the-standby step) and confirm it reaches `streaming` — this rehearses
-   the part operators most often forget under pressure.
+   rebuild-the-standby step operators most often forget): delete the old
+   primary's PVC and re-create the standby so it re-bootstraps via
+   `pg_basebackup` from the promoted node, then confirm it reaches `streaming`:
+
+   ```bash
+   kubectl -n "$DRILL_NS" delete pvc data-drill-postgres-0
+   # re-create/point the standby at the new primary per your rebuild step, then:
+   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
+     psql -U supabase_admin -d postgres -c "SELECT state FROM pg_stat_replication;"
+   ```
 
 6. **Tear down** — the namespace and its throwaway archive prefix go together, so
    nothing lingers:
@@ -224,7 +255,8 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    ```bash
    helm uninstall drill -n "$DRILL_NS"
    kubectl delete namespace "$DRILL_NS"
-   # delete the drill's s3://pawtograder-drill-*/ prefix from the object store.
+   # delete ONLY this drill's prefix from the object store (not a *-drill-* glob):
+   #   aws s3 rm --recursive "$DRILL_PREFIX"
    ```
 
 Run it before each term (and after any change to the postgres/replica templates

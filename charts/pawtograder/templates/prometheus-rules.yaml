@@ -143,7 +143,11 @@ spec:
               Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
               usage. Runbook: docs/operations/point-in-time-recovery.md.
     {{- end }}
-    {{- if and .Values.postgres.enabled .Values.postgres.replica.enabled }}
+    {{- /* Skip when the standby is intentionally paused (replica.replicas: 0,
+         supported by postgres-replica.yaml to keep the PVC/config while stopped):
+         pg_stat_replication is then empty by design and NotStreaming would fire
+         forever. */}}
+    {{- if and .Values.postgres.enabled .Values.postgres.replica.enabled (gt (int (dig "replicas" 1 .Values.postgres.replica)) 0) }}
     - name: pawtograder.replication
       rules:
         # The streaming standby has stopped streaming. streaming_standbys is the

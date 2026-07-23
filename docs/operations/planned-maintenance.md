@@ -91,27 +91,46 @@ The window is dominated by the primary pod reschedule + Postgres restart —
 budget a **couple of minutes** of write downtime, a bit more if the image must
 pull on the new node.
 
-1. **Put up the maintenance page / stop writers.** Either flip the ingress to a
-   maintenance splash, or scale the app tiers to zero so nothing writes to the
-   database:
+1. **Put up the maintenance page — this is the fence, not a scale-down.** Flip
+   the ingress to a maintenance splash that returns 503 for **every** app host
+   (the main host _and_ the API host, plus any per-course
+   [deployment-channel](./deployment-channels.md) hosts). The maintenance page is
+   mandatory because scaling Deployments to zero does **not** reliably stop all
+   writers:
+
+   - **auth** (GoTrue) writes sessions/refresh tokens on every request — it is a
+     database writer, so a scale list that omits it leaves auth traffic writing.
+   - **edge-functions** is HPA-managed; `kubectl scale` is immediately undone by
+     the HorizontalPodAutoscaler, which scales it back toward `minReplicas`.
+   - per-course **channel** Deployments (`<release>-web-<channel>`,
+     `<release>-functions-<channel>`) are not in any fixed name list.
+
+   Blocking every host at the ingress covers all of them at once. Only if you
+   also want the pods gone (e.g. to free the node) should you additionally
+   **record current replica counts and suspend the HPA**, so you can restore them
+   exactly in step 5:
 
    ```bash
-   kubectl -n "$NS" scale deploy \
-     <release>-web <release>-rest <release>-functions <release>-realtime \
-     --replicas=0
+   # Record what to restore (note replicas AND any HPA min/max), THEN scale down.
+   kubectl -n "$NS" get deploy,hpa -o wide > /tmp/pg-maint-scale-$(date +%s).txt
+   kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=<release> --replicas=0
+   # edge-functions is HPA-managed: pause the HPA or it re-scales the deploy.
+   kubectl -n "$NS" patch hpa <release>-functions \
+     -p '{"spec":{"minReplicas":0,"maxReplicas":0}}' 2>/dev/null || true
    ```
 
-   (This is the same "stop writers" step the failover runbook uses; here it is a
-   graceful pause, not an emergency fence.)
-
-2. **Confirm the standby is caught up** before you disturb the primary — a small
-   `replay_lag` means it is a viable safety net if the bounce goes sideways
-   (run on the PRIMARY):
+2. **Confirm the standby is caught up** before you disturb the primary — a
+   streaming standby with a small **byte** gap is a viable safety net if the
+   bounce goes sideways. Check `state = 'streaming'` and the WAL byte gap
+   (`pg_wal_lsn_diff`), not `replay_lag` alone — `replay_lag` is a delay interval
+   that is `NULL` when idle and does not show the current gap (run on the
+   PRIMARY):
 
    ```bash
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
-     psql -U supabase_admin -c "SELECT application_name, state, sync_state,
-       write_lag, replay_lag FROM pg_stat_replication;"
+     psql -U supabase_admin -d postgres -c "SELECT application_name, state,
+       sync_state, pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
+       FROM pg_stat_replication;"
    ```
 
 3. **Do the maintenance.** Drain the node (or reboot/upgrade it):
@@ -126,30 +145,49 @@ pull on the new node.
    enabled in this environment — see [above](#what-makes-the-bounce-safe-and-cheap);
    do **not** force-delete the pod as a habit.
 
-4. **Verify Postgres is healthy and streaming resumed.** Primary out of recovery
-   and accepting writes, standby back to `streaming` with small lag:
+   > **Node-local storage is a hard exception.** This "reschedule onto another
+   > node and reattach the PVC" only works when the primary's volume is
+   > network-attached and movable (Khoury prod uses NetApp NFS — fine). If
+   > Postgres is on a **node-local** storage class (e.g. `local-path` / local
+   > NVMe, as in the staging overlay), the PVC is pinned to the drained node: the
+   > rescheduled pod stays `Pending` and the database is **down until that node
+   > returns**. On node-local storage do not use this bounce — either keep the
+   > primary on its node (reboot in place without draining Postgres off it) or use
+   > the [promote path](./point-in-time-recovery.md#manual-failover-promote-the-standby).
+
+4. **Verify Postgres is healthy, streaming resumed, and the node is back.**
+   Primary out of recovery and accepting writes, standby back to `streaming`:
 
    ```bash
    # Primary is up and read-write (returns f):
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
-     psql -U supabase_admin -tAc "SELECT pg_is_in_recovery();"
+     psql -U supabase_admin -d postgres -tAc "SELECT pg_is_in_recovery();"
 
    # Standby is streaming again (run on the PRIMARY):
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
-     psql -U supabase_admin -c "SELECT application_name, state, replay_lag
+     psql -U supabase_admin -d postgres -c "SELECT application_name, state,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
        FROM pg_stat_replication;"
+
+   # Put the drained node back in service (drain leaves it cordoned):
+   kubectl uncordon <node>
+   kubectl get node <node>   # want: Ready, SchedulingDisabled cleared
    ```
 
    The `PawtograderReplicaNotStreaming` / `PawtograderReplicaLagHigh` alerts
    (when `postgres.replica.enabled`) should clear once the standby reconnects.
 
-5. **Bring the app back** (step 1 in reverse) and run the
-   [smoke checklist](./production-install.md#smoke-test):
+5. **Bring the app back** and run the
+   [smoke checklist](./production-install.md#smoke-test). Drop the maintenance
+   page. If you scaled down in step 1, restore the recorded replica counts and
+   un-pause the HPA (do **not** hardcode a number — read it back from the file
+   you saved):
 
    ```bash
-   kubectl -n "$NS" scale deploy \
-     <release>-web <release>-rest <release>-functions <release>-realtime \
-     --replicas=<original>
+   # Restore each Deployment to the replica count recorded in step 1's file,
+   # then restore the functions HPA min/max to their prior values.
+   kubectl -n "$NS" patch hpa <release>-functions \
+     -p '{"spec":{"minReplicas":<recorded-min>,"maxReplicas":<recorded-max>}}'
    ```
 
 ---

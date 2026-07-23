@@ -163,8 +163,10 @@ After install (see [production-install.md](./production-install.md)):
 
 1. **Rules loaded.** In Prometheus → Status → Rules, the `pawtograder.backup`,
    `pawtograder.secrets`, `pawtograder.certs`, and `pawtograder.app` groups
-   appear, plus `pawtograder.walg` when `postgres.walg` is enabled and
-   `pawtograder.postgres` when `postgres` is deployed. If they don't, the
+   appear, plus `pawtograder.walg` when `postgres.walg` is enabled,
+   `pawtograder.postgres` when `postgres` is deployed, and
+   `pawtograder.replication` when `postgres.replica` is enabled with a running
+   standby (`replica.replicas` > 0). If they don't, the
    `prometheusRules.labels` selector doesn't match — fix it first.
 2. **Series exist.** Query each metric above in Prometheus and confirm it
    returns data for the release namespace.
