@@ -111,8 +111,12 @@ pull on the new node.
    exactly in step 5:
 
    ```bash
-   # Record what to restore (replicas AND the HPA's min/max), THEN scale down.
-   kubectl -n "$NS" get deploy,hpa -o wide > /tmp/pg-maint-scale-$(date +%s).txt
+   # Record what to restore: each Deployment's name + desired replicas (a
+   # `-o wide` snapshot is not machine-readable for restore), and the HPA YAML.
+   kubectl -n "$NS" get deploy \
+     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
+     > /tmp/pg-maint-deploy-replicas-$(date +%s).txt
+   kubectl -n "$NS" get hpa -o yaml > /tmp/pg-maint-hpa-$(date +%s).yaml
    # edge-functions is HPA-managed. You cannot "pause" it by patching
    # minReplicas:0/maxReplicas:0 — this chart's HPA scales on Resource CPU/memory
    # metrics, where minReplicas:0 needs the HPAScaleToZero gate and maxReplicas:0
@@ -122,18 +126,22 @@ pull on the new node.
    kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=<release> --replicas=0
    ```
 
-2. **Confirm the standby is caught up** before you disturb the primary — a
-   streaming standby with a small **byte** gap is a viable safety net if the
-   bounce goes sideways. Check `state = 'streaming'` and the WAL byte gap
-   (`pg_wal_lsn_diff`), not `replay_lag` alone — `replay_lag` is a delay interval
-   that is `NULL` when idle and does not show the current gap (run on the
+2. **Confirm the physical standby is caught up** before you disturb the primary —
+   a streaming standby with a small **byte** gap is a viable safety net if the
+   bounce goes sideways. Filter to the physical standby role
+   (`usename = 'supabase_replication_admin'`) so a logical-replication client
+   (Realtime streams as `supabase_admin`) can't be mistaken for the standby, and
+   check `state = 'streaming'` with the WAL byte gap (`pg_wal_lsn_diff`) — not
+   `replay_lag` alone, which is a delay interval that is `NULL` when idle.
+   **Proceed only when the row is `streaming` and `lag_bytes` is below the alert
+   threshold (`replicationLagBytesWarning`, 100 MiB by default)** (run on the
    PRIMARY):
 
    ```bash
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
      psql -U supabase_admin -d postgres -c "SELECT application_name, state,
        sync_state, pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
-       FROM pg_stat_replication;"
+       FROM pg_stat_replication WHERE usename = 'supabase_replication_admin';"
    ```
 
 3. **Do the maintenance.** Drain the node (or reboot/upgrade it):
@@ -162,23 +170,31 @@ pull on the new node.
    Primary out of recovery and accepting writes, standby back to `streaming`:
 
    ```bash
-   # Primary is up and read-write (returns f):
+   # Primary actually accepts WRITES — not just out of recovery. pg_is_in_recovery()
+   # = f is necessary but not sufficient; also confirm it is not read-only and can
+   # write. txid_current() allocates a real xid, so it errors on a read-only /
+   # in-recovery server and succeeds on a writable primary:
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
-     psql -U supabase_admin -d postgres -tAc "SELECT pg_is_in_recovery();"
+     psql -U supabase_admin -d postgres -tAc \
+       "SELECT pg_is_in_recovery(), current_setting('transaction_read_only'), txid_current();"
+   # want: f | off | <a transaction id>
 
-   # Standby is streaming again (run on the PRIMARY):
+   # Physical standby is streaming again (run on the PRIMARY):
    kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
      psql -U supabase_admin -d postgres -c "SELECT application_name, state,
        pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
-       FROM pg_stat_replication;"
+       FROM pg_stat_replication WHERE usename = 'supabase_replication_admin';"
 
    # Put the drained node back in service (drain leaves it cordoned):
    kubectl uncordon <node>
    kubectl get node <node>   # want: Ready, SchedulingDisabled cleared
    ```
 
-   The `PawtograderReplicaNotStreaming` / `PawtograderReplicaLagHigh` alerts
-   (when `postgres.replica.enabled`) should clear once the standby reconnects.
+   When `postgres.replica.enabled`, `PawtograderReplicaNotStreaming` clears as
+   soon as the standby re-establishes streaming, but `PawtograderReplicaLagHigh`
+   stays active until the standby has caught up and replay lag drops back below
+   its configured threshold — expect it to linger briefly while the reconnected
+   standby replays the WAL it missed during the bounce.
 
 5. **Bring the app back — restore first, drop the maintenance page last.** With
    the maintenance gate still up (so users don't hit empty services / 502s while
@@ -187,7 +203,14 @@ pull on the new node.
    maintenance page. If you scaled down in step 1:
 
    - Restore each Deployment to the replica count you recorded (do **not**
-     hardcode a number — read it back from the saved file).
+     hardcode a number — read it back from the saved file):
+
+     ```bash
+     while IFS=$'\t' read -r name replicas; do
+       kubectl -n "$NS" scale deploy "$name" --replicas="$replicas"
+     done < /tmp/pg-maint-deploy-replicas-*.txt
+     ```
+
    - **Recreate the deleted HPA by reconciling the Helm release**
      (`helm upgrade` with the same values), not `kubectl autoscale`: the chart's
      `edge-functions-hpa.yaml` is an `autoscaling/v2` HPA with **both** CPU and
