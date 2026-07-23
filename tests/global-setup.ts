@@ -177,6 +177,31 @@ const VISUAL_TEST_CSS = `
   }
 
   /*
+   * Width-stabilize "blackout" masks. `data-visual-test="blackout"` is Argos's
+   * own built-in convention: Argos paints a solid box over the element's live
+   * bounding box at capture time. Unlike "transparent" (which we pin to a fixed
+   * inline-size above), a raw blackout box is sized to whatever it wraps — and
+   * the two blackout usages in the app wrap DATES ("· Submitted <relative>",
+   * "commented on MMM d, yyyy"). A date's rendered width depends on the calendar
+   * day, so the blackout box's right edge shifts run-to-run across CI builds run
+   * on different days, and Argos flags the whole view "changed" (the residual
+   * grading/self-review/regrade cluster — carets and rubric scroll aside). The
+   * date TEXT is already hidden; only its WIDTH leaks. Pin blackout elements to a
+   * deterministic inline-size (same mechanism that keeps the 45 "transparent"
+   * dates stable) so the box Argos masks is identical every run. Not a masking
+   * hack — the content is masked by design; this only removes a width wobble.
+   */
+  html[data-visual-tests] [data-visual-test="blackout"] {
+    display: inline-block !important;
+    inline-size: 24ch !important;
+    min-inline-size: 24ch !important;
+    max-inline-size: 24ch !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    vertical-align: baseline !important;
+  }
+
+  /*
    * Remove transient UI entirely. The element remains in the DOM, but does
    * not affect visual layout or screenshots while visual tests are active.
    */

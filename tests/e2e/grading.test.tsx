@@ -439,6 +439,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .click();
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    // Clicking "Open Request" replaces that button with a fresh "Add a comment to continue the
+    // discussion" textbox in the same spot, so the leftover cursor lands on it and paints a
+    // hover border in some runs but not others (confirmed flaky: soak reps split 3-vs-2 on a
+    // ~1056×128 block that is exactly this textbox). Park the cursor off-canvas and drop focus so
+    // the box is captured in its neutral (unhovered, unfocused) state every run.
+    await page.mouse.move(0, 0);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await visualScreenshot(page, "Student can add a comment to open the regrade request", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -454,6 +461,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
+    // The full-page capture includes the right-hand review-actions panel, whose completion
+    // status loads asynchronously after this fresh navigation. Until it lands, the panel shows
+    // the actionable "Submission Review Actions / Complete Review" state; once loaded it flips to
+    // the settled "Completed by / Completed at" state. The grading review was completed earlier in
+    // this describe, so the settled state is correct — wait for it so the screenshot does not race
+    // the load (confirmed flaky: soak reps differed by a ~608×500 block in exactly this panel).
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can view the student's regrade request", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -573,6 +587,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
     await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
     await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
+    // Same async review-actions panel race as the regrade-request view above: wait for the
+    // settled "Completed by" state so the full-page capture does not race the panel's load.
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can view the student's regrade appeal", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -602,6 +619,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
     await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
     await expect(region.getByText(REGRADE_FINAL_COMMENT)).toBeVisible();
+    // Same async review-actions panel race: closing the regrade does not un-complete the grading
+    // review, so wait for the settled "Completed by" state before the full-page capture.
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can close the regrade request", { stabilizeRubric: "Grading Rubric" });
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
