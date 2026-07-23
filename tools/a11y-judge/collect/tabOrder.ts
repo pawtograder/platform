@@ -32,11 +32,35 @@ export interface TabOrderProbeData {
 export async function collectTabOrder(page: Page, opts: { maxStops: number }): Promise<TabOrderProbeData> {
   const { maxStops } = opts;
 
-  await page.evaluate((stamp) => {
-    (document.activeElement as HTMLElement | null)?.blur();
-    document.body.focus();
-    document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp));
-  }, STAMP);
+  // Reset to a known start. blur() clears activeElement but NOT the browser's
+  // sequential-focus-navigation starting point — Tab resumes after wherever
+  // focus last was. The focus-indicator collector runs right before this one
+  // and leaves that point mid-page, so the walk started mid-document and the
+  // rotation read as a tabindex scramble (seen live: assignments-table links
+  // at stops 1-4 AND revisited later → judge false-positived 2.4.3 while the
+  // real tab order was correct). Anchor the starting point at the top of
+  // <body> via a transient tabindex="-1" node, and verify body holds focus.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.evaluate((stamp) => {
+      document.querySelectorAll(`[${stamp}], [${stamp}-visited]`).forEach((el) => {
+        el.removeAttribute(stamp);
+        el.removeAttribute(`${stamp}-visited`);
+      });
+      document.getElementById(`${stamp}-anchor`)?.remove();
+      // Focused, non-tabbable, invisible anchor as body's first child: the
+      // sequential-focus starting point sits at the document top, so the
+      // first Tab reaches the first tabbable. Removed in the finally below.
+      const anchor = document.createElement("span");
+      anchor.id = `${stamp}-anchor`;
+      anchor.setAttribute("tabindex", "-1");
+      anchor.setAttribute("aria-hidden", "true");
+      document.body.prepend(anchor);
+      anchor.focus();
+    }, STAMP);
+    await page.waitForTimeout(300);
+    const anchored = await page.evaluate((stamp) => document.activeElement?.id === `${stamp}-anchor`, STAMP);
+    if (anchored) break;
+  }
 
   const stops: AuditStop[] = [];
   let bodyHits = 0;
@@ -68,7 +92,12 @@ export async function collectTabOrder(page: Page, opts: { maxStops: number }): P
         const followsPrevious =
           prev && prev !== el ? Boolean(prev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null;
         prev?.removeAttribute(stamp);
+        // Persistently mark visited elements: landing on one again is recorded
+        // as `revisited` so the judge can tell wrap-around/duplication apart
+        // from a genuine positive-tabindex reorder.
+        const revisited = el.hasAttribute(`${stamp}-visited`);
         el.setAttribute(stamp, "");
+        el.setAttribute(`${stamp}-visited`, "");
 
         const r = el.getBoundingClientRect();
         const landmarks: string[] = [];
@@ -115,7 +144,8 @@ export async function collectTabOrder(page: Page, opts: { maxStops: number }): P
           w: Math.round(r.width),
           h: Math.round(r.height),
           visible,
-          followsPrevious
+          followsPrevious,
+          revisited
         };
       }, STAMP);
       stops.push({ n: i + 1, ...stop });
@@ -129,7 +159,13 @@ export async function collectTabOrder(page: Page, opts: { maxStops: number }): P
     }
   } finally {
     await page
-      .evaluate((stamp) => document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp)), STAMP)
+      .evaluate((stamp) => {
+        document.getElementById(`${stamp}-anchor`)?.remove();
+        document.querySelectorAll(`[${stamp}], [${stamp}-visited]`).forEach((el) => {
+          el.removeAttribute(stamp);
+          el.removeAttribute(`${stamp}-visited`);
+        });
+      }, STAMP)
       .catch(() => {});
   }
 

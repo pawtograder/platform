@@ -41,7 +41,9 @@ export const AuditStopSchema = z.object({
   w: z.number(),
   h: z.number(),
   visible: z.boolean(),
-  followsPrevious: z.boolean().nullable()
+  followsPrevious: z.boolean().nullable(),
+  /** True when the walk landed on an element it had already visited (wrap-around/churn signal). */
+  revisited: z.boolean().optional()
 });
 export type AuditStop = z.infer<typeof AuditStopSchema>;
 
