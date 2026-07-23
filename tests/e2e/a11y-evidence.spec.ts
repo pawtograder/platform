@@ -825,11 +825,12 @@ test("evidence: office-hours page", async ({ page, browserName }) => {
   await applyMutationForPage(page, "office-hours");
   await loginAsUser(page, student, course);
   await page.goto(officeHoursUrl);
-  // The queue page is realtime-heavy; wait on the seeded request's text with a
+  // The queue page is realtime-heavy; wait on its named region (a bare
+  // getByText match can land on a hidden nav/skip-link node) with a
   // structural fallback to the main landmark.
   await waitForPageReady(
     page,
-    page.getByText(/office hours|help queue/i).first(),
+    page.getByRole("region", { name: /office hours/i }).first(),
     page.locator("#main-content, main").first()
   );
   await settlePage(page);
