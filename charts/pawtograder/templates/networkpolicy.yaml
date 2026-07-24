@@ -73,9 +73,14 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
+      # maintenance: the planned-maintenance runbook repoints the web-host
+      # ingress backend to the maintenance Service, so the controller must be
+      # allowed to reach its pods too (harmless when maintenance.enabled=false —
+      # no pods carry the label). Without this the page is unreachable under a
+      # default-deny policy even though it works where networkPolicy is off.
       - key: app.kubernetes.io/component
         operator: In
-        values: ["web", "kong", "studio"]
+        values: ["web", "kong", "studio", "maintenance"]
     matchLabels:
       {{- include "pawtograder.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress"]

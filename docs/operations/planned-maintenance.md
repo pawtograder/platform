@@ -203,19 +203,34 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    and scale the writer tiers to 0**, so you can restore them exactly in step 5:
 
    ```bash
-   # Record what to restore: each Deployment's name + desired replicas (a
-   # `-o wide` snapshot is not machine-readable for restore), and the HPA YAML.
-   kubectl -n "$NS" get deploy \
-     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
-     > /tmp/pg-maint-deploy-replicas-$(date +%s).txt
+   # 0. Pause pg_cron FIRST. ~20 scheduled jobs write in-DB every minute,
+   #    independent of every app pod, so scaling Deployments alone does NOT fence
+   #    them. Record the active set so you can resume exactly in step 5.
+   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+     -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
+   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+     -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
+
+   # 1. Record what to restore: writer Deployments + the realtime StatefulSet
+   #    (name + desired replicas — a `-o wide` snapshot is not machine-readable),
+   #    and the HPA YAML.
+   kubectl -n "$NS" get deploy,statefulset \
+     -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
+     > /tmp/pg-maint-replicas-$(date +%s).txt
    kubectl -n "$NS" get hpa -o yaml > /tmp/pg-maint-hpa-$(date +%s).yaml
-   # edge-functions is HPA-managed. You cannot "pause" it by patching
-   # minReplicas:0/maxReplicas:0 — this chart's HPA scales on Resource CPU/memory
-   # metrics, where minReplicas:0 needs the HPAScaleToZero gate and maxReplicas:0
-   # is rejected outright. DELETE the HPA first (recorded above) so it stops
-   # reconciling, then scale the Deployment:
+
+   # 2. edge-functions is HPA-managed and cannot be "paused" via minReplicas:0
+   #    (needs the HPAScaleToZero gate) / maxReplicas:0 (rejected outright) — so
+   #    DELETE the HPA first (recorded above), then scale the writer tiers to 0
+   #    BY COMPONENT. Do NOT use `-l app.kubernetes.io/instance=<release>`: it
+   #    would also scale the maintenance page down and STILL miss realtime (a
+   #    StatefulSet, not a Deployment).
    kubectl -n "$NS" delete hpa <release>-functions
-   kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=<release> --replicas=0
+   for c in functions web rest auth storage; do
+     kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0
+   done
+   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
+   # plus any per-course channel Deployments (<release>-{web,functions}-<channel>).
    ```
 
 2. **Confirm the physical standby is caught up** before you disturb the primary —
