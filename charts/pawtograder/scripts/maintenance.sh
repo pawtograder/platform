@@ -34,6 +34,15 @@ RELEASE="${RELEASE:-pawtograder}"
 DRY_RUN=false
 ASSUME_YES=false
 
+# Custom maintenance-page text (set via --title/--message/--eta on `down`).
+# When set, `down` patches the maintenance ConfigMap's index.html for THIS window
+# and rolls the maintenance pod (subPath mounts don't hot-reload). Unset fields
+# keep the deployed maintenance.title/message/eta chart defaults. A later
+# `helm upgrade` reconciles the ConfigMap back to the chart values.
+MAINT_TITLE="";   MAINT_TITLE_SET=false
+MAINT_MESSAGE=""; MAINT_MESSAGE_SET=false
+MAINT_ETA="";     MAINT_ETA_SET=false
+
 # Drain gate: how long to wait for the async queues to empty, and poll cadence.
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-900}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-5}"
@@ -41,6 +50,12 @@ DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-5}"
 # Standby replay lag (bytes) at/under which a bounce is considered safe. Mirrors
 # monitoring.prometheusRules.replicationLagBytesWarning (100 MiB) in values.yaml.
 LAG_THRESHOLD_BYTES="${LAG_THRESHOLD_BYTES:-104857600}"
+
+# How long `up` waits for each restored tier to become Ready before dropping the
+# maintenance page. Flipping the ingress back to web while its pods are still
+# booting leaves the controller with no ready endpoints → it serves its OWN
+# default 503 until they come up. We drop the page only once the app can serve.
+READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 
 # ----------------------------------------------------------------------------
 # Derived resource names / labels (verified against the chart + migrations)
@@ -54,8 +69,8 @@ INGRESS="${RELEASE}"                       # Helm fullname
 WEB_SVC="${RELEASE}-web"
 WEB_PORT="3000"
 MAINT_SVC="${RELEASE}-maintenance"
+MAINT_CM="${RELEASE}-maintenance"          # ConfigMap holding index.html
 MAINT_PORT="8080"
-FUNCTIONS_DEPLOY="${RELEASE}-functions"
 FUNCTIONS_HPA="${RELEASE}-functions"
 STATE_CM="${RELEASE}-maintenance-state"
 INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
@@ -198,6 +213,64 @@ state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
 state_get() { k get configmap "$STATE_CM" -o jsonpath="{.data.$1}" 2>/dev/null; }
 
 # ----------------------------------------------------------------------------
+# Custom maintenance-page text (--title/--message/--eta)
+# ----------------------------------------------------------------------------
+# Minimal HTML-escaping so an operator message can't break the markup. & first.
+html_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+
+# If any of --title/--message/--eta was given, rewrite the marked spans in the
+# maintenance ConfigMap's index.html and roll the maintenance pod so it serves
+# the new text. Called during `down` BEFORE the ingress is repointed, so the
+# page is already showing the window-specific message when traffic arrives (and
+# the roll can't cause a gap — the ingress still points at web at this point).
+apply_custom_message() {
+  $MAINT_TITLE_SET || $MAINT_MESSAGE_SET || $MAINT_ETA_SET || return 0
+  if $DRY_RUN; then
+    log "[dry-run] would patch ${MAINT_CM} index.html (title/message/eta) + roll ${MAINT_SVC}"
+    return 0
+  fi
+  need perl
+  k get configmap "$MAINT_CM" >/dev/null 2>&1 \
+    || { warn "ConfigMap ${MAINT_CM} not found; cannot set a custom message"; return 0; }
+  local html
+  html="$(k get configmap "$MAINT_CM" -o jsonpath='{.data.index\.html}')"
+  [ -n "$html" ] || { warn "${MAINT_CM} has no index.html; skipping custom message"; return 0; }
+  # The template must carry the <!--maint:*--> markers this substitutes between.
+  case "$html" in
+    *"<!--maint:message-->"*) : ;;
+    *) warn "maintenance page has no <!--maint:*--> markers (older image?); skipping custom message"; return 0 ;;
+  esac
+
+  if $MAINT_TITLE_SET; then
+    html="$(T="$(html_escape "$MAINT_TITLE")" perl -0777 -pe \
+      's/(<!--maint:title-->).*?(<!--\/maint:title-->)/$1.$ENV{T}.$2/gse' <<<"$html")"
+  fi
+  if $MAINT_MESSAGE_SET; then
+    html="$(M="$(html_escape "$MAINT_MESSAGE")" perl -0777 -pe \
+      's/(<!--maint:message-->).*?(<!--\/maint:message-->)/$1.$ENV{M}.$2/se' <<<"$html")"
+  fi
+  if $MAINT_ETA_SET; then
+    local inner=""
+    [ -n "$MAINT_ETA" ] && inner="$(printf '\n      <p class="eta">Expected back by %s</p>' "$(html_escape "$MAINT_ETA")")"
+    html="$(E="$inner" perl -0777 -pe \
+      's/(<!--maint:eta-->).*?(<!--\/maint:eta-->)/$1.$ENV{E}.$2/se' <<<"$html")"
+  fi
+
+  # jq builds the strategic-merge patch (handles newline/quote escaping in the
+  # multiline HTML value). Then roll the pod: index.html is a subPath mount, so
+  # a ConfigMap edit alone does NOT reach the running container.
+  k patch configmap "$MAINT_CM" --type merge -p "$(jq -n --arg h "$html" '{data:{"index.html":$h}}')" >/dev/null
+  k rollout restart deploy "$MAINT_SVC" >/dev/null
+  k rollout status deploy "$MAINT_SVC" --timeout="${READY_TIMEOUT_SECONDS}s" \
+    || warn "${MAINT_SVC} not Ready after the message update; the page may lag briefly"
+  ok "custom maintenance message applied + ${MAINT_SVC} rolled"
+}
+
+# ----------------------------------------------------------------------------
 # down
 # ----------------------------------------------------------------------------
 cmd_down() {
@@ -283,6 +356,10 @@ cmd_down() {
   else
     warn "no edge-functions HPA (${FUNCTIONS_HPA}); nothing to capture"
   fi
+  # 2a½. apply a window-specific message BEFORE repointing the ingress, so the
+  #      page is already showing it when traffic arrives (and the maintenance
+  #      pod roll happens while the ingress still points at web → no gap).
+  apply_custom_message
   # 2b. put the page up (verify the maintenance Service is Ready first).
   if ! k get deploy "$MAINT_SVC" >/dev/null 2>&1; then
     warn "Deployment ${MAINT_SVC} not found — deploy it first (helm upgrade --set maintenance.enabled=true). Skipping ingress swap."
@@ -436,11 +513,25 @@ cmd_up() {
     log "no cron jobs were active at down time; nothing to resume"
   fi
 
-  # 5. Verify functions healthy (best-effort) before dropping the page.
-  step "5/6 verify" "waiting for edge-functions to be available"
-  if ! $DRY_RUN; then
-    k rollout status deploy "$FUNCTIONS_DEPLOY" --timeout=180s \
-      || warn "${FUNCTIONS_DEPLOY} not Ready yet; check before announcing the window closed"
+  # 5. Wait for the restored tiers to be READY before dropping the page. Flipping
+  #    the ingress back to pawtograder-web while its pods are still booting leaves
+  #    the NGINX-Inc controller with no ready endpoints → it serves its OWN
+  #    default 503 (a bare "503 Service Temporarily Unavailable", not our styled
+  #    page) until web comes up. Waiting here makes "page down last" mean "page
+  #    down only once the app can actually serve" — no default-503 flash.
+  step "5/6 verify" "waiting for restored tiers to be Ready before dropping the page"
+  if $DRY_RUN; then
+    log "[dry-run] would wait for restored writer tiers (web, functions, realtime, ...) to be Ready"
+  else
+    local rk rn rr
+    while IFS=$'\t' read -r rk rn rr; do
+      [ -n "$rn" ] || continue
+      [[ "$rr" =~ ^[0-9]+$ ]] && [ "$rr" -eq 0 ] && continue   # nothing to wait for at 0
+      log "  waiting for ${rk}/${rn} (${rr} replica(s))"
+      k rollout status "$rk" "$rn" --timeout="${READY_TIMEOUT_SECONDS}s" \
+        || die "${rk}/${rn} not Ready within ${READY_TIMEOUT_SECONDS}s — leaving the maintenance page UP to avoid a broken cutover (users keep seeing the styled page, not errors). Investigate, then re-run '$0 up' to finish."
+    done < "$tmp/deploy_replicas"
+    ok "all restored tiers Ready"
   fi
 
   # 6. Point the web host back to the app, then delete state LAST. Page down last.
@@ -519,9 +610,16 @@ Usage: $0 <down|up|status> [options]
 Options:
   -n, --namespace NS   Namespace   (default: ${NAMESPACE}, env NAMESPACE)
   -r, --release NAME   Helm release (default: ${RELEASE}, env RELEASE)
+      --title TEXT     (down) window-specific page heading   (default: chart value)
+      --message TEXT   (down) window-specific page body text (default: chart value)
+      --eta TEXT       (down) "Expected back by <TEXT>" line; "" clears it
       --dry-run        Print intended mutations without executing (reads still run)
       --yes            Skip the confirmation prompt
   -h, --help           This help
+
+  --title/--message/--eta patch the deployed maintenance page for this window and
+  roll the maintenance pod; a later 'helm upgrade' reconciles it to chart values.
+  Requires perl (only when one of these is used).
 
 Requires kubectl (context set) and jq. DB access is via kubectl exec into
 ${PG_POD} — no local psql needed.
@@ -536,6 +634,9 @@ main() {
       -r | --release)   RELEASE="$2"; shift 2 ;;
       --dry-run)        DRY_RUN=true; shift ;;
       --yes)            ASSUME_YES=true; shift ;;
+      --title)          MAINT_TITLE="$2";   MAINT_TITLE_SET=true;   shift 2 ;;
+      --message)        MAINT_MESSAGE="$2"; MAINT_MESSAGE_SET=true; shift 2 ;;
+      --eta)            MAINT_ETA="$2";     MAINT_ETA_SET=true;     shift 2 ;;
       -h | --help)      usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -543,8 +644,13 @@ main() {
   # Re-derive names that depend on NAMESPACE/RELEASE flags parsed above.
   PG_POD="${RELEASE}-postgres-0"
   INGRESS="${RELEASE}"; WEB_SVC="${RELEASE}-web"; MAINT_SVC="${RELEASE}-maintenance"
-  FUNCTIONS_DEPLOY="${RELEASE}-functions"; FUNCTIONS_HPA="${RELEASE}-functions"
+  MAINT_CM="${RELEASE}-maintenance"
+  FUNCTIONS_HPA="${RELEASE}-functions"
   STATE_CM="${RELEASE}-maintenance-state"; INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
+
+  if { $MAINT_TITLE_SET || $MAINT_MESSAGE_SET || $MAINT_ETA_SET; } && [ "$cmd" != "down" ]; then
+    warn "--title/--message/--eta only apply to 'down'; ignoring for '${cmd}'"
+  fi
 
   case "$cmd" in
     down)   cmd_down ;;

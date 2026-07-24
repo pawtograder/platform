@@ -23,7 +23,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- Auto-retry: the app returns when maintenance.enabled is turned back off. -->
     <meta http-equiv="refresh" content="{{ .Values.maintenance.retryAfterSeconds | default 120 }}" />
-    <title>{{ .Values.maintenance.title | default "We'll be right back" }} · Pawtograder</title>
+    <title><!--maint:title-->{{ .Values.maintenance.title | default "We'll be right back" }}<!--/maint:title--> · Pawtograder</title>
     <style>
       * {
         box-sizing: border-box;
@@ -110,13 +110,13 @@
   <body>
     <main class="card">
       <div class="paw" aria-hidden="true">🐾</div>
-      <h1>{{ .Values.maintenance.title | default "We'll be right back" }}</h1>
+      <h1><!--maint:title-->{{ .Values.maintenance.title | default "We'll be right back" }}<!--/maint:title--></h1>
       <p>
-        {{ .Values.maintenance.message | default "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own." }}
+        <!--maint:message-->{{ .Values.maintenance.message | default "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own." }}<!--/maint:message-->
       </p>
-      {{- with .Values.maintenance.eta }}
+      <!--maint:eta-->{{- with .Values.maintenance.eta }}
       <p class="eta">Expected back by {{ . }}</p>
-      {{- end }}
+      {{- end }}<!--/maint:eta-->
     </main>
   </body>
 </html>
