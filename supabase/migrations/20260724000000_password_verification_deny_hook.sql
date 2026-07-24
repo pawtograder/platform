@@ -27,11 +27,23 @@ LANGUAGE sql
 IMMUTABLE
 SET search_path = ''
 AS $$
-    -- Ignore the event; password sign-in is disabled for this deployment.
-    SELECT jsonb_build_object(
-        'decision', 'reject',
-        'message', 'Password sign-in is disabled. Please use single sign-on.'
-    );
+    -- The hook only fires once GoTrue has already checked the password, so
+    -- reject ONLY when the password was correct (event.valid = true). For an
+    -- incorrect password (valid = false) return 'continue' so GoTrue emits its
+    -- normal invalid-credentials response — otherwise our distinctive "disabled"
+    -- message would leak which emails have a password set (accounts with no
+    -- password / nonexistent emails are rejected by GoTrue before the hook runs,
+    -- so they never reach here). Fail closed: a missing/unexpected 'valid' still
+    -- rejects, so a correct password is never let through.
+    SELECT CASE
+        WHEN (event->>'valid')::boolean IS DISTINCT FROM false THEN
+            jsonb_build_object(
+                'decision', 'reject',
+                'message', 'Password sign-in is disabled. Please use single sign-on.'
+            )
+        ELSE
+            jsonb_build_object('decision', 'continue')
+    END;
 $$;
 
 COMMENT ON FUNCTION public.password_verification_hook(jsonb) IS
