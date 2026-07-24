@@ -74,6 +74,15 @@ export interface AtObservation {
   error?: string;
 }
 
+/**
+ * The command surface replay/agent code depends on. Implemented by AtHarness
+ * (virtual SR over Playwright) and by the real-VoiceOver harness
+ * (tools/a11y-judge/vo/voHarness.ts), so replayPlan can drive either.
+ */
+export interface AtDriver {
+  run(command: AtCommand, arg?: string): Promise<AtObservation>;
+}
+
 export interface AtStepRecord {
   index: number;
   command: AtCommand;
@@ -137,7 +146,7 @@ interface InPageResult {
   error?: string;
 }
 
-export class AtHarness {
+export class AtHarness implements AtDriver {
   readonly steps: AtStepRecord[] = [];
   private constructor(
     private readonly page: Page,

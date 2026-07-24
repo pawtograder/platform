@@ -143,9 +143,15 @@ env var the specs are byte-identical to the plain replay.
 - The judge is stochastic (no temperature control on current models); use
   `--samples 3` and read the unanimity markers in the report.
 - Agent mode inherits the virtual screen reader's fidelity: it is a simulator,
-  not NVDA/VoiceOver (impossible on this Linux CI box) — real-AT runs are future
-  work. Purely visual criteria (e.g. 2.4.7 focus-outline loss) are outside the
-  spoken channel by construction, so the agent legitimately will not "see" them;
+  not NVDA/VoiceOver (impossible on this Linux CI box). Real-AT coverage now
+  exists as a separate lane: `vo/` replays the promoted task plans through real
+  macOS VoiceOver + real Safari on a dedicated Mac runner (`npm run a11y:vo`,
+  dispatched via `.github/workflows/a11y-voiceover.yml`, setup in
+  `docs/a11y-voiceover-mac-runbook.md`). Milestone templates were recorded from
+  VSR phrasing, so run `--calibrate` and tune the `VO_*` pattern lists in
+  `vo/voHarness.ts` before trusting enforced runs. Purely visual criteria
+  (e.g. 2.4.7 focus-outline loss) are outside the spoken channel by
+  construction, so the agent legitimately will not "see" them;
   that is a scope boundary, not a miss, and the static judge covers them.
 - The `claude -p` CLI can drop a structured-output property that follows a long
   string after ~100-turn sessions; the agent schema keeps the long `narrative`

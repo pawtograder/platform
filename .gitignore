@@ -63,6 +63,7 @@ a11y-evidence/
 a11y-verdicts/
 a11y-trajectories/
 a11y-videos/
+a11y-vo-artifacts/
 
 # Claude Code local session state
 .claude/

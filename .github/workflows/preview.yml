@@ -258,6 +258,35 @@ jobs:
           # pawtograder-edge-functions is created by the top-up loop above
           # (whether or not we hit this first-install path).
 
+      # Mirror the e2e bundle (Supabase keys, END_TO_END_SECRET, derived
+      # URLs) into OpenBao so out-of-cluster runners — the a11y VoiceOver
+      # Mac (a11y-voiceover.yml) — can fetch it without cluster access.
+      # Best-effort by design: Bao downtime or missing config must never
+      # break the preview hot path. Removed again by the destroy job.
+      - name: Publish e2e bundle to OpenBao (best-effort)
+        continue-on-error: true
+        env:
+          PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ secrets.BAO_PUBLISHER_ROLE_ID }}
+          BAO_SECRET_ID: ${{ secrets.BAO_PUBLISHER_SECRET_ID }}
+          BAO_VERSION: 2.2.0
+        run: |
+          set -euo pipefail
+          if [ -z "${BAO_ADDR:-}" ] || [ -z "${BAO_ROLE_ID:-}" ] || [ -z "${BAO_SECRET_ID:-}" ]; then
+            echo "::warning::OpenBao e2e publish skipped — vars.BAO_ADDR / secrets.BAO_PUBLISHER_ROLE_ID / secrets.BAO_PUBLISHER_SECRET_ID not configured"
+            exit 0
+          fi
+          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+            curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+              | tar -xz -C "$RUNNER_TEMP" bao
+            chmod +x "$RUNNER_TEMP/bao"
+            export PATH="$RUNNER_TEMP:$PATH"
+          fi
+          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          export BAO_TOKEN
+          ./scripts/publish-preview-e2e-to-bao.sh "$PREVIEW_ID"
+
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
   # across previews (NEXT_PUBLIC_* is inlined). edge-functions & migrations
@@ -586,6 +615,35 @@ jobs:
           else
             echo "preview ${NS} already absent — nothing to do"
           fi
+
+      # Counterpart of the secrets job's OpenBao publish: drop the mirrored
+      # e2e bundle with the preview. Best-effort — a stale bundle is dead
+      # weight anyway once the namespace is gone.
+      - name: Remove e2e bundle from OpenBao (best-effort)
+        continue-on-error: true
+        env:
+          PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ secrets.BAO_PUBLISHER_ROLE_ID }}
+          BAO_SECRET_ID: ${{ secrets.BAO_PUBLISHER_SECRET_ID }}
+          BAO_VERSION: 2.2.0
+        run: |
+          set -euo pipefail
+          if [ -z "${BAO_ADDR:-}" ] || [ -z "${BAO_ROLE_ID:-}" ] || [ -z "${BAO_SECRET_ID:-}" ]; then
+            echo "OpenBao not configured — nothing to remove"
+            exit 0
+          fi
+          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+            curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+              | tar -xz -C "$RUNNER_TEMP" bao
+            chmod +x "$RUNNER_TEMP/bao"
+            export PATH="$RUNNER_TEMP:$PATH"
+          fi
+          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          export BAO_TOKEN
+          bao kv metadata delete -mount=kv "apps/pawtograder/preview-e2e/pr-${PREVIEW_ID}" \
+            && echo "removed e2e bundle for pr-${PREVIEW_ID}" \
+            || echo "no e2e bundle to remove for pr-${PREVIEW_ID}"
 
       - name: Update PR comment
         if: github.event_name == 'pull_request'

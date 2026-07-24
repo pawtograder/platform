@@ -48,7 +48,9 @@
     "a11y:generate-specs": "npx tsx tools/a11y-judge/agent/generateSpec.ts --trajectories a11y-trajectories/latest",
     "a11y:tasks": "cross-env A11Y_TASKS=1 playwright test tests/e2e/a11y-tasks --project=chromium --workers=1",
     "a11y:tasks:video": "npx tsx tools/a11y-judge/videos/run.ts",
-    "a11y:agent:eval": "npx tsx tools/a11y-judge/agent/evalReport.ts"
+    "a11y:agent:eval": "npx tsx tools/a11y-judge/agent/evalReport.ts",
+    "a11y:vo": "npx tsx tools/a11y-judge/vo/run.ts",
+    "a11y:vo:doctor": "npx tsx tools/a11y-judge/vo/doctor.ts"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
@@ -181,6 +183,8 @@
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.26.0",
     "@faker-js/faker": "^9.9.0",
+    "@guidepup/guidepup": "^0.29.2",
+    "@guidepup/record": "^0.1.0",
     "@guidepup/virtual-screen-reader": "^0.32.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openapi-codegen/cli": "^3.0.1",

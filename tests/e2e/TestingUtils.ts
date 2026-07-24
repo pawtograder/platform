@@ -441,7 +441,7 @@ export async function updateClassSettings({
  * generateLink error as transient and retry with jitter; only surface the
  * error after all retries are exhausted.
  */
-async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
+export async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
   const delaysMs = [500, 1500, 4000];
   let lastErrMsg = "";
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {

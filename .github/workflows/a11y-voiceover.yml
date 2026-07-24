@@ -1,0 +1,99 @@
+# Real-AT accessibility lane: replays the promoted SR task plans
+# (tests/e2e/a11y-tasks/) through REAL macOS VoiceOver + REAL Safari against a
+# PR's deploy preview. Complements the Linux virtual-screen-reader lane
+# (npm run a11y:tasks) — see tools/a11y-judge/README.md.
+#
+# Manually dispatched only: the runner is a single out-of-cluster Mac (labels
+# self-hosted/macOS/voiceover — setup: docs/a11y-voiceover-mac-runbook.md). It
+# cannot host a dev stack; it drives Safari+VoiceOver against the remote
+# preview and pulls the preview's e2e env from OpenBao, where preview.yml's
+# secrets job published it (scripts/publish-preview-e2e-to-bao.sh).
+name: a11y VoiceOver (real Safari)
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_id:
+        description: PR number of a deployed preview (pr-<id>.preview.pawtograder.net)
+        required: true
+      task_filter:
+        description: substring filter on pageId__taskId (empty = all promoted tasks)
+        required: false
+        default: ""
+      record:
+        description: capture per-task screen recordings (.mov artifacts)
+        type: boolean
+        default: true
+      calibrate:
+        description: calibration mode — log VSR→VoiceOver phrasing drift instead of failing on milestones
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One Mac, one VoiceOver session: queue dispatches, never kill a run mid-flight
+# (an interrupted VoiceOver/AppleScript session can wedge the machine's AT state).
+concurrency:
+  group: a11y-voiceover-mac
+  cancel-in-progress: false
+
+jobs:
+  voiceover:
+    runs-on: [self-hosted, macOS, voiceover]
+    timeout-minutes: 120
+    env:
+      # Derived, non-secret preview URLs (same convention as preview.yml's
+      # meta job). The Bao bundle carries authoritative copies; these exist so
+      # early steps can log/probe before secrets are hydrated.
+      BASE_URL: https://pr-${{ inputs.preview_id }}.preview.pawtograder.net
+      SUPABASE_URL: https://pr-${{ inputs.preview_id }}-api.preview.pawtograder.net
+      BAO_ADDR: ${{ vars.BAO_ADDR }}
+      PREVIEW_ID: ${{ inputs.preview_id }}
+      TASK_FILTER: ${{ inputs.task_filter }}
+    steps:
+      - name: Validate preview id
+        # Same DNS-safe slug rule as preview.yml — the id flows into URLs,
+        # a Bao path, and shell commands below (via env, never inline ${{ }}).
+        run: |
+          set -euo pipefail
+          if [[ ! "$PREVIEW_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$ ]]; then
+            echo "::error::invalid preview_id '$PREVIEW_ID'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Preflight (VoiceOver / Safari / OpenBao permissions)
+        run: npm run a11y:vo:doctor
+
+      - name: Run VoiceOver replay suite
+        env:
+          A11Y_VO_RUN_ID: pr-${{ inputs.preview_id }}-run-${{ github.run_id }}
+        # The Mac's standing AppRole creds (~/.config/pawtograder/bao/) do the
+        # Bao login inside the export script — secret values are hydrated into
+        # this step's shell only and never appear in workflow env or logs.
+        run: |
+          set -euo pipefail
+          eval "$(./scripts/export-preview-e2e-from-bao.sh "$PREVIEW_ID" --shell)"
+          flags=(--filter "$TASK_FILTER")
+          if ${{ inputs.record }}; then flags+=(--record); fi
+          if ${{ inputs.calibrate }}; then flags+=(--calibrate); fi
+          npm run a11y:vo -- "${flags[@]}"
+
+      - name: Upload artifacts (spoken logs, junit, recordings)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-vo-pr-${{ inputs.preview_id }}
+          path: a11y-vo-artifacts/
+          retention-days: 30
+          if-no-files-found: warn
