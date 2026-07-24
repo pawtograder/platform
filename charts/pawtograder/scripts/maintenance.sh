@@ -211,7 +211,7 @@ cmd_down() {
 
   confirm "Fence writes + put up the maintenance page in ${NAMESPACE}? (pgmq backlog is durable and drains after 'up')"
 
-  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
   # 1. Pause pg_cron (stops in-DB producers). Record the active set first.
   step "1/5 pg_cron" "pausing scheduled jobs"
@@ -365,7 +365,7 @@ cmd_up() {
 
   confirm "Restore ${NAMESPACE} from ${STATE_CM} and take the maintenance page down?"
 
-  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
   # A. Drop the maintenance page FIRST-of-restore is wrong: page comes down LAST.
   #    Restore backends/pods first while the page still shields users.
