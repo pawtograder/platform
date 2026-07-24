@@ -91,12 +91,41 @@ The window is dominated by the primary pod reschedule + Postgres restart —
 budget a **couple of minutes** of write downtime, a bit more if the image must
 pull on the new node.
 
-1. **Put up the maintenance page — this is the fence, not a scale-down.** Flip
-   the ingress to a maintenance splash that returns 503 for **every** app host
-   (the main host _and_ the API host, plus any per-course
-   [deployment-channel](./deployment-channels.md) hosts). The maintenance page is
-   mandatory because scaling Deployments to zero does **not** reliably stop all
-   writers:
+1. **Put up the maintenance page, then fence writes.** The chart ships a styled
+   maintenance page (`maintenance.enabled`) — a tiny nginx Deployment behind the
+   `pawtograder-maintenance` Service that returns HTTP 503 + `Retry-After` with an
+   on-brand "we'll be right back" body. You route the **web host** to it so users
+   see a clean banner instead of errors.
+
+   **Deploy the page first — it must exist before you reroute.** Enabling
+   `maintenance.enabled` only _creates_ the Deployment/Service; the ingress patch
+   is what reroutes. Roll it out and wait for endpoints:
+
+   ```bash
+   helm upgrade pawtograder <chart> -n "$NS" --reuse-values \
+     --set maintenance.enabled=true \
+     --set maintenance.eta="6:15pm ET"   # optional; title/message also overridable
+   kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
+   ```
+
+   **Reroute the web host → maintenance page.** The primary ingress is named
+   `pawtograder` (the Helm fullname); its first rule (`rules[0]`) is the web host,
+   and with the API on its own host (prod default) that rule's first path
+   (`paths[0]`) is the web backend. Verify the rule is the web host, then repoint
+   it:
+
+   ```bash
+   # Confirm rules[0] is the WEB host (not the api host) before patching:
+   kubectl -n "$NS" get ingress pawtograder -o jsonpath='{.spec.rules[0].host}{"\n"}'
+
+   kubectl -n "$NS" patch ingress pawtograder --type=json -p \
+     '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-maintenance","port":{"number":8080}}}]'
+   ```
+
+   **This reroutes the web host ONLY — it is not a write fence.** The API/kong
+   host is a separate ingress rule and stays open, so the page is a user-facing
+   banner, not protection for the database. Fencing writes is a separate step, and
+   scaling Deployments to zero does **not** by itself stop every writer:
 
    - **auth** (GoTrue) writes sessions/refresh tokens on every request — it is a
      database writer, so a scale list that omits it leaves auth traffic writing.
@@ -105,10 +134,8 @@ pull on the new node.
    - per-course **channel** Deployments (`<release>-web-<channel>`,
      `<release>-functions-<channel>`) are not in any fixed name list.
 
-   Blocking every host at the ingress covers all of them at once. Only if you
-   also want the pods gone (e.g. to free the node) should you additionally
-   **record current replica counts and suspend the HPA**, so you can restore them
-   exactly in step 5:
+   So to actually fence writes, **record current replica counts, delete the HPA,
+   and scale the writer tiers to 0**, so you can restore them exactly in step 5:
 
    ```bash
    # Record what to restore: each Deployment's name + desired replicas (a
@@ -218,7 +245,15 @@ pull on the new node.
      `kubectl autoscale` (CPU-target v1-style) HPA reproduces. Helm owns it, so a
      reconcile restores it exactly.
 
-   Drop the maintenance page only after the smoke checklist passes.
+   **Point the web host back to the app** (reverse of the step-1 patch), then drop
+   the maintenance page only after the smoke checklist passes:
+
+   ```bash
+   kubectl -n "$NS" patch ingress pawtograder --type=json -p \
+     '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-web","port":{"number":3000}}}]'
+   # Optional: tear the page down again once traffic is back on the app.
+   helm upgrade pawtograder <chart> -n "$NS" --reuse-values --set maintenance.enabled=false
+   ```
 
 ---
 

@@ -436,6 +436,41 @@ postgres:
   affinity: {}
 
 # -----------------------------------------------------------------------------
+# Maintenance page — a tiny static nginx Deployment + Service that returns
+# HTTP 503 + Retry-After with a styled "we'll be right back" body (matching the
+# app's in-app error boundary). Off by default. During a planned-maintenance
+# window the web-host ingress backend is repointed to the `pawtograder-maintenance`
+# Service, then back (see docs/operations/planned-maintenance.md). Enabling this
+# only CREATES the Service; the ingress patch is what reroutes. It reroutes the
+# WEB host only (user-facing "down" banner), so it is not itself a write fence —
+# scaling the writer tiers to 0 remains the real fence.
+# -----------------------------------------------------------------------------
+maintenance:
+  enabled: false
+  # Copy shown on the page. eta is optional (omitted from the page when empty).
+  title: "We'll be right back"
+  message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
+  eta: "" # e.g. "6:15pm ET" — rendered only when set
+  # Retry-After header (seconds) AND the page's auto-refresh interval.
+  retryAfterSeconds: 120
+  replicas: 1
+  image:
+    # Built by .github/workflows/release-images.yml (build-maintenance), mirrored
+    # into Harbor for Khoury prod. tag "" => chart appVersion (same convention as
+    # the migrations image).
+    repository: dev-harbor.khoury.northeastern.edu/pawtograder/maintenance
+    tag: "" # default: chart appVersion
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits: { cpu: "100m", memory: "64Mi" }
+  # Override the whole page body (raw HTML, rendered through `tpl`). Empty =>
+  # the chart-bundled maintenance/index.html.
+  html: ""
+
+# -----------------------------------------------------------------------------
 # Migrations job — runs `supabase db push`-equivalent against postgres.
 # Implemented as a pre-install/pre-upgrade Helm hook.
 # -----------------------------------------------------------------------------
