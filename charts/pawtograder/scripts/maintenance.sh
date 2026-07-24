@@ -10,7 +10,7 @@
 #
 # See docs/operations/planned-maintenance.md for the manual reference sequence.
 #
-#   maintenance.sh down          # fence + drain + page up, report SAFE TO BOUNCE
+#   maintenance.sh down          # page up + fence writers, report SAFE TO BOUNCE
 #   ...operator does the node/DB maintenance...
 #   maintenance.sh up            # restore everything, page down LAST
 #   maintenance.sh status        # read-only posture report
@@ -60,13 +60,15 @@ FUNCTIONS_HPA="${RELEASE}-functions"
 STATE_CM="${RELEASE}-maintenance-state"
 INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 
-# Stable writer Deployments (channels web-*/functions-* are discovered at runtime).
-STABLE_WRITERS=(web rest auth storage realtime)
+# Writer Deployments fenced (scaled to 0) in one step (channels web-*/functions-*
+# are discovered at runtime). `functions` is included here so it is captured,
+# scaled, gated, and restored uniformly with the rest.
+STABLE_WRITERS=(functions web rest auth storage realtime)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).
 SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify)
 
-# pgmq queue tables that must drain to 0 before it is safe to bounce.
+# pgmq queue tables reported as informational backlog (durable; not a gate).
 DRAIN_QUEUES=(q_async_calls q_async_calls_low_priority q_gradebook_row_recalculate q_discord_async_calls)
 
 # ----------------------------------------------------------------------------
@@ -199,121 +201,23 @@ cmd_down() {
   fi
   k get pod "$PG_POD" >/dev/null 2>&1 || die "primary pod ${PG_POD} not found"
 
-  confirm "Fence writes + drain + put up the maintenance page in ${NAMESPACE}?"
+  confirm "Fence writes + put up the maintenance page in ${NAMESPACE}? (pgmq backlog is durable and drains after 'up')"
 
   local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-  # 1. Pause pg_cron (record the jobids that were active first).
-  step "1/7 pg_cron" "pausing scheduled jobs"
+  # 1. Pause pg_cron (stops in-DB producers). Record the active set first.
+  step "1/5 pg_cron" "pausing scheduled jobs"
   local active_jobs
-  active_jobs="$(psql_ro "SELECT string_agg(jobid::text, ',') FROM cron.job WHERE active;")" || true
+  active_jobs="$(psql_ro "SELECT string_agg(jobid::text, ',') FROM cron.job WHERE active;")"
   printf '%s' "${active_jobs:-}" > "$tmp/cron_jobids"
   log "active cron jobs: ${active_jobs:-none}"
   psql_exec "UPDATE cron.job SET active=false WHERE active;"
   ok "pg_cron paused"
 
-  # 2. Capture + delete the edge-functions HPA; scale functions to 0.
-  step "2/7 edge-functions" "capturing HPA and scaling to 0 (in-flight drains via edge-runtime graceful-exit)"
-  : > "$tmp/functions_hpa"
-  if k get hpa "$FUNCTIONS_HPA" >/dev/null 2>&1; then
-    if $DRY_RUN; then
-      printf '%s[dry-run]%s capture + delete hpa/%s\n' "$C_WARN" "$C_RESET" "$FUNCTIONS_HPA"
-    else
-      k get hpa "$FUNCTIONS_HPA" -o json \
-        | jq 'del(.status, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.managedFields, .metadata.annotations."kubectl.kubernetes.io/last-applied-configuration")' \
-        > "$tmp/functions_hpa"
-      run k delete hpa "$FUNCTIONS_HPA"
-    fi
-    ok "edge-functions HPA captured"
-  else
-    warn "no edge-functions HPA (${FUNCTIONS_HPA}); nothing to capture"
-  fi
-  run k scale deploy "$FUNCTIONS_DEPLOY" --replicas=0
-
-  # 3. Drain gate: wait for the async queues to empty.
-  step "3/7 drain" "waiting for in-flight async work to finish"
-  if $DRY_RUN; then
-    log "[dry-run] current queue depth: $(queue_depth)"
-  else
-    local waited=0 depth
-    while :; do
-      depth="$(queue_depth)"
-      if [[ "$depth" =~ ^[0-9]+$ ]]; then
-        if [ "$depth" -eq 0 ]; then
-          ok "draining in-flight: 0 ✓"
-          break
-        fi
-        log "draining in-flight: ${depth} (waited ${waited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
-      else
-        # Never treat an unreadable depth as drained — keep waiting until timeout.
-        warn "could not read queue depth (got '${depth}'); retrying"
-      fi
-      if [ "$waited" -ge "$DRAIN_TIMEOUT_SECONDS" ]; then
-        die "queues did not drain within ${DRAIN_TIMEOUT_SECONDS}s (last depth '${depth}'); NOT safe to fence. Investigate stuck workers."
-      fi
-      sleep "$DRAIN_POLL_SECONDS"; waited=$((waited + DRAIN_POLL_SECONDS))
-    done
-  fi
-
-  # 4. Scale remaining writer tiers + channels to 0 (record counts).
-  step "4/7 writers" "scaling app tiers + channels to 0"
-  discover_writers > "$tmp/deploy_replicas"
-  if [ -s "$tmp/deploy_replicas" ]; then
-    local name replicas
-    while IFS=$'\t' read -r name replicas; do
-      [ -n "$name" ] || continue
-      log "  ${name}: ${replicas} -> 0"
-      run k scale deploy "$name" --replicas=0
-    done < "$tmp/deploy_replicas"
-  fi
-  ok "writer tiers scaled down"
-
-  # Confirm the fenced writer pods have ACTUALLY terminated — queue depth alone
-  # doesn't prove it: an edge-functions handler can still hold a live DB
-  # connection/transaction after its pgmq row is deleted, and pods finish their
-  # graceful drain asynchronously. Wait until no pods remain for the functions
-  # deployment + every writer/channel we scaled, before declaring it safe.
-  if $DRY_RUN; then
-    log "[dry-run] would wait for ${FUNCTIONS_DEPLOY} + scaled writer pods to terminate"
-  else
-    local fenced=("$FUNCTIONS_DEPLOY") fname
-    while IFS=$'\t' read -r fname _; do
-      [ -n "$fname" ] && fenced+=("$fname")
-    done < "$tmp/deploy_replicas"
-    local pwaited=0 remaining d cur
-    while :; do
-      remaining=0
-      for d in "${fenced[@]}"; do
-        cur="$(k get deploy "$d" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
-        [[ "$cur" =~ ^[0-9]+$ ]] && remaining=$((remaining + cur))
-      done
-      [ "$remaining" -eq 0 ] && { ok "all fenced writer pods terminated"; break; }
-      log "waiting for writer pods to terminate: ${remaining} still running (${pwaited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
-      if [ "$pwaited" -ge "$DRAIN_TIMEOUT_SECONDS" ]; then
-        die "writer pods did not terminate within ${DRAIN_TIMEOUT_SECONDS}s (${remaining} still running); NOT safe to bounce."
-      fi
-      sleep "$DRAIN_POLL_SECONDS"; pwaited=$((pwaited + DRAIN_POLL_SECONDS))
-    done
-  fi
-
-  # 5. Suspend write-capable CronJobs (record prior suspend state).
-  step "5/7 cronjobs" "suspending write-capable CronJobs"
-  : > "$tmp/cronjobs_suspend"
-  local cj cjname prior
-  for cj in "${SUSPEND_CRONJOBS[@]}"; do
-    cjname="${RELEASE}-${cj}"
-    if k get cronjob "$cjname" >/dev/null 2>&1; then
-      prior="$(k get cronjob "$cjname" -o jsonpath='{.spec.suspend}')"; prior="${prior:-false}"
-      printf '%s\t%s\n' "$cjname" "$prior" >> "$tmp/cronjobs_suspend"
-      run k patch cronjob "$cjname" --type=merge -p '{"spec":{"suspend":true}}'
-      log "  suspended ${cjname} (was suspend=${prior})"
-    fi
-  done
-  ok "CronJobs suspended"
-
-  # Record the ingress web-host backend BEFORE swapping (restore it exactly).
-  # jsonpath can't emit JSON for the backend object, so capture name+port scalars
-  # and reconstruct valid JSON for the later `up` patch.
+  # --- Capture ALL prior state, then persist it BEFORE any destructive fence
+  #     action, so `up` can restore even if the fence is interrupted mid-way. ---
+  # ingress web-host backend (name+port scalars → JSON; jsonpath can't emit the
+  # backend object as JSON).
   local cur_name cur_port rule0_host
   cur_name="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}' 2>/dev/null || true)"
   cur_port="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.port.number}' 2>/dev/null || true)"
@@ -323,11 +227,31 @@ cmd_down() {
     printf '{"name":"%s","port":{"number":%s}}' "$cur_name" "$cur_port" > "$tmp/ingress_backend"
   fi
   log "ingress rules[0] host=${rule0_host:-?} backend=${cur_name:-?}:${cur_port:-?}"
-  if [ "$cur_name" != "$WEB_SVC" ]; then
-    warn "rules[0].paths[0] backend is '${cur_name:-?}', not ${WEB_SVC}; verify this is the web host before proceeding"
+  [ "$cur_name" != "$WEB_SVC" ] && warn "rules[0].paths[0] backend is '${cur_name:-?}', not ${WEB_SVC}; verify this is the web host"
+  # edge-functions HPA (re-applied on `up`).
+  : > "$tmp/functions_hpa"
+  if k get hpa "$FUNCTIONS_HPA" >/dev/null 2>&1; then
+    if $DRY_RUN; then
+      log "[dry-run] would capture hpa/${FUNCTIONS_HPA}"
+    else
+      k get hpa "$FUNCTIONS_HPA" -o json \
+        | jq 'del(.status, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.managedFields, .metadata.annotations."kubectl.kubernetes.io/last-applied-configuration")' \
+        > "$tmp/functions_hpa"
+    fi
   fi
-
-  # Persist captured state BEFORE putting the page up, so `up` can always restore.
+  # writer/channel/functions replica counts (functions is in STABLE_WRITERS).
+  discover_writers > "$tmp/deploy_replicas"
+  # CronJob prior suspend states (suspended in step 3; captured now so state is
+  # complete before we persist and mutate).
+  : > "$tmp/cronjobs_suspend"
+  local cj cjname prior
+  for cj in "${SUSPEND_CRONJOBS[@]}"; do
+    cjname="${RELEASE}-${cj}"
+    if k get cronjob "$cjname" >/dev/null 2>&1; then
+      prior="$(k get cronjob "$cjname" -o jsonpath='{.spec.suspend}')"; prior="${prior:-false}"
+      printf '%s\t%s\n' "$cjname" "$prior" >> "$tmp/cronjobs_suspend"
+    fi
+  done
   if ! $DRY_RUN; then
     k create configmap "$STATE_CM" \
       --from-file=cron_jobids="$tmp/cron_jobids" \
@@ -340,22 +264,86 @@ cmd_down() {
     log "[dry-run] would save state -> configmap/${STATE_CM}"
   fi
 
-  # 6. Put up the maintenance page (requires maintenance.enabled already deployed).
-  step "6/7 page" "routing the web host to the maintenance page"
+  # 2. Fence: put the maintenance page up AND scale EVERY writer tier to 0 in one
+  #    step. Producers on the web host see the 503 page; edge-runtime's
+  #    --graceful-exit-timeout lets any in-flight functions handler COMMIT and exit
+  #    cleanly as the pods drain.
+  step "2/5 fence" "maintenance page up + all writer tiers -> 0"
+  # 2a. delete the functions HPA first so it can't fight the scale-to-0.
+  if [ -s "$tmp/functions_hpa" ]; then
+    run k delete hpa "$FUNCTIONS_HPA"; ok "edge-functions HPA captured + deleted"
+  else
+    warn "no edge-functions HPA (${FUNCTIONS_HPA}); nothing to capture"
+  fi
+  # 2b. put the page up (verify the maintenance Service is Ready first).
   if ! k get deploy "$MAINT_SVC" >/dev/null 2>&1; then
     warn "Deployment ${MAINT_SVC} not found — deploy it first (helm upgrade --set maintenance.enabled=true). Skipping ingress swap."
   else
     if ! $DRY_RUN; then
-      k rollout status deploy "$MAINT_SVC" --timeout=120s \
-        || warn "${MAINT_SVC} not Ready; the page may 502 until it is"
+      k rollout status deploy "$MAINT_SVC" --timeout=120s || warn "${MAINT_SVC} not Ready; the page may 502 until it is"
     fi
     run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
     ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
   fi
+  # 2c. scale every writer/channel/functions deployment to 0 (records were saved).
+  if [ -s "$tmp/deploy_replicas" ]; then
+    local name replicas
+    while IFS=$'\t' read -r name replicas; do
+      [ -n "$name" ] || continue
+      log "  ${name}: ${replicas} -> 0"
+      run k scale deploy "$name" --replicas=0
+    done < "$tmp/deploy_replicas"
+  fi
+  ok "all writer tiers scaled to 0"
 
-  # 7. Report standby health so the operator knows whether it is safe to bounce.
-  step "7/7 standby" "checking replication before the bounce"
+  # 3. Suspend write-capable CronJobs (prior states captured above).
+  step "3/5 cronjobs" "suspending write-capable CronJobs"
+  local cj2 cjn
+  for cj2 in "${SUSPEND_CRONJOBS[@]}"; do
+    cjn="${RELEASE}-${cj2}"
+    if k get cronjob "$cjn" >/dev/null 2>&1; then
+      run k patch cronjob "$cjn" --type=merge -p '{"spec":{"suspend":true}}'
+      log "  suspended ${cjn}"
+    fi
+  done
+  ok "CronJobs suspended"
+
+  # 4. AUTHORITATIVE GATE: block until every fenced writer/channel/functions
+  #    deployment has 0 running pods. Zero writer pods — NOT an empty queue — is
+  #    the real safety signal: --graceful-exit-timeout has let in-flight work
+  #    COMMIT and no writer process is left touching the DB.
+  step "4/5 gate" "waiting for all writer pods to terminate"
+  if $DRY_RUN; then
+    log "[dry-run] would block until all scaled writer/functions pods terminate"
+  else
+    local pwaited=0 remaining cur name2
+    while :; do
+      remaining=0
+      while IFS=$'\t' read -r name2 _; do
+        [ -n "$name2" ] || continue
+        cur="$(k get deploy "$name2" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
+        [[ "$cur" =~ ^[0-9]+$ ]] && remaining=$((remaining + cur))
+      done < "$tmp/deploy_replicas"
+      [ "$remaining" -eq 0 ] && { ok "all writer pods terminated ✓"; break; }
+      log "waiting for writer pods to terminate: ${remaining} still running (${pwaited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
+      if [ "$pwaited" -ge "$DRAIN_TIMEOUT_SECONDS" ]; then
+        die "writer pods did not terminate within ${DRAIN_TIMEOUT_SECONDS}s (${remaining} still running); NOT safe to bounce."
+      fi
+      sleep "$DRAIN_POLL_SECONDS"; pwaited=$((pwaited + DRAIN_POLL_SECONDS))
+    done
+  fi
+
+  # Informational only: the pgmq queues are Postgres tables, so the backlog is
+  # DURABLE across the bounce and drains after `up` when functions resumes. We do
+  # NOT block on it — safety is graceful-exit + zero writer pods above. Blocking
+  # would also never converge: the api/kong host stays open and webhooks (e.g.
+  # github-repo-webhook) keep writing directly, holding the count above zero.
+  local buffered; buffered="$(queue_depth)"
+  log "pgmq backlog: ${buffered:-?} message(s) buffered — durable, drains after 'up' (informational, not a gate)"
+
+  # 5. Report standby health → SAFE TO BOUNCE / NOT READY.
+  step "5/5 standby" "checking replication before the bounce"
   report_standby
 }
 
@@ -403,16 +391,18 @@ cmd_up() {
   fi
   ok "writer tiers restored"
 
-  # 2. Recreate the edge-functions HPA (re-apply the captured object). Alternative:
-  #    `helm upgrade --reuse-values` reconciles it from chart values (cleanest in a
-  #    GitOps flow) — we re-apply the captured object to stay self-contained.
-  step "2/6 edge-functions" "restoring HPA + scaling functions back"
+  # 2. Recreate the edge-functions HPA (re-apply the captured object). functions'
+  #    replica count was already restored in step 1 (it is in deploy_replicas);
+  #    re-applying the HPA hands replica management back to the autoscaler.
+  #    Alternative: `helm upgrade --reuse-values` reconciles it from chart values
+  #    (cleanest in GitOps) — we re-apply the captured object to stay self-contained.
+  step "2/6 edge-functions" "re-applying the edge-functions HPA"
   state_get functions_hpa > "$tmp/functions_hpa" || true
   if [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
     run k apply -f "$tmp/functions_hpa"
-    ok "edge-functions HPA re-applied (autoscaler will manage functions replicas)"
+    ok "edge-functions HPA re-applied (autoscaler resumes managing functions replicas)"
   else
-    warn "no captured HPA; leaving functions at its Deployment replica count (restored above or via helm)"
+    warn "no captured HPA; functions stays at the replica count restored in step 1"
   fi
 
   # 3. Unsuspend CronJobs to their recorded prior state.
@@ -512,8 +502,9 @@ usage() {
   cat <<USAGE
 Usage: $0 <down|up|status> [options]
 
-  down     Fence writes, drain in-flight async work, put up the maintenance page,
-           and report whether it is SAFE TO BOUNCE. Captures prior state.
+  down     Put up the maintenance page and fence all writer tiers to 0, wait for
+           their pods to terminate, and report whether it is SAFE TO BOUNCE.
+           Captures prior state. (pgmq backlog is durable and drains after 'up'.)
   up       Restore everything from the captured state; drop the page LAST.
   status   Read-only maintenance-posture report.
 

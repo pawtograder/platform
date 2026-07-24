@@ -93,17 +93,22 @@ pull on the new node.
 
 ### Recommended: drive it with `maintenance.sh`
 
-`charts/pawtograder/scripts/maintenance.sh` wraps the fence/drain/page sequence
-below with live status output and exact-restore state capture. Use it as the
-primary path; the numbered steps that follow are the underlying reference (and
-the fallback if you need to do it by hand).
+`charts/pawtograder/scripts/maintenance.sh` wraps the page-up + write-fence
+sequence below with live status output and exact-restore state capture. Use it as
+the primary path; the numbered steps that follow are the underlying reference (and
+the fallback if you need to do it by hand). Its `down` does, in order: pause
+pg_cron → (page up + scale every writer tier to 0, in one fence) → suspend
+write CronJobs → block until all writer pods terminate → report SAFE TO BOUNCE /
+NOT READY. `up` is the reverse (writable preflight → restore writers/channels →
+unsuspend CronJobs → re-apply the functions HPA → resume pg_cron → drop the page
+last).
 
 ```bash
 # 1. Pre-stage the page once (creates the Service; does NOT reroute yet):
 helm upgrade pawtograder <chart> -n pawtograder-prod --reuse-values \
   --set maintenance.enabled=true
 
-# 2. Fence + drain + page up, then read the SAFE TO BOUNCE / NOT READY line:
+# 2. Page up + fence all writers, then read the SAFE TO BOUNCE / NOT READY line:
 charts/pawtograder/scripts/maintenance.sh down            # add --dry-run to preview
 #    ...perform the node/DB maintenance once it says SAFE TO BOUNCE...
 
@@ -129,14 +134,23 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
   `kubectl scale` is undone by the HPA — delete the HPA first); and **`pg_cron`**
   fires DB-side jobs (gradebook recalculation, deadline checks, sync) with no pod
   to scale — pause them with `UPDATE cron.job SET active=false`.
-- **Drain signal.** In-flight async work lives in the pgmq queues
+- **The real gate is "zero writer pods", not "empty queue".** Everything is
+  fenced in one step — page up + scale **all** writer tiers to 0 (`functions` incl.
+  its HPA, `web`, `rest`, `auth`, `storage`, `realtime`, and channel deploys) —
+  and the script then blocks until those pods have **terminated**. Scaling
+  `functions` to 0 lets in-flight handlers COMMIT and exit cleanly because
+  edge-runtime drains on SIGTERM up to `edgeFunctions.gracefulExitTimeoutSeconds`
+  (410s ≥ `worker.timeoutMs` 400s), exiting as soon as in-flight is done
+  (near-instant when idle); `terminationGracePeriodSeconds` (430s) is only the
+  SIGKILL backstop. Once no writer pod is running, nothing is touching the DB.
+- **The pgmq backlog is durable, so it is NOT a gate.** The queues
   (`pgmq.q_async_calls`, `q_async_calls_low_priority`, `q_gradebook_row_recalculate`,
-  `q_discord_async_calls`); the script blocks until their combined depth is 0
-  before declaring it safe. Scaling `functions` to 0 lets in-flight handlers
-  finish gracefully because edge-runtime drains on SIGTERM up to
-  `edgeFunctions.gracefulExitTimeoutSeconds` (410s ≥ `worker.timeoutMs` 400s),
-  exiting as soon as in-flight is done (near-instant when idle);
-  `terminationGracePeriodSeconds` (430s) is only the SIGKILL backstop.
+  `q_discord_async_calls`) are Postgres tables — the backlog survives the bounce and
+  drains after `up` when `functions` resumes. The script prints the buffered count
+  as context but does **not** block on it: safety comes from graceful-exit +
+  zero writer pods, and blocking on 0 would never converge anyway because the
+  api/kong host stays open and webhooks (e.g. `github-repo-webhook`) keep writing
+  directly.
 - Write-capable **CronJobs** (`audit-partitions`, the backup drills) are suspended
   for the window and restored afterward.
 
