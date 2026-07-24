@@ -577,13 +577,19 @@ auth:
   enableAnonymousUsers: false
   # Email + password sign-in. Defaults ON so every existing / preview / staging
   # deployment (and the E2E + seed flows that log in with a password) is
-  # unchanged. Set false for an SSO-only deployment: this (a) enables GoTrue's
-  # password-verification deny hook so `grant_type=password` is rejected
-  # server-side even against the direct API, and (b) hides the email/password
-  # form on the web sign-in page (ENABLE_PASSWORD_LOGIN=false). The email
-  # provider stays ON, so magic-link / OTP (e.g. admin break-glass via the
-  # GoTrue admin generate_link API) still works. Note: the deny hook only fires
-  # on password verification, never on magic-link / OTP.
+  # unchanged. Set false for a sealed SSO-only deployment, which:
+  #   (a) enables GoTrue's password-verification deny hook so the password grant
+  #       (/token grant_type=password) is rejected server-side, even against the
+  #       direct API (backed by public.password_verification_hook);
+  #   (b) blocks the remaining anon-reachable email entry points at Kong —
+  #       POST /auth/v1/{signup,otp,recover} — so a caller with the anon key
+  #       can't self-signup or magic-link/recover themselves into a non-SSO
+  #       session (see templates/kong-config.yaml); and
+  #   (c) hides the email/password form on the web sign-in page
+  #       (ENABLE_PASSWORD_LOGIN=false).
+  # The email provider stays ON and magic-link *consumption* (GET /verify) plus
+  # admin break-glass (service-role POST /auth/v1/admin/generate_link) still
+  # work; OAuth onboarding (/authorize + /callback) is untouched.
   enablePasswordLogin: true
   # The web app links GitHub/Discord identities via supabase.auth.linkIdentity,
   # which needs GoTrue manual linking on (else `manual_linking_disabled`).

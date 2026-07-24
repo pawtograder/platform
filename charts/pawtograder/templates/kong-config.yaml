@@ -63,6 +63,57 @@ data:
               - /auth/v1/authorize
         plugins:
           - name: cors
+      {{- if not .Values.auth.enablePasswordLogin }}
+      # SSO-only (auth.enablePasswordLogin=false): seal the public email entry
+      # points so a caller with the anon key can't mint a non-SSO session. The
+      # password *grant* (/token grant_type=password) is already rejected by
+      # GoTrue's password-verification deny hook (see templates/auth.yaml); these
+      # routes close the remaining anon-reachable paths — self-service signup and
+      # magic-link / OTP / recovery *requests*. OAuth onboarding is unaffected
+      # (it uses /authorize + /callback, above), magic-link *consumption* is
+      # unaffected (GET /auth/v1/verify, above), and admin break-glass is
+      # unaffected (service-role POST /auth/v1/admin/generate_link, served by the
+      # catch-all below). These more specific paths take priority over /auth/v1/.
+      - name: auth-v1-signup-blocked
+        url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/signup
+        routes:
+          - name: auth-v1-signup-blocked
+            strip_path: true
+            paths:
+              - /auth/v1/signup
+        plugins:
+          - name: cors
+          - name: request-termination
+            config:
+              status_code: 403
+              message: "Email sign-up is disabled. Please use single sign-on."
+      - name: auth-v1-otp-blocked
+        url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/otp
+        routes:
+          - name: auth-v1-otp-blocked
+            strip_path: true
+            paths:
+              - /auth/v1/otp
+        plugins:
+          - name: cors
+          - name: request-termination
+            config:
+              status_code: 403
+              message: "Password sign-in is disabled. Please use single sign-on."
+      - name: auth-v1-recover-blocked
+        url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/recover
+        routes:
+          - name: auth-v1-recover-blocked
+            strip_path: true
+            paths:
+              - /auth/v1/recover
+        plugins:
+          - name: cors
+          - name: request-termination
+            config:
+              status_code: 403
+              message: "Password recovery is disabled. Please use single sign-on."
+      {{- end }}
       - name: auth-v1
         _comment: "GoTrue: /auth/v1/* -> http://auth:9999/*"
         url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/
