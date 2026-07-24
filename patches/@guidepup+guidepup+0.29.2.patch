@@ -1,0 +1,30 @@
+diff --git a/node_modules/@guidepup/guidepup/lib/macOS/VoiceOver/start.js b/node_modules/@guidepup/guidepup/lib/macOS/VoiceOver/start.js
+index 545ec1f..92e375d 100644
+--- a/node_modules/@guidepup/guidepup/lib/macOS/VoiceOver/start.js
++++ b/node_modules/@guidepup/guidepup/lib/macOS/VoiceOver/start.js
+@@ -18,6 +18,23 @@ async function start(options) {
+             }
+         });
+     });
+-    await (0, delay_1.delay)(500);
+-    await (0, activate_1.activate)(Applications_1.Applications.VoiceOver, options);
++    // guidepup patch (pawtograder): on slow machines VoiceOver can take several
++    // seconds to become AppleScript-addressable, so the upstream fixed 500ms
++    // delay races `activate` -> -600 "Application isn't running". Poll activate
++    // until it succeeds (up to ~20s). See docs/a11y-voiceover-mac-runbook.md.
++    let activateError;
++    for (let attempt = 0; attempt < 20; attempt++) {
++        await (0, delay_1.delay)(1000);
++        try {
++            await (0, activate_1.activate)(Applications_1.Applications.VoiceOver, options);
++            activateError = undefined;
++            break;
++        }
++        catch (error) {
++            activateError = error;
++        }
++    }
++    if (activateError) {
++        throw activateError;
++    }
+ }

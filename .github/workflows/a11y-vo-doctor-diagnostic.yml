@@ -2,6 +2,7 @@
 # rev 2: re-trigger after enabling VoiceOver AppleScript control + doctor JS fix.
 # rev 3: re-trigger after disabling VO Welcome dialog + Safari count-of-documents fix.
 # rev 4: instrument doctor to print guidepup cause.
+# rev 5: guidepup start() poll-activate patch (slow-machine -600 fix).
 #
 # Validates the runner's assistive-tech chain (runbook §7) by running
 # `a11y:vo:doctor` under Runner.Listener — the TCC-granted binary — which is the

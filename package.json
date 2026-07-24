@@ -9,6 +9,7 @@
   },
   "license": "GPL-3.0-only",
   "scripts": {
+    "postinstall": "patch-package",
     "dev": "next dev",
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=8000 next build",
     "start": "next start",
@@ -226,6 +227,7 @@
     "jest-environment-jsdom": "^30.1.2",
     "k6": "^0.0.0",
     "open": "^10.0.0",
+    "patch-package": "^8.0.1",
     "pg": "^8.13.3",
     "postcss": "8.4.49",
     "prettier": "^3.5.3",
