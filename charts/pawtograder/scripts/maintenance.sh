@@ -38,6 +38,10 @@ ASSUME_YES=false
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-900}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-5}"
 
+# Standby replay lag (bytes) at/under which a bounce is considered safe. Mirrors
+# monitoring.prometheusRules.replicationLagBytesWarning (100 MiB) in values.yaml.
+LAG_THRESHOLD_BYTES="${LAG_THRESHOLD_BYTES:-104857600}"
+
 # ----------------------------------------------------------------------------
 # Derived resource names / labels (verified against the chart + migrations)
 # ----------------------------------------------------------------------------
@@ -162,14 +166,17 @@ report_standby() {
   local streaming lag
   streaming="$(psql_ro "SELECT count(*) FROM pg_stat_replication WHERE state='streaming' AND usename='supabase_replication_admin';")"
   lag="$(psql_ro "SELECT COALESCE(max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)),0) FROM pg_stat_replication WHERE usename='supabase_replication_admin';")"
-  streaming="${streaming:-0}"; lag="${lag:-unknown}"
-  log "physical standbys streaming: ${streaming}; max replay lag: ${lag} bytes"
-  if [ "$streaming" -ge 1 ] 2>/dev/null; then
-    printf '%s[maint ✓] SAFE TO BOUNCE%s — standby streaming (lag %s bytes). Perform the node/DB maintenance, then run: %s up\n' \
-      "$C_OK" "$C_RESET" "$lag" "$0"
+  log "physical standbys streaming: ${streaming:-?}; max replay lag: ${lag:-?} bytes (threshold ${LAG_THRESHOLD_BYTES})"
+  # SAFE only when a physical standby is streaming AND its replay lag is a known
+  # value at/under the threshold — a standby that is streaming but far behind is
+  # NOT a safe failover target (promotion would lose the un-replayed tail).
+  if [[ "$streaming" =~ ^[0-9]+$ ]] && [ "$streaming" -ge 1 ] \
+     && [[ "$lag" =~ ^[0-9]+$ ]] && [ "$lag" -le "$LAG_THRESHOLD_BYTES" ]; then
+    printf '%s[maint ✓] SAFE TO BOUNCE%s — standby streaming, replay lag %s <= %s bytes. Perform the node/DB maintenance, then run: %s up\n' \
+      "$C_OK" "$C_RESET" "$lag" "$LAG_THRESHOLD_BYTES" "$0"
   else
-    printf '%s[maint ⚠] NOT READY%s — no physical standby streaming. Bouncing now risks data loss; investigate before proceeding.\n' \
-      "$C_WARN" "$C_RESET"
+    printf '%s[maint ⚠] NOT READY%s — need a streaming physical standby with replay lag <= %s bytes; got streaming=%s lag=%s. Bouncing now risks data loss; investigate before proceeding.\n' \
+      "$C_WARN" "$C_RESET" "$LAG_THRESHOLD_BYTES" "${streaming:-?}" "${lag:-?}"
   fi
 }
 
@@ -261,6 +268,34 @@ cmd_down() {
   fi
   ok "writer tiers scaled down"
 
+  # Confirm the fenced writer pods have ACTUALLY terminated — queue depth alone
+  # doesn't prove it: an edge-functions handler can still hold a live DB
+  # connection/transaction after its pgmq row is deleted, and pods finish their
+  # graceful drain asynchronously. Wait until no pods remain for the functions
+  # deployment + every writer/channel we scaled, before declaring it safe.
+  if $DRY_RUN; then
+    log "[dry-run] would wait for ${FUNCTIONS_DEPLOY} + scaled writer pods to terminate"
+  else
+    local fenced=("$FUNCTIONS_DEPLOY") fname
+    while IFS=$'\t' read -r fname _; do
+      [ -n "$fname" ] && fenced+=("$fname")
+    done < "$tmp/deploy_replicas"
+    local pwaited=0 remaining d cur
+    while :; do
+      remaining=0
+      for d in "${fenced[@]}"; do
+        cur="$(k get deploy "$d" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
+        [[ "$cur" =~ ^[0-9]+$ ]] && remaining=$((remaining + cur))
+      done
+      [ "$remaining" -eq 0 ] && { ok "all fenced writer pods terminated"; break; }
+      log "waiting for writer pods to terminate: ${remaining} still running (${pwaited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
+      if [ "$pwaited" -ge "$DRAIN_TIMEOUT_SECONDS" ]; then
+        die "writer pods did not terminate within ${DRAIN_TIMEOUT_SECONDS}s (${remaining} still running); NOT safe to bounce."
+      fi
+      sleep "$DRAIN_POLL_SECONDS"; pwaited=$((pwaited + DRAIN_POLL_SECONDS))
+    done
+  fi
+
   # 5. Suspend write-capable CronJobs (record prior suspend state).
   step "5/7 cronjobs" "suspending write-capable CronJobs"
   : > "$tmp/cronjobs_suspend"
@@ -338,6 +373,22 @@ cmd_up() {
 
   # A. Drop the maintenance page FIRST-of-restore is wrong: page comes down LAST.
   #    Restore backends/pods first while the page still shields users.
+
+  # 0. Preflight: the primary MUST accept writes before we restore any writer
+  #    tier — otherwise (e.g. the bounce left it in recovery, or a promotion was
+  #    needed and not done) every restored writer would fail writes immediately.
+  #    Confirm not-in-recovery AND not read-only, then a real write probe
+  #    (txid_current allocates an xid — errors on a read-only / in-recovery server).
+  step "0/6 preflight" "verifying the primary accepts writes"
+  if $DRY_RUN; then
+    log "[dry-run] would verify ${PG_POD} is writable (pg_is_in_recovery / transaction_read_only / txid_current)"
+  else
+    local writable
+    writable="$(psql_ro "SELECT (NOT pg_is_in_recovery()) AND NOT current_setting('transaction_read_only')::bool;")"
+    [ "$writable" = "t" ] || die "primary ${PG_POD} is not writable (in recovery or read-only: got '${writable:-?}'). Restore aborted — promote/verify the DB first, then re-run 'up'."
+    psql_exec "SELECT txid_current();" >/dev/null 2>&1 || die "write probe (txid_current) failed on ${PG_POD}; not writable. Restore aborted."
+    ok "primary accepts writes"
+  fi
 
   # 1. Restore writer tiers + channels to recorded counts.
   step "1/6 writers" "restoring app tiers + channels"
