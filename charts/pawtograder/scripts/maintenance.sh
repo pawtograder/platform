@@ -206,7 +206,7 @@ cmd_down() {
   ok "pg_cron paused"
 
   # 2. Capture + delete the edge-functions HPA; scale functions to 0.
-  step "2/7 edge-functions" "capturing HPA and scaling to 0 (in-flight drains via preStop)"
+  step "2/7 edge-functions" "capturing HPA and scaling to 0 (in-flight drains via edge-runtime graceful-exit)"
   : > "$tmp/functions_hpa"
   if k get hpa "$FUNCTIONS_HPA" >/dev/null 2>&1; then
     if $DRY_RUN; then

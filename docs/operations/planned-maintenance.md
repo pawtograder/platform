@@ -133,8 +133,10 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
   (`pgmq.q_async_calls`, `q_async_calls_low_priority`, `q_gradebook_row_recalculate`,
   `q_discord_async_calls`); the script blocks until their combined depth is 0
   before declaring it safe. Scaling `functions` to 0 lets in-flight handlers
-  finish gracefully because `edgeFunctions.preStopSleepSeconds` (410s) ≥
-  `worker.timeoutMs` (400s) — SIGTERM is only delivered after the drain window.
+  finish gracefully because edge-runtime drains on SIGTERM up to
+  `edgeFunctions.gracefulExitTimeoutSeconds` (410s ≥ `worker.timeoutMs` 400s),
+  exiting as soon as in-flight is done (near-instant when idle);
+  `terminationGracePeriodSeconds` (430s) is only the SIGKILL backstop.
 - Write-capable **CronJobs** (`audit-partitions`, the backup drills) are suspended
   for the window and restored afterward.
 

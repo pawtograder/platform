@@ -1110,21 +1110,23 @@ edgeFunctions:
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
-  # Graceful drain sized to worker.timeoutMs (400s). A handler can run up to the
-  # worker lifetime, so a shorter window SIGKILLs in-flight work on any scale-down,
-  # rolling deploy, or node drain. The fix is the preStop window, NOT grace alone:
-  # preStop runs BEFORE SIGTERM while the endpoint is already removed from
-  # kong/Service (no new intake), and edge-runtime keeps serving in-flight isolates
-  # through it — so by the time preStop ends and SIGTERM is delivered, a <=400s
-  # handler has finished, regardless of whether edge-runtime drains-on-SIGTERM or
-  # exits-on-SIGTERM (v1.74.0's behavior isn't guaranteed either way). preStop =
-  # worker.timeoutMs + ~10s endpoint-drop propagation; grace must exceed preStop
-  # (the countdown spans the preStop hook) plus headroom for the post-SIGTERM exit,
-  # or the kubelet SIGKILLs mid-drain.
-  # Trade-off: every termination now takes ~preStop seconds even when idle; that
-  # is the cost of never truncating an in-flight autograder request.
-  terminationGracePeriodSeconds: 430 # >= preStopSleepSeconds + SIGTERM-exit headroom
-  preStopSleepSeconds: 410 # >= worker.timeoutMs (400s) + endpoint-drop propagation
+  # Graceful drain on SIGTERM. edge-runtime intercepts SIGTERM and, up to
+  # --graceful-exit-timeout, stops NEW intake and lets IN-FLIGHT handlers finish
+  # before exiting (verified against v1.74.0: with the flag a 25s request that was
+  # in flight at SIGTERM completed 200 and the process exited right after; at the
+  # 15s default the same request was cut off with "channel closed"). It exits
+  # promptly when idle (~0.3s in the same test), so this is cheap — unlike a fixed
+  # preStop sleep, it only waits as long as there is work.
+  #
+  # Sizing: gracefulExitTimeoutSeconds >= worker.timeoutMs (400s) so the longest
+  # possible in-flight request can finish; preStop is a SHORT endpoint-drop delay
+  # (kong/Service drops the pod before SIGTERM, so no new intake races the drain);
+  # terminationGracePeriodSeconds is only a SIGKILL BACKSTOP — it must exceed
+  # preStop + gracefulExitTimeout so the kubelet never SIGKILLs mid-drain, but the
+  # runtime normally exits well before it.
+  gracefulExitTimeoutSeconds: 410 # --graceful-exit-timeout; >= worker.timeoutMs (400s)
+  preStopSleepSeconds: 10 # short: just lets kong/endpoints drop the pod pre-SIGTERM
+  terminationGracePeriodSeconds: 430 # SIGKILL backstop >= preStop + gracefulExitTimeout
   spreadAcrossNodes: true
   updateStrategy:
     type: RollingUpdate
