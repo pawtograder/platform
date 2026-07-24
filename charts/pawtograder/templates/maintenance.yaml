@@ -104,7 +104,10 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 4 }}
 spec:
-  replicas: {{ .Values.maintenance.replicas | default 1 }}
+  # Default 2 (not 1): the page fronts the web host during a node drain, so a
+  # single replica on the drained node would leave the ingress serving 5xx until a
+  # replacement schedules. Paired with the topology spread below.
+  replicas: {{ .Values.maintenance.replicas | default 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "maintenance") | nindent 6 }}
@@ -113,8 +116,12 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 8 }}
       annotations:
-        # Roll the pods when the rendered page/config changes.
-        checksum/config: {{ tpl (.Values.maintenance.html | default (.Files.Get "maintenance/index.html")) . | sha256sum }}
+        # Roll the pods when the page OR its config changes. index.html, default.conf
+        # and nginx.conf are all subPath mounts, which Kubernetes does NOT hot-update
+        # in a running container — so the hash must cover the values that drive
+        # default.conf (service.port, retryAfterSeconds) too, not just index.html,
+        # or e.g. a retryAfterSeconds change would silently never reach nginx.
+        checksum/config: {{ printf "%s|%v|%v" (tpl (.Values.maintenance.html | default (.Files.Get "maintenance/index.html")) .) .Values.maintenance.service.port (.Values.maintenance.retryAfterSeconds | default 120) | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
@@ -161,6 +168,15 @@ spec:
         - name: content
           configMap:
             name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") }}
+      # Spread replicas across nodes so a single node drain can't evict the whole
+      # page tier. Soft (ScheduleAnyway) so a single-node cluster still schedules.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "maintenance") | nindent 14 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.maintenance)) }}
       nodeSelector:
         {{- . | nindent 8 }}

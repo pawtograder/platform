@@ -245,6 +245,12 @@ apply_custom_message() {
     *) warn "maintenance page has no <!--maint:*--> markers (older image?); skipping custom message"; return 0 ;;
   esac
 
+  # Save the pre-override page into the state ConfigMap so `up` can restore it.
+  # Without this, once staged, a later window run WITHOUT flags would keep serving
+  # this window's title/message/eta until a helm upgrade reconciles the ConfigMap.
+  k patch configmap "$STATE_CM" --type merge \
+    -p "$(jq -n --arg h "$html" '{data:{maint_index_html_orig:$h}}')" >/dev/null
+
   if $MAINT_TITLE_SET; then
     html="$(T="$(html_escape "$MAINT_TITLE")" perl -0777 -pe \
       's/(<!--maint:title-->).*?(<!--\/maint:title-->)/$1.$ENV{T}.$2/gse' <<<"$html")"
@@ -288,9 +294,18 @@ cmd_down() {
 
   # 1. Pause pg_cron (stops in-DB producers). Record the active set first.
   step "1/5 pg_cron" "pausing scheduled jobs"
-  local active_jobs
-  active_jobs="$(psql_ro "SELECT string_agg(jobid::text, ',') FROM cron.job WHERE active;")"
-  printf '%s' "${active_jobs:-}" > "$tmp/cron_jobids"
+  # Read the active set with a sentinel so a TRANSIENT read failure (psql_ro
+  # swallows errors and returns "") can't be mistaken for "no active jobs". If we
+  # can't positively read the set, ABORT before disabling anything — otherwise we
+  # would pause every job but record none, and `up` would silently leave all
+  # scheduled work (deadlines, gradebook, reconciliation) disabled after the window.
+  local cron_read active_jobs
+  cron_read="$(psql_ro "SELECT 'MARK:' || COALESCE(string_agg(jobid::text, ','), '') FROM cron.job WHERE active;")"
+  case "$cron_read" in
+    MARK:*) active_jobs="${cron_read#MARK:}" ;;
+    *) die "could not read the pg_cron active-job set from ${PG_POD} (got '${cron_read:-<empty>}'). Aborting BEFORE pausing cron so 'up' can't leave jobs disabled. Check the DB and retry." ;;
+  esac
+  printf '%s' "$active_jobs" > "$tmp/cron_jobids"
   log "active cron jobs: ${active_jobs:-none}"
   psql_exec "UPDATE cron.job SET active=false WHERE active;"
   ok "pg_cron paused"
@@ -545,6 +560,18 @@ cmd_up() {
     warn "no recorded ingress backend; restoring to ${WEB_SVC}:${WEB_PORT}"
     run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${WEB_SVC}\",\"port\":{\"number\":${WEB_PORT}}}}]"
+  fi
+
+  # Restore the maintenance page's pre-window text if `down --title/--message/--eta`
+  # overrode it — otherwise the next flag-less window serves this window's text.
+  # Safe here: the ingress already points at web, so rolling the maintenance pod
+  # (single replica) has no user impact.
+  local orig_html; orig_html="$(state_get maint_index_html_orig || true)"
+  if [ -n "$orig_html" ]; then
+    run k patch configmap "$MAINT_CM" --type merge \
+      -p "$(jq -n --arg h "$orig_html" '{data:{"index.html":$h}}')"
+    run k rollout restart deploy "$MAINT_SVC"
+    ok "maintenance page text restored to its pre-window default"
   fi
 
   run k delete configmap "$STATE_CM"

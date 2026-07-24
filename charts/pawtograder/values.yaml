@@ -453,7 +453,10 @@ maintenance:
   eta: "" # e.g. "6:15pm ET" — rendered only when set
   # Retry-After header (seconds) AND the page's auto-refresh interval.
   retryAfterSeconds: 120
-  replicas: 1
+  # 2 (+ the template's node topology spread): the page fronts the web host during
+  # a node drain, so a single replica on the drained node would leave the ingress
+  # serving 5xx until a replacement schedules.
+  replicas: 2
   image:
     # Built by .github/workflows/release-images.yml (build-maintenance), mirrored
     # into Harbor for Khoury prod. tag "" => chart appVersion (same convention as

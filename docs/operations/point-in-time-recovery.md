@@ -223,6 +223,13 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    shortcut them):
 
    ```bash
+   # (a0) Wait for the marker (step 2) to replay on the standby before promoting.
+   #      Replication is async, so promoting while the standby still lags drops the
+   #      very row the drill asserts. Proceed only when the byte gap is ~0 (run on
+   #      the primary); repeat until it reads 0.
+   kubectl -n "$DRILL_NS" exec drill-postgres-0 -c postgres -- psql -U supabase_admin \
+     -d postgres -tAc "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)
+       FROM pg_stat_replication WHERE usename='supabase_replication_admin';"
    # (a) Fence the old primary so it can't come back writing.
    kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
    # (b) Promote the standby.

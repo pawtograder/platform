@@ -309,13 +309,17 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    [smoke checklist](./production-install.md#smoke-test), and only then remove the
    maintenance page. If you scaled down in step 1:
 
-   - Restore each Deployment to the replica count you recorded (do **not**
-     hardcode a number — read it back from the saved file):
+   - Resume pg_cron for exactly the jobs you paused in step 0 (the jobids you
+     recorded), then restore each writer to its recorded replica count — read it
+     back from the saved file (**do not** hardcode), scaling by the captured
+     **kind** so the `realtime` StatefulSet is restored too:
 
      ```bash
-     while IFS=$'\t' read -r name replicas; do
-       kubectl -n "$NS" scale deploy "$name" --replicas="$replicas"
-     done < /tmp/pg-maint-deploy-replicas-*.txt
+     kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
+     while IFS=$'\t' read -r kind name replicas; do
+       kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
+     done < /tmp/pg-maint-replicas-*.txt   # the file written in step 1 above
      ```
 
    - **Recreate the deleted HPA by reconciling the Helm release**
