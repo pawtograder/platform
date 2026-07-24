@@ -1,4 +1,5 @@
 # TEMPORARY diagnostic — DELETE after validating the VoiceOver Mac runner.
+# rev 2: re-trigger after enabling VoiceOver AppleScript control + doctor JS fix.
 #
 # Validates the runner's assistive-tech chain (runbook §7) by running
 # `a11y:vo:doctor` under Runner.Listener — the TCC-granted binary — which is the

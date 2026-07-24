@@ -53,7 +53,10 @@ const checks: Check[] = [
     hint: "enable Safari ▸ Develop ▸ Allow JavaScript from Apple Events (runbook §4)",
     run: async () => {
       const result = await safari.evalJs("1 + 1");
-      if (result !== "2") throw new Error(`evalJs returned ${JSON.stringify(result)}`);
+      // Safari on macOS 26+ stringifies the numeric result as "2.0"; older
+      // Safari returns "2". Compare numerically so the capability check isn't
+      // gated on the OS's number-to-string formatting.
+      if (Number(result) !== 2) throw new Error(`evalJs returned ${JSON.stringify(result)}`);
     }
   },
   {
