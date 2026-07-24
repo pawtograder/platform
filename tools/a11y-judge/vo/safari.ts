@@ -61,7 +61,9 @@ export class SafariHost {
       [
         'tell application "Safari"',
         "  activate",
-        "  if (count of windows) = 0 then",
+        // A Start Page / Favorites window counts as a window but has no
+        // document, so gate on documents (not windows) to avoid -1719.
+        "  if (count of documents) = 0 then",
         `    make new document with properties {URL:"${u}"}`,
         "  else",
         `    set URL of front document to "${u}"`,
