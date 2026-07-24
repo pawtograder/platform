@@ -1110,11 +1110,21 @@ edgeFunctions:
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
-  # Long grace: an in-flight autograder request can legitimately run for
-  # tens of seconds; the preStop sleep lets kong/endpoints drop the pod
-  # before SIGTERM reaches the runtime.
-  terminationGracePeriodSeconds: 75
-  preStopSleepSeconds: 10
+  # Graceful drain sized to worker.timeoutMs (400s). A handler can run up to the
+  # worker lifetime, so a shorter window SIGKILLs in-flight work on any scale-down,
+  # rolling deploy, or node drain. The fix is the preStop window, NOT grace alone:
+  # preStop runs BEFORE SIGTERM while the endpoint is already removed from
+  # kong/Service (no new intake), and edge-runtime keeps serving in-flight isolates
+  # through it — so by the time preStop ends and SIGTERM is delivered, a <=400s
+  # handler has finished, regardless of whether edge-runtime drains-on-SIGTERM or
+  # exits-on-SIGTERM (v1.74.0's behavior isn't guaranteed either way). preStop =
+  # worker.timeoutMs + ~10s endpoint-drop propagation; grace must exceed preStop
+  # (the countdown spans the preStop hook) plus headroom for the post-SIGTERM exit,
+  # or the kubelet SIGKILLs mid-drain.
+  # Trade-off: every termination now takes ~preStop seconds even when idle; that
+  # is the cost of never truncating an in-flight autograder request.
+  terminationGracePeriodSeconds: 430 # >= preStopSleepSeconds + SIGTERM-exit headroom
+  preStopSleepSeconds: 410 # >= worker.timeoutMs (400s) + endpoint-drop propagation
   spreadAcrossNodes: true
   updateStrategy:
     type: RollingUpdate

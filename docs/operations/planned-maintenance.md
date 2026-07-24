@@ -91,6 +91,55 @@ The window is dominated by the primary pod reschedule + Postgres restart —
 budget a **couple of minutes** of write downtime, a bit more if the image must
 pull on the new node.
 
+### Recommended: drive it with `maintenance.sh`
+
+`charts/pawtograder/scripts/maintenance.sh` wraps the fence/drain/page sequence
+below with live status output and exact-restore state capture. Use it as the
+primary path; the numbered steps that follow are the underlying reference (and
+the fallback if you need to do it by hand).
+
+```bash
+# 1. Pre-stage the page once (creates the Service; does NOT reroute yet):
+helm upgrade pawtograder <chart> -n pawtograder-prod --reuse-values \
+  --set maintenance.enabled=true
+
+# 2. Fence + drain + page up, then read the SAFE TO BOUNCE / NOT READY line:
+charts/pawtograder/scripts/maintenance.sh down            # add --dry-run to preview
+#    ...perform the node/DB maintenance once it says SAFE TO BOUNCE...
+
+# 3. Restore everything (page comes down LAST):
+charts/pawtograder/scripts/maintenance.sh up
+
+charts/pawtograder/scripts/maintenance.sh status          # read-only posture, any time
+```
+
+`down` captures prior state (active `cron.job` rows, the edge-functions HPA,
+writer replica counts, suspended CronJobs, the ingress web-host backend) into the
+`pawtograder-maintenance-state` ConfigMap; `up` restores from it and deletes it.
+`NAMESPACE`/`RELEASE` are configurable (`-n`/`-r`, default `pawtograder-prod` /
+`pawtograder`); `--yes` skips the prompt.
+
+**Facts the write-fence audit surfaced (why the script does more than scale pods):**
+
+- **The page is not a write fence.** The ingress patch reroutes the **web host
+  only**; the **API/kong host stays open**, so the database is still reachable
+  until the writer tiers are actually stopped.
+- **Writes come from more than the obvious tiers.** `auth` (GoTrue) writes
+  sessions on every request; `edge-functions` is HPA-managed (a bare
+  `kubectl scale` is undone by the HPA — delete the HPA first); and **`pg_cron`**
+  fires DB-side jobs (gradebook recalculation, deadline checks, sync) with no pod
+  to scale — pause them with `UPDATE cron.job SET active=false`.
+- **Drain signal.** In-flight async work lives in the pgmq queues
+  (`pgmq.q_async_calls`, `q_async_calls_low_priority`, `q_gradebook_row_recalculate`,
+  `q_discord_async_calls`); the script blocks until their combined depth is 0
+  before declaring it safe. Scaling `functions` to 0 lets in-flight handlers
+  finish gracefully because `edgeFunctions.preStopSleepSeconds` (410s) ≥
+  `worker.timeoutMs` (400s) — SIGTERM is only delivered after the drain window.
+- Write-capable **CronJobs** (`audit-partitions`, the backup drills) are suspended
+  for the window and restored afterward.
+
+### Manual reference sequence
+
 1. **Put up the maintenance page, then fence writes.** The chart ships a styled
    maintenance page (`maintenance.enabled`) — a tiny nginx Deployment behind the
    `pawtograder-maintenance` Service that returns HTTP 503 + `Retry-After` with an
