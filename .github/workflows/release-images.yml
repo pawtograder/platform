@@ -402,7 +402,7 @@ jobs:
   # the upgrade and `--wait` blocks until it — and every Deployment — is
   # healthy, so a failed migration or rollout turns this job red.
   deploy-staging:
-    needs: [meta, build-web, build-edge-functions, build-migrations]
+    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
@@ -482,6 +482,9 @@ jobs:
             --set web.image.tag="$VERSION" \
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
+            --set maintenance.enabled=true \
+            --set maintenance.image.repository=ghcr.io/pawtograder/maintenance \
+            --set maintenance.image.tag="$VERSION" \
             --wait \
             --wait-for-jobs \
             --timeout 15m
