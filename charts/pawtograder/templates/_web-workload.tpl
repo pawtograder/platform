@@ -184,6 +184,17 @@ spec:
               value: {{ .ssoProviders | toJson | quote }}
             {{- end }}
             {{- end }}
+            {{- /*
+            SSO-only sign-in. When auth.enablePasswordLogin is false, tell the
+            web app to hide the email/password form (lib/features.ts:
+            isPasswordLoginEnabled). GoTrue enforces the same server-side via the
+            password-verification deny hook (see templates/auth.yaml). Defaults
+            ON, so this env is only emitted when explicitly disabled.
+            */ -}}
+            {{- if not $ctx.Values.auth.enablePasswordLogin }}
+            - name: ENABLE_PASSWORD_LOGIN
+              value: "false"
+            {{- end }}
             {{- with $ctx.Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

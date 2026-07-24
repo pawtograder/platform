@@ -153,6 +153,17 @@ spec:
             - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI
               value: {{ .Values.auth.customAccessTokenHook.uri | quote }}
             {{- end }}
+            {{- if not .Values.auth.enablePasswordLogin }}
+            # SSO-only deployment (auth.enablePasswordLogin=false): reject every
+            # password sign-in via the password-verification hook. The email
+            # provider stays enabled, so magic-link / OTP is unaffected — the
+            # hook only fires on grant_type=password. Backed by the always-deny
+            # public.password_verification_hook function (see migration).
+            - name: GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED
+              value: "true"
+            - name: GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI
+              value: "pg-functions://postgres/public/password_verification_hook"
+            {{- end }}
             {{- if .Values.auth.external.github.enabled }}
             - name: GOTRUE_EXTERNAL_GITHUB_ENABLED
               value: "true"

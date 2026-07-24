@@ -575,6 +575,16 @@ auth:
   enableEmailSignup: true
   enableEmailAutoconfirm: true
   enableAnonymousUsers: false
+  # Email + password sign-in. Defaults ON so every existing / preview / staging
+  # deployment (and the E2E + seed flows that log in with a password) is
+  # unchanged. Set false for an SSO-only deployment: this (a) enables GoTrue's
+  # password-verification deny hook so `grant_type=password` is rejected
+  # server-side even against the direct API, and (b) hides the email/password
+  # form on the web sign-in page (ENABLE_PASSWORD_LOGIN=false). The email
+  # provider stays ON, so magic-link / OTP (e.g. admin break-glass via the
+  # GoTrue admin generate_link API) still works. Note: the deny hook only fires
+  # on password verification, never on magic-link / OTP.
+  enablePasswordLogin: true
   # The web app links GitHub/Discord identities via supabase.auth.linkIdentity,
   # which needs GoTrue manual linking on (else `manual_linking_disabled`).
   manualLinkingEnabled: true
