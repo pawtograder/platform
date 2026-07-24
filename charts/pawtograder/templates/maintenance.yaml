@@ -1,0 +1,143 @@
+{{- if .Values.maintenance.enabled }}
+{{- /*
+Maintenance page: a tiny static nginx Deployment + Service that returns HTTP 503
++ Retry-After with a styled body matching the app's in-app error boundary. The
+planned-maintenance runbook repoints the web-host ingress backend to this
+Service for the window (see docs/operations/planned-maintenance.md), then back.
+
+Deploy this (maintenance.enabled=true, via helm upgrade) BEFORE patching the
+ingress — enabling it only creates the Service; the ingress patch is what
+actually reroutes traffic. It reroutes the WEB host only, so it is a user-facing
+"down" banner, not a write fence: the api/kong host stays open, so scaling the
+writer tiers to 0 remains the real fence.
+
+index.html is rendered through `tpl` so maintenance.title/message/eta from values
+are substituted; the ConfigMap is mounted over the image's baked copies.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 4 }}
+data:
+  index.html: |
+{{ tpl (.Values.maintenance.html | default (.Files.Get "maintenance/index.html")) . | indent 4 }}
+  default.conf: |
+    # Every application path returns 503 + the styled body + Retry-After.
+    # /healthz stays 200 so the kubelet probes pass and the Service gets
+    # endpoints (a probe against "/" would see 503 and mark the pod NotReady).
+    server {
+        listen {{ .Values.maintenance.service.port }};
+        server_tokens off;
+        root /usr/share/nginx/html;
+
+        add_header Retry-After {{ .Values.maintenance.retryAfterSeconds | default 120 }} always;
+
+        location = /healthz {
+            add_header Content-Type text/plain;
+            return 200 "ok\n";
+        }
+
+        error_page 503 /index.html;
+        location = /index.html {
+            internal;
+        }
+
+        # Background image referenced by the 503 body must serve (200), not 503.
+        location = /maintenance-mode.png {
+            add_header Retry-After {{ .Values.maintenance.retryAfterSeconds | default 120 }} always;
+        }
+
+        location / {
+            return 503;
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.maintenance.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "maintenance") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 4 }}
+spec:
+  replicas: {{ .Values.maintenance.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "maintenance") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "maintenance") | nindent 8 }}
+      annotations:
+        # Roll the pods when the rendered page/config changes.
+        checksum/config: {{ tpl (.Values.maintenance.html | default (.Files.Get "maintenance/index.html")) . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.maintenance) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.maintenance) | nindent 6 }}
+      containers:
+        - name: maintenance
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.maintenance.image) }}
+          imagePullPolicy: {{ .Values.maintenance.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.maintenance) | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.maintenance.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.maintenance.resources | nindent 12 }}
+          volumeMounts:
+            - name: content
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+              readOnly: true
+            - name: content
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+      volumes:
+        - name: content
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.maintenance)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.maintenance)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}
