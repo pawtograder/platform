@@ -78,6 +78,12 @@ async function main(): Promise<void> {
     } catch (e) {
       failures++;
       console.error(`❌ ${check.name}: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+      // Surface the underlying cause — guidepup wraps the real failure (e.g. an
+      // AppleScript permission error or waitForRunning timeout) as `cause`.
+      if (e instanceof Error && e.cause) {
+        const c = e.cause;
+        console.error(`   cause: ${c instanceof Error ? c.message : String(c)}`);
+      }
       console.error(`   → ${check.hint}`);
     }
   }
