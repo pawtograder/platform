@@ -150,14 +150,22 @@ queue_depth() {
 # ----------------------------------------------------------------------------
 # Emits "<deploy-name>\t<replicas>" for every writer tier + channel Deployment.
 # Stable writers by exact component; channels by component prefix web-/functions-.
+# Emits "<kind>\t<name>\t<replicas>" (kind = deployment|statefulset) for every
+# writer tier + channel. Both kinds are queried because `realtime` is a
+# StatefulSet (the rest are Deployments); postgres/postgres-replica are also
+# StatefulSets but their component labels aren't in the writer set, so they are
+# never matched — the DB is never scaled.
 discover_writers() {
   local stable_re; stable_re="$(IFS='|'; echo "${STABLE_WRITERS[*]}")"
-  k get deploy -l "$INSTANCE_LABEL" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.app\.kubernetes\.io/component}{"\t"}{.spec.replicas}{"\n"}{end}' \
-  | awk -v OFS='\t' -v stable="^(${stable_re})$" '
-      { comp=$2
+  {
+    k get deploy -l "$INSTANCE_LABEL" \
+      -o jsonpath='{range .items[*]}deployment{"\t"}{.metadata.name}{"\t"}{.metadata.labels.app\.kubernetes\.io/component}{"\t"}{.spec.replicas}{"\n"}{end}'
+    k get statefulset -l "$INSTANCE_LABEL" \
+      -o jsonpath='{range .items[*]}statefulset{"\t"}{.metadata.name}{"\t"}{.metadata.labels.app\.kubernetes\.io/component}{"\t"}{.spec.replicas}{"\n"}{end}'
+  } | awk -F'\t' -v OFS='\t' -v stable="^(${stable_re})$" '
+      { kind=$1; nm=$2; comp=$3; rep=$4
         channel = (comp ~ /^web-/ || comp ~ /^functions-/)
-        if (comp ~ stable || channel) print $1, $3
+        if (comp ~ stable || channel) print kind, nm, rep
       }'
 }
 
@@ -286,13 +294,13 @@ cmd_down() {
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
     ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
   fi
-  # 2c. scale every writer/channel/functions deployment to 0 (records were saved).
+  # 2c. scale every writer/channel/functions workload to 0 (records were saved).
   if [ -s "$tmp/deploy_replicas" ]; then
-    local name replicas
-    while IFS=$'\t' read -r name replicas; do
+    local kind name replicas
+    while IFS=$'\t' read -r kind name replicas; do
       [ -n "$name" ] || continue
-      log "  ${name}: ${replicas} -> 0"
-      run k scale deploy "$name" --replicas=0
+      log "  ${kind}/${name}: ${replicas} -> 0"
+      run k scale "$kind" "$name" --replicas=0
     done < "$tmp/deploy_replicas"
   fi
   ok "all writer tiers scaled to 0"
@@ -317,12 +325,12 @@ cmd_down() {
   if $DRY_RUN; then
     log "[dry-run] would block until all scaled writer/functions pods terminate"
   else
-    local pwaited=0 remaining cur name2
+    local pwaited=0 remaining cur kind2 name2
     while :; do
       remaining=0
-      while IFS=$'\t' read -r name2 _; do
+      while IFS=$'\t' read -r kind2 name2 _; do
         [ -n "$name2" ] || continue
-        cur="$(k get deploy "$name2" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
+        cur="$(k get "$kind2" "$name2" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
         [[ "$cur" =~ ^[0-9]+$ ]] && remaining=$((remaining + cur))
       done < "$tmp/deploy_replicas"
       [ "$remaining" -eq 0 ] && { ok "all writer pods terminated ✓"; break; }
@@ -382,11 +390,11 @@ cmd_up() {
   step "1/6 writers" "restoring app tiers + channels"
   state_get deploy_replicas > "$tmp/deploy_replicas" || true
   if [ -s "$tmp/deploy_replicas" ]; then
-    local name replicas
-    while IFS=$'\t' read -r name replicas; do
+    local kind name replicas
+    while IFS=$'\t' read -r kind name replicas; do
       [ -n "$name" ] || continue
-      log "  ${name} -> ${replicas}"
-      run k scale deploy "$name" --replicas="$replicas"
+      log "  ${kind}/${name} -> ${replicas}"
+      run k scale "$kind" "$name" --replicas="$replicas"
     done < "$tmp/deploy_replicas"
   fi
   ok "writer tiers restored"
@@ -479,8 +487,8 @@ cmd_status() {
   fi
 
   log "writer replica counts:"
-  discover_writers | while IFS=$'\t' read -r name replicas; do
-    [ -n "$name" ] && printf '    %s = %s\n' "$name" "$replicas"
+  discover_writers | while IFS=$'\t' read -r kind name replicas; do
+    [ -n "$name" ] && printf '    %s/%s = %s\n' "$kind" "$name" "$replicas"
   done
 
   local backend host
