@@ -1,6 +1,7 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 3: focusWebArea descends into containers via interact() — rev 2 showed
-# the cursor bouncing on Safari's "scroll area" (next never enters a container).
+# rev 4: login matches the wrapped button label via spoken phrases (rev 3
+# reached "Sign in with magic" — itemText is the current text LINE, truncated
+# by wrapping) + early exit when the cursor parks on the page's last element.
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is

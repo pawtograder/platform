@@ -12,14 +12,18 @@
  * surface (TCC, capture hangs, cursor stuck in browser chrome).
  */
 import { generateMagicLinkWithRetry, type TestingUser } from "../../../tests/e2e/TestingUtils";
-import { templateMatches } from "../agent/normalize";
 import type { SafariHost } from "./safari";
 import type { VoHarness } from "./voHarness";
 import { waitForPageReady } from "./ready";
 
-const SIGN_IN_BUTTON = "sign in with magic link";
+// Wrap-tolerant: VO's itemText is the current text LINE, so a wrapped button
+// label arrives truncated ("Sign in with magic" — observed live, rev-3 run);
+// match the prefix and also test the full spoken announcement.
+const SIGN_IN_MATCH = /sign in with magic/i;
 const MAX_ATTEMPTS = 4;
 const MAX_CURSOR_HOPS = 40;
+/** Consecutive identical items = cursor parked on the page's last element. */
+const STUCK_CURSOR_LIMIT = 5;
 
 const TIMEZONE_PREFERENCE_KEY = "pawtograder-timezone-pref";
 const TIMEZONE_PREFERENCE_VALUE = "course";
@@ -107,12 +111,21 @@ export async function loginWithVoiceOver(
       // area, then linear navigation to the sign-in button.
       await harness.focusWebArea(focusMainContent(safari));
       let clicked = false;
+      let lastItem = "";
+      let stuckCount = 0;
       for (let hop = 0; hop < MAX_CURSOR_HOPS; hop++) {
         const obs = await harness.run(hop === 0 ? "observe" : "next");
-        if (templateMatches(SIGN_IN_BUTTON, obs.currentItem, {})) {
-          debug("login: sign-in button under cursor — acting", { hop });
+        const heard = [obs.currentItem, ...obs.spokenSinceLastAction].join(" | ");
+        if (SIGN_IN_MATCH.test(heard)) {
+          debug("login: sign-in button under cursor — acting", { hop, heard });
           await harness.run("act");
           clicked = true;
+          break;
+        }
+        stuckCount = obs.currentItem === lastItem ? stuckCount + 1 : 0;
+        lastItem = obs.currentItem;
+        if (stuckCount >= STUCK_CURSOR_LIMIT) {
+          debug("login: cursor parked on the page's last element — ending scan early", { hop, item: lastItem });
           break;
         }
       }
