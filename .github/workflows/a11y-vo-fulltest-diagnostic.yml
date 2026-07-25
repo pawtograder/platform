@@ -1,0 +1,54 @@
+# TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
+# Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
+# runs from this branch without landing on the default branch) with preview_id
+# pinned to PR 862's live preview and a single read-task filter. Once this is
+# green, the permanent path is a11y-voiceover.yml (workflow_dispatch, on staging).
+name: a11y VO full test (diagnostic — DELETE ME)
+
+on:
+  push:
+    branches: [a11y/wcag-aa-student-pages]
+    paths: ['.github/workflows/a11y-vo-fulltest-diagnostic.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a11y-voiceover-mac
+  cancel-in-progress: false
+
+jobs:
+  voiceover:
+    runs-on: [self-hosted, macOS, voiceover]
+    timeout-minutes: 45
+    env:
+      PREVIEW_ID: "862"
+      TASK_FILTER: assignments-list
+      BASE_URL: https://pr-862.preview.pawtograder.net
+      SUPABASE_URL: https://pr-862-api.preview.pawtograder.net
+      BAO_ADDR: https://bao.work.ripley.cloud
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Preflight (VoiceOver / Safari / OpenBao permissions)
+        run: npm run a11y:vo:doctor
+      - name: Run VoiceOver replay suite (single read task)
+        env:
+          A11Y_VO_RUN_ID: pr-862-run-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          eval "$(./scripts/export-preview-e2e-from-bao.sh "$PREVIEW_ID" --shell)"
+          npm run a11y:vo -- --filter "$TASK_FILTER" --record
+      - name: Upload artifacts (spoken logs, junit, recordings)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-vo-fulltest-pr-862
+          path: a11y-vo-artifacts/
+          retention-days: 7
+          if-no-files-found: warn
