@@ -132,6 +132,7 @@ export interface VoHarnessOptions {
 export class VoHarness implements AtDriver {
   readonly steps: AtStepRecord[] = [];
   private spokenLogCursor = 0;
+  private itemTextLogCursor = 0;
   private voInstance: VoiceOver | null = null;
   private readonly noisePatterns: RegExp[];
   private readonly commandTimeoutMs: number;
@@ -159,6 +160,7 @@ export class VoHarness implements AtDriver {
     await this.vo.start(this.commandOptions);
     const log = await this.vo.spokenPhraseLog();
     this.spokenLogCursor = log.length;
+    this.itemTextLogCursor = (await this.vo.itemTextLog()).length;
     this.debug("vo.started", { initialPhrases: log.length });
   }
 
@@ -211,6 +213,20 @@ export class VoHarness implements AtDriver {
       this.vo.perform(this.vo.keyboardCommands.jumpToLeftEdge, { capture: "initial" })
     ).catch((e) => this.debug("focusWebArea: jumpToLeftEdge failed", { error: String(e) }));
     this.debug("focusWebArea: done", { item: await this.itemTextSafe() });
+  }
+
+  /**
+   * VO's interact() moves only the VO CURSOR; keyboard focus stays behind, so
+   * a plain type() sends keystrokes into the void (observed live: the
+   * office-hours textarea still announced its placeholder + "required invalid
+   * data" after 40+ typed characters). Route keyboard focus to the cursor
+   * (VO+Cmd+F5) before any focused-element input.
+   */
+  private async ensureKeyboardFocusAtCursor(): Promise<void> {
+    await this.withTimeout(
+      "moveKeyboardFocusToCursor",
+      this.vo.perform(this.vo.keyboardCommands.moveKeyboardFocusToCursor, { capture: "initial" })
+    ).catch((e) => this.debug("ensureKeyboardFocusAtCursor failed", { error: String(e) }));
   }
 
   private async itemTextSafe(): Promise<string> {
@@ -281,10 +297,12 @@ export class VoHarness implements AtDriver {
       case "stopInteracting":
         return vo.stopInteracting(opts);
       case "press":
+        await this.ensureKeyboardFocusAtCursor();
         return vo.press(arg ?? "Enter");
       case "pressKey":
         return vo.press(arg ?? "Tab");
       case "type":
+        await this.ensureKeyboardFocusAtCursor();
         return vo.type(arg ?? "");
       case "readNext": {
         const n = Math.min(Math.max(parseInt(arg ?? "10", 10) || 10, 1), READ_NEXT_MAX);
@@ -327,6 +345,15 @@ export class VoHarness implements AtDriver {
       const log = await this.withTimeout("spokenPhraseLog", this.vo.spokenPhraseLog());
       rawSpoken = log.slice(this.spokenLogCursor);
       this.spokenLogCursor = log.length;
+      // Merge the per-action ITEM texts too: a multi-hop readNext lands here
+      // as one command, and "initial" capture can clip long row announcements
+      // — the item text log carries each hop's full line, so needles aren't
+      // at the mercy of speech-capture timing.
+      const itemLog = await this.withTimeout("itemTextLog", this.vo.itemTextLog());
+      for (const hopItem of itemLog.slice(this.itemTextLogCursor)) {
+        if (hopItem && !rawSpoken.includes(hopItem)) rawSpoken.push(hopItem);
+      }
+      this.itemTextLogCursor = itemLog.length;
       currentItem = await this.withTimeout("itemText", this.vo.itemText());
       // itemText is the current text LINE, so a wrapped label arrives
       // truncated ("Sign in with magic" for "Sign in with magic link" —

@@ -44,17 +44,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Does a live phrase (normalized under the REPLAY run's bindings) satisfy a
- * recorded template? Exact equality after both normalize, except the generic
- * placeholders match any content of their class.
- */
-export function templateMatches(template: string, livePhrase: string, replayBindings: Bindings): boolean {
-  const liveNormalized = normalizePhrase(livePhrase, replayBindings);
-  if (liveNormalized === null) return false;
-  if (template === liveNormalized) return true;
-  // Generic placeholders in the template act as wildcards for their class.
-  const pattern = template
+/** Template → regex source (generic placeholders act as class wildcards). */
+function templateToPattern(template: string): string {
+  return template
     .split(/(\{\{(?:number|date|time)\}\})/)
     .map((chunk) =>
       chunk === "{{number}}"
@@ -64,5 +56,30 @@ export function templateMatches(template: string, livePhrase: string, replayBind
           : escapeRegExp(chunk)
     )
     .join("");
-  return new RegExp(`^${pattern}$`).test(liveNormalized);
+}
+
+/**
+ * Does a live phrase (normalized under the REPLAY run's bindings) satisfy a
+ * recorded template? Exact equality after both normalize, except the generic
+ * placeholders match any content of their class.
+ */
+export function templateMatches(template: string, livePhrase: string, replayBindings: Bindings): boolean {
+  const liveNormalized = normalizePhrase(livePhrase, replayBindings);
+  if (liveNormalized === null) return false;
+  if (template === liveNormalized) return true;
+  return new RegExp(`^${templateToPattern(template)}$`).test(liveNormalized);
+}
+
+/**
+ * Prefix form at a word boundary: real assistive tech can compute a LONGER
+ * accessible name than the virtual SR for the same control (observed live:
+ * VSR-recorded milestone "post" vs VoiceOver's "Post as Agent Student").
+ * Guarded to templates of ≥4 chars so trivial fragments can't hijack a
+ * resync walk.
+ */
+export function templatePrefixMatches(template: string, livePhrase: string, replayBindings: Bindings): boolean {
+  if (template.length < 4) return false;
+  const liveNormalized = normalizePhrase(livePhrase, replayBindings);
+  if (liveNormalized === null) return false;
+  return new RegExp(`^${templateToPattern(template)}([\\s,]|$)`).test(liveNormalized);
 }

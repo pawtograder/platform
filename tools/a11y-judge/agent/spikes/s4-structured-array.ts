@@ -33,7 +33,18 @@ const prompt =
 
 const out = execFileSync(
   "claude",
-  ["-p", "--model", "claude-opus-4-8", "--output-format", "json", "--json-schema", JSON.stringify(schema), "--max-turns", "3", "--strict-mcp-config"],
+  [
+    "-p",
+    "--model",
+    "claude-opus-4-8",
+    "--output-format",
+    "json",
+    "--json-schema",
+    JSON.stringify(schema),
+    "--max-turns",
+    "3",
+    "--strict-mcp-config"
+  ],
   { input: prompt, encoding: "utf-8", timeout: 300_000, maxBuffer: 16 * 1024 * 1024 }
 );
 const envelope = JSON.parse(out);

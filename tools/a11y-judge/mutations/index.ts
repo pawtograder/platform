@@ -56,18 +56,14 @@ export async function applyMutationFromEnv(page: Page): Promise<Mutation | null>
   if (!id || id.trim() === "") return null;
   const mutation = getMutation(id.trim());
   if (!mutation) {
-    throw new Error(
-      `Unknown ${MUTATION_ENV_VAR}="${id}". Known ids: ${MUTATIONS.map((m) => m.id).join(", ")}`
-    );
+    throw new Error(`Unknown ${MUTATION_ENV_VAR}="${id}". Known ids: ${MUTATIONS.map((m) => m.id).join(", ")}`);
   }
   await mutation.apply(page);
   return mutation;
 }
 
 /** Ground-truth sidecar shape written next to a collected evidence bundle. */
-export type GroundTruth =
-  | { mutationId: string; criterion: string; expected: "fail" }
-  | { clean: true };
+export type GroundTruth = { mutationId: string; criterion: string; expected: "fail" } | { clean: true };
 
 /**
  * Write `groundTruth.json` into `outDir` recording whether the collection ran

@@ -73,9 +73,7 @@ export class ErrorFlowRecorder {
 
       const resolveDescribedBy = (el: Element): string[] => {
         const ids = (el.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
-        return ids
-          .map((id) => clamp(document.getElementById(id)?.textContent, 200))
-          .filter((t) => t.length > 0);
+        return ids.map((id) => clamp(document.getElementById(id)?.textContent, 200)).filter((t) => t.length > 0);
       };
 
       const invalidFields = Array.from(document.querySelectorAll("[aria-invalid]"))

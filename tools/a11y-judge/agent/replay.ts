@@ -12,7 +12,7 @@
  *   3. write-tasks: the task's machine predicate (checked by the caller).
  */
 import type { AtCommand, AtDriver, AtObservation } from "./atHarness";
-import { normalizePhrase, templateMatches, type Bindings } from "./normalize";
+import { normalizePhrase, templateMatches, templatePrefixMatches, type Bindings } from "./normalize";
 
 export const GENERATOR_VERSION = "1";
 export const DEFAULT_RESYNC_LIMIT = 10;
@@ -52,8 +52,11 @@ export class ReplayNeedleError extends Error {}
  * button" — that exact template equality can't safely strip).
  */
 export function milestoneMatches(milestone: string, observation: AtObservation, bindings: Bindings): boolean {
-  if (templateMatches(milestone, observation.currentItem, bindings)) return true;
-  return (observation.currentItemAlternates ?? []).some((alt) => templateMatches(milestone, alt, bindings));
+  const candidates = [observation.currentItem, ...(observation.currentItemAlternates ?? [])];
+  if (candidates.some((c) => templateMatches(milestone, c, bindings))) return true;
+  // Word-boundary prefix: real AT can compute a longer accessible name than
+  // the recorder did ("post" vs "Post as Agent Student").
+  return candidates.some((c) => templatePrefixMatches(milestone, c, bindings));
 }
 
 export async function replayPlan(

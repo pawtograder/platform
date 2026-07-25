@@ -13,12 +13,7 @@
  */
 import fs from "fs";
 import path from "path";
-import {
-  mutationDetection,
-  taskReliability,
-  type SampleData,
-  type TaskReliability
-} from "./metrics";
+import { mutationDetection, taskReliability, type SampleData, type TaskReliability } from "./metrics";
 import type { Trajectory } from "../schema/trajectory";
 
 /** Round-1 static-judge gauntlet result per mutation (from PROGRESS.md). */
@@ -100,8 +95,11 @@ function render(cleanDir: string, gauntletDirs: string[]): string {
 
   const lines: string[] = [];
   lines.push(`# Agentic SR-driving evaluation`, "");
-  lines.push(`Clean run: \`${path.basename(cleanDir)}\` (${clean.length} samples). ` +
-    `Gauntlet runs: ${gauntletDirs.map((d) => `\`${path.basename(d)}\``).join(", ") || "none"}.`, "");
+  lines.push(
+    `Clean run: \`${path.basename(cleanDir)}\` (${clean.length} samples). ` +
+      `Gauntlet runs: ${gauntletDirs.map((d) => `\`${path.basename(d)}\``).join(", ") || "none"}.`,
+    ""
+  );
 
   lines.push(`## Clean reliability (per task, across samples)`, "");
   lines.push(`| Task | n | predicate✓ | outcome (consistency) | mean steps | mean turns | mean $ | tool variance |`);
@@ -134,14 +132,16 @@ function render(cleanDir: string, gauntletDirs: string[]): string {
     // the R1 static judge caught it (everything except 413, which it could not
     // reach). This is the ablation thesis — the two methods cover different
     // failure classes.
-    const dets = [...byMutTask.values()].map((s) =>
-      mutationDetection(s, cleanMeanStepsByTask.get(s[0].taskId) ?? 0)
-    );
+    const dets = [...byMutTask.values()].map((s) => mutationDetection(s, cleanMeanStepsByTask.get(s[0].taskId) ?? 0));
     const agentCatches = (id: string) => (dets.find((d) => d.mutationId === id)?.detectionRate ?? 0) >= 0.5;
     const r1Catches = (id: string) => /fail/.test(R1_GAUNTLET[id] ?? "");
     const both = dets.filter((d) => agentCatches(d.mutationId) && r1Catches(d.mutationId)).map((d) => d.mutationId);
-    const agentOnly = dets.filter((d) => agentCatches(d.mutationId) && !r1Catches(d.mutationId)).map((d) => d.mutationId);
-    const judgeOnly = dets.filter((d) => !agentCatches(d.mutationId) && r1Catches(d.mutationId)).map((d) => d.mutationId);
+    const agentOnly = dets
+      .filter((d) => agentCatches(d.mutationId) && !r1Catches(d.mutationId))
+      .map((d) => d.mutationId);
+    const judgeOnly = dets
+      .filter((d) => !agentCatches(d.mutationId) && r1Catches(d.mutationId))
+      .map((d) => d.mutationId);
     lines.push(`### Complementarity (agent ≥50% detection vs R1 static judge)`, "");
     lines.push(`- **Both** catch: ${both.join(", ") || "—"}`);
     lines.push(

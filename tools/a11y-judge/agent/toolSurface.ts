@@ -23,8 +23,7 @@ export interface ToolSpec {
 export const TOOL_SPECS: ToolSpec[] = [
   {
     command: "next",
-    description:
-      "Move the VIRTUAL reading cursor to the next item and hear it announced. Does not move keyboard focus."
+    description: "Move the VIRTUAL reading cursor to the next item and hear it announced. Does not move keyboard focus."
   },
   {
     command: "previous",

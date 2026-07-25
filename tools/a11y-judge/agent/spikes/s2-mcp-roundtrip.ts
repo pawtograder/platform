@@ -22,15 +22,14 @@ function buildMcpServer(): McpServer {
   server.registerTool(
     "echo",
     {
-      description:
-        "Echoes the message back with an 'echo:' prefix. Call this exactly once.",
-      inputSchema: { message: z.string().describe("text to echo") },
+      description: "Echoes the message back with an 'echo:' prefix. Call this exactly once.",
+      inputSchema: { message: z.string().describe("text to echo") }
     },
     async ({ message }) => {
       toolCallsSeen.push({ tool: "echo", args: { message } });
       console.error(`[bridge] echo tool called with message=${JSON.stringify(message)}`);
       return { content: [{ type: "text", text: `echo:${message}` }] };
-    },
+    }
   );
   return server;
 }
@@ -71,9 +70,9 @@ async function main() {
       at: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
-        headers: { Authorization: `Bearer ${TOKEN}` },
-      },
-    },
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      }
+    }
   };
   const cfgPath = join(mkdtempSync(join(tmpdir(), "s2-mcp-")), "mcp-config.json");
   writeFileSync(cfgPath, JSON.stringify(mcpConfig));
@@ -82,19 +81,25 @@ async function main() {
     type: "object",
     properties: { echoed: { type: "string", description: "exact text returned by the echo tool" } },
     required: ["echoed"],
-    additionalProperties: false,
+    additionalProperties: false
   };
 
   const args = [
     "-p",
-    "--model", "claude-opus-4-8",
-    "--output-format", "stream-json",
+    "--model",
+    "claude-opus-4-8",
+    "--output-format",
+    "stream-json",
     "--verbose",
-    "--mcp-config", cfgPath,
+    "--mcp-config",
+    cfgPath,
     "--strict-mcp-config",
-    "--allowedTools", "mcp__at__echo",
-    "--max-turns", "10",
-    "--json-schema", JSON.stringify(outputSchema),
+    "--allowedTools",
+    "mcp__at__echo",
+    "--max-turns",
+    "10",
+    "--json-schema",
+    JSON.stringify(outputSchema)
   ];
   const prompt =
     "Call the echo tool with the message 'round-trip-ok'. Then report the exact text the tool returned as the structured output field `echoed`.";
@@ -133,7 +138,9 @@ async function main() {
     try {
       const ev = JSON.parse(line);
       if (ev.type === "result") resultEnvelope = ev;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   console.log("=== GATE CHECK ===");

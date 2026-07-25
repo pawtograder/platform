@@ -85,7 +85,7 @@ function modal<T>(xs: T[]): { value: T; count: number } {
   for (const x of xs) counts.set(x, (counts.get(x) ?? 0) + 1);
   let best: T = xs[0];
   let bestCount = 0;
-  for (const [value, count] of counts) if (count > bestCount) ((best = value), (bestCount = count));
+  for (const [value, count] of counts) if (count > bestCount) (best = value), (bestCount = count);
   return { value: best, count: bestCount };
 }
 

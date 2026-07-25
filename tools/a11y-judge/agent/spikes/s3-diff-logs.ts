@@ -55,9 +55,13 @@ for (let i = 0; i < max; i++) {
   if (normA[i] !== normB[i]) {
     mismatches++;
     if (mismatches <= 20) {
-      console.log(`#${i}\n  a: ${JSON.stringify(normA[i] ?? "<missing>")}\n  b: ${JSON.stringify(normB[i] ?? "<missing>")}`);
+      console.log(
+        `#${i}\n  a: ${JSON.stringify(normA[i] ?? "<missing>")}\n  b: ${JSON.stringify(normB[i] ?? "<missing>")}`
+      );
     }
   }
 }
-console.log(mismatches === 0 ? "S3 GATE: PASS — normalized logs identical" : `S3 GATE: FAIL — ${mismatches} mismatches`);
+console.log(
+  mismatches === 0 ? "S3 GATE: PASS — normalized logs identical" : `S3 GATE: FAIL — ${mismatches} mismatches`
+);
 process.exit(mismatches === 0 ? 0 : 1);

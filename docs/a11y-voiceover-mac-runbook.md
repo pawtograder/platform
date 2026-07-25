@@ -59,6 +59,14 @@ landmark commands need). Then, in System Settings ▸ Privacy & Security, grant:
 Verify with `npm run a11y:vo:doctor` (from a repo checkout). ⚠️ TCC grants are
 per-binary and **reset on macOS upgrades** — see §8.
 
+### VoiceOver navigation settings
+
+The harness routes keyboard focus to the VO cursor (VO+Cmd+F5) before every
+`type`/`press`, so no VoiceOver Utility navigation setting is load-bearing —
+but keeping VoiceOver Utility ▸ Navigation ▸ "Keyboard focus follows
+VoiceOver cursor" **enabled** reduces focus/cursor divergence between
+commands.
+
 ## 4. Safari
 
 - Settings ▸ Advanced: **Show Develop menu**.

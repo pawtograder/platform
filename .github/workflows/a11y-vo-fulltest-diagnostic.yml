@@ -1,7 +1,8 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 7: alternate item renderings — rev 6 (6/9) failed only where itemText
-# embeds a bare role word ("New Request link", "Complete button"); milestones
-# now match the primary text OR driver-supplied alternates.
+# rev 8: keyboard focus routed to the VO cursor before type/press (typed text
+# never landed — "required invalid data" on the office-hours textarea);
+# word-boundary prefix milestones ("post" vs "Post as Agent Student");
+# per-hop itemText merged into heard phrases (attempt-1 needle flakes).
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is
