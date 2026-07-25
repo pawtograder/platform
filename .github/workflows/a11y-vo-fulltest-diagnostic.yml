@@ -1,6 +1,6 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 2: capture="initial" default + cursor-tracking focusWebArea + live debug
-# artifacts (a11y-vo-artifacts/<runId>/debug/) — fixing the 4×30s login hang.
+# rev 3: focusWebArea descends into containers via interact() — rev 2 showed
+# the cursor bouncing on Safari's "scroll area" (next never enters a container).
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is

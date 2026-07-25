@@ -147,9 +147,14 @@ export class VoHarness implements AtDriver {
    * Strategy (each stage logged): focus main content from the host side and
    * rely on VO's default cursor tracking to follow keyboard focus (no
    * keystroke — the old moveCursorToKeyboardFocus perform hung inside
-   * guidepup's capture loop on chatty pages). Only if the cursor is visibly
-   * NOT in web content do we fall back to the explicit keystroke, and if the
-   * cursor rests ON the web-area container we interact() to enter it.
+   * guidepup's capture loop on chatty pages), falling back to the explicit
+   * keystroke only when the cursor is visibly in browser chrome. The cursor
+   * then typically rests ON a container ("scroll area" → "HTML content") —
+   * observed live on the Mac runner: `next` bounces on "scroll area" forever
+   * — and VoiceOver only descends via interact(), so interact through the
+   * container layers and align to the content start (the same
+   * focus → interact → jump-to-edge sequence as guidepup's own
+   * navigateToWebContent helper).
    */
   async focusWebArea(focusViaHost: () => Promise<void>): Promise<void> {
     await focusViaHost();
@@ -165,13 +170,21 @@ export class VoHarness implements AtDriver {
       item = await this.itemTextSafe();
       this.debug("focusWebArea: after keystroke", { item });
     }
-    if (/\b(html|web) content\b/i.test(item)) {
-      this.debug("focusWebArea: on the web-area container — interacting to enter it");
-      await this.withTimeout("focusWebArea:interact", this.vo.interact({ capture: "initial" })).catch((e) =>
-        this.debug("focusWebArea: interact failed", { error: String(e) })
+    for (let depth = 1; depth <= 3; depth++) {
+      if (!/^\s*(scroll area|html content|web content|group|empty group)\s*$/i.test(item)) break;
+      await this.withTimeout(`focusWebArea:interact(${depth})`, this.vo.interact({ capture: "initial" })).catch((e) =>
+        this.debug("focusWebArea: interact failed", { depth, error: String(e) })
       );
-      this.debug("focusWebArea: after interact", { item: await this.itemTextSafe() });
+      item = await this.itemTextSafe();
+      this.debug("focusWebArea: after interact", { depth, item });
     }
+    // Align to the start of the (now-entered) content so the follow-up linear
+    // scan / restartFromTop starts from a deterministic spot.
+    await this.withTimeout(
+      "focusWebArea:jumpToLeftEdge",
+      this.vo.perform(this.vo.keyboardCommands.jumpToLeftEdge, { capture: "initial" })
+    ).catch((e) => this.debug("focusWebArea: jumpToLeftEdge failed", { error: String(e) }));
+    this.debug("focusWebArea: done", { item: await this.itemTextSafe() });
   }
 
   private async itemTextSafe(): Promise<string> {
