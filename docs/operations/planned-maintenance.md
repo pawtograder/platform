@@ -12,6 +12,10 @@ primary loss (the primary is gone and not coming back) use the promote path in
 [point-in-time-recovery.md](./point-in-time-recovery.md#manual-failover-promote-the-standby)
 instead — this doc is the _planned_ case.
 
+![The maintenance page served on staging: the pixel-art Pawtograder cityscape behind a centered card with a configurable title, message, and ETA.](./images/maintenance-page.jpg)
+
+_The styled maintenance page (served with `HTTP 503` + `Retry-After`), captured from staging. Title/message/ETA are set per-window with `maintenance.sh down --title/--message/--eta`._
+
 ---
 
 ## Why a full-downtime window, not read-only
