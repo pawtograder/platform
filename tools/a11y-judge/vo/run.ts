@@ -184,7 +184,8 @@ async function main(): Promise<void> {
     commandTimeoutMs: PER_COMMAND_TIMEOUT_MS,
     fullCapture: process.env.A11Y_VO_CAPTURE === "full",
     onStep: (record) => debug.step(record),
-    onDebug: (stage, detail) => debug.log(stage, detail)
+    onDebug: (stage, detail) => debug.log(stage, detail),
+    hostEval: (js) => safari.evalJs(js)
   });
   const reports: TaskReport[] = [];
 

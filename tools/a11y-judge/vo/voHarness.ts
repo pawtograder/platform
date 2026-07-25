@@ -107,13 +107,18 @@ const VO_CURSOR_ESCAPED =
 const MAX_ESCAPE_RECOVERIES = 8;
 
 /**
- * Consecutive identical items on move commands = the cursor is TRAPPED inside
- * an interaction level (observed live: 45 straight next/previous on "Any
- * other feedback?" — real VO descends TWO levels into a textarea, and the
- * VSR-recorded plan's single stopInteracting exits only one).
+ * Consecutive identical items on move commands = the cursor MAY be trapped
+ * inside an interaction level (observed live: 45 straight next/previous on
+ * "Any other feedback?" — real VO descends TWO levels into a textarea, and
+ * the VSR-recorded plan's single stopInteracting exits one). Geofenced to
+ * text-entry contexts (raw item carries the indicator): a cursor parked on a
+ * page/dialog BOUNDARY also repeats items, and popping there rips VoiceOver
+ * out of context the plan needs (rev-11 regression: pops on "close button" /
+ * the notifications region broke two previously-green tasks).
  */
 const TRAPPED_MOVE_LIMIT = 4;
 const MAX_TRAP_POPS = 3;
+const VO_TEXT_ENTRY_CONTEXT = /(text entry area|edit text|selectable text|text field)/i;
 
 export function stripVoBoilerplate(phrase: string): string | null {
   if (VO_BOILERPLATE_PATTERNS.some((re) => re.test(phrase.trim()))) return null;
@@ -147,6 +152,14 @@ export interface VoHarnessOptions {
   /** Live diagnostics hooks (see debug.ts) — every command + stage marker. */
   onStep?: (record: AtStepRecord) => void;
   onDebug?: (stage: string, detail?: Record<string, unknown>) => void;
+  /**
+   * Host-channel JS evaluator (SafariHost.evalJs). Used ONLY for internal
+   * harness reliability — verifying that typed text actually landed in the
+   * focused field (document.activeElement.value), never for content
+   * assertions. VO item text is NOT a reliable value mirror (rev-11: false
+   * negatives on SurveyJS fields triggered destructive retries).
+   */
+  hostEval?: (js: string) => Promise<string>;
 }
 
 export class VoHarness implements AtDriver {
@@ -164,6 +177,7 @@ export class VoHarness implements AtDriver {
   private readonly commandOptions: { capture: boolean | "initial" };
   private readonly onStep?: (record: AtStepRecord) => void;
   private readonly debug: (stage: string, detail?: Record<string, unknown>) => void;
+  private readonly hostEval?: (js: string) => Promise<string>;
 
   constructor(options: VoHarnessOptions = {}) {
     this.noisePatterns = options.noisePatterns ?? DEFAULT_NOISE_PATTERNS;
@@ -171,6 +185,7 @@ export class VoHarness implements AtDriver {
     this.commandOptions = { capture: options.fullCapture ? true : "initial" };
     this.onStep = options.onStep;
     this.debug = options.onDebug ?? (() => {});
+    this.hostEval = options.hostEval;
   }
 
   private get vo(): VoiceOver {
@@ -264,6 +279,23 @@ export class VoHarness implements AtDriver {
     ).catch((e) => this.debug("ensureKeyboardFocusAtCursor failed", { error: String(e) }));
   }
 
+  private async typedTextLanded(text: string): Promise<boolean> {
+    if (!this.hostEval) return true;
+    const needle = text.slice(0, 20);
+    const js = `(() => {
+      const el = document.activeElement;
+      if (!el) return 'no-active';
+      const v = el.value !== undefined ? el.value : (el.textContent || '');
+      return String(String(v).includes(${JSON.stringify(needle)}));
+    })()`;
+    const result = await this.hostEval(js).catch((e) => `error:${e}`);
+    if (result !== "true" && result !== "false") {
+      this.debug("typedTextLanded: host check inconclusive — assuming landed", { result: String(result).slice(0, 80) });
+      return true;
+    }
+    return result === "true";
+  }
+
   private async itemTextSafe(): Promise<string> {
     try {
       return await this.withTimeout("itemText", this.vo.itemText());
@@ -299,12 +331,17 @@ export class VoHarness implements AtDriver {
       rawSpoken = [...rawSpoken, ...recovered.rawSpoken];
       currentItem = recovered.currentItem;
     }
-    // Trap detection: move commands that don't move mean the cursor is stuck
-    // inside an interaction level — pop out one level, like a VO user would.
+    // Trap detection: move commands that don't move INSIDE a text-entry
+    // context mean the cursor is stuck in an interaction level — pop out one
+    // level, like a VO user would. (Boundary bounce elsewhere is normal.)
     if (command === "next" || command === "previous") {
       this.trappedMoves = currentItem === this.lastMoveItem ? this.trappedMoves + 1 : 0;
       this.lastMoveItem = currentItem;
-      if (this.trappedMoves >= TRAPPED_MOVE_LIMIT && this.trapPops < MAX_TRAP_POPS) {
+      if (
+        this.trappedMoves >= TRAPPED_MOVE_LIMIT &&
+        this.trapPops < MAX_TRAP_POPS &&
+        VO_TEXT_ENTRY_CONTEXT.test([currentItem, ...rawSpoken.slice(-2)].join(" "))
+      ) {
         this.trapPops++;
         this.trappedMoves = 0;
         this.debug("cursor trapped in interaction level — popping out", {
@@ -378,22 +415,20 @@ export class VoHarness implements AtDriver {
         await vo.type(arg ?? "");
         // Typing is the flakiest real-VO path: even with focus routed, the
         // text sometimes doesn't land (observed live: survey's required q1
-        // announced "Response required … invalid data" at submit). The
-        // field's itemText reflects its VALUE, so verify and retry once via
-        // act() (which focuses text inputs for editing). A duplicated value
-        // on a false negative is tolerable — predicates are contains-based.
-        if (arg && arg.length >= 3) {
-          const needle = arg.slice(0, 20).toLowerCase();
-          const item = (await this.itemTextSafe()).toLowerCase();
-          if (!item.includes(needle)) {
-            this.debug("type: text not reflected in item — refocusing via act and retrying", {
-              item: item.slice(0, 80)
-            });
+        // announced "Response required … invalid data" at submit). Verify
+        // through the HOST channel — document.activeElement.value is certain,
+        // unlike VO item text (rev-11: its false negatives caused destructive
+        // retries) — and retry once: act() focuses the field under the
+        // cursor, Cmd+A makes the retype REPLACE instead of append.
+        if (arg && arg.length >= 3 && this.hostEval) {
+          if (!(await this.typedTextLanded(arg))) {
+            this.debug("type: text not in focused field — act to focus, select-all, retype");
             await vo.act(opts);
+            await new Promise((r) => setTimeout(r, 300));
             await this.ensureKeyboardFocusAtCursor();
+            await vo.press("Command+a");
             await vo.type(arg);
-            const after = (await this.itemTextSafe()).toLowerCase();
-            this.debug("type: after retry", { landed: after.includes(needle) });
+            this.debug("type: after retry", { landed: await this.typedTextLanded(arg) });
           }
         }
         return;

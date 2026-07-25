@@ -1,9 +1,9 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 11: type verify-and-retry + trapped-cursor pop — rev 10 went 8/9 with
-# escape recovery saving every task; survey still fails on (a) flaky typing
-# (required q1 empty at submit) and (b) the cursor trapped inside the
-# textarea's second interaction level (45 no-op moves on "Any other
-# feedback?" — plans record only one stopInteracting).
+# rev 12: rev 11 regressed to 6/9 — its trap-pop fired on boundary bounce
+# (popped out of dialogs/pages mid-plan) and its itemText-based type check
+# false-negatived into destructive retries. Trap-pop is now geofenced to
+# text-entry contexts; type verification goes through the host channel
+# (document.activeElement.value) with a select-all replace retry.
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is
