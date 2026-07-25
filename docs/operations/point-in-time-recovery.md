@@ -230,11 +230,15 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    kubectl -n "$DRILL_NS" exec drill-postgres-0 -c postgres -- psql -U supabase_admin \
      -d postgres -tAc "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)
        FROM pg_stat_replication WHERE usename='supabase_replication_admin';"
-   # (a) Fence the old primary so it can't come back writing.
+   # (a) Fence the old primary, and WAIT for it to actually exit — scaling the
+   #     StatefulSet to 0 does not prove drill-postgres-0 has stopped, and promoting
+   #     while it is still up risks a split brain.
    kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
-   # (b) Promote the standby.
-   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
-     pg_ctl promote -D /var/lib/postgresql/data/pgdata
+   kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=120s
+   # (b) Promote the standby. pg_ctl refuses to run as root, and `kubectl exec`
+   #     enters as the image's root user, so drop to the postgres user.
+   kubectl -n "$DRILL_NS" exec drill-postgres-replica-0 -c postgres -- \
+     su postgres -c "pg_ctl promote -D /var/lib/postgresql/data/pgdata"
    # (c) Repoint the write Service at the promoted pod (edit the selector to the
    #     replica's component label, or scale the old primary sts to 0 as above).
    kubectl -n "$DRILL_NS" patch svc drill-postgres --type=merge -p \

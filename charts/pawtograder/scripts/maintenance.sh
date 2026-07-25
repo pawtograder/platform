@@ -288,30 +288,41 @@ cmd_down() {
   fi
   k get pod "$PG_POD" >/dev/null 2>&1 || die "primary pod ${PG_POD} not found"
 
+  # Precondition: the maintenance page must already be deployed AND Ready. The
+  # fence scales the web tier to 0, so if the page can't serve, users get the
+  # ingress controller's bare 5xx instead of the styled page. Fail fast, before
+  # any mutation, rather than fencing into a void.
+  k get deploy "$MAINT_SVC" >/dev/null 2>&1 \
+    || die "maintenance Deployment ${MAINT_SVC} not found — deploy the page first (helm upgrade --set maintenance.enabled=true) before running 'down'."
+  if ! $DRY_RUN; then
+    k rollout status deploy "$MAINT_SVC" --timeout=120s \
+      || die "maintenance page ${MAINT_SVC} is not Ready — fix it before fencing (users would otherwise see a bare 5xx, not the styled page)."
+  fi
+
   confirm "Fence writes + put up the maintenance page in ${NAMESPACE}? (pgmq backlog is durable and drains after 'up')"
 
   tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
-  # 1. Pause pg_cron (stops in-DB producers). Record the active set first.
-  step "1/5 pg_cron" "pausing scheduled jobs"
-  # Read the active set with a sentinel so a TRANSIENT read failure (psql_ro
-  # swallows errors and returns "") can't be mistaken for "no active jobs". If we
-  # can't positively read the set, ABORT before disabling anything — otherwise we
-  # would pause every job but record none, and `up` would silently leave all
-  # scheduled work (deadlines, gradebook, reconciliation) disabled after the window.
+  # 1. Capture + persist ALL prior state BEFORE any destructive action, so an
+  #    interrupted fence is always recoverable by `up`. pg_cron is PAUSED only
+  #    after the state ConfigMap exists (step 2) — pausing before we persist the
+  #    active set would, if a later capture failed, leave every job disabled with
+  #    nothing recorded to resume.
+  step "1/6 capture" "recording prior state before fencing"
+  # Read the active cron set with a sentinel so a TRANSIENT read failure (psql_ro
+  # swallows errors and returns "") can't be mistaken for "no active jobs" — abort
+  # if we can't positively read it.
   local cron_read active_jobs
   cron_read="$(psql_ro "SELECT 'MARK:' || COALESCE(string_agg(jobid::text, ','), '') FROM cron.job WHERE active;")"
   case "$cron_read" in
     MARK:*) active_jobs="${cron_read#MARK:}" ;;
-    *) die "could not read the pg_cron active-job set from ${PG_POD} (got '${cron_read:-<empty>}'). Aborting BEFORE pausing cron so 'up' can't leave jobs disabled. Check the DB and retry." ;;
+    *) die "could not read the pg_cron active-job set from ${PG_POD} (got '${cron_read:-<empty>}'). Aborting before any change. Check the DB and retry." ;;
   esac
   printf '%s' "$active_jobs" > "$tmp/cron_jobids"
   log "active cron jobs: ${active_jobs:-none}"
-  psql_exec "UPDATE cron.job SET active=false WHERE active;"
-  ok "pg_cron paused"
 
-  # --- Capture ALL prior state, then persist it BEFORE any destructive fence
-  #     action, so `up` can restore even if the fence is interrupted mid-way. ---
+  # --- Capture the rest of prior state, then persist it BEFORE any destructive
+  #     fence action, so `up` can restore even if the fence is interrupted. ---
   # ingress web-host backend (name+port scalars → JSON; jsonpath can't emit the
   # backend object as JSON).
   local cur_name cur_port rule0_host
@@ -360,33 +371,33 @@ cmd_down() {
     log "[dry-run] would save state -> configmap/${STATE_CM}"
   fi
 
-  # 2. Fence: put the maintenance page up AND scale EVERY writer tier to 0 in one
+  # 2. Pause pg_cron now that prior state is safely persisted (state ConfigMap
+  #    exists), so a failure here can never strand cron in the disabled state.
+  step "2/6 pg_cron" "pausing scheduled jobs"
+  psql_exec "UPDATE cron.job SET active=false WHERE active;"
+  ok "pg_cron paused"
+
+  # 3. Fence: put the maintenance page up AND scale EVERY writer tier to 0 in one
   #    step. Producers on the web host see the 503 page; edge-runtime's
   #    --graceful-exit-timeout lets any in-flight functions handler COMMIT and exit
   #    cleanly as the pods drain.
-  step "2/5 fence" "maintenance page up + all writer tiers -> 0"
-  # 2a. delete the functions HPA first so it can't fight the scale-to-0.
+  step "3/6 fence" "maintenance page up + all writer tiers -> 0"
+  # 3a. delete the functions HPA first so it can't fight the scale-to-0.
   if [ -s "$tmp/functions_hpa" ]; then
     run k delete hpa "$FUNCTIONS_HPA"; ok "edge-functions HPA captured + deleted"
   else
     warn "no edge-functions HPA (${FUNCTIONS_HPA}); nothing to capture"
   fi
-  # 2a½. apply a window-specific message BEFORE repointing the ingress, so the
+  # 3a½. apply a window-specific message BEFORE repointing the ingress, so the
   #      page is already showing it when traffic arrives (and the maintenance
   #      pod roll happens while the ingress still points at web → no gap).
   apply_custom_message
-  # 2b. put the page up (verify the maintenance Service is Ready first).
-  if ! k get deploy "$MAINT_SVC" >/dev/null 2>&1; then
-    warn "Deployment ${MAINT_SVC} not found — deploy it first (helm upgrade --set maintenance.enabled=true). Skipping ingress swap."
-  else
-    if ! $DRY_RUN; then
-      k rollout status deploy "$MAINT_SVC" --timeout=120s || warn "${MAINT_SVC} not Ready; the page may 502 until it is"
-    fi
-    run k patch ingress "$INGRESS" --type=json -p \
-      "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
-    ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
-  fi
-  # 2c. scale every writer/channel/functions workload to 0 (records were saved).
+  # 3b. put the page up. Existence + readiness were verified as a precondition
+  #     above, so this just repoints the web host at the maintenance Service.
+  run k patch ingress "$INGRESS" --type=json -p \
+    "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
+  ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
+  # 3c. scale every writer/channel/functions workload to 0 (records were saved).
   if [ -s "$tmp/deploy_replicas" ]; then
     local kind name replicas
     while IFS=$'\t' read -r kind name replicas; do
@@ -397,8 +408,8 @@ cmd_down() {
   fi
   ok "all writer tiers scaled to 0"
 
-  # 3. Suspend write-capable CronJobs (prior states captured above).
-  step "3/5 cronjobs" "suspending write-capable CronJobs"
+  # 4. Suspend write-capable CronJobs (prior states captured above).
+  step "4/6 cronjobs" "suspending write-capable CronJobs"
   local cj2 cjn
   for cj2 in "${SUSPEND_CRONJOBS[@]}"; do
     cjn="${RELEASE}-${cj2}"
@@ -413,22 +424,32 @@ cmd_down() {
   #    deployment has 0 running pods. Zero writer pods — NOT an empty queue — is
   #    the real safety signal: --graceful-exit-timeout has let in-flight work
   #    COMMIT and no writer process is left touching the DB.
-  step "4/5 gate" "waiting for all writer pods to terminate"
+  step "5/6 gate" "waiting for all writer pods to terminate"
   if $DRY_RUN; then
     log "[dry-run] would block until all scaled writer/functions pods terminate"
   else
-    local pwaited=0 remaining cur kind2 name2
+    local pwaited=0 remaining unreadable cur kind2 name2
     while :; do
-      remaining=0
+      remaining=0; unreadable=0
       while IFS=$'\t' read -r kind2 name2 _; do
         [ -n "$name2" ] || continue
-        cur="$(k get "$kind2" "$name2" -o jsonpath='{.status.replicas}' 2>/dev/null || true)"
-        [[ "$cur" =~ ^[0-9]+$ ]] && remaining=$((remaining + cur))
+        # `.status.replicas` counts pods the controller still owns; it is empty
+        # once all are gone. A FAILED `kubectl get`, though, must NOT be read as
+        # 0 — a transient API blip would otherwise let the gate falsely declare
+        # "terminated" and SAFE TO BOUNCE while writers are still running.
+        if ! cur="$(k get "$kind2" "$name2" -o jsonpath='{.status.replicas}' 2>/dev/null)"; then
+          unreadable=$((unreadable + 1)); continue
+        fi
+        [ -z "$cur" ] && cur=0
+        if [[ "$cur" =~ ^[0-9]+$ ]]; then remaining=$((remaining + cur)); else unreadable=$((unreadable + 1)); fi
       done < "$tmp/deploy_replicas"
-      [ "$remaining" -eq 0 ] && { ok "all writer pods terminated ✓"; break; }
-      log "waiting for writer pods to terminate: ${remaining} still running (${pwaited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
+      # Safe only when every writer read succeeded AND reported 0 running pods.
+      if [ "$remaining" -eq 0 ] && [ "$unreadable" -eq 0 ]; then
+        ok "all writer pods terminated ✓"; break
+      fi
+      log "waiting for writer pods to terminate: ${remaining} running, ${unreadable} unreadable (${pwaited}s / ${DRAIN_TIMEOUT_SECONDS}s)"
       if [ "$pwaited" -ge "$DRAIN_TIMEOUT_SECONDS" ]; then
-        die "writer pods did not terminate within ${DRAIN_TIMEOUT_SECONDS}s (${remaining} still running); NOT safe to bounce."
+        die "writer pods not confirmed terminated within ${DRAIN_TIMEOUT_SECONDS}s (${remaining} running, ${unreadable} unreadable); NOT safe to bounce."
       fi
       sleep "$DRAIN_POLL_SECONDS"; pwaited=$((pwaited + DRAIN_POLL_SECONDS))
     done
@@ -442,8 +463,8 @@ cmd_down() {
   local buffered; buffered="$(queue_depth)"
   log "pgmq backlog: ${buffered:-?} message(s) buffered — durable, drains after 'up' (informational, not a gate)"
 
-  # 5. Report standby health → SAFE TO BOUNCE / NOT READY.
-  step "5/5 standby" "checking replication before the bounce"
+  # 6. Report standby health → SAFE TO BOUNCE / NOT READY.
+  step "6/6 standby" "checking replication before the bounce"
   report_standby
 }
 
@@ -478,17 +499,20 @@ cmd_up() {
     ok "primary accepts writes"
   fi
 
-  # 1. Restore writer tiers + channels to recorded counts.
+  # 1. Restore writer tiers + channels to recorded counts. The state ConfigMap
+  #    was confirmed present above and `down` always records writers, so an EMPTY
+  #    read here means a transient API/ConfigMap read failure — NOT "nothing to
+  #    restore". Abort rather than silently leave every writer scaled to 0.
   step "1/6 writers" "restoring app tiers + channels"
   state_get deploy_replicas > "$tmp/deploy_replicas" || true
-  if [ -s "$tmp/deploy_replicas" ]; then
-    local kind name replicas
-    while IFS=$'\t' read -r kind name replicas; do
-      [ -n "$name" ] || continue
-      log "  ${kind}/${name} -> ${replicas}"
-      run k scale "$kind" "$name" --replicas="$replicas"
-    done < "$tmp/deploy_replicas"
-  fi
+  [ -s "$tmp/deploy_replicas" ] \
+    || die "could not read recorded writer replicas from ${STATE_CM} (empty). Restore aborted so the app isn't left scaled to 0. Retry 'up'; if it persists, restore manually from the ConfigMap."
+  local kind name replicas
+  while IFS=$'\t' read -r kind name replicas; do
+    [ -n "$name" ] || continue
+    log "  ${kind}/${name} -> ${replicas}"
+    run k scale "$kind" "$name" --replicas="$replicas"
+  done < "$tmp/deploy_replicas"
   ok "writer tiers restored"
 
   # 2. Recreate the edge-functions HPA (re-apply the captured object). functions'
