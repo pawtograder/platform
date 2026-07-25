@@ -1,7 +1,7 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 4: login matches the wrapped button label via spoken phrases (rev 3
-# reached "Sign in with magic" — itemText is the current text LINE, truncated
-# by wrapping) + early exit when the cursor parks on the page's last element.
+# rev 5: FULL SUITE — rev 4 went green end-to-end on assignments-list
+# (login + replay, 0 resyncs), so drop the task filter and run all 9 promoted
+# plans with recordings to gather complete calibration data.
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is
@@ -23,10 +23,10 @@ concurrency:
 jobs:
   voiceover:
     runs-on: [self-hosted, macOS, voiceover]
-    timeout-minutes: 45
+    timeout-minutes: 100
     env:
       PREVIEW_ID: "862"
-      TASK_FILTER: assignments-list
+      TASK_FILTER: ""
       BASE_URL: https://pr-862.preview.pawtograder.net
       SUPABASE_URL: https://pr-862-api.preview.pawtograder.net
       BAO_ADDR: https://bao.work.ripley.cloud
@@ -40,7 +40,7 @@ jobs:
         run: npm ci
       - name: Preflight (VoiceOver / Safari / OpenBao permissions)
         run: npm run a11y:vo:doctor
-      - name: Run VoiceOver replay suite (single read task)
+      - name: Run VoiceOver replay suite (full suite)
         env:
           A11Y_VO_RUN_ID: pr-862-run-${{ github.run_id }}
         run: |
