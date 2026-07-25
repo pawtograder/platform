@@ -106,6 +106,15 @@ const VO_CURSOR_ESCAPED =
   /^(scroll area|window|favorites bar.*|bookmarks bar.*|tab bar.*|address and search.*|sidebar|reload page)$/i;
 const MAX_ESCAPE_RECOVERIES = 8;
 
+/**
+ * Consecutive identical items on move commands = the cursor is TRAPPED inside
+ * an interaction level (observed live: 45 straight next/previous on "Any
+ * other feedback?" — real VO descends TWO levels into a textarea, and the
+ * VSR-recorded plan's single stopInteracting exits only one).
+ */
+const TRAPPED_MOVE_LIMIT = 4;
+const MAX_TRAP_POPS = 3;
+
 export function stripVoBoilerplate(phrase: string): string | null {
   if (VO_BOILERPLATE_PATTERNS.some((re) => re.test(phrase.trim()))) return null;
   let p = phrase.trim();
@@ -147,6 +156,9 @@ export class VoHarness implements AtDriver {
   private voInstance: VoiceOver | null = null;
   private hostFocus: (() => Promise<void>) | null = null;
   private escapeRecoveries = 0;
+  private lastMoveItem = "";
+  private trappedMoves = 0;
+  private trapPops = 0;
   private readonly noisePatterns: RegExp[];
   private readonly commandTimeoutMs: number;
   private readonly commandOptions: { capture: boolean | "initial" };
@@ -200,6 +212,9 @@ export class VoHarness implements AtDriver {
   async focusWebArea(focusViaHost: () => Promise<void>): Promise<void> {
     this.hostFocus = focusViaHost;
     this.escapeRecoveries = 0;
+    this.trapPops = 0;
+    this.trappedMoves = 0;
+    this.lastMoveItem = "";
     await this.enterWebArea();
   }
 
@@ -284,6 +299,26 @@ export class VoHarness implements AtDriver {
       rawSpoken = [...rawSpoken, ...recovered.rawSpoken];
       currentItem = recovered.currentItem;
     }
+    // Trap detection: move commands that don't move mean the cursor is stuck
+    // inside an interaction level — pop out one level, like a VO user would.
+    if (command === "next" || command === "previous") {
+      this.trappedMoves = currentItem === this.lastMoveItem ? this.trappedMoves + 1 : 0;
+      this.lastMoveItem = currentItem;
+      if (this.trappedMoves >= TRAPPED_MOVE_LIMIT && this.trapPops < MAX_TRAP_POPS) {
+        this.trapPops++;
+        this.trappedMoves = 0;
+        this.debug("cursor trapped in interaction level — popping out", {
+          item: currentItem,
+          pop: this.trapPops
+        });
+        await this.withTimeout("trapPop:stopInteracting", this.vo.stopInteracting({ capture: "initial" })).catch((e) =>
+          this.debug("trapPop failed", { error: String(e) })
+        );
+        const popped = await this.collect();
+        rawSpoken = [...rawSpoken, ...popped.rawSpoken];
+        currentItem = popped.currentItem;
+      }
+    }
     const cleanedItem = stripVoBoilerplate(currentItem) ?? currentItem;
     const alternates = new Set<string>();
     const announced = stripVoBoilerplate(rawSpoken.at(-1) ?? "");
@@ -338,9 +373,31 @@ export class VoHarness implements AtDriver {
         return vo.press(arg ?? "Enter");
       case "pressKey":
         return vo.press(arg ?? "Tab");
-      case "type":
+      case "type": {
         await this.ensureKeyboardFocusAtCursor();
-        return vo.type(arg ?? "");
+        await vo.type(arg ?? "");
+        // Typing is the flakiest real-VO path: even with focus routed, the
+        // text sometimes doesn't land (observed live: survey's required q1
+        // announced "Response required … invalid data" at submit). The
+        // field's itemText reflects its VALUE, so verify and retry once via
+        // act() (which focuses text inputs for editing). A duplicated value
+        // on a false negative is tolerable — predicates are contains-based.
+        if (arg && arg.length >= 3) {
+          const needle = arg.slice(0, 20).toLowerCase();
+          const item = (await this.itemTextSafe()).toLowerCase();
+          if (!item.includes(needle)) {
+            this.debug("type: text not reflected in item — refocusing via act and retrying", {
+              item: item.slice(0, 80)
+            });
+            await vo.act(opts);
+            await this.ensureKeyboardFocusAtCursor();
+            await vo.type(arg);
+            const after = (await this.itemTextSafe()).toLowerCase();
+            this.debug("type: after retry", { landed: after.includes(needle) });
+          }
+        }
+        return;
+      }
       case "readNext": {
         const n = Math.min(Math.max(parseInt(arg ?? "10", 10) || 10, 1), READ_NEXT_MAX);
         for (let i = 0; i < n; i++) await vo.next(opts);
