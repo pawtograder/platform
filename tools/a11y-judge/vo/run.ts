@@ -21,6 +21,7 @@ import waitForSchemaCache from "../../../tests/wait-for-schema-cache";
 import { normalizePhrase, templateMatches, type Bindings } from "../agent/normalize";
 import { replayPlan, STATE_CHANGING_COMMANDS, type ReplayPlan, type ReplayResult } from "../agent/replay";
 import { getTask } from "../agent/tasks";
+import { VoDebugLog } from "./debug";
 import { loadPlans, type LoadedPlan } from "./plans";
 import { ARTIFACT_ROOT, writeRunArtifacts, type CalibrationEntry, type TaskReport } from "./report";
 import { SafariHost } from "./safari";
@@ -159,19 +160,33 @@ async function main(): Promise<void> {
   const seed = await seedAgentPages();
   const taskContext = makeTaskContext(seed.seedValues);
 
+  const debug = new VoDebugLog(runId);
   const safari = new SafariHost();
-  const harness = new VoHarness({ commandTimeoutMs: PER_COMMAND_TIMEOUT_MS });
+  const harness = new VoHarness({
+    commandTimeoutMs: PER_COMMAND_TIMEOUT_MS,
+    fullCapture: process.env.A11Y_VO_CAPTURE === "full",
+    onStep: (record) => debug.step(record),
+    onDebug: (stage, detail) => debug.log(stage, detail)
+  });
   const reports: TaskReport[] = [];
 
+  // A fatal error (login, VO wedge) must still leave artifacts behind: the
+  // live debug.jsonl already has the trace; add a screenshot + fatal.txt and
+  // flush whatever task reports exist before exiting non-zero.
+  let fatalError: unknown;
   try {
     console.log("[a11y:vo] starting VoiceOver…");
     await harness.start();
     console.log("[a11y:vo] logging in through VoiceOver…");
-    await loginWithVoiceOver(safari, harness, seed.student, baseUrl);
+    await loginWithVoiceOver(safari, harness, seed.student, baseUrl, (stage, detail) => debug.log(stage, detail));
 
     for (const loaded of plans) {
       reports.push(await runTask(loaded));
     }
+  } catch (e) {
+    fatalError = e;
+    debug.fatal(e);
+    await debug.screenshot("fatal");
   } finally {
     await harness.stop();
     await safari.closeAllWindows();
@@ -190,6 +205,7 @@ async function main(): Promise<void> {
     `[a11y:vo] done: ${reports.length - failed.length - blocked.length} passed, ${failed.length} failed, ` +
       `${blocked.length} blocked — artifacts in ${runDir}`
   );
+  if (fatalError !== undefined) throw fatalError;
   if (failed.length > 0) process.exitCode = 1;
 
   async function runTask(loaded: LoadedPlan): Promise<TaskReport> {
@@ -265,6 +281,7 @@ async function main(): Promise<void> {
       } catch (e) {
         lastError = e instanceof Error ? e.message : String(e);
         console.log(`[a11y:vo] ❌ ${loaded.id} attempt ${attempt + 1}: ${lastError}`);
+        await debug.screenshot(`${loaded.id}-attempt${attempt + 1}-failed`);
         if (attempt === TASK_RETRIES) {
           return {
             ...base,

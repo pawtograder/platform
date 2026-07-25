@@ -42,6 +42,26 @@ const checks: Check[] = [
     }
   },
   {
+    name: "VoiceOver navigation round-trip",
+    hint: "a VO move command hung — check VoiceOver Utility isn't showing a first-run dialog, and that speech isn't wedged (pkill VoiceOver, re-run)",
+    run: async () => {
+      const { voiceOver } = await import("@guidepup/guidepup");
+      await voiceOver.start({ capture: "initial" });
+      try {
+        // Exercise the real command path (keystroke → capture polling); a
+        // hang here would otherwise surface as a 30s timeout mid-login.
+        await Promise.race([
+          voiceOver.next({ capture: "initial" }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("vo.next() hung for 15s")), 15_000))
+        ]);
+        const item = await voiceOver.itemText();
+        console.log(`   (cursor on: ${JSON.stringify(item.slice(0, 80))})`);
+      } finally {
+        await voiceOver.stop().catch(() => {});
+      }
+    }
+  },
+  {
     name: "Safari AppleScript automation",
     hint: "grant Automation (Safari) to the runner process in System Settings ▸ Privacy & Security ▸ Automation (runbook §3)",
     run: async () => {

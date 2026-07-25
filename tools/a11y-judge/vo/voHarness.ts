@@ -88,12 +88,19 @@ export interface VoHarnessOptions {
   noisePatterns?: RegExp[];
   commandTimeoutMs?: number;
   /**
-   * Capture the FULL spoken output of every command (guidepup default only
-   * captures the initial page of speech). Needle assertions depend on hearing
-   * everything, so this defaults to true; disable if calibration shows the
-   * runs are unbearably slow and the phrases are short.
+   * Capture the FULL spoken output of every command. DANGEROUS on real pages:
+   * guidepup's full-capture mode polls until VO's speech STABILIZES (25
+   * consecutive identical 50ms samples), and a page that keeps announcing —
+   * VO's own post-load read-through, our realtime-status live region — never
+   * stabilizes, so every command hangs to its timeout (observed live on the
+   * Mac runner: login died 4×30s in the first perform). Default is guidepup's
+   * "initial" capture; item text still carries the milestone/needle content.
+   * Opt in per-run with A11Y_VO_CAPTURE=full only to diagnose missed needles.
    */
   fullCapture?: boolean;
+  /** Live diagnostics hooks (see debug.ts) — every command + stage marker. */
+  onStep?: (record: AtStepRecord) => void;
+  onDebug?: (stage: string, detail?: Record<string, unknown>) => void;
 }
 
 export class VoHarness implements AtDriver {
@@ -102,12 +109,16 @@ export class VoHarness implements AtDriver {
   private voInstance: VoiceOver | null = null;
   private readonly noisePatterns: RegExp[];
   private readonly commandTimeoutMs: number;
-  private readonly commandOptions: { capture: boolean };
+  private readonly commandOptions: { capture: boolean | "initial" };
+  private readonly onStep?: (record: AtStepRecord) => void;
+  private readonly debug: (stage: string, detail?: Record<string, unknown>) => void;
 
   constructor(options: VoHarnessOptions = {}) {
     this.noisePatterns = options.noisePatterns ?? DEFAULT_NOISE_PATTERNS;
     this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    this.commandOptions = { capture: options.fullCapture ?? true };
+    this.commandOptions = { capture: options.fullCapture ? true : "initial" };
+    this.onStep = options.onStep;
+    this.debug = options.onDebug ?? (() => {});
   }
 
   private get vo(): VoiceOver {
@@ -118,9 +129,11 @@ export class VoHarness implements AtDriver {
   async start(): Promise<void> {
     const { voiceOver } = await import("@guidepup/guidepup");
     this.voInstance = voiceOver;
+    this.debug("vo.start", { capture: this.commandOptions.capture });
     await this.vo.start(this.commandOptions);
     const log = await this.vo.spokenPhraseLog();
     this.spokenLogCursor = log.length;
+    this.debug("vo.started", { initialPhrases: log.length });
   }
 
   async stop(): Promise<void> {
@@ -129,12 +142,44 @@ export class VoHarness implements AtDriver {
 
   /**
    * Move the VoiceOver cursor into the page's web area. Host-assisted
-   * orientation (keyboard focus into main content, then VO cursor to
-   * keyboard focus) — setup only, mirroring page.goto in the VSR path.
+   * orientation — setup only, mirroring page.goto in the VSR path.
+   *
+   * Strategy (each stage logged): focus main content from the host side and
+   * rely on VO's default cursor tracking to follow keyboard focus (no
+   * keystroke — the old moveCursorToKeyboardFocus perform hung inside
+   * guidepup's capture loop on chatty pages). Only if the cursor is visibly
+   * NOT in web content do we fall back to the explicit keystroke, and if the
+   * cursor rests ON the web-area container we interact() to enter it.
    */
   async focusWebArea(focusViaHost: () => Promise<void>): Promise<void> {
     await focusViaHost();
-    await this.withTimeout("focusWebArea", this.vo.perform(this.vo.keyboardCommands.moveCursorToKeyboardFocus));
+    await new Promise((r) => setTimeout(r, 750)); // let cursor tracking follow
+    let item = await this.itemTextSafe();
+    this.debug("focusWebArea: after host focus", { item });
+    if (item === "" || /address and search|toolbar|tab bar|bookmarks|window$/i.test(item)) {
+      this.debug("focusWebArea: cursor looks like browser chrome — trying moveCursorToKeyboardFocus");
+      await this.withTimeout(
+        "focusWebArea",
+        this.vo.perform(this.vo.keyboardCommands.moveCursorToKeyboardFocus, { capture: "initial" })
+      ).catch((e) => this.debug("focusWebArea: moveCursorToKeyboardFocus failed", { error: String(e) }));
+      item = await this.itemTextSafe();
+      this.debug("focusWebArea: after keystroke", { item });
+    }
+    if (/\b(html|web) content\b/i.test(item)) {
+      this.debug("focusWebArea: on the web-area container — interacting to enter it");
+      await this.withTimeout("focusWebArea:interact", this.vo.interact({ capture: "initial" })).catch((e) =>
+        this.debug("focusWebArea: interact failed", { error: String(e) })
+      );
+      this.debug("focusWebArea: after interact", { item: await this.itemTextSafe() });
+    }
+  }
+
+  private async itemTextSafe(): Promise<string> {
+    try {
+      return await this.withTimeout("itemText", this.vo.itemText());
+    } catch {
+      return "";
+    }
   }
 
   async run(command: AtCommand, arg?: string): Promise<AtObservation> {
@@ -153,7 +198,7 @@ export class VoHarness implements AtDriver {
       null,
       { noisePatterns: this.noisePatterns, error }
     );
-    this.steps.push({
+    const record: AtStepRecord = {
       index: this.steps.length,
       command,
       ...(arg === undefined ? {} : { arg }),
@@ -161,7 +206,9 @@ export class VoHarness implements AtDriver {
       rawSpoken,
       startedTimestamp,
       endedTimestamp: new Date().toISOString()
-    });
+    };
+    this.steps.push(record);
+    this.onStep?.(record);
     return observation;
   }
 
@@ -223,12 +270,14 @@ export class VoHarness implements AtDriver {
     let rawSpoken: string[] = [];
     let currentItem = "";
     try {
-      const log = await this.vo.spokenPhraseLog();
+      // Bounded: spokenPhraseLog waits for the client's action queue, which
+      // must never be allowed to wedge the runner without a timeout.
+      const log = await this.withTimeout("spokenPhraseLog", this.vo.spokenPhraseLog());
       rawSpoken = log.slice(this.spokenLogCursor);
       this.spokenLogCursor = log.length;
-      currentItem = await this.vo.itemText();
-    } catch {
-      /* observation collection is best-effort; the command outcome stands */
+      currentItem = await this.withTimeout("itemText", this.vo.itemText());
+    } catch (e) {
+      this.debug("collect: observation truncated", { error: String(e) });
     }
     return { rawSpoken, currentItem };
   }

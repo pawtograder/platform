@@ -27,6 +27,12 @@ VoiceOver only runs in a logged-in GUI (aqua) session — never headless/SSH.
 - Mute output volume (spoken-phrase capture is via API, not audio) and set a
   fast VoiceOver speech rate (VoiceOver Utility ▸ Speech) so runs aren't gated
   on speech synthesis.
+- Cut VoiceOver's automatic chatter — it feeds guidepup's phrase-capture
+  polling and slows every command: VoiceOver Utility ▸ Web ▸ Page Loading:
+  uncheck "Automatically speak the webpage"; Verbosity ▸ Speech: set to Low.
+  (The runner's capture mode defaults to guidepup's bounded "initial"; only
+  set `A11Y_VO_CAPTURE=full` for diagnosis — on chatty pages full capture
+  waits for speech to stabilize and can hang every command.)
 
 ## 2. Software
 
