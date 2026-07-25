@@ -1,7 +1,9 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 9: length-scaled type timeouts — rev 8 reached 8/9; the last failure is
-# office-hours' 68-char type blowing the flat 30s guard (real VO types
-# per-character with capture polling per keystroke).
+# rev 10: cursor-escape self-healing — rev 9 went 8/9 (office-hours green
+# after the type-timeout fix); survey flaked with the VO cursor yanked out to
+# Safari chrome ("Favorites bar group"/"scroll area") after an app rerender,
+# where resync can never find in-page milestones. The harness now detects
+# unambiguous chrome items and re-enters the web area (bounded per task).
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is

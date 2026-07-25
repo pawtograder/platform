@@ -95,6 +95,17 @@ const VO_REPEATED_CHUNK = /^(.{3,}?)([,\s]+\1)+$/i;
 const VO_AMBIGUOUS_ROLE_SUFFIX =
   /\s+(current page,?\s*)?(visited\s+)?(button|link|tab|image|list|table|group|heading|main|article|banner)$/i;
 
+/**
+ * Items that mean the VO cursor has ESCAPED the page's web content into
+ * Safari chrome or a bare container — observed live: an app rerender after
+ * act() yanked the cursor to "Favorites bar group"/"scroll area", where no
+ * amount of next/previous can reach an in-page milestone. Kept to
+ * unambiguous chrome only (in-page toolbars/groups are legitimate content).
+ */
+const VO_CURSOR_ESCAPED =
+  /^(scroll area|window|favorites bar.*|bookmarks bar.*|tab bar.*|address and search.*|sidebar|reload page)$/i;
+const MAX_ESCAPE_RECOVERIES = 8;
+
 export function stripVoBoilerplate(phrase: string): string | null {
   if (VO_BOILERPLATE_PATTERNS.some((re) => re.test(phrase.trim()))) return null;
   let p = phrase.trim();
@@ -134,6 +145,8 @@ export class VoHarness implements AtDriver {
   private spokenLogCursor = 0;
   private itemTextLogCursor = 0;
   private voInstance: VoiceOver | null = null;
+  private hostFocus: (() => Promise<void>) | null = null;
+  private escapeRecoveries = 0;
   private readonly noisePatterns: RegExp[];
   private readonly commandTimeoutMs: number;
   private readonly commandOptions: { capture: boolean | "initial" };
@@ -185,7 +198,14 @@ export class VoHarness implements AtDriver {
    * navigateToWebContent helper).
    */
   async focusWebArea(focusViaHost: () => Promise<void>): Promise<void> {
-    await focusViaHost();
+    this.hostFocus = focusViaHost;
+    this.escapeRecoveries = 0;
+    await this.enterWebArea();
+  }
+
+  private async enterWebArea(): Promise<void> {
+    if (!this.hostFocus) return;
+    await this.hostFocus();
     await new Promise((r) => setTimeout(r, 750)); // let cursor tracking follow
     let item = await this.itemTextSafe();
     this.debug("focusWebArea: after host focus", { item });
@@ -249,7 +269,21 @@ export class VoHarness implements AtDriver {
       if (e instanceof VoCommandTimeoutError || e instanceof VoUnsupportedCommandError) throw e;
       error = e instanceof Error ? e.message : String(e);
     }
-    const { rawSpoken, currentItem } = await this.collect();
+    let { rawSpoken, currentItem } = await this.collect();
+    // Self-heal a cursor escape: re-enter the web area and observe again.
+    // Bounded per focusWebArea() so a genuinely broken page still fails.
+    if (VO_CURSOR_ESCAPED.test(currentItem.trim()) && this.hostFocus && this.escapeRecoveries < MAX_ESCAPE_RECOVERIES) {
+      this.escapeRecoveries++;
+      this.debug("cursor escaped web content — recovering", {
+        command,
+        item: currentItem,
+        recovery: this.escapeRecoveries
+      });
+      await this.enterWebArea();
+      const recovered = await this.collect();
+      rawSpoken = [...rawSpoken, ...recovered.rawSpoken];
+      currentItem = recovered.currentItem;
+    }
     const cleanedItem = stripVoBoilerplate(currentItem) ?? currentItem;
     const alternates = new Set<string>();
     const announced = stripVoBoilerplate(rawSpoken.at(-1) ?? "");
