@@ -86,10 +86,12 @@ export async function replayPlan(
   const perCommandTimeoutMs = options.perCommandTimeoutMs ?? 0;
   const run = (command: AtCommand, arg?: string): Promise<AtObservation> => {
     if (perCommandTimeoutMs <= 0) return harness.run(command, arg);
+    // type is per-character on real AT drivers — scale its budget with length.
+    const budgetMs = perCommandTimeoutMs + (command === "type" ? (arg?.length ?? 0) * 1000 : 0);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new Error(`AT command "${command}" timed out after ${perCommandTimeoutMs}ms`)),
-        perCommandTimeoutMs
+        () => reject(new Error(`AT command "${command}" timed out after ${budgetMs}ms`)),
+        budgetMs
       );
       harness.run(command, arg).then(
         (obs) => {

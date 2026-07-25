@@ -241,7 +241,10 @@ export class VoHarness implements AtDriver {
     const startedTimestamp = new Date().toISOString();
     let error: string | undefined;
     try {
-      await this.withTimeout(command, this.execute(command, arg));
+      // type is per-character (keystroke + capture poll each), so its budget
+      // must scale with text length — a 68-char plan arg blew the flat 30s.
+      const budget = command === "type" ? this.commandTimeoutMs + (arg?.length ?? 0) * 1000 : this.commandTimeoutMs;
+      await this.withTimeout(command, this.execute(command, arg), budget);
     } catch (e) {
       if (e instanceof VoCommandTimeoutError || e instanceof VoUnsupportedCommandError) throw e;
       error = e instanceof Error ? e.message : String(e);
@@ -374,16 +377,16 @@ export class VoHarness implements AtDriver {
     return { rawSpoken, currentItem };
   }
 
-  private withTimeout<T>(command: string, promise: Promise<T>): Promise<T> {
+  private withTimeout<T>(command: string, promise: Promise<T>, budgetMs = this.commandTimeoutMs): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(
         () =>
           reject(
             new VoCommandTimeoutError(
-              `VoiceOver command "${command}" hung for ${this.commandTimeoutMs}ms (dropped AppleScript event?)`
+              `VoiceOver command "${command}" hung for ${budgetMs}ms (dropped AppleScript event?)`
             )
           ),
-        this.commandTimeoutMs
+        budgetMs
       );
       promise.then(
         (v) => {
