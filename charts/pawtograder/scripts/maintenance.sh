@@ -187,21 +187,38 @@ discover_writers() {
 # ----------------------------------------------------------------------------
 # Standby health report
 # ----------------------------------------------------------------------------
+# mode "fenced" (from `down`, AFTER the write fence + pods-terminated gate) issues
+# an actual bounce clearance. Any other mode (e.g. `status`) reports standby
+# viability ONLY — it must NOT print "SAFE TO BOUNCE", because writers are still
+# live there and an operator could otherwise bounce an un-fenced primary.
 report_standby() {
-  local streaming lag
+  local mode="${1:-status}" streaming lag standby_ok=false
   streaming="$(psql_ro "SELECT count(*) FROM pg_stat_replication WHERE state='streaming' AND usename='supabase_replication_admin';")"
   lag="$(psql_ro "SELECT COALESCE(max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)),0) FROM pg_stat_replication WHERE usename='supabase_replication_admin';")"
   log "physical standbys streaming: ${streaming:-?}; max replay lag: ${lag:-?} bytes (threshold ${LAG_THRESHOLD_BYTES})"
-  # SAFE only when a physical standby is streaming AND its replay lag is a known
-  # value at/under the threshold — a standby that is streaming but far behind is
-  # NOT a safe failover target (promotion would lose the un-replayed tail).
+  # Viable safety net only when a physical standby is streaming AND its replay lag
+  # is a known value at/under the threshold — streaming-but-far-behind is NOT a
+  # safe failover target (promotion would lose the un-replayed tail).
   if [[ "$streaming" =~ ^[0-9]+$ ]] && [ "$streaming" -ge 1 ] \
      && [[ "$lag" =~ ^[0-9]+$ ]] && [ "$lag" -le "$LAG_THRESHOLD_BYTES" ]; then
-    printf '%s[maint ✓] SAFE TO BOUNCE%s — standby streaming, replay lag %s <= %s bytes. Perform the node/DB maintenance, then run: %s up\n' \
-      "$C_OK" "$C_RESET" "$lag" "$LAG_THRESHOLD_BYTES" "$0"
+    standby_ok=true
+  fi
+  if [ "$mode" = "fenced" ]; then
+    if $standby_ok; then
+      printf '%s[maint ✓] SAFE TO BOUNCE%s — writers fenced and standby streaming, replay lag %s <= %s bytes. Perform the node/DB maintenance, then run: %s up\n' \
+        "$C_OK" "$C_RESET" "$lag" "$LAG_THRESHOLD_BYTES" "$0"
+    else
+      printf '%s[maint ⚠] NOT READY%s — need a streaming physical standby with replay lag <= %s bytes; got streaming=%s lag=%s. Bouncing now risks data loss; investigate before proceeding.\n' \
+        "$C_WARN" "$C_RESET" "$LAG_THRESHOLD_BYTES" "${streaming:-?}" "${lag:-?}"
+    fi
   else
-    printf '%s[maint ⚠] NOT READY%s — need a streaming physical standby with replay lag <= %s bytes; got streaming=%s lag=%s. Bouncing now risks data loss; investigate before proceeding.\n' \
-      "$C_WARN" "$C_RESET" "$LAG_THRESHOLD_BYTES" "${streaming:-?}" "${lag:-?}"
+    # Informational (status): report standby viability, NOT a bounce clearance —
+    # "SAFE TO BOUNCE" is issued only by `down`, once the fence is complete.
+    if $standby_ok; then
+      log "standby: healthy failover target (streaming, lag within threshold). NOT a bounce clearance — run 'down' to fence writers first."
+    else
+      warn "standby: NOT a safe failover target (streaming=${streaming:-?}, lag=${lag:-?}). Investigate before any bounce."
+    fi
   fi
 }
 
@@ -462,9 +479,9 @@ cmd_down() {
   local buffered; buffered="$(queue_depth)"
   log "pgmq backlog: ${buffered:-?} message(s) buffered — durable, drains after 'up' (informational, not a gate)"
 
-  # 6. Report standby health → SAFE TO BOUNCE / NOT READY.
+  # 6. Report standby health → SAFE TO BOUNCE / NOT READY (writers are now fenced).
   step "6/6 standby" "checking replication before the bounce"
-  report_standby
+  report_standby fenced
 }
 
 # ----------------------------------------------------------------------------
