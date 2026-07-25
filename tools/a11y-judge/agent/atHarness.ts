@@ -90,6 +90,14 @@ export interface AtObservation {
  */
 export interface AtDriver {
   run(command: AtCommand, arg?: string): Promise<AtObservation>;
+  /**
+   * Optional last-resort recovery: called by replayPlan when a milestone
+   * resync exhausts BOTH directions — real AT cursors get trapped inside
+   * interaction levels or displaced by app rerenders in ways the virtual SR
+   * cannot be. Implementations should pop interaction levels and re-enter
+   * the content area. The virtual SR needs no implementation.
+   */
+  unstick?(): Promise<void>;
 }
 
 export interface AtStepRecord {

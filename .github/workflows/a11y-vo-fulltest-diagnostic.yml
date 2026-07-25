@@ -1,6 +1,8 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 14: CONFIRMATION RUN — rev 13 went 9/9 (first fully green suite).
-# Repeat unchanged to check stability before deleting this workflow.
+# rev 15: driver unstick — rev 14 confirmed 8/9 stable with survey the sole
+# flake (trapped textarea level / deep milestone after top-restart). When a
+# milestone resync exhausts both directions, the driver now pops interaction
+# levels + re-enters content and the walk retries once at 3× budget.
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is

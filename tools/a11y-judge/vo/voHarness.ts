@@ -270,6 +270,23 @@ export class VoHarness implements AtDriver {
   }
 
   /**
+   * Last-resort recovery for replayPlan (AtDriver.unstick): pop up to two
+   * interaction levels (real VO descends deeper into textareas than the
+   * VSR-recorded plans account for), then re-enter the web area from the
+   * top. Called only when a milestone resync exhausts both directions.
+   */
+  async unstick(): Promise<void> {
+    this.debug("unstick: popping interaction levels and re-entering web area");
+    for (let i = 0; i < 2; i++) {
+      await this.withTimeout("unstick:stopInteracting", this.vo.stopInteracting({ capture: "initial" })).catch(
+        () => {}
+      );
+    }
+    await this.enterWebArea();
+    this.debug("unstick: done", { item: await this.itemTextSafe() });
+  }
+
+  /**
    * VO's interact() moves only the VO CURSOR; keyboard focus stays behind, so
    * a plain type() sends keystrokes into the void (observed live: the
    * office-hours textarea still announced its placeholder + "required invalid

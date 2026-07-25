@@ -146,10 +146,27 @@ export async function replayPlan(
             }
           }
         }
+        // Last resort: let the driver recover a trapped/displaced cursor
+        // (real-AT only) and walk once more with a larger budget from
+        // wherever recovery landed — typically the content top.
+        if (!found && harness.unstick) {
+          await harness.unstick();
+          for (let press = 1; press <= resyncLimit * 3; press++) {
+            const obs = await run("next");
+            heardPhrases.push(...obs.spokenSinceLastAction);
+            await paced();
+            if (milestoneMatches(step.milestone, obs, bindings)) {
+              resyncs.push({ stepIndex, presses: resyncLimit + press, milestone: step.milestone });
+              found = true;
+              break;
+            }
+          }
+        }
         if (!found) {
           throw new ReplayMilestoneError(
             `step ${stepIndex} (${step.command}): milestone ${JSON.stringify(step.milestone)} not found ` +
-              `within ${resyncLimit} presses forward or ${resyncLimit} back (cursor was on ` +
+              `within ${resyncLimit} presses forward or ${resyncLimit} back` +
+              `${harness.unstick ? ` (nor ${resyncLimit * 3} after unstick)` : ""} (cursor was on ` +
               `${JSON.stringify(current.currentItem)})`
           );
         }
