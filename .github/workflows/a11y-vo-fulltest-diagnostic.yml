@@ -1,7 +1,8 @@
 # TEMPORARY end-to-end test — DELETE after validating the real VoiceOver lane.
-# rev 5: FULL SUITE — rev 4 went green end-to-end on assignments-list
-# (login + replay, 0 resyncs), so drop the task filter and run all 9 promoted
-# plans with recordings to gather complete calibration data.
+# rev 6: drift fixes from the rev-5 full suite (5/9 green): bidirectional
+# milestone resync (VO overshoots), repeated-chunk collapse + safer role-suffix
+# stripping, spoken-phrase substitution for line-truncated itemText, fresh
+# Safari window per task (wedged SPA state blocked the next navigation).
 # Mirrors .github/workflows/a11y-voiceover.yml's job but push-triggered (so it
 # runs from this branch without landing on the default branch) with preview_id
 # pinned to PR 862's live preview and a single read-task filter. Once this is

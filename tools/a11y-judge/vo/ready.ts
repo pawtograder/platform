@@ -23,7 +23,14 @@ export async function waitForPageReady(safari: SafariHost, timeoutMs = 30_000): 
   );
   if (!visible) {
     const url = await safari.currentUrl().catch(() => "?");
-    throw new Error(`page never became ready (no visible #main-content/main within ${timeoutMs}ms) at ${url}`);
+    const readyState = await safari.evalJs("document.readyState").catch(() => "?");
+    const bodySnippet = await safari
+      .evalJs("(document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 300)")
+      .catch(() => "?");
+    throw new Error(
+      `page never became ready (no visible #main-content/main within ${timeoutMs}ms) at ${url} ` +
+        `[readyState=${readyState}] body: ${JSON.stringify(bodySnippet)}`
+    );
   }
 }
 

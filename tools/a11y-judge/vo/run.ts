@@ -92,6 +92,18 @@ async function calibratePlan(
             break;
           }
         }
+        // Backward pass, mirroring replayPlan: recover overshoot (negative presses).
+        if (resyncPresses === null) {
+          for (let press = 1; press <= RESYNC_LIMIT * 2; press++) {
+            const obs = await harness.run("previous");
+            heardPhrases.push(...obs.spokenSinceLastAction);
+            if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+              resyncs.push({ stepIndex, presses: RESYNC_LIMIT - press, milestone: step.milestone });
+              resyncPresses = RESYNC_LIMIT - press;
+              break;
+            }
+          }
+        }
       }
       calibration.push({
         stepIndex,
@@ -237,6 +249,12 @@ async function main(): Promise<void> {
       const stopRecording = recordingPath ? macOSRecord(recordingPath) : () => {};
       try {
         console.log(`[a11y:vo] ▶ ${loaded.id} (attempt ${attempt + 1})`);
+        // Fresh window per task: a previous task's SPA state (typed drafts,
+        // beforeunload guards, open dialogs) must not block this navigation —
+        // observed live: discussion-subject never got a ready page right
+        // after discussion-reply failed mid-typing in the same window. The
+        // httpOnly session cookie survives window churn, so login persists.
+        await safari.closeAllWindows();
         await safari.openUrl(baseUrl + seed.routes[plan.pageId]);
         await seedTimezonePreference(safari);
         await waitForPageReady(safari);

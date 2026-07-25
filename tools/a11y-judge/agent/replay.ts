@@ -113,10 +113,29 @@ export async function replayPlan(
             break;
           }
         }
+        // Backward pass: real-AT drivers can linearize content differently
+        // from the virtual SR and OVERSHOOT the milestone (observed live:
+        // real VoiceOver was already past the survey's first question), and a
+        // forward-only search can never recover that. Walk back through the
+        // forward excursion plus the same budget on the other side; backward
+        // hits are reported as negative presses.
+        if (!found) {
+          for (let press = 1; press <= resyncLimit * 2; press++) {
+            const obs = await run("previous");
+            heardPhrases.push(...obs.spokenSinceLastAction);
+            await paced();
+            if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+              resyncs.push({ stepIndex, presses: resyncLimit - press, milestone: step.milestone });
+              found = true;
+              break;
+            }
+          }
+        }
         if (!found) {
           throw new ReplayMilestoneError(
             `step ${stepIndex} (${step.command}): milestone ${JSON.stringify(step.milestone)} not found ` +
-              `within ${resyncLimit} presses (cursor was on ${JSON.stringify(current.currentItem)})`
+              `within ${resyncLimit} presses forward or ${resyncLimit} back (cursor was on ` +
+              `${JSON.stringify(current.currentItem)})`
           );
         }
       }

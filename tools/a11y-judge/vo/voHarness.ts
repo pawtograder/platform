@@ -67,8 +67,23 @@ export const VO_BOILERPLATE_PATTERNS: RegExp[] = [
 export const VO_ITEM_SUFFIX_PATTERNS: RegExp[] = [
   /,?\s*\d+ of \d+$/i,
   /,?\s*(selected|unselected|checked|not checked|unchecked|dimmed|expanded|collapsed|visited)$/i,
-  /,?\s*(button|link|heading level \d|heading|text field|secure text field|edit text|search text field|combo box|pop up button|menu button|radio button|checkbox|tick box|menu item|tab|image|group|list|table|toolbar|banner|navigation|main|complementary|content information|article|region|web content|html content)$/i
+  // Comma-separated role: VO's "label, role" form — any role token is safe to
+  // strip after a comma.
+  /,\s*(button|link|heading level \d|heading|text field|secure text field|edit text|search text field|text entry area|combo box|pop up button|menu button|radio button|radio|checkbox|tick box|menu item|tab|image|group|list|table|toolbar|banner|navigation|main|complementary|content information|article|region|web content|html content)$/i,
+  // Space-separated role: itemText appends roles with a bare space ("Skip
+  // links navigation", "… pace? radio") — strip ONLY tokens that don't
+  // collide with real label endings (stripping "link"/"button" here ate the
+  // literal "link" in "Sign in with magic link").
+  /\s+(heading level \d|text field|secure text field|edit text|search text field|text entry area|combo box|pop up button|menu button|radio button|radio|checkbox|tick box|menu item|toolbar|banner|navigation|complementary|content information|region|web content|html content)$/i
 ];
+
+/**
+ * VO announces a control's label AND its matching placeholder/value, so a
+ * textbox named "Reply..." with placeholder "Reply..." arrives as
+ * "Reply... Reply... Reply... text entry area" (observed live). Collapse a
+ * phrase that is one chunk repeated.
+ */
+const VO_REPEATED_CHUNK = /^(.{3,}?)([,\s]+\1)+$/i;
 
 export function stripVoBoilerplate(phrase: string): string | null {
   if (VO_BOILERPLATE_PATTERNS.some((re) => re.test(phrase.trim()))) return null;
@@ -77,6 +92,7 @@ export function stripVoBoilerplate(phrase: string): string | null {
   do {
     previous = p;
     for (const re of VO_ITEM_SUFFIX_PATTERNS) p = p.replace(re, "").trim();
+    p = p.replace(VO_REPEATED_CHUNK, "$1").trim();
   } while (p !== previous && p.length > 0);
   return p.length > 0 ? p : null;
 }
@@ -289,6 +305,19 @@ export class VoHarness implements AtDriver {
       rawSpoken = log.slice(this.spokenLogCursor);
       this.spokenLogCursor = log.length;
       currentItem = await this.withTimeout("itemText", this.vo.itemText());
+      // itemText is the current text LINE, so a wrapped label arrives
+      // truncated ("Sign in with magic" for "Sign in with magic link" —
+      // observed live). The spoken announcement carries the full accessible
+      // name; substitute it when it extends the truncated line.
+      const announced = stripVoBoilerplate(rawSpoken.at(-1) ?? "");
+      if (
+        announced &&
+        currentItem &&
+        announced.length > currentItem.trim().length &&
+        announced.toLowerCase().startsWith(currentItem.trim().toLowerCase())
+      ) {
+        currentItem = announced;
+      }
     } catch (e) {
       this.debug("collect: observation truncated", { error: String(e) });
     }
