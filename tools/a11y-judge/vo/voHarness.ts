@@ -160,6 +160,8 @@ export interface VoHarnessOptions {
    * negatives on SurveyJS fields triggered destructive retries).
    */
   hostEval?: (js: string) => Promise<string>;
+  /** Clipboard writer (SafariHost.setClipboard) for the paste-based type retry. */
+  hostSetClipboard?: (text: string) => Promise<void>;
 }
 
 export class VoHarness implements AtDriver {
@@ -178,6 +180,7 @@ export class VoHarness implements AtDriver {
   private readonly onStep?: (record: AtStepRecord) => void;
   private readonly debug: (stage: string, detail?: Record<string, unknown>) => void;
   private readonly hostEval?: (js: string) => Promise<string>;
+  private readonly hostSetClipboard?: (text: string) => Promise<void>;
 
   constructor(options: VoHarnessOptions = {}) {
     this.noisePatterns = options.noisePatterns ?? DEFAULT_NOISE_PATTERNS;
@@ -186,6 +189,7 @@ export class VoHarness implements AtDriver {
     this.onStep = options.onStep;
     this.debug = options.onDebug ?? (() => {});
     this.hostEval = options.hostEval;
+    this.hostSetClipboard = options.hostSetClipboard;
   }
 
   private get vo(): VoiceOver {
@@ -277,6 +281,19 @@ export class VoHarness implements AtDriver {
       "moveKeyboardFocusToCursor",
       this.vo.perform(this.vo.keyboardCommands.moveKeyboardFocusToCursor, { capture: "initial" })
     ).catch((e) => this.debug("ensureKeyboardFocusAtCursor failed", { error: String(e) }));
+  }
+
+  /** One-line focused-element descriptor for type-failure diagnostics. */
+  private async describeActiveElement(): Promise<string> {
+    if (!this.hostEval) return "?";
+    return this.hostEval(
+      `(() => {
+        const el = document.activeElement;
+        if (!el) return 'none';
+        const v = el.value !== undefined ? el.value : (el.textContent || '');
+        return el.tagName + (el.id ? '#' + el.id : '') + '[' + (el.getAttribute('aria-label') || '') + '] value=' + String(v).slice(0, 60);
+      })()`
+    ).catch((e) => `error:${e}`);
   }
 
   private async typedTextLanded(text: string): Promise<boolean> {
@@ -422,13 +439,28 @@ export class VoHarness implements AtDriver {
         // cursor, Cmd+A makes the retype REPLACE instead of append.
         if (arg && arg.length >= 3 && this.hostEval) {
           if (!(await this.typedTextLanded(arg))) {
-            this.debug("type: text not in focused field — act to focus, select-all, retype");
+            // Per-character typing takes seconds; an app rerender (autosave)
+            // can steal focus mid-stream (observed live: survey inputs).
+            // Retry ATOMICALLY: refocus, select-all, then paste in one
+            // keystroke — a race the rerender can't win. Paste-only-on-retry
+            // keeps the first attempt at full keyboard fidelity.
+            this.debug("type: text not in focused field — refocus + select-all + atomic retry", {
+              activeElement: await this.describeActiveElement()
+            });
             await vo.act(opts);
             await new Promise((r) => setTimeout(r, 300));
             await this.ensureKeyboardFocusAtCursor();
             await vo.press("Command+a");
-            await vo.type(arg);
-            this.debug("type: after retry", { landed: await this.typedTextLanded(arg) });
+            if (this.hostSetClipboard) {
+              await this.hostSetClipboard(arg);
+              await vo.press("Command+v");
+            } else {
+              await vo.type(arg);
+            }
+            this.debug("type: after retry", {
+              landed: await this.typedTextLanded(arg),
+              activeElement: await this.describeActiveElement()
+            });
           }
         }
         return;

@@ -120,6 +120,15 @@ export class SafariHost {
     return false;
   }
 
+  /**
+   * Put text on the system clipboard (for the VO harness's paste-based
+   * typing retry — an atomic Cmd+V can't lose a race against an app rerender
+   * the way seconds of per-character typing can).
+   */
+  async setClipboard(text: string): Promise<void> {
+    await this.osascript(`set the clipboard to "${escapeAppleScriptString(text)}"`);
+  }
+
   /** Best-effort browser-state hygiene between runs. */
   async closeAllWindows(): Promise<void> {
     await this.osascript('tell application "Safari" to close every window').catch(() => {});

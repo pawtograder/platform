@@ -42,7 +42,9 @@ const REQUIRED_ENV = [
   "END_TO_END_SECRET"
 ];
 const STEP_PAUSE_MS = 300;
-const RESYNC_LIMIT = 15;
+// Escape recoveries restart the cursor at the content top, so deep milestones
+// (survey q2 was >15 items from the top) need a bigger walk budget.
+const RESYNC_LIMIT = 25;
 const PER_COMMAND_TIMEOUT_MS = 30_000;
 const WRITE_SETTLE_MS = 2500;
 const TASK_RETRIES = 1;
@@ -185,7 +187,8 @@ async function main(): Promise<void> {
     fullCapture: process.env.A11Y_VO_CAPTURE === "full",
     onStep: (record) => debug.step(record),
     onDebug: (stage, detail) => debug.log(stage, detail),
-    hostEval: (js) => safari.evalJs(js)
+    hostEval: (js) => safari.evalJs(js),
+    hostSetClipboard: (text) => safari.setClipboard(text)
   });
   const reports: TaskReport[] = [];
 
