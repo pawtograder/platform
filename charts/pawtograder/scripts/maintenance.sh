@@ -351,6 +351,22 @@ cmd_down() {
   fi
   log "ingress rules[0] host=${rule0_host:-?} backend=${cur_name:-?}:${cur_port:-?}"
   [ "$cur_name" != "$WEB_SVC" ] && warn "rules[0].paths[0] backend is '${cur_name:-?}', not ${WEB_SVC}; verify this is the web host"
+  # Per-course A/B channel web Ingresses: each has its OWN host whose "/" path
+  # routes to that channel's web-<channel> Deployment (which we also fence to 0),
+  # so the page must front them too or channel users get errors instead of the
+  # page. The "/" path is NOT index 0 (the API paths precede it), so record each
+  # ingress name + the index of its "/" path + that path's backend — to repoint on
+  # the fence and restore on `up`.
+  : > "$tmp/channel_ingresses"
+  k get ingress -l "$INSTANCE_LABEL" -o json 2>/dev/null | jq -c '
+    [ .items[]
+      | select(((.metadata.labels["app.kubernetes.io/component"]) // "") | startswith("web-"))
+      | .metadata.name as $n
+      | (.spec.rules[0].http.paths | to_entries[] | select(.value.path == "/")) as $p
+      | {ingress: $n, index: $p.key, backend: $p.value.backend.service} ]' \
+    > "$tmp/channel_ingresses" || printf '[]' > "$tmp/channel_ingresses"
+  [ -s "$tmp/channel_ingresses" ] || printf '[]' > "$tmp/channel_ingresses"
+  log "channel web ingresses to repoint: $(jq -r 'length' "$tmp/channel_ingresses" 2>/dev/null || echo 0)"
   # edge-functions HPA (re-applied on `up`).
   : > "$tmp/functions_hpa"
   if k get hpa "$FUNCTIONS_HPA" >/dev/null 2>&1; then
@@ -381,7 +397,8 @@ cmd_down() {
       --from-file=functions_hpa="$tmp/functions_hpa" \
       --from-file=deploy_replicas="$tmp/deploy_replicas" \
       --from-file=cronjobs_suspend="$tmp/cronjobs_suspend" \
-      --from-file=ingress_backend="$tmp/ingress_backend" >/dev/null
+      --from-file=ingress_backend="$tmp/ingress_backend" \
+      --from-file=channel_ingresses="$tmp/channel_ingresses" >/dev/null
     ok "captured prior state -> configmap/${STATE_CM}"
   else
     log "[dry-run] would save state -> configmap/${STATE_CM}"
@@ -413,6 +430,20 @@ cmd_down() {
   run k patch ingress "$INGRESS" --type=json -p \
     "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
   ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
+  # 3b′. repoint each per-course channel web host's "/" to the page too (their
+  #      web-<channel> Deployments are fenced to 0 below; without this, channel
+  #      users would get errors instead of the maintenance page).
+  if [ "$(jq -r 'length' "$tmp/channel_ingresses" 2>/dev/null || echo 0)" -gt 0 ]; then
+    local crow cing cidx
+    while IFS= read -r crow; do
+      [ -n "$crow" ] || continue
+      cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
+      run k patch ingress "$cing" --type=json -p \
+        "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
+      log "  channel ingress ${cing} path[${cidx}] -> ${MAINT_SVC}:${MAINT_PORT}"
+    done < <(jq -c '.[]' "$tmp/channel_ingresses")
+    ok "channel web hosts -> ${MAINT_SVC}:${MAINT_PORT}"
+  fi
   # 3c. scale every writer/channel/functions workload to 0 (records were saved).
   if [ -s "$tmp/deploy_replicas" ]; then
     local kind name replicas
@@ -608,6 +639,20 @@ cmd_up() {
     warn "no recorded ingress backend; restoring to ${WEB_SVC}:${WEB_PORT}"
     run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${WEB_SVC}\",\"port\":{\"number\":${WEB_PORT}}}}]"
+  fi
+  # Restore each channel web host's "/" backend from the recorded snapshot.
+  local chan; chan="$(sget channel_ingresses)"
+  if [ -n "$chan" ] && [ "$(jq -r 'length' <<<"$chan" 2>/dev/null || echo 0)" -gt 0 ]; then
+    local crow cing cidx cbackend
+    while IFS= read -r crow; do
+      [ -n "$crow" ] || continue
+      cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
+      cbackend="$(jq -c '.backend' <<<"$crow")"
+      run k patch ingress "$cing" --type=json -p \
+        "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
+      log "  channel ingress ${cing} path[${cidx}] -> restored"
+    done < <(jq -c '.[]' <<<"$chan")
+    ok "channel web hosts restored"
   fi
 
   # Restore the maintenance page's pre-window text if `down --title/--message/--eta`
