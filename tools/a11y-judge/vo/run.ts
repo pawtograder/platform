@@ -18,8 +18,14 @@
 import path from "node:path";
 import { macOSRecord } from "@guidepup/record";
 import waitForSchemaCache from "../../../tests/wait-for-schema-cache";
-import { normalizePhrase, templateMatches, type Bindings } from "../agent/normalize";
-import { replayPlan, STATE_CHANGING_COMMANDS, type ReplayPlan, type ReplayResult } from "../agent/replay";
+import { normalizePhrase, type Bindings } from "../agent/normalize";
+import {
+  milestoneMatches,
+  replayPlan,
+  STATE_CHANGING_COMMANDS,
+  type ReplayPlan,
+  type ReplayResult
+} from "../agent/replay";
 import { getTask } from "../agent/tasks";
 import { VoDebugLog } from "./debug";
 import { loadPlans, type LoadedPlan } from "./plans";
@@ -80,13 +86,13 @@ async function calibratePlan(
     if (step.milestone) {
       const current = await harness.run("observe");
       heardPhrases.push(...current.spokenSinceLastAction);
-      const matched = templateMatches(step.milestone, current.currentItem, bindings);
+      const matched = milestoneMatches(step.milestone, current, bindings);
       let resyncPresses: number | null = matched ? 0 : null;
       if (!matched) {
         for (let press = 1; press <= RESYNC_LIMIT; press++) {
           const obs = await harness.run("next");
           heardPhrases.push(...obs.spokenSinceLastAction);
-          if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+          if (milestoneMatches(step.milestone, obs, bindings)) {
             resyncs.push({ stepIndex, presses: press, milestone: step.milestone });
             resyncPresses = press;
             break;
@@ -97,7 +103,7 @@ async function calibratePlan(
           for (let press = 1; press <= RESYNC_LIMIT * 2; press++) {
             const obs = await harness.run("previous");
             heardPhrases.push(...obs.spokenSinceLastAction);
-            if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+            if (milestoneMatches(step.milestone, obs, bindings)) {
               resyncs.push({ stepIndex, presses: RESYNC_LIMIT - press, milestone: step.milestone });
               resyncPresses = RESYNC_LIMIT - press;
               break;

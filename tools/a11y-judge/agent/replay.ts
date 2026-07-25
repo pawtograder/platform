@@ -46,6 +46,16 @@ export interface ReplayResult {
 export class ReplayMilestoneError extends Error {}
 export class ReplayNeedleError extends Error {}
 
+/**
+ * Milestone check against the primary item text OR any driver-supplied
+ * alternate rendering (real VoiceOver embeds bare role words — "Complete
+ * button" — that exact template equality can't safely strip).
+ */
+export function milestoneMatches(milestone: string, observation: AtObservation, bindings: Bindings): boolean {
+  if (templateMatches(milestone, observation.currentItem, bindings)) return true;
+  return (observation.currentItemAlternates ?? []).some((alt) => templateMatches(milestone, alt, bindings));
+}
+
 export async function replayPlan(
   harness: AtDriver,
   plan: ReplayPlan,
@@ -101,13 +111,13 @@ export async function replayPlan(
       const current = await run("observe");
       heardPhrases.push(...current.spokenSinceLastAction);
       await paced();
-      if (!templateMatches(step.milestone, current.currentItem, bindings)) {
+      if (!milestoneMatches(step.milestone, current, bindings)) {
         let found = false;
         for (let press = 1; press <= resyncLimit; press++) {
           const obs = await run("next");
           heardPhrases.push(...obs.spokenSinceLastAction);
           await paced();
-          if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+          if (milestoneMatches(step.milestone, obs, bindings)) {
             resyncs.push({ stepIndex, presses: press, milestone: step.milestone });
             found = true;
             break;
@@ -124,7 +134,7 @@ export async function replayPlan(
             const obs = await run("previous");
             heardPhrases.push(...obs.spokenSinceLastAction);
             await paced();
-            if (templateMatches(step.milestone, obs.currentItem, bindings)) {
+            if (milestoneMatches(step.milestone, obs, bindings)) {
               resyncs.push({ stepIndex, presses: resyncLimit - press, milestone: step.milestone });
               found = true;
               break;

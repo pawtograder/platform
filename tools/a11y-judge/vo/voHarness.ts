@@ -85,6 +85,16 @@ export const VO_ITEM_SUFFIX_PATTERNS: RegExp[] = [
  */
 const VO_REPEATED_CHUNK = /^(.{3,}?)([,\s]+\1)+$/i;
 
+/**
+ * Role words itemText appends with a bare space that CAN also end real labels
+ * ("Sign in with magic link"), so they must never be stripped from the
+ * primary item — they feed currentItemAlternates instead, and milestone
+ * matching accepts either rendering ("New Request link" vs "new request" —
+ * observed live in the rev-6 office-hours resync walk).
+ */
+const VO_AMBIGUOUS_ROLE_SUFFIX =
+  /\s+(current page,?\s*)?(visited\s+)?(button|link|tab|image|list|table|group|heading|main|article|banner)$/i;
+
 export function stripVoBoilerplate(phrase: string): string | null {
   if (VO_BOILERPLATE_PATTERNS.some((re) => re.test(phrase.trim()))) return null;
   let p = phrase.trim();
@@ -221,11 +231,24 @@ export class VoHarness implements AtDriver {
       error = e instanceof Error ? e.message : String(e);
     }
     const { rawSpoken, currentItem } = await this.collect();
+    const cleanedItem = stripVoBoilerplate(currentItem) ?? currentItem;
+    const alternates = new Set<string>();
+    const announced = stripVoBoilerplate(rawSpoken.at(-1) ?? "");
+    if (announced) alternates.add(announced);
+    let roleFree = cleanedItem;
+    let previous;
+    do {
+      previous = roleFree;
+      roleFree = roleFree.replace(VO_AMBIGUOUS_ROLE_SUFFIX, "").trim();
+    } while (roleFree !== previous && roleFree.length > 0);
+    if (roleFree) alternates.add(roleFree);
+    alternates.delete(cleanedItem);
+    alternates.delete("");
     const observation = buildObservation(
       rawSpoken.map((p) => stripVoBoilerplate(p)).filter((p): p is string => p !== null),
-      stripVoBoilerplate(currentItem) ?? currentItem,
+      cleanedItem,
       null,
-      { noisePatterns: this.noisePatterns, error }
+      { noisePatterns: this.noisePatterns, error, currentItemAlternates: [...alternates] }
     );
     const record: AtStepRecord = {
       index: this.steps.length,

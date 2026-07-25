@@ -61,6 +61,15 @@ export type AtCommand =
 export interface AtObservation {
   spokenSinceLastAction: string[];
   currentItem: string;
+  /**
+   * Optional alternate renderings of the current item supplied by drivers
+   * whose primary text embeds role words that exact template matching can't
+   * safely strip (real VoiceOver's "New Request link" / "Complete button" —
+   * the bare suffix collides with labels that genuinely end in "link" etc.).
+   * Milestone matching accepts the primary OR any alternate. The virtual SR
+   * never sets this.
+   */
+  currentItemAlternates?: string[];
   domFocus: string | null;
   /**
    * TRUE checked state of the control under the virtual cursor (radio/
@@ -126,13 +135,19 @@ export function buildObservation(
   rawSpoken: string[],
   currentItem: string,
   domFocus: string | null,
-  options: { noisePatterns?: RegExp[]; error?: string; checkableState?: "checked" | "not checked" | null } = {}
+  options: {
+    noisePatterns?: RegExp[];
+    error?: string;
+    checkableState?: "checked" | "not checked" | null;
+    currentItemAlternates?: string[];
+  } = {}
 ): AtObservation {
   const observation: AtObservation = {
     spokenSinceLastAction: collapseRepeats(filterNoise(rawSpoken, options.noisePatterns ?? DEFAULT_NOISE_PATTERNS)),
     currentItem,
     domFocus
   };
+  if (options.currentItemAlternates?.length) observation.currentItemAlternates = options.currentItemAlternates;
   if (options.checkableState) observation.checkableState = options.checkableState;
   if (options.error) observation.error = options.error;
   return observation;
