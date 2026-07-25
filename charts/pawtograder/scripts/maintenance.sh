@@ -210,7 +210,6 @@ report_standby() {
 # ----------------------------------------------------------------------------
 state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
 
-state_get() { k get configmap "$STATE_CM" -o jsonpath="{.data.$1}" 2>/dev/null; }
 
 # ----------------------------------------------------------------------------
 # Custom maintenance-page text (--title/--message/--eta)
@@ -480,6 +479,14 @@ cmd_up() {
 
   tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
+  # Read the ENTIRE state ConfigMap ONCE, and fail if THAT read fails — so a
+  # transient API/ConfigMap read can never be misread per-key as "empty" and
+  # silently skip restoring CronJobs / cron / HPA / ingress before the state is
+  # deleted. Every key read below comes from this one verified snapshot.
+  k get configmap "$STATE_CM" -o json > "$tmp/state.json" 2>/dev/null \
+    || die "could not read state ConfigMap ${STATE_CM}. Restore aborted (retry is safe; do NOT delete it — it holds everything 'up' needs)."
+  sget() { jq -r --arg k "$1" '.data[$k] // ""' "$tmp/state.json"; }
+
   # A. Drop the maintenance page FIRST-of-restore is wrong: page comes down LAST.
   #    Restore backends/pods first while the page still shields users.
 
@@ -504,7 +511,7 @@ cmd_up() {
   #    read here means a transient API/ConfigMap read failure — NOT "nothing to
   #    restore". Abort rather than silently leave every writer scaled to 0.
   step "1/6 writers" "restoring app tiers + channels"
-  state_get deploy_replicas > "$tmp/deploy_replicas" || true
+  sget deploy_replicas > "$tmp/deploy_replicas"
   [ -s "$tmp/deploy_replicas" ] \
     || die "could not read recorded writer replicas from ${STATE_CM} (empty). Restore aborted so the app isn't left scaled to 0. Retry 'up'; if it persists, restore manually from the ConfigMap."
   local kind name replicas
@@ -521,7 +528,7 @@ cmd_up() {
   #    Alternative: `helm upgrade --reuse-values` reconciles it from chart values
   #    (cleanest in GitOps) — we re-apply the captured object to stay self-contained.
   step "2/6 edge-functions" "re-applying the edge-functions HPA"
-  state_get functions_hpa > "$tmp/functions_hpa" || true
+  sget functions_hpa > "$tmp/functions_hpa"
   if [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
     run k apply -f "$tmp/functions_hpa"
     ok "edge-functions HPA re-applied (autoscaler resumes managing functions replicas)"
@@ -531,7 +538,7 @@ cmd_up() {
 
   # 3. Unsuspend CronJobs to their recorded prior state.
   step "3/6 cronjobs" "restoring CronJob suspend state"
-  state_get cronjobs_suspend > "$tmp/cronjobs_suspend" || true
+  sget cronjobs_suspend > "$tmp/cronjobs_suspend"
   if [ -s "$tmp/cronjobs_suspend" ]; then
     local cjname prior
     while IFS=$'\t' read -r cjname prior; do
@@ -544,7 +551,7 @@ cmd_up() {
 
   # 4. Resume pg_cron for exactly the jobs that were active.
   step "4/6 pg_cron" "resuming scheduled jobs"
-  local jobids; jobids="$(state_get cron_jobids || true)"
+  local jobids; jobids="$(sget cron_jobids)"
   if [ -n "$jobids" ]; then
     psql_exec "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[${jobids}]::bigint[]);"
     ok "resumed cron jobs: ${jobids}"
@@ -575,7 +582,7 @@ cmd_up() {
 
   # 6. Point the web host back to the app, then delete state LAST. Page down last.
   step "6/6 page" "restoring the web host to the app"
-  local backend; backend="$(state_get ingress_backend || true)"
+  local backend; backend="$(sget ingress_backend)"
   if [ -n "$backend" ]; then
     run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":${backend}}]"
@@ -590,7 +597,7 @@ cmd_up() {
   # overrode it — otherwise the next flag-less window serves this window's text.
   # Safe here: the ingress already points at web, so rolling the maintenance pod
   # (single replica) has no user impact.
-  local orig_html; orig_html="$(state_get maint_index_html_orig || true)"
+  local orig_html; orig_html="$(sget maint_index_html_orig)"
   if [ -n "$orig_html" ]; then
     run k patch configmap "$MAINT_CM" --type merge \
       -p "$(jq -n --arg h "$orig_html" '{data:{"index.html":$h}}')"
