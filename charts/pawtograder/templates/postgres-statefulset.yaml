@@ -51,7 +51,17 @@ spec:
         # with the strip the hash is identical across versions yet still changes
         # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
         # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
-        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (include (print $.Template.BasePath "/postgres-config.yaml") .) "" | sha256sum }}
+        #
+        # Also hash monitoring.yaml (empty unless monitoring.enabled): it renders
+        # the postgres_exporter custom-queries ConfigMap the exporter SIDECAR mounts
+        # and reads ONLY at startup. Without this, adding/altering a collector (e.g.
+        # the replication-lag query) on an in-place upgrade would update the mounted
+        # file but never restart the sidecar, so the new metric stays absent until a
+        # manual roll. The strip drops the version labels AND the ServiceMonitor
+        # `interval`/`scrapeTimeout` lines, so a scrape-cadence tweak (unrelated to
+        # the exporter's query set) does NOT needlessly roll the primary — only a
+        # real query change does.
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version|interval|scrapeTimeout):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) (include (print $.Template.BasePath "/monitoring.yaml") .)) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}

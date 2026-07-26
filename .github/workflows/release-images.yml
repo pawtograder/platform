@@ -321,6 +321,43 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.version }}
           done
 
+  build-maintenance:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push maintenance image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/maintenance/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/maintenance:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=maintenance
+          cache-to: type=gha,scope=maintenance,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/maintenance:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/maintenance:${{ needs.meta.outputs.version }}
+          done
+
   publish-chart:
     # Note: build-web is intentionally not a dep — on v* tag pushes the web
     # image is not built here (URLs would have to be baked at tag time and
@@ -365,7 +402,7 @@ jobs:
   # the upgrade and `--wait` blocks until it — and every Deployment — is
   # healthy, so a failed migration or rollout turns this job red.
   deploy-staging:
-    needs: [meta, build-web, build-edge-functions, build-migrations]
+    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
@@ -445,6 +482,9 @@ jobs:
             --set web.image.tag="$VERSION" \
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
+            --set maintenance.enabled=true \
+            --set maintenance.image.repository=ghcr.io/pawtograder/maintenance \
+            --set maintenance.image.tag="$VERSION" \
             --wait \
             --wait-for-jobs \
             --timeout 15m

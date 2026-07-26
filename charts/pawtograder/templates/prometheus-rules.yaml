@@ -143,6 +143,62 @@ spec:
               Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
               usage. Runbook: docs/operations/point-in-time-recovery.md.
     {{- end }}
+    {{- /* Skip when the standby is intentionally paused (replica.replicas: 0,
+         supported by postgres-replica.yaml to keep the PVC/config while stopped):
+         pg_stat_replication is then empty by design and NotStreaming would fire
+         forever. */}}
+    {{- $wantStandbys := int (dig "replicas" 1 .Values.postgres.replica) }}
+    {{- if and .Values.postgres.enabled .Values.postgres.replica.enabled (gt $wantStandbys 0) }}
+    - name: pawtograder.replication
+      rules:
+        # Fewer standbys streaming than configured (postgres.replica.replicas =
+        # {{ $wantStandbys }}). streaming_standbys is the primary-side count from
+        # pg_stat_replication (pawtograder_replication query in monitoring.yaml) —
+        # NOT pg_replication_slots, which is empty because the chart creates no
+        # slot. Comparing to the configured count (not a hard-coded 1) catches a
+        # DEGRADED topology: with replicas>1, losing one standby while another
+        # still streams must still warn. A missing standby leaves the warm
+        # failover target (docs/operations/point-in-time-recovery.md) stale.
+        # Warns (a broken standby is not itself an outage; the primary still
+        # serves). No absent() arm — matching the connection alerts: a downed
+        # exporter must NOT page as "not streaming" (the WAL-archiving alert
+        # already covers an exporter-down blind spot for the primary's path).
+        - alert: PawtograderReplicaNotStreaming
+          expr: |
+            max(pawtograder_replication_streaming_standbys{namespace="{{ $ns }}"}) < {{ $wantStandbys }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres standby(s) not streaming"
+            description: >-
+              Fewer than the configured {{ $wantStandbys }} standby(s) have been
+              in state=streaming in {{ $ns }} for 10m (pg_stat_replication,
+              primary side). The warm failover target is stale or the replica
+              topology is degraded — a promotion now would lose writes since a
+              standby dropped off. Check the postgres-replica pod(s), replication
+              credentials, and the primary's pg_wal. Runbook:
+              docs/operations/point-in-time-recovery.md.
+        # The standby is streaming but replaying WAL far behind the primary. Lag
+        # in bytes (primary current LSN − standby replay_lsn); a large, sustained
+        # gap widens the RPO of a failover. Warns.
+        - alert: PawtograderReplicaLagHigh
+          expr: |
+            max(pawtograder_replication_max_replay_lag_bytes{namespace="{{ $ns }}"})
+              > {{ int64 .Values.monitoring.prometheusRules.replicationLagBytesWarning }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres standby replication lag is high"
+            description: >-
+              The standby in {{ $ns }} has trailed the primary by more than
+              {{ int64 .Values.monitoring.prometheusRules.replicationLagBytesWarning }}
+              bytes for 15m (pg_stat_replication replay_lsn). Failover RPO is
+              growing. Check standby I/O/CPU, network to the primary, and whether
+              it fell back to wal-g wal-fetch. Runbook:
+              docs/operations/point-in-time-recovery.md.
+    {{- end }}
     {{- if .Values.postgres.enabled }}
     - name: pawtograder.postgres
       rules:

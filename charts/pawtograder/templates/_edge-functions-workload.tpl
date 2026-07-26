@@ -95,6 +95,15 @@ spec:
             - "{{ $ctx.Values.edgeFunctions.service.port }}"
             - --policy
             - {{ $ctx.Values.edgeFunctions.policy | quote }}
+            {{- with $ctx.Values.edgeFunctions.gracefulExitTimeoutSeconds }}
+            # On SIGTERM (scale-down / rolling deploy / node drain) edge-runtime
+            # stops new intake and lets in-flight handlers finish for up to this
+            # many seconds before forcibly terminating, then exits (immediately if
+            # idle). Sized >= worker.timeoutMs so the longest request can complete;
+            # terminationGracePeriodSeconds is the SIGKILL backstop above it.
+            - --graceful-exit-timeout
+            - {{ . | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.maxParallelism }}
             # Cap on simultaneous isolates; under per_request this bounds max
             # concurrent requests/pod (excess queue via --request-wait-timeout).

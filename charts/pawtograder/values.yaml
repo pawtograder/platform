@@ -436,6 +436,44 @@ postgres:
   affinity: {}
 
 # -----------------------------------------------------------------------------
+# Maintenance page — a tiny static nginx Deployment + Service that returns
+# HTTP 503 + Retry-After with a styled "we'll be right back" body (matching the
+# app's in-app error boundary). Off by default. During a planned-maintenance
+# window the web-host ingress backend is repointed to the `pawtograder-maintenance`
+# Service, then back (see docs/operations/planned-maintenance.md). Enabling this
+# only CREATES the Service; the ingress patch is what reroutes. It reroutes the
+# WEB host only (user-facing "down" banner), so it is not itself a write fence —
+# scaling the writer tiers to 0 remains the real fence.
+# -----------------------------------------------------------------------------
+maintenance:
+  enabled: false
+  # Copy shown on the page. eta is optional (omitted from the page when empty).
+  title: "We'll be right back"
+  message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
+  eta: "" # e.g. "6:15pm ET" — rendered only when set
+  # Retry-After header (seconds) AND the page's auto-refresh interval.
+  retryAfterSeconds: 120
+  # 2 (+ the template's node topology spread): the page fronts the web host during
+  # a node drain, so a single replica on the drained node would leave the ingress
+  # serving 5xx until a replacement schedules.
+  replicas: 2
+  image:
+    # Built by .github/workflows/release-images.yml (build-maintenance), mirrored
+    # into Harbor for Khoury prod. tag "" => chart appVersion (same convention as
+    # the migrations image).
+    repository: dev-harbor.khoury.northeastern.edu/pawtograder/maintenance
+    tag: "" # default: chart appVersion
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits: { cpu: "100m", memory: "64Mi" }
+  # Override the whole page body (raw HTML, rendered through `tpl`). Empty =>
+  # the chart-bundled maintenance/index.html.
+  html: ""
+
+# -----------------------------------------------------------------------------
 # Migrations job — runs `supabase db push`-equivalent against postgres.
 # Implemented as a pre-install/pre-upgrade Helm hook.
 # -----------------------------------------------------------------------------
@@ -1075,11 +1113,23 @@ edgeFunctions:
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
-  # Long grace: an in-flight autograder request can legitimately run for
-  # tens of seconds; the preStop sleep lets kong/endpoints drop the pod
-  # before SIGTERM reaches the runtime.
-  terminationGracePeriodSeconds: 75
-  preStopSleepSeconds: 10
+  # Graceful drain on SIGTERM. edge-runtime intercepts SIGTERM and, up to
+  # --graceful-exit-timeout, stops NEW intake and lets IN-FLIGHT handlers finish
+  # before exiting (verified against v1.74.0: with the flag a 25s request that was
+  # in flight at SIGTERM completed 200 and the process exited right after; at the
+  # 15s default the same request was cut off with "channel closed"). It exits
+  # promptly when idle (~0.3s in the same test), so this is cheap — unlike a fixed
+  # preStop sleep, it only waits as long as there is work.
+  #
+  # Sizing: gracefulExitTimeoutSeconds >= worker.timeoutMs (400s) so the longest
+  # possible in-flight request can finish; preStop is a SHORT endpoint-drop delay
+  # (kong/Service drops the pod before SIGTERM, so no new intake races the drain);
+  # terminationGracePeriodSeconds is only a SIGKILL BACKSTOP — it must exceed
+  # preStop + gracefulExitTimeout so the kubelet never SIGKILLs mid-drain, but the
+  # runtime normally exits well before it.
+  gracefulExitTimeoutSeconds: 410 # --graceful-exit-timeout; >= worker.timeoutMs (400s)
+  preStopSleepSeconds: 10 # short: just lets kong/endpoints drop the pod pre-SIGTERM
+  terminationGracePeriodSeconds: 430 # SIGKILL backstop >= preStop + gracefulExitTimeout
   spreadAcrossNodes: true
   updateStrategy:
     type: RollingUpdate
@@ -1430,6 +1480,11 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
+    # fires (only when postgres.replica.enabled). Primary current LSN − standby
+    # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
+    # burst without flapping while still catching a standby that is falling behind.
+    replicationLagBytesWarning: 104857600  # 100 MiB
 
   # Alertmanager routing SCAFFOLD (templates/alertmanager-config.yaml). Renders a
   # prometheus-operator AlertmanagerConfig CR that Grafana Alloy's

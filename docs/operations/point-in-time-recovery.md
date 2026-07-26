@@ -91,7 +91,8 @@ kubectl -n "$NS" exec -it <release>-postgres-replica-0 -c postgres -- \
 ```
 
 `pg_stat_replication` showing the standby `streaming`, and a small `replay_lag`,
-means both halves work. Do a promotion drill in a scratch namespace before term.
+means both halves work. Rehearse the promote path before you need it in anger —
+see [Promotion drill](#promotion-drill-rehearsing-failover) below.
 
 ---
 
@@ -152,6 +153,141 @@ is already warm.
 > avoids the split-brain risk an unsupervised promoter carries against a shared
 > WAL archive. If automatic failover becomes a requirement, the tracked path is
 > Patroni/CloudNativePG (PRODUCTION-READINESS §1.1).
+
+---
+
+## Promotion drill (rehearsing failover)
+
+The [manual failover](#manual-failover-promote-the-standby) above is only
+trustworthy if you have run it before the day the primary dies. But you cannot
+rehearse it against production: promoting the real standby branches a new
+timeline and, worse, a rehearsal that touched the live `WALG_S3_PREFIX` risks the
+split brain step 1 exists to prevent. **Rehearse in a throwaway release with its
+own isolated archive**, never against prod.
+
+The drill exercises the operator muscle memory — promote, confirm the node left
+recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
+
+1. **Stand up a scratch release** (primary + standby) in a fresh namespace. Use
+   the **self-contained preview overlay** (`secrets.autogenerate: true`, no ESO/
+   OpenBao, no `tier=prod-staging` placement) — the staging overlay is _not_
+   self-contained (`secrets.create: false` + fixed secret names) and its pods
+   would never start in a fresh namespace. Set `fullnameOverride=drill` so
+   resources are named `drill-postgres*` (without it the chart's `fullname`
+   helper renders `drill-pawtograder-postgres*`), and a WAL-G prefix **distinct
+   from every real environment's** so nothing the drill does can reach a
+   production archive:
+
+   ```bash
+   DRILL_NS=pg-promote-drill
+   DRILL_PREFIX="s3://pawtograder-drill/$(uuidgen)"   # exact, collision-resistant
+   kubectl create namespace "$DRILL_NS"
+
+   # The replica render-guard requires walg.enabled, and both WAL-G and the
+   # storage API read S3 creds from the `pawtograder-s3` Secret — which the
+   # preview overlay's autogenerate path does NOT create. Create it by hand,
+   # pointing at a SCRATCH bucket you can wipe (never a real WALG_S3_PREFIX):
+   kubectl -n "$DRILL_NS" create secret generic pawtograder-s3 \
+     --from-literal=AWS_ACCESS_KEY_ID="$DRILL_S3_KEY" \
+     --from-literal=AWS_SECRET_ACCESS_KEY="$DRILL_S3_SECRET"
+
+   helm install drill charts/pawtograder -n "$DRILL_NS" \
+     -f charts/pawtograder/examples/values-preview.yaml \
+     --set fullnameOverride=drill \
+     --set global.hostname="drill.invalid" \
+     --set postgres.replica.enabled=true \
+     --set postgres.walg.enabled=true \
+     --set postgres.walg.s3Endpoint="$DRILL_S3_ENDPOINT" \
+     --set postgres.walg.s3Prefix="$DRILL_PREFIX/walg"
+   # Wait for drill-postgres-0 and drill-postgres-replica-0 Ready, then run the
+   # "Verifying" queries above to confirm the standby is streaming.
+   ```
+
+   > The unique, throwaway prefix is the whole safety story: two primaries (the
+   > drill's promoted standby + its restarted old primary, or a real cluster) must
+   > never archive to one prefix. A per-run UUID prefix guarantees isolation;
+   > teardown deletes exactly `$DRILL_PREFIX`, never a broad `*` glob that could
+   > hit a concurrent drill.
+
+2. **Write a marker** so you can prove the promoted node carries the data:
+
+   ```bash
+   kubectl -n "$DRILL_NS" exec -it drill-postgres-0 -c postgres -- \
+     psql -U supabase_admin -d postgres -c "CREATE TABLE IF NOT EXISTS drill_marker(t timestamptz);
+       INSERT INTO drill_marker VALUES (now());"
+   ```
+
+3. **Fence the primary, promote, and repoint** — the real
+   [manual failover](#manual-failover-promote-the-standby) steps, run against the
+   `drill-` release so the failure-prone parts are actually rehearsed (do not
+   shortcut them):
+
+   ```bash
+   # (a0) Wait for the marker (step 2) to replay on the standby before promoting.
+   #      Replication is async, so promoting while the standby still lags drops the
+   #      very row the drill asserts. Proceed only when the byte gap is ~0 (run on
+   #      the primary); repeat until it reads 0.
+   kubectl -n "$DRILL_NS" exec drill-postgres-0 -c postgres -- psql -U supabase_admin \
+     -d postgres -tAc "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)
+       FROM pg_stat_replication WHERE usename='supabase_replication_admin';"
+   # (a) Fence the old primary, and WAIT for it to actually exit — scaling the
+   #     StatefulSet to 0 does not prove drill-postgres-0 has stopped, and promoting
+   #     while it is still up risks a split brain.
+   kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
+   kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=120s
+   # (b) Promote the standby. pg_ctl refuses to run as root, and `kubectl exec`
+   #     enters as the image's root user, so drop to the postgres user.
+   kubectl -n "$DRILL_NS" exec drill-postgres-replica-0 -c postgres -- \
+     su postgres -c "pg_ctl promote -D /var/lib/postgresql/data/pgdata"
+   # (c) Repoint the write Service at the promoted pod (edit the selector to the
+   #     replica's component label, or scale the old primary sts to 0 as above).
+   kubectl -n "$DRILL_NS" patch svc drill-postgres --type=merge -p \
+     '{"spec":{"selector":{"app.kubernetes.io/component":"postgres-replica"}}}'
+   ```
+
+4. **Verify the promotion held:** the promoted node left recovery, accepts
+   writes, and has the marker row:
+
+   ```bash
+   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
+     psql -U supabase_admin -d postgres -tAc "SELECT pg_is_in_recovery();"   # f
+   kubectl -n "$DRILL_NS" exec -it drill-postgres-replica-0 -c postgres -- \
+     psql -U supabase_admin -d postgres -c "INSERT INTO drill_marker VALUES (now());
+       SELECT count(*) FROM drill_marker;"                                   # >= 2
+   ```
+
+5. **Understand the role-reversal limit (do not create a split brain).** After
+   step 3 the promoted node is `drill-postgres-replica-0`; the `drill-postgres`
+   StatefulSet (scaled to 0) still holds the stale old-primary data. This chart
+   has **no in-place role reversal** — `postgres-statefulset.yaml` always renders
+   a _primary_ and `postgres-replica.yaml` always renders a _standby that
+   bootstraps from the `drill-postgres` Service_. So:
+
+   > **Never scale `drill-postgres` back up as-is.** It returns as an independent
+   > primary on divergent data — exactly the split brain the failover runbook
+   > exists to prevent. (Rehearsing this footgun _safely_ in the scratch namespace
+   > is a legitimate part of the drill: confirm you recognize it.)
+
+   A clean "rebuild a standby of the new primary" is therefore a **redeploy /
+   values reconcile**, not an in-place command: in a real incident you promote the
+   recovered data into a rebuilt primary and let a fresh standby bootstrap from it
+   (the [manual failover](#manual-failover-promote-the-standby) rebuild note), and
+   automatic role reversal is the deferred Patroni/CloudNativePG work
+   (PRODUCTION-READINESS §1.1). For the drill, the rehearsal ends at a verified
+   promotion; the standby rebuild is exercised by tearing down and reinstalling.
+
+6. **Tear down** — the namespace and its throwaway archive prefix go together, so
+   nothing lingers:
+
+   ```bash
+   helm uninstall drill -n "$DRILL_NS"
+   kubectl delete namespace "$DRILL_NS"
+   # delete ONLY this drill's prefix from the object store (not a *-drill-* glob):
+   #   aws s3 rm --recursive "$DRILL_PREFIX"
+   ```
+
+Run it before each term (and after any change to the postgres/replica templates
+or the WAL-G config). It never touches prod, so it is safe to run any time.
 
 ---
 
@@ -294,7 +430,11 @@ asserts row count, cleans up — no orphan scratch DB or volume.
   the WAL still in the primary's `pg_wal` falls back to `wal-g wal-fetch` from the
   archive (`postgres-replica.yaml` writes the `restore_command`). This is
   deliberate: with no slot, a dead or slow standby cannot pin WAL on the primary
-  and fill its disk.
+  and fill its disk. Because there is no slot, standby health is tracked from the
+  **primary side** via `pg_stat_replication`, not `pg_replication_slots` (which
+  is empty here) — that is what the `PawtograderReplicaNotStreaming` /
+  `PawtograderReplicaLagHigh` alerts read (see
+  [monitoring-alerting.md](./monitoring-alerting.md)).
 - **`archive_command` must keep succeeding** or WAL accumulates in `pg_wal` and
   can fill the primary's disk. Alert on it (add a rule alongside the backup
   alerts in [monitoring-alerting.md](./monitoring-alerting.md)); `wal-g wal-show`
@@ -306,6 +446,8 @@ asserts row count, cleans up — no orphan scratch DB or volume.
 
 ## Related
 
+- [planned-maintenance.md](./planned-maintenance.md) — the _planned_ node/DB
+  bounce (short full-downtime window, no promotion); when to promote instead.
 - [disaster-recovery.md](./disaster-recovery.md) — the `pg_dump` scheme + restore.
 - [rollback.md](./rollback.md) — app rollback; the migrations re-run note.
 - [monitoring-alerting.md](./monitoring-alerting.md) — archiving/backup alerts.
