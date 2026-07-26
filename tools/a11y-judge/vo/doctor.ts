@@ -51,6 +51,20 @@ const checks: Check[] = [
     }
   },
   {
+    name: "Console session unlocked",
+    hint: "the Mac's screen is locked or nobody is at the console — VoiceOver starts but cursor moves fail. Unlock the session and fix runbook §1 (auto-login, screen lock NEVER, pmset)",
+    run: async () => {
+      // IOConsoleLocked reflects the real lock state; IOConsoleUsers shows
+      // who owns the console session.
+      const ioreg = execFileSync("ioreg", ["-n", "Root", "-d1", "-a"], { stdio: "pipe" }).toString();
+      const locked = /<key>IOConsoleLocked<\/key>\s*<true\s*\/>/.test(ioreg);
+      const onConsole = /<key>kCGSSessionOnConsoleKey<\/key>\s*<true\s*\/>/.test(ioreg);
+      console.log(`   (IOConsoleLocked=${locked}, sessionOnConsole=${onConsole})`);
+      if (locked) throw new Error("console session is LOCKED");
+      if (!onConsole) throw new Error("no user session on the console");
+    }
+  },
+  {
     name: "Safari AppleScript automation",
     hint: "grant Automation (Safari) to the runner process in System Settings ▸ Privacy & Security ▸ Automation (runbook §3)",
     run: async () => {
