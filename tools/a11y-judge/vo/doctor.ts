@@ -4,6 +4,12 @@
  * Verifies each permission/control surface with an actionable message; no
  * app secrets required.
  *
+ * Starts with machine self-healing: kill any wedged VoiceOver instance and
+ * wake the display (observed live: a 15-run soak failed 15/15 with
+ * "VoiceOver unable to move" after the rig sat overnight — stale VO/session
+ * state, not code). The navigation round-trip runs with Safari frontmost on
+ * a content page: moving across an empty desktop can legitimately fail.
+ *
  *   Usage: tsx tools/a11y-judge/vo/doctor.ts
  */
 import { execFileSync } from "node:child_process";
@@ -16,6 +22,25 @@ interface Check {
 }
 
 const safari = new SafariHost();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const DOCTOR_PAGE = "data:text/html,<h1>a11y doctor</h1><p>probe one</p><p>probe two</p><a href='%23'>probe link</a>";
+
+/** Best-effort machine self-healing before any check runs. */
+function selfHeal(): void {
+  try {
+    execFileSync("pkill", ["-x", "VoiceOver"], { stdio: "pipe" });
+    console.log("[a11y:vo:doctor] killed a running VoiceOver instance (fresh start)");
+  } catch {
+    /* not running — fine */
+  }
+  try {
+    // Simulate user activity so a slept/dimmed display wakes for the session.
+    execFileSync("caffeinate", ["-u", "-t", "2"], { stdio: "pipe" });
+  } catch {
+    /* best-effort */
+  }
+}
 
 const checks: Check[] = [
   {
@@ -23,6 +48,24 @@ const checks: Check[] = [
     hint: "real VoiceOver only exists on macOS — this runner must be the Mac (labels: self-hosted, macOS, voiceover)",
     run: async () => {
       if (process.platform !== "darwin") throw new Error(`platform is ${process.platform}`);
+    }
+  },
+  {
+    name: "Safari AppleScript automation",
+    hint: "grant Automation (Safari) to the runner process in System Settings ▸ Privacy & Security ▸ Automation (runbook §3)",
+    run: async () => {
+      await safari.openUrl(DOCTOR_PAGE);
+    }
+  },
+  {
+    name: "Safari JavaScript from Apple Events",
+    hint: "enable Safari ▸ Develop ▸ Allow JavaScript from Apple Events (runbook §4)",
+    run: async () => {
+      const result = await safari.evalJs("1 + 1");
+      // Safari on macOS 26+ stringifies the numeric result as "2.0"; older
+      // Safari returns "2". Compare numerically so the capability check isn't
+      // gated on the OS's number-to-string formatting.
+      if (Number(result) !== 2) throw new Error(`evalJs returned ${JSON.stringify(result)}`);
     }
   },
   {
@@ -43,9 +86,13 @@ const checks: Check[] = [
   },
   {
     name: "VoiceOver navigation round-trip",
-    hint: "a VO move command hung — check VoiceOver Utility isn't showing a first-run dialog, and that speech isn't wedged (pkill VoiceOver, re-run)",
+    hint: "a VO move failed — check the console session is unlocked/awake, no VoiceOver Utility first-run dialog, and speech isn't wedged (pkill VoiceOver, re-run)",
     run: async () => {
       const { voiceOver } = await import("@guidepup/guidepup");
+      // Safari frontmost on the probe page so the cursor has content to
+      // traverse — "VoiceOver unable to move" on a bare desktop is ambiguous.
+      await safari.openUrl(DOCTOR_PAGE);
+      await sleep(1000);
       await voiceOver.start({ capture: "initial" });
       try {
         // Exercise the real command path (keystroke → capture polling); a
@@ -62,24 +109,6 @@ const checks: Check[] = [
     }
   },
   {
-    name: "Safari AppleScript automation",
-    hint: "grant Automation (Safari) to the runner process in System Settings ▸ Privacy & Security ▸ Automation (runbook §3)",
-    run: async () => {
-      await safari.openUrl("about:blank");
-    }
-  },
-  {
-    name: "Safari JavaScript from Apple Events",
-    hint: "enable Safari ▸ Develop ▸ Allow JavaScript from Apple Events (runbook §4)",
-    run: async () => {
-      const result = await safari.evalJs("1 + 1");
-      // Safari on macOS 26+ stringifies the numeric result as "2.0"; older
-      // Safari returns "2". Compare numerically so the capability check isn't
-      // gated on the OS's number-to-string formatting.
-      if (Number(result) !== 2) throw new Error(`evalJs returned ${JSON.stringify(result)}`);
-    }
-  },
-  {
     name: "OpenBao client",
     hint: "brew install openbao; set BAO_ADDR and place AppRole creds at ~/.config/pawtograder/bao/ (runbook §6)",
     run: async () => {
@@ -90,6 +119,7 @@ const checks: Check[] = [
 ];
 
 async function main(): Promise<void> {
+  selfHeal();
   let failures = 0;
   for (const check of checks) {
     try {

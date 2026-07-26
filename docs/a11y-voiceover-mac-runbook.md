@@ -176,5 +176,10 @@ single read task before running the full suite. Promotion bar for enforcing
 - **Stuck concurrency queue** (`a11y-voiceover-mac`): cancel the wedged run in
   the Actions UI; if VoiceOver itself is wedged on the Mac, `pkill VoiceOver`
   and re-run the doctor.
+- **Rig idle overnight**: VoiceOver/session state can go stale ("VoiceOver
+  unable to move" — observed as 15/15 preflight failures after an idle
+  night). The doctor self-heals (pkill VoiceOver + `caffeinate -u`) before
+  its checks; if the navigation round-trip still fails, verify §1's
+  pmset/auto-login/no-lock settings actually took effect.
 - Artifacts land in the workflow's `a11y-vo-pr-<id>` upload (spoken logs,
   junit, summary, `.mov` recordings); the local copy is `a11y-vo-artifacts/`.
