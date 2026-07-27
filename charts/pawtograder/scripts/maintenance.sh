@@ -38,9 +38,7 @@ ASSUME_YES=false
 # When set, `down` patches the maintenance ConfigMap's index.html for THIS window
 # and rolls the maintenance pod (subPath mounts don't hot-reload). Unset fields
 # keep the deployed maintenance.title/message/eta chart defaults. A later
-# `helm upgrade` reconciles the ConfigMap back to the chart values — which only
-# holds because the patch is attributed to Helm's field manager (see HELM_FM);
-# with kubectl's default manager the upgrade FAILS on the field instead.
+# `helm upgrade` reconciles the ConfigMap back to the chart values.
 MAINT_TITLE="";   MAINT_TITLE_SET=false
 MAINT_MESSAGE=""; MAINT_MESSAGE_SET=false
 MAINT_ETA="";     MAINT_ETA_SET=false
@@ -131,27 +129,6 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 # kubectl / psql wrappers
 # ----------------------------------------------------------------------------
 k() { kubectl -n "$NAMESPACE" "$@"; }
-
-# Field manager for mutations to objects the CHART owns (the maintenance
-# ConfigMap, ingresses, writer workloads, CronJobs, the functions HPA).
-#
-# Under server-side apply, kubectl's default managers (`kubectl-patch`,
-# `kubectl-scale`, `kubectl-client-side-apply`) take OWNERSHIP of every field
-# they touch, and reverting the change does not release the claim — the record
-# persists on the object. A later `helm upgrade` then fails on a field it no
-# longer owns:
-#
-#   UPGRADE FAILED: conflict occurred while applying object ...
-#     Apply failed with 1 conflict: conflict with "kubectl-patch" using v1: .data.index.html
-#
-# i.e. a maintenance window taken weeks ago breaks an unrelated deploy today.
-# Attributing these writes to Helm's own manager keeps ownership where the chart
-# expects it. If a conflict slips through anyway, re-run the deploy with
-# --force-conflicts after confirming the live value matches the chart's.
-#
-# Deliberately NOT used on $STATE_CM: that ConfigMap is created and owned by this
-# script, not by the chart, so it should keep its own field manager.
-readonly HELM_FM="--field-manager=helm"
 
 # Read-only SQL (tuples-only). Runs even under --dry-run (no side effects).
 psql_ro() {
@@ -276,7 +253,14 @@ apply_custom_message() {
   k get configmap "$MAINT_CM" >/dev/null 2>&1 \
     || { warn "ConfigMap ${MAINT_CM} not found; cannot set a custom message"; return 0; }
   local html
-  html="$(k get configmap "$MAINT_CM" -o jsonpath='{.data.index\.html}')"
+  # The trailing `x` + `%x` preserves any trailing newline: `$(...)` strips them,
+  # and the chart's rendered index.html ends with one. Losing it makes the value
+  # `up` restores differ from the chart's by a single byte — which is all
+  # server-side apply needs to raise a conflict on the NEXT `helm upgrade`:
+  #   conflict with "kubectl-patch" using v1: .data.index.html
+  # i.e. a maintenance window silently breaks an unrelated deploy days later.
+  html="$(k get configmap "$MAINT_CM" -o jsonpath='{.data.index\.html}'; printf x)"
+  html="${html%x}"
   [ -n "$html" ] || { warn "${MAINT_CM} has no index.html; skipping custom message"; return 0; }
   # The template must carry the <!--maint:*--> markers this substitutes between.
   case "$html" in
@@ -308,7 +292,7 @@ apply_custom_message() {
   # jq builds the strategic-merge patch (handles newline/quote escaping in the
   # multiline HTML value). Then roll the pod: index.html is a subPath mount, so
   # a ConfigMap edit alone does NOT reach the running container.
-  k patch configmap "$MAINT_CM" "$HELM_FM" --type merge -p "$(jq -n --arg h "$html" '{data:{"index.html":$h}}')" >/dev/null
+  k patch configmap "$MAINT_CM" --type merge -p "$(jq -n --arg h "$html" '{data:{"index.html":$h}}')" >/dev/null
   k rollout restart deploy "$MAINT_SVC" >/dev/null
   k rollout status deploy "$MAINT_SVC" --timeout="${READY_TIMEOUT_SECONDS}s" \
     || warn "${MAINT_SVC} not Ready after the message update; the page may lag briefly"
@@ -450,7 +434,7 @@ cmd_down() {
   apply_custom_message
   # 3b. put the page up. Existence + readiness were verified as a precondition
   #     above, so this just repoints the web host at the maintenance Service.
-  run k patch ingress "$INGRESS" "$HELM_FM" --type=json -p \
+  run k patch ingress "$INGRESS" --type=json -p \
     "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
   ok "web host -> ${MAINT_SVC}:${MAINT_PORT}"
   # 3b′. repoint each per-course channel web host's "/" to the page too (their
@@ -461,7 +445,7 @@ cmd_down() {
     while IFS= read -r crow; do
       [ -n "$crow" ] || continue
       cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
-      run k patch ingress "$cing" "$HELM_FM" --type=json -p \
+      run k patch ingress "$cing" --type=json -p \
         "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":{\"name\":\"${MAINT_SVC}\",\"port\":{\"number\":${MAINT_PORT}}}}]"
       log "  channel ingress ${cing} path[${cidx}] -> ${MAINT_SVC}:${MAINT_PORT}"
     done < <(jq -c '.[]' "$tmp/channel_ingresses")
@@ -473,11 +457,7 @@ cmd_down() {
     while IFS=$'\t' read -r kind name replicas; do
       [ -n "$name" ] || continue
       log "  ${kind}/${name}: ${replicas} -> 0"
-      # `patch`, not `scale`: kubectl scale has no --field-manager flag, so it
-      # would claim .spec.replicas as "kubectl-scale" and break a later
-      # `helm upgrade` (see HELM_FM). A merge patch is equivalent and lets us
-      # attribute the write to Helm.
-      run k patch "$kind" "$name" "$HELM_FM" --type=merge -p '{"spec":{"replicas":0}}'
+      run k scale "$kind" "$name" --replicas=0
     done < "$tmp/deploy_replicas"
   fi
   ok "all writer tiers scaled to 0"
@@ -488,7 +468,7 @@ cmd_down() {
   for cj2 in "${SUSPEND_CRONJOBS[@]}"; do
     cjn="${RELEASE}-${cj2}"
     if k get cronjob "$cjn" >/dev/null 2>&1; then
-      run k patch cronjob "$cjn" "$HELM_FM" --type=merge -p '{"spec":{"suspend":true}}'
+      run k patch cronjob "$cjn" --type=merge -p '{"spec":{"suspend":true}}'
       log "  suspended ${cjn}"
     fi
   done
@@ -593,8 +573,7 @@ cmd_up() {
   while IFS=$'\t' read -r kind name replicas; do
     [ -n "$name" ] || continue
     log "  ${kind}/${name} -> ${replicas}"
-    # `patch`, not `scale` — same reason as the fence above.
-    run k patch "$kind" "$name" "$HELM_FM" --type=merge -p "{\"spec\":{\"replicas\":${replicas}}}"
+    run k scale "$kind" "$name" --replicas="$replicas"
   done < "$tmp/deploy_replicas"
   ok "writer tiers restored"
 
@@ -606,7 +585,7 @@ cmd_up() {
   step "2/6 edge-functions" "re-applying the edge-functions HPA"
   sget functions_hpa > "$tmp/functions_hpa"
   if [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
-    run k apply "$HELM_FM" -f "$tmp/functions_hpa"
+    run k apply -f "$tmp/functions_hpa"
     ok "edge-functions HPA re-applied (autoscaler resumes managing functions replicas)"
   else
     warn "no captured HPA; functions stays at the replica count restored in step 1"
@@ -620,7 +599,7 @@ cmd_up() {
     while IFS=$'\t' read -r cjname prior; do
       [ -n "$cjname" ] || continue
       log "  ${cjname} -> suspend=${prior}"
-      run k patch cronjob "$cjname" "$HELM_FM" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
+      run k patch cronjob "$cjname" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
     done < "$tmp/cronjobs_suspend"
   fi
   ok "CronJobs restored"
@@ -660,12 +639,12 @@ cmd_up() {
   step "6/6 page" "restoring the web host to the app"
   local backend; backend="$(sget ingress_backend)"
   if [ -n "$backend" ]; then
-    run k patch ingress "$INGRESS" "$HELM_FM" --type=json -p \
+    run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":${backend}}]"
     ok "web host -> restored recorded backend"
   else
     warn "no recorded ingress backend; restoring to ${WEB_SVC}:${WEB_PORT}"
-    run k patch ingress "$INGRESS" "$HELM_FM" --type=json -p \
+    run k patch ingress "$INGRESS" --type=json -p \
       "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/0/backend/service\",\"value\":{\"name\":\"${WEB_SVC}\",\"port\":{\"number\":${WEB_PORT}}}}]"
   fi
   # Restore each channel web host's "/" backend from the recorded snapshot.
@@ -676,7 +655,7 @@ cmd_up() {
       [ -n "$crow" ] || continue
       cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
       cbackend="$(jq -c '.backend' <<<"$crow")"
-      run k patch ingress "$cing" "$HELM_FM" --type=json -p \
+      run k patch ingress "$cing" --type=json -p \
         "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
       log "  channel ingress ${cing} path[${cidx}] -> restored"
     done < <(jq -c '.[]' <<<"$chan")
@@ -687,9 +666,15 @@ cmd_up() {
   # overrode it — otherwise the next flag-less window serves this window's text.
   # Safe here: the ingress already points at web, so rolling the maintenance pod
   # (single replica) has no user impact.
-  local orig_html; orig_html="$(sget maint_index_html_orig)"
+  # Same trailing-newline guard as the capture side: restoring a value that
+  # differs from the chart's by even one byte leaves the ConfigMap in a state
+  # that conflicts on the next `helm upgrade`. `jq -r` also appends its own
+  # newline, so strip exactly one before the sentinel comparison.
+  local orig_html; orig_html="$(sget maint_index_html_orig; printf x)"
+  orig_html="${orig_html%x}"
+  orig_html="${orig_html%$'\n'}"
   if [ -n "$orig_html" ]; then
-    run k patch configmap "$MAINT_CM" "$HELM_FM" --type merge \
+    run k patch configmap "$MAINT_CM" --type merge \
       -p "$(jq -n --arg h "$orig_html" '{data:{"index.html":$h}}')"
     run k rollout restart deploy "$MAINT_SVC"
     ok "maintenance page text restored to its pre-window default"

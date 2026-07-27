@@ -187,27 +187,36 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    # Confirm rules[0] is the WEB host (not the api host) before patching:
    kubectl -n "$NS" get ingress pawtograder -o jsonpath='{.spec.rules[0].host}{"\n"}'
 
-   kubectl -n "$NS" patch ingress pawtograder --field-manager=helm --type=json -p \
+   kubectl -n "$NS" patch ingress pawtograder --type=json -p \
      '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-maintenance","port":{"number":8080}}}]'
    ```
 
-   > **`--field-manager=helm` is not cosmetic.** Under server-side apply, every
-   > `kubectl patch`/`scale` records a field manager that then _owns_ the fields it
-   > touched. The default (`kubectl-patch`) is a different manager from Helm's, so
-   > the next `helm upgrade` fails on a field it no longer owns:
+   > **Restore every patched field to its exact prior value.** Under server-side
+   > apply, `kubectl patch`/`scale` take ownership of the fields they touch, and
+   > reverting the value does not release that claim. Ownership alone is harmless:
+   > SSA raises a conflict only when a later apply would **change** a field owned
+   > by someone else. So the rule that matters is byte-exactness — if what you
+   > restore differs from what the chart renders, even by one character, the next
+   > `helm upgrade` fails:
    >
    > ```
    > UPGRADE FAILED: conflict occurred while applying object ...
    >   Apply failed with 1 conflict: conflict with "kubectl-patch" using v1: .data.index.html
    > ```
    >
-   > Reverting the patch does **not** release the claim — the ownership record
-   > persists on the object, so a maintenance window taken weeks ago can fail an
-   > unrelated deploy today. Passing `--field-manager=helm` keeps the fields
-   > attributed to Helm. If you hit the conflict anyway, re-run the deploy with
-   > `--force-conflicts` (the production deploy workflow exposes this as a
-   > `force_conflicts` input); confirm first that the live value matches what the
-   > chart renders, since forcing overwrites whatever is there.
+   > and it fails on a deploy that may be days later and unrelated to the window.
+   >
+   > `--field-manager=helm` does **not** avoid this — verified in production: it
+   > only changes the name in the message to `conflict with "helm"`, because a
+   > manager's `Update` entry is distinct from Helm's `Apply` entry. The escape
+   > hatch is to force ownership back to Helm, after confirming the live value is
+   > the one you want:
+   >
+   > ```bash
+   > helm upgrade <release> <chart> -n "$NS" -f <values> --force-conflicts
+   > ```
+   >
+   > (Some environments' deploy wrappers expose this as their own flag or input.)
 
    **This reroutes the web host ONLY — it is not a write fence.** The API/kong
    host is a separate ingress rule and stays open, so the page is a user-facing
@@ -247,14 +256,11 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    #    BY COMPONENT. Do NOT use `-l app.kubernetes.io/instance=<release>`: it
    #    would also scale the maintenance page down and STILL miss realtime (a
    #    StatefulSet, not a Deployment).
-   #    `--field-manager=helm` on every scale, same reason as the ingress patch:
-   #    replicas is a Helm-owned field, and the default `kubectl-scale` manager
-   #    would claim it and fail the next `helm upgrade`.
    kubectl -n "$NS" delete hpa <release>-functions
    for c in functions web rest auth storage; do
-     kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0 --field-manager=helm
+     kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0
    done
-   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0 --field-manager=helm
+   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
    # plus any per-course channel Deployments (<release>-{web,functions}-<channel>).
    ```
 
@@ -343,7 +349,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
        -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
      while IFS=$'\t' read -r kind name replicas; do
-       kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas" --field-manager=helm
+       kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
      done < /tmp/pg-maint-replicas-*.txt   # the file written in step 1 above
      ```
 
@@ -358,8 +364,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    the maintenance page only after the smoke checklist passes:
 
    ```bash
-   # --field-manager=helm again, for the same reason as the step-1 patch.
-   kubectl -n "$NS" patch ingress pawtograder --field-manager=helm --type=json -p \
+   kubectl -n "$NS" patch ingress pawtograder --type=json -p \
      '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-web","port":{"number":3000}}}]'
    # Optional: tear the page down again once traffic is back on the app.
    helm upgrade pawtograder <chart> -n "$NS" --reuse-values --set maintenance.enabled=false
