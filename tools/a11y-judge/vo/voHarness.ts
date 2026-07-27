@@ -330,6 +330,28 @@ export class VoHarness implements AtDriver {
     this.debug("hostFocusField", { label, result: String(result).slice(0, 100) });
   }
 
+  /** Degraded-fidelity value entry: native setter + synthetic events. */
+  private async hostSetValue(text: string): Promise<void> {
+    if (!this.hostEval) return;
+    const result = await this.hostEval(
+      `(() => {
+        const el = document.activeElement;
+        if (!el) return 'no-active';
+        if (el.isContentEditable) { el.textContent = ${JSON.stringify(text)}; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (!desc || !desc.set) return 'no-setter for ' + el.tagName;
+          desc.set.call(el, ${JSON.stringify(text)});
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return 'set on ' + el.tagName;
+      })()`
+    ).catch((e) => `error:${e}`);
+    this.debug("hostSetValue", { result: String(result).slice(0, 80) });
+  }
+
   /** One-line focused-element descriptor for type-failure diagnostics. */
   private async describeActiveElement(): Promise<string> {
     if (!this.hostEval) return "?";
@@ -514,6 +536,16 @@ export class VoHarness implements AtDriver {
               await this.hostSetClipboard(arg);
               await new Promise((r) => setTimeout(r, 500));
               await vo.press("Command+v");
+            }
+            if (!(await this.typedTextLanded(arg))) {
+              // DEGRADED-FIDELITY last resort: this widget eats keyboard
+              // events even into a host-verified-focused input (observed
+              // live: retype AND paste left value="" — an app finding in its
+              // own right, logged every time). Set the value host-side with
+              // the native setter + synthetic input/change events so the
+              // task can still exercise the rest of the journey.
+              this.debug("type: HOST VALUE FALLBACK — keyboard input failed twice (degraded fidelity)");
+              await this.hostSetValue(arg);
             }
             this.debug("type: after retry", {
               landed: await this.typedTextLanded(arg),
