@@ -204,7 +204,12 @@ export async function replayPlan(
     let missing = missingNeedles();
     const sweepLimit = options.needleSweepLimit ?? 0;
     if (missing.length > 0 && sweepLimit > 0) {
-      heardPhrases.push(...(await run("restartFromTop")).spokenSinceLastAction);
+      // unstick, not restartFromTop: VO-Home is CONTAINER-scoped (observed
+      // live: from inside the notifications region, "top" was the region top
+      // and 79 sweep presses parked on its last item). unstick re-enters the
+      // web area at the content start from anywhere.
+      if (harness.unstick) await harness.unstick();
+      else heardPhrases.push(...(await run("restartFromTop")).spokenSinceLastAction);
       for (let i = 0; i < sweepLimit; i++) {
         const obs = await run("next");
         heardPhrases.push(...obs.spokenSinceLastAction, obs.currentItem);
