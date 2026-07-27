@@ -35,11 +35,16 @@ AS $$
     -- password / nonexistent emails are rejected by GoTrue before the hook runs,
     -- so they never reach here). Fail closed: a missing/unexpected 'valid' still
     -- rejects, so a correct password is never let through.
+    -- should_logout_user=false: a `reject` decision can otherwise revoke the
+    -- user's active sessions. We only want to block this password grant, not log
+    -- the user out of an existing SSO session (e.g. if they fat-finger an old
+    -- password in another tab, or someone probes a leaked one).
     SELECT CASE
         WHEN (event->>'valid')::boolean IS DISTINCT FROM false THEN
             jsonb_build_object(
                 'decision', 'reject',
-                'message', 'Password sign-in is disabled. Please use single sign-on.'
+                'message', 'Password sign-in is disabled. Please use single sign-on.',
+                'should_logout_user', false
             )
         ELSE
             jsonb_build_object('decision', 'continue')
