@@ -4,7 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 import { env } from "process";
-import { isSignupsEnabled } from "@/lib/features";
+import { isPasswordLoginEnabled, isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
 
 export const confirmEmailAction = async (formData: FormData) => {
@@ -81,6 +81,14 @@ export const signInWithMagicLinkAction = async (formData: FormData) => {
 };
 
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
+  // Defense-in-depth: the sign-in page hides the email/password form when
+  // password login is disabled, but a direct POST could still reach this
+  // action. GoTrue's password-verification deny hook is the real backstop
+  // (it rejects grant_type=password server-side); this just gives a clean
+  // message instead of a hook rejection error.
+  if (!isPasswordLoginEnabled()) {
+    return encodedRedirect("error", "/sign-in", "Password sign-in is disabled. Please use single sign-on.");
+  }
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
