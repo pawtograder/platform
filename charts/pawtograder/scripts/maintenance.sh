@@ -669,7 +669,8 @@ cmd_up() {
   # Same trailing-newline guard as the capture side: restoring a value that
   # differs from the chart's by even one byte leaves the ConfigMap in a state
   # that conflicts on the next `helm upgrade`. `jq -r` also appends its own
-  # newline, so strip exactly one before the sentinel comparison.
+  # newline, so strip exactly one newline, after removing the `x` sentinel and
+  # before the `-n` emptiness check.
   local orig_html; orig_html="$(sget maint_index_html_orig; printf x)"
   orig_html="${orig_html%x}"
   orig_html="${orig_html%$'\n'}"
