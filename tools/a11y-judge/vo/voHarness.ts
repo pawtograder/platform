@@ -253,7 +253,11 @@ export class VoHarness implements AtDriver {
       this.debug("focusWebArea: after keystroke", { item });
     }
     for (let depth = 1; depth <= 3; depth++) {
-      if (!/^\s*(scroll area|html content|web content|group|empty group)\s*$/i.test(item)) break;
+      // The web-area element's accessible name is the PAGE TITLE, so the
+      // container item arrives title-prefixed ("Surveys · … web content" —
+      // observed live: 75 no-op next presses on it after an unstick). Match
+      // bare containers exactly, and web/HTML content by suffix.
+      if (!/^\s*(scroll area|group|empty group)\s*$|(html|web) content\s*$/i.test(item)) break;
       await this.withTimeout(`focusWebArea:interact(${depth})`, this.vo.interact({ capture: "initial" })).catch((e) =>
         this.debug("focusWebArea: interact failed", { depth, error: String(e) })
       );
@@ -491,18 +495,25 @@ export class VoHarness implements AtDriver {
             // autosave rerender can't interrupt mid-stream. The typing
             // channel stays keyboard; only the focus assist is host-side.
             const label = stripVoBoilerplate(await this.itemTextSafe()) ?? "";
-            this.debug("type: text not in focused field — host-assisted field focus + atomic retry", {
+            this.debug("type: text not in focused field — host-assisted field focus + retype", {
               label,
               activeElement: await this.describeActiveElement()
             });
             await this.hostFocusField(label);
             await new Promise((r) => setTimeout(r, 300));
             await vo.press("Command+a");
-            if (this.hostSetClipboard) {
+            // The field is now genuinely focused (host-verified targeting),
+            // so plain keystrokes should land; paste is the LAST resort
+            // (observed live: an immediate clipboard+Cmd+V after set landed
+            // empty — give the pasteboard time to settle if we need it).
+            await vo.type(arg);
+            if (!(await this.typedTextLanded(arg)) && this.hostSetClipboard) {
+              this.debug("type: retype missed too — atomic paste fallback");
+              await this.hostFocusField(label);
+              await vo.press("Command+a");
               await this.hostSetClipboard(arg);
+              await new Promise((r) => setTimeout(r, 500));
               await vo.press("Command+v");
-            } else {
-              await vo.type(arg);
             }
             this.debug("type: after retry", {
               landed: await this.typedTextLanded(arg),

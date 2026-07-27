@@ -45,6 +45,10 @@ const STEP_PAUSE_MS = 300;
 // Escape recoveries restart the cursor at the content top, so deep milestones
 // (survey q2 was >15 items from the top) need a bigger walk budget.
 const RESYNC_LIMIT = 25;
+// Read-task salvage sweep: one transiently-eaten press (a11y tree lagging
+// the DOM) can end a milestone-less read journey early — sweep the page
+// top-down before declaring needles unheard.
+const NEEDLE_SWEEP_LIMIT = 80;
 const PER_COMMAND_TIMEOUT_MS = 30_000;
 const WRITE_SETTLE_MS = 2500;
 const TASK_RETRIES = 1;
@@ -301,7 +305,8 @@ async function main(): Promise<void> {
             pause: sleep,
             stepPauseMs: STEP_PAUSE_MS,
             resyncLimit: RESYNC_LIMIT,
-            perCommandTimeoutMs: PER_COMMAND_TIMEOUT_MS
+            perCommandTimeoutMs: PER_COMMAND_TIMEOUT_MS,
+            needleSweepLimit: NEEDLE_SWEEP_LIMIT
           });
         }
 

@@ -78,6 +78,15 @@ export async function replayPlan(
      * occasionally do. 0 (default) = no timeout.
      */
     perCommandTimeoutMs?: number;
+    /**
+     * Read-task salvage (real-AT only): when needles are unheard after the
+     * plan, restart from the top and read forward up to this many items —
+     * what a human SR user does when they haven't found something. Guards
+     * against a single transiently-eaten press (e.g. "Heading not found"
+     * while the accessibility tree lags the DOM) invalidating a milestone-
+     * less read journey. 0 (default) = off; the virtual lane never sets it.
+     */
+    needleSweepLimit?: number;
   } = {}
 ): Promise<ReplayResult> {
   const resyncLimit = options.resyncLimit ?? DEFAULT_RESYNC_LIMIT;
@@ -183,16 +192,30 @@ export async function replayPlan(
   }
 
   if (plan.taskKind === "read") {
-    const heardNormalized = heardPhrases
-      .map((p) => normalizePhrase(p, bindings))
-      .filter((p): p is string => p !== null)
-      .join("  ");
     // normalizePhrase lowercases its output, so placeholder keys appear
     // lowercased in the heard log.
-    const missing = plan.readNeedleKeys.filter((key) => !heardNormalized.includes(`{{${key.toLowerCase()}}}`));
+    const missingNeedles = () => {
+      const heardNormalized = heardPhrases
+        .map((p) => normalizePhrase(p, bindings))
+        .filter((p): p is string => p !== null)
+        .join("  ");
+      return plan.readNeedleKeys.filter((key) => !heardNormalized.includes(`{{${key.toLowerCase()}}}`));
+    };
+    let missing = missingNeedles();
+    const sweepLimit = options.needleSweepLimit ?? 0;
+    if (missing.length > 0 && sweepLimit > 0) {
+      heardPhrases.push(...(await run("restartFromTop")).spokenSinceLastAction);
+      for (let i = 0; i < sweepLimit; i++) {
+        const obs = await run("next");
+        heardPhrases.push(...obs.spokenSinceLastAction, obs.currentItem);
+        await paced();
+        missing = missingNeedles();
+        if (missing.length === 0) break;
+      }
+    }
     if (missing.length > 0) {
       throw new ReplayNeedleError(
-        `read-task ground truth never heard during replay: ${missing
+        `read-task ground truth never heard during replay${sweepLimit > 0 ? ` (nor in a ${sweepLimit}-item sweep)` : ""}: ${missing
           .map((key) => `${key}=${JSON.stringify(bindings[key] ?? "?")}`)
           .join(", ")}`
       );
