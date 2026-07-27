@@ -473,7 +473,11 @@ cmd_down() {
     while IFS=$'\t' read -r kind name replicas; do
       [ -n "$name" ] || continue
       log "  ${kind}/${name}: ${replicas} -> 0"
-      run k scale "$kind" "$name" "$HELM_FM" --replicas=0
+      # `patch`, not `scale`: kubectl scale has no --field-manager flag, so it
+      # would claim .spec.replicas as "kubectl-scale" and break a later
+      # `helm upgrade` (see HELM_FM). A merge patch is equivalent and lets us
+      # attribute the write to Helm.
+      run k patch "$kind" "$name" "$HELM_FM" --type=merge -p '{"spec":{"replicas":0}}'
     done < "$tmp/deploy_replicas"
   fi
   ok "all writer tiers scaled to 0"
@@ -589,7 +593,8 @@ cmd_up() {
   while IFS=$'\t' read -r kind name replicas; do
     [ -n "$name" ] || continue
     log "  ${kind}/${name} -> ${replicas}"
-    run k scale "$kind" "$name" "$HELM_FM" --replicas="$replicas"
+    # `patch`, not `scale` — same reason as the fence above.
+    run k patch "$kind" "$name" "$HELM_FM" --type=merge -p "{\"spec\":{\"replicas\":${replicas}}}"
   done < "$tmp/deploy_replicas"
   ok "writer tiers restored"
 
