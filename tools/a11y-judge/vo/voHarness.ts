@@ -300,6 +300,32 @@ export class VoHarness implements AtDriver {
     ).catch((e) => this.debug("ensureKeyboardFocusAtCursor failed", { error: String(e) }));
   }
 
+  /**
+   * Host-assisted focus of the text field whose accessible label matches the
+   * VO cursor's item — setup assist only (like focusWebArea), typing itself
+   * stays on the keyboard channel.
+   */
+  private async hostFocusField(label: string): Promise<void> {
+    if (!this.hostEval || !label) return;
+    const result = await this.hostEval(
+      `(() => {
+        const label = ${JSON.stringify(label.toLowerCase())};
+        const fields = [...document.querySelectorAll('input:not([type=hidden]):not([type=radio]):not([type=checkbox]), textarea, [contenteditable="true"]')];
+        const nameOf = (el) => {
+          const bits = [el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.labels && [...el.labels].map((l) => l.textContent).join(' ')];
+          const labelled = el.getAttribute('aria-labelledby');
+          if (labelled) bits.push(labelled.split(/\\s+/).map((id) => (document.getElementById(id) || {}).textContent || '').join(' '));
+          return bits.filter(Boolean).join(' ').toLowerCase();
+        };
+        const match = fields.find((el) => nameOf(el).includes(label)) || fields.find((el) => label.includes(nameOf(el)) && nameOf(el).length > 2);
+        if (!match) return 'no-match among ' + fields.length + ' fields';
+        match.focus();
+        return 'focused ' + match.tagName + '[' + (match.getAttribute('aria-label') || '') + ']';
+      })()`
+    ).catch((e) => `error:${e}`);
+    this.debug("hostFocusField", { label, result: String(result).slice(0, 100) });
+  }
+
   /** One-line focused-element descriptor for type-failure diagnostics. */
   private async describeActiveElement(): Promise<string> {
     if (!this.hostEval) return "?";
@@ -456,17 +482,21 @@ export class VoHarness implements AtDriver {
         // cursor, Cmd+A makes the retype REPLACE instead of append.
         if (arg && arg.length >= 3 && this.hostEval) {
           if (!(await this.typedTextLanded(arg))) {
-            // Per-character typing takes seconds; an app rerender (autosave)
-            // can steal focus mid-stream (observed live: survey inputs).
-            // Retry ATOMICALLY: refocus, select-all, then paste in one
-            // keystroke — a race the rerender can't win. Paste-only-on-retry
-            // keeps the first attempt at full keyboard fidelity.
-            this.debug("type: text not in focused field — refocus + select-all + atomic retry", {
+            // Focus routing to text inputs is unreliable on this widget set:
+            // the soak showed document.activeElement resting on a BUTTON when
+            // type fired, and vo.act() landing focus on a button too. Retry
+            // with HOST-ASSISTED focus — find the input whose label matches
+            // the VO cursor's item and .focus() it (same host-assist policy
+            // as focusWebArea) — then select-all + atomic paste so an
+            // autosave rerender can't interrupt mid-stream. The typing
+            // channel stays keyboard; only the focus assist is host-side.
+            const label = stripVoBoilerplate(await this.itemTextSafe()) ?? "";
+            this.debug("type: text not in focused field — host-assisted field focus + atomic retry", {
+              label,
               activeElement: await this.describeActiveElement()
             });
-            await vo.act(opts);
+            await this.hostFocusField(label);
             await new Promise((r) => setTimeout(r, 300));
-            await this.ensureKeyboardFocusAtCursor();
             await vo.press("Command+a");
             if (this.hostSetClipboard) {
               await this.hostSetClipboard(arg);

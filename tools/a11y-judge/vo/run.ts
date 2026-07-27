@@ -268,6 +268,22 @@ async function main(): Promise<void> {
         await safari.openUrl(baseUrl + seed.routes[plan.pageId]);
         await seedTimezonePreference(safari);
         await waitForPageReady(safari);
+        // Content gate for read tasks: async-computed data (the gradebook's
+        // recalculated columns — soak run 30241068420) can render seconds to
+        // minutes after the page shell, and a walk that starts early never
+        // hears its needles. Wait host-side for each needle value to exist in
+        // the page text; on timeout, log and proceed (the standard needle
+        // error then carries "content never rendered" evidence).
+        for (const key of plan.readNeedleKeys) {
+          const value = seed.seedValues[key];
+          if (!value) continue;
+          const appeared = await safari.waitForJs(
+            `String(document.body.innerText.includes(${JSON.stringify(value)}))`,
+            90_000,
+            2000
+          );
+          debug.log("content gate", { task: loaded.id, needle: key, appeared });
+        }
         await settlePage(safari);
         await harness.focusWebArea(focusMainContent(safari));
 
