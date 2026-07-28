@@ -104,11 +104,8 @@ Deno.serve(async (req) => {
         creation_error: repo.creation_error,
         hours_stuck: ALERT_AFTER_HOURS
       });
-      Sentry.captureMessage(
-        `Repository ${repo.repository} still not ready after ${ALERT_AFTER_HOURS}h` +
-          (repo.creation_error ? `: ${repo.creation_error}` : " (no recorded error)"),
-        { level: "error" }
-      );
+      repoScope.setLevel("error");
+      Sentry.captureMessage("GitHub repository still not ready after alert threshold", repoScope);
     }
     if (stuck.length > 0) {
       console.warn(`[github-repo-reconciler] ${stuck.length} repos stuck > ${ALERT_AFTER_HOURS}h (alerted to Sentry)`);

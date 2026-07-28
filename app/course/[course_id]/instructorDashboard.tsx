@@ -629,9 +629,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           Assignment Grading Overview
         </Heading>
         <Text mb={4} color="fg.muted" fontSize="sm">
-          One RPC now loads all assignment metrics. Incomplete submission reviews and incomplete review assignments are
-          tracked separately (review assignments may be higher when multiple graders are assigned to one submission).
-          &nbsp;“Grading due” reflects the due date for grading work.
+          Incomplete submission reviews and incomplete review assignments are tracked separately (review assignments may
+          be higher when multiple graders are assigned to one submission). &nbsp;“Grading due” reflects the due date for
+          grading work.
         </Text>
         {metricsLoadFailed ? (
           <CardRoot borderColor="red.200" borderWidth="1px">
