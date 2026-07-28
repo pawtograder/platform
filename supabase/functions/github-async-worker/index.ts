@@ -861,13 +861,17 @@ export async function processEnvelope(
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
+          // maybeSingle (not single): on a role DELETE the trigger enqueues this sync with the
+          // removed user_id, so the row is already gone. That must NOT throw — the class-wide
+          // reconcile below is what removes them from the team and has to run regardless. A missing
+          // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
-            .single();
+            .maybeSingle();
           if (error) throw error;
           if (
             data &&
@@ -894,6 +898,7 @@ export async function processEnvelope(
               .eq("class_id", envelope.class_id || 0)
               .in("role", ["instructor", "grader", "admin"])
               .eq("github_org_confirmed", true)
+              .eq("disabled", false)
               .limit(5000);
             if (error) throw error;
             return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
@@ -907,7 +912,7 @@ export async function processEnvelope(
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
-            .single();
+            .maybeSingle();
           if (
             !error &&
             ur &&

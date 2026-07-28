@@ -172,20 +172,25 @@ async function processInvitation(
       }
     }
 
-    // Check if invitation already exists
+    // Check if an invitation already exists (in ANY status). The unique constraint on
+    // (class_id, sis_user_id) is status-agnostic, so there is at most one row. We only let a
+    // 'dropped' invitation (removed from the SIS roster) fall through to create_invitation, which
+    // reactivates it. pending/accepted/cancelled are reported as a graceful soft error here so we
+    // never invoke the RPC just to have it raise — that RPC error would otherwise be logged to
+    // Sentry as "Error creating invitation" for what is really an expected, benign re-invite.
     const { data: existingInvitation } = await supabaseClient
       .from("invitations")
       .select("id, status, class_section_id, lab_section_id")
       .eq("class_id", courseId)
       .eq("sis_user_id", invitation.sis_user_id)
-      .eq("status", "pending")
-      .single();
+      .maybeSingle();
 
-    if (existingInvitation) {
-      //If needed, update the invitation to the new class_section_id and lab_section_id
+    if (existingInvitation && existingInvitation.status !== "dropped") {
+      // Keep an existing pending invitation's section assignments in sync with the latest request.
       if (
-        invitation.class_section_id !== existingInvitation.class_section_id ||
-        invitation.lab_section_id !== existingInvitation.lab_section_id
+        existingInvitation.status === "pending" &&
+        (invitation.class_section_id !== existingInvitation.class_section_id ||
+          invitation.lab_section_id !== existingInvitation.lab_section_id)
       ) {
         await supabaseClient
           .from("invitations")
@@ -193,11 +198,15 @@ async function processInvitation(
           .eq("id", existingInvitation.id);
       }
 
+      const reason =
+        existingInvitation.status === "pending"
+          ? "Pending invitation already exists for this user"
+          : `Invitation already exists for this user (status: ${existingInvitation.status})`;
       return {
         success: false,
         error: {
           sis_user_id: invitation.sis_user_id,
-          error: "Pending invitation already exists for this user"
+          error: reason
         }
       };
     }

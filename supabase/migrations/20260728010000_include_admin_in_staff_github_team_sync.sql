@@ -8,8 +8,11 @@
 -- Finish that change here by teaching the trigger that admin is a staff role. (The matching edge
 -- functions that build the staff username list / write github_org_confirmed are updated alongside.)
 --
--- Only the staff-branch role predicates change; the student branches already key off `!= 'student'`,
--- which correctly treats admin as non-student, so they are unchanged.
+-- The staff-branch role predicates now match ('instructor','grader','admin'); the student branches
+-- already key off `!= 'student'`, which correctly treats admin as non-student, so they are unchanged.
+-- This revision also adds a staff disable/enable branch: previously only student disable/enable
+-- resynced the team, so disabling a staff member left them on the GitHub staff team. The desired-
+-- member fetchers in the edge functions gain a matching `disabled = false` filter.
 CREATE OR REPLACE FUNCTION "public"."sync_github_teams_on_role_change"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -48,6 +51,14 @@ begin
     if NEW.role = 'student' and
        OLD.disabled != NEW.disabled then
       perform public.sync_student_github_team(NEW.class_id, NEW.user_id);
+    end if;
+
+    -- If a staff role is reactivated or deactivated, resync the staff team so a disabled staff
+    -- member is removed from the GitHub staff team (and a re-enabled one is re-added). Previously
+    -- only student disable/enable was handled, so disabling a staff member left them on the team.
+    if NEW.role in ('instructor', 'grader', 'admin') and
+       OLD.disabled != NEW.disabled then
+      perform public.sync_staff_github_team(NEW.class_id, NEW.user_id);
     end if;
 
     -- Consolidated repo creation and permission sync logic

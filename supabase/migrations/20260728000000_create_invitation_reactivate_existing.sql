@@ -8,11 +8,19 @@
 -- invitations_class_id_sis_user_id_key" for every caller (the invitation-create edge function and the
 -- bulk CSV import RPC). Re-importing a roster or re-inviting a previously-removed student hit this.
 --
--- Fix: when a non-pending invitation already exists, reactivate it in place (reset to 'pending' and
--- refresh role/email/name/sections/invited_by) rather than inserting a duplicate. The existing
--- profile pair is reused untouched, so we never orphan or duplicate profiles (#390). A 'dropped' ->
--- 'pending' transition still fires trigger_auto_accept_invitation_on_reactivation as before. A
--- pending invitation still raises, preserving the existing contract with callers.
+-- Fix: look up any existing invitation for the pair (the constraint is status-agnostic) and, when
+-- one exists in status 'dropped' (removed from the SIS roster), reactivate it in place — reset to
+-- 'pending' reusing the existing profile pair, so we never orphan or duplicate profiles (#390) — and
+-- refresh the reused private profile's name when a corrected name is supplied. 'dropped' -> 'pending'
+-- is the transition wired to trigger_auto_accept_invitation_on_reactivation, so an existing user is
+-- actually re-enrolled. For 'pending' / 'accepted' / 'cancelled' we raise "already exists" instead of
+-- mutating: 'accepted' would un-accept an enrolled student and 'cancelled' is a deliberate instructor
+-- action, and reactivating either to 'pending' would NOT fire the (dropped-only) auto-accept trigger.
+-- A transaction-scoped advisory lock serializes concurrent calls for the same pair.
+--
+-- Callers surface "already exists" as a per-row soft error; the invitation-create edge function's
+-- pre-check also short-circuits pending/accepted/cancelled before calling this RPC, so this RAISE is
+-- primarily a race-safety net.
 CREATE OR REPLACE FUNCTION public.create_invitation(
   p_class_id bigint,
   p_role public.app_role,
@@ -35,6 +43,7 @@ DECLARE
     v_invitation_id bigint;
     v_existing_id bigint;
     v_existing_status text;
+    v_existing_private_profile_id uuid;
     v_display_name text;
     v_adjective text;
     v_noun text;
@@ -45,21 +54,34 @@ BEGIN
         RAISE EXCEPTION 'Only instructors or admins can create invitations for this class';
     END IF;
 
+    -- Serialize concurrent create_invitation calls for the same (class, sis_user) so the
+    -- lookup-then-insert/reactivate below is atomic. createInvitationsBulk fans invitations out
+    -- concurrently and duplicate SIS IDs (or simultaneous requests) could otherwise both see "no
+    -- pending row" and collide on invitations_class_id_sis_user_id_key, or both reactivate the same
+    -- row. The transaction-scoped lock is released automatically at COMMIT/ROLLBACK.
+    PERFORM pg_advisory_xact_lock(hashtext('create_invitation:' || p_class_id::text || ':' || p_sis_user_id::text));
+
     -- Look up any existing invitation for this (class, sis_user) — the unique constraint is
     -- unconditional, so status does not matter for conflict detection.
-    SELECT id, status INTO v_existing_id, v_existing_status
+    SELECT id, status, private_profile_id
+      INTO v_existing_id, v_existing_status, v_existing_private_profile_id
     FROM public.invitations
     WHERE class_id = p_class_id AND sis_user_id = p_sis_user_id
     LIMIT 1;
 
     IF v_existing_id IS NOT NULL THEN
-        IF v_existing_status = 'pending' THEN
+        -- Only a 'dropped' invitation (removed from the SIS roster) is reactivatable here, matching
+        -- the SIS-sync reactivation semantics. 'pending' already exists; 'accepted' means the user
+        -- is/was enrolled (resetting it would un-accept an enrolled student); 'cancelled' is a
+        -- deliberate instructor action. For all three we raise so the caller reports "already
+        -- exists" rather than silently mutating state. Reactivating 'dropped' -> 'pending' is the
+        -- one transition wired to trigger_auto_accept_invitation_on_reactivation, so the user is
+        -- actually re-enrolled when they already have an account.
+        IF v_existing_status <> 'dropped' THEN
             RAISE EXCEPTION 'Invitation already exists for this user in this class';
         END IF;
 
-        -- Reactivate the existing invitation in place, reusing its profile pair. Setting status
-        -- back to 'pending' re-invites the user; for a previously 'dropped' invitation this also
-        -- fires the auto-accept trigger when the user already has an account.
+        -- Reactivate the dropped invitation in place, reusing its profile pair.
         UPDATE public.invitations
         SET status = 'pending',
             role = p_role,
@@ -72,6 +94,15 @@ BEGIN
             accepted_at = NULL,
             updated_at = NOW()
         WHERE id = v_existing_id;
+
+        -- Refresh the reused private profile's display name when a (corrected) name is supplied, so
+        -- the roster/grading surfaces don't show a stale name after the user enrolls. The public
+        -- pseudonym profile is left untouched.
+        IF p_name IS NOT NULL AND v_existing_private_profile_id IS NOT NULL THEN
+            UPDATE public.profiles
+            SET name = p_name
+            WHERE id = v_existing_private_profile_id AND is_private_profile = true;
+        END IF;
 
         RETURN v_existing_id;
     END IF;
