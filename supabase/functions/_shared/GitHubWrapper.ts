@@ -1832,7 +1832,6 @@ export async function syncTeam(
   for (const username of removeMembers) {
     const newScope = scope?.clone();
     newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing member from team ${resolvedSlug}`, newScope);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
@@ -2542,10 +2541,11 @@ async function markUserRoleOrgConfirmedForTeam({
   team_slug: string;
 }) {
   let courseSlug: string | undefined;
-  let allowedRoles: ("instructor" | "grader" | "student")[] = [];
+  let allowedRoles: ("admin" | "instructor" | "grader" | "student")[] = [];
   if (team_slug.endsWith("-staff")) {
     courseSlug = team_slug.slice(0, -"-staff".length);
-    allowedRoles = ["instructor", "grader"];
+    // "staff" is every non-student role — admins belong on the staff team too.
+    allowedRoles = ["admin", "instructor", "grader"];
   } else if (team_slug.endsWith("-students")) {
     courseSlug = team_slug.slice(0, -"-students".length);
     allowedRoles = ["student"];

@@ -866,7 +866,7 @@ export async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
+            .in("role", ["instructor", "grader", "admin"])
             .single();
           if (error) throw error;
           if (
@@ -892,7 +892,7 @@ export async function processEnvelope(
               .from("user_roles")
               .select("users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader"])
+              .in("role", ["instructor", "grader", "admin"])
               .eq("github_org_confirmed", true)
               .limit(5000);
             if (error) throw error;
@@ -906,7 +906,7 @@ export async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
+            .in("role", ["instructor", "grader", "admin"])
             .single();
           if (
             !error &&

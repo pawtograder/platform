@@ -64,7 +64,7 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
     .from("user_roles")
     .select("class_id, role, github_org_confirmed, classes(slug, github_org)")
     .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
+    .in("role", ["instructor", "grader", "admin"])
     .eq("user_id", userID);
   if (staffError) {
     Sentry.captureException(staffError, scope);
