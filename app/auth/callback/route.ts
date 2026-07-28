@@ -96,6 +96,29 @@ export async function GET(request: Request) {
           }
         }
 
+        // Drop the provider tokens from the persisted session.
+        //
+        // @supabase/auth-js writes the WHOLE session object into the auth
+        // cookie, including provider_token and provider_refresh_token. For
+        // Azure those are Microsoft Graph tokens totalling ~3 KB, which pushes
+        // the cookie from 2 chunks to 3 and the Cookie header past 8 KB. The
+        // api host then rejects the Realtime WebSocket handshake on its
+        // request-header limit — so Realtime broke for freshly-logged-in users
+        // and silently healed about an hour later, when the first token refresh
+        // rewrote the session without them. That intermittency made it look
+        // like a Realtime fault rather than a cookie-size one.
+        //
+        // setSession() rebuilds the session from just these two tokens and
+        // re-persists it, so the provider tokens never reach the cookie. This
+        // runs after the only two readers of provider_token (the iss decode and
+        // userFetchAzureProfile above); nothing else in the codebase reads it.
+        // The GitHub reconciliation below uses data.session.user, already in
+        // hand, so it is unaffected.
+        await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token
+        });
+
         // Reconcile the user's existing GitHub org/team memberships on login. A user already a
         // member of the course's GitHub org (joined via another class, or added out-of-band) would
         // otherwise be stuck on the "accept your invitation" banner forever, since an invite can't

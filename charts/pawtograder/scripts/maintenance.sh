@@ -253,7 +253,14 @@ apply_custom_message() {
   k get configmap "$MAINT_CM" >/dev/null 2>&1 \
     || { warn "ConfigMap ${MAINT_CM} not found; cannot set a custom message"; return 0; }
   local html
-  html="$(k get configmap "$MAINT_CM" -o jsonpath='{.data.index\.html}')"
+  # The trailing `x` + `%x` preserves any trailing newline: `$(...)` strips them,
+  # and the chart's rendered index.html ends with one. Losing it makes the value
+  # `up` restores differ from the chart's by a single byte — which is all
+  # server-side apply needs to raise a conflict on the NEXT `helm upgrade`:
+  #   conflict with "kubectl-patch" using v1: .data.index.html
+  # i.e. a maintenance window silently breaks an unrelated deploy days later.
+  html="$(k get configmap "$MAINT_CM" -o jsonpath='{.data.index\.html}'; printf x)"
+  html="${html%x}"
   [ -n "$html" ] || { warn "${MAINT_CM} has no index.html; skipping custom message"; return 0; }
   # The template must carry the <!--maint:*--> markers this substitutes between.
   case "$html" in
@@ -659,7 +666,14 @@ cmd_up() {
   # overrode it — otherwise the next flag-less window serves this window's text.
   # Safe here: the ingress already points at web, so rolling the maintenance pod
   # (single replica) has no user impact.
-  local orig_html; orig_html="$(sget maint_index_html_orig)"
+  # Same trailing-newline guard as the capture side: restoring a value that
+  # differs from the chart's by even one byte leaves the ConfigMap in a state
+  # that conflicts on the next `helm upgrade`. `jq -r` also appends its own
+  # newline, so strip exactly one newline, after removing the `x` sentinel and
+  # before the `-n` emptiness check.
+  local orig_html; orig_html="$(sget maint_index_html_orig; printf x)"
+  orig_html="${orig_html%x}"
+  orig_html="${orig_html%$'\n'}"
   if [ -n "$orig_html" ]; then
     run k patch configmap "$MAINT_CM" --type merge \
       -p "$(jq -n --arg h "$orig_html" '{data:{"index.html":$h}}')"

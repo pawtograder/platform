@@ -12,7 +12,22 @@ if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
     ui_host: process.env.NEXT_PUBLIC_POSTHOG_UI_HOST,
-    defaults: "2025-05-24"
+    defaults: "2025-05-24",
+    // Keep PostHog state out of cookies entirely. Its default persistence is
+    // "localStorage+cookie", and the cookie's domain is chosen by a probe that
+    // walks up the hostname keeping the BROADEST domain the browser accepts —
+    // for pawtograder.khoury.northeastern.edu that resolves to
+    // ".northeastern.edu". So the cookie was sent to every Pawtograder host,
+    // including the api host, which never reads cookies at all.
+    //
+    // That matters because the API host has hard request-header limits: an
+    // oversized Cookie header 400s the Realtime WebSocket handshake at the
+    // ingress before it reaches Kong. localStorage costs us nothing here —
+    // there is no cross-subdomain identity requirement it cannot serve.
+    persistence: "localStorage",
+    // Belt and braces: if persistence ever goes back to a cookie mode, keep it
+    // scoped to this host rather than letting the probe pick .northeastern.edu.
+    cross_subdomain_cookie: false
   });
 } else {
   console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
