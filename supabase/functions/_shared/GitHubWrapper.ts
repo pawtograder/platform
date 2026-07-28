@@ -1578,8 +1578,27 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
         owner: org,
         repo: repoName
       });
+      // `size` is only refreshed by a lagging GitHub background job — on a freshly generated/forked
+      // repo it can stay 0 for minutes even after the content has landed, so it is NOT a reliable
+      // readiness signal on its own (a fully-populated repo would time out here). Keep it as a fast
+      // positive, but the authoritative signal is the default-branch ref existing: it appears as
+      // soon as the initial commit is mirrored, which is exactly "content is ready to read".
       if (data && (data as { size?: number }).size && (data as { size?: number }).size! > 0) {
         return;
+      }
+      const defaultBranch = (data as { default_branch?: string }).default_branch || "main";
+      try {
+        await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: org,
+          repo: repoName,
+          ref: `heads/${defaultBranch}`
+        });
+        return; // default branch ref exists → the initial commit has landed
+      } catch (refErr) {
+        // 404/409 → branch not created yet; anything else is a real error.
+        if (!(refErr instanceof RequestError) || (refErr.status !== 404 && refErr.status !== 409)) {
+          throw refErr;
+        }
       }
     } catch (e) {
       if (!(e instanceof RequestError) || e.status !== 404) {
