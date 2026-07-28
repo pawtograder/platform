@@ -110,3 +110,70 @@ begin
   return null;
 end;
 $$;
+
+-- Let trigger-initiated syncs skip the caller re-authorization.
+--
+-- sync_staff/student_github_team re-check auth.uid() so DIRECT RPC callers must be instructor/admin.
+-- But this trigger fires AFTER the user_roles mutation has already been authorized (RLS /
+-- admin_set_user_role_disabled / the enrollment functions), and the mutation can leave the caller
+-- without the very role being checked — e.g. an admin disabling their own last admin role. The
+-- post-mutation re-auth then fails and rolls the whole operation back. Skip the re-auth when running
+-- inside a trigger (pg_trigger_depth() > 0); direct RPC calls (depth 0) are still authorized as
+-- before. This also covers the analogous self-mutation cases on the DELETE / role-change branches.
+create or replace function public.sync_staff_github_team(class_id integer, user_id uuid default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_slug text;
+  v_org text;
+begin
+  if class_id is null then
+    raise warning 'sync_staff_github_team called with NULL class_id, skipping';
+    return;
+  end if;
+  if auth.uid() is not null
+     and pg_trigger_depth() = 0
+     and not (public.authorizeforclassinstructor(class_id::bigint) or public.authorize_for_admin()) then
+    raise exception 'Access denied: Only instructors or admins can sync staff GitHub team for class %', class_id;
+  end if;
+  select slug, github_org into v_slug, v_org from public.classes where id = class_id;
+  if v_slug is null or v_org is null then
+    -- Class isn't GitHub-configured; nothing to sync. Do NOT raise -- this runs
+    -- from a user_roles trigger and would otherwise block the enrollment.
+    raise warning 'Skipping staff GitHub team sync for class %: missing org/slug', class_id;
+    return;
+  end if;
+  perform public.enqueue_github_sync_staff_team(class_id::bigint, v_org, v_slug, user_id, null);
+end;
+$$;
+
+create or replace function public.sync_student_github_team(class_id integer, user_id uuid default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_slug text;
+  v_org text;
+begin
+  if class_id is null then
+    raise warning 'sync_student_github_team called with NULL class_id, skipping';
+    return;
+  end if;
+  if auth.uid() is not null
+     and pg_trigger_depth() = 0
+     and not (public.authorizeforclassinstructor(class_id::bigint) or public.authorize_for_admin()) then
+    raise exception 'Access denied: Only instructors or admins can sync student GitHub team for class %', class_id;
+  end if;
+  select slug, github_org into v_slug, v_org from public.classes where id = class_id;
+  if v_slug is null or v_org is null then
+    raise warning 'Skipping student GitHub team sync for class %: missing org/slug', class_id;
+    return;
+  end if;
+  perform public.enqueue_github_sync_student_team(class_id::bigint, v_org, v_slug, user_id, null);
+end;
+$$;

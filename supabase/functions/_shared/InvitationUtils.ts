@@ -142,13 +142,17 @@ async function processInvitation(
       .single();
 
     if (existingUser) {
-      // Check if already enrolled
+      // Check if already ACTIVELY enrolled. Only a non-disabled role counts: a user previously
+      // removed by SIS sync keeps a disabled user_roles row alongside a 'dropped' invitation, and
+      // treating that as "already enrolled" would short-circuit here and never let the dropped
+      // invitation reactivate (which is what re-enables the role via the auto-accept trigger).
       const { data: existingEnrollment } = await supabaseClient
         .from("user_roles")
         .select("role")
         .eq("user_id", existingUser.user_id)
         .eq("class_id", courseId)
-        .single();
+        .eq("disabled", false)
+        .maybeSingle();
 
       if (existingEnrollment) {
         //Set canvas_id to the sis_user_id, update class_section_id and lab_section_id if provided
