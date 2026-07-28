@@ -871,6 +871,9 @@ export async function processEnvelope(
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
+            // Never reinvite a disabled staff member: the disable-triggered sync routes their id here,
+            // and reconcile removes them from the team — reinviting would immediately undo that.
+            .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
           if (
@@ -912,6 +915,9 @@ export async function processEnvelope(
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
+            // Same as the pre-reconcile lookup: skip disabled staff so we don't reinvite someone the
+            // reconcile just removed.
+            .eq("disabled", false)
             .maybeSingle();
           if (
             !error &&
