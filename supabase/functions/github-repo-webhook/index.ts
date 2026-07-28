@@ -1396,10 +1396,12 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
       return;
     }
 
-    // Check if the team type matches the user's role
+    // Check if the team type matches the user's role. "staff" covers every non-student role
+    // (admin/instructor/grader); admins belong on the staff team just like instructors and graders,
+    // so confirm them too rather than logging a spurious mismatch.
     const userRole = userRoleData.role;
     const isCorrectTeam =
-      (teamType === "staff" && (userRole === "instructor" || userRole === "grader")) ||
+      (teamType === "staff" && (userRole === "admin" || userRole === "instructor" || userRole === "grader")) ||
       (teamType === "student" && userRole === "student");
 
     if (isCorrectTeam) {
