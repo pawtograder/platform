@@ -51,7 +51,9 @@
     "a11y:tasks:video": "npx tsx tools/a11y-judge/videos/run.ts",
     "a11y:agent:eval": "npx tsx tools/a11y-judge/agent/evalReport.ts",
     "a11y:vo": "npx tsx tools/a11y-judge/vo/run.ts",
-    "a11y:vo:doctor": "npx tsx tools/a11y-judge/vo/doctor.ts"
+    "a11y:vo:doctor": "npx tsx tools/a11y-judge/vo/doctor.ts",
+    "a11y:nvda": "npx tsx tools/a11y-judge/nvda/run.ts",
+    "a11y:nvda:doctor": "npx tsx tools/a11y-judge/nvda/doctor.ts"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
