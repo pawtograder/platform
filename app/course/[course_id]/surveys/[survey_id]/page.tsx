@@ -56,22 +56,41 @@ export default function SurveyTakingPage() {
     };
   }, []);
 
+  // Derived from the survey row rather than the row object itself: the row comes
+  // from a TableController, so its identity changes on every realtime update or
+  // refetch. Keying the loader effect on the object re-ran the fetch and handed
+  // <SurveyComponent> a fresh `initialData` object mid-edit (issue #881).
+  const surveyId = survey?.id;
+  const surveyMissing = survey === null;
+  const allowResponseEditing = survey?.allow_response_editing ?? false;
+
   // Load existing response for this user
   useEffect(() => {
-    const loadExistingResponse = async () => {
-      if (!survey || !private_profile_id) {
-        setIsLoading(false);
-        return;
-      }
+    // Neither an id nor a confirmed miss: the course controller hasn't produced
+    // the row yet. Leave the loading gate up — dropping it here would render the
+    // survey before the saved draft has been fetched, and answers given in that
+    // window get overwritten when it lands.
+    if (!surveyId && !surveyMissing) return;
 
+    if (!surveyId || !private_profile_id) {
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+
+    const loadExistingResponse = async () => {
       try {
         // Fetch existing response for this student
         const { data, error } = await controller.client
           .from("survey_responses")
           .select("*")
-          .eq("survey_id", survey.id)
+          .eq("survey_id", surveyId)
           .eq("profile_id", private_profile_id)
           .single();
+
+        if (cancelled) return;
 
         if (error && error.code !== "PGRST116") {
           // PGRST116 = no rows found, which is fine
@@ -87,12 +106,16 @@ export default function SurveyTakingPage() {
       } catch (error) {
         console.error("Error loading existing response:", error);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     loadExistingResponse();
-  }, [survey, private_profile_id, controller.client]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [surveyId, surveyMissing, private_profile_id, controller.client]);
 
   // Handle survey not found or not published
   useEffect(() => {
@@ -109,7 +132,7 @@ export default function SurveyTakingPage() {
   // Save response helper using controller client
   const saveResponseToDb = useCallback(
     async (responseData: ResponseData, isSubmitted: boolean) => {
-      if (!survey || !private_profile_id) return;
+      if (!surveyId || !private_profile_id) return;
       // Never downgrade a submitted response back to a draft.
       if (!isSubmitted && hasSubmittedRef.current) return;
 
@@ -120,7 +143,7 @@ export default function SurveyTakingPage() {
         is_submitted: boolean;
         submitted_at?: string;
       } = {
-        survey_id: survey.id,
+        survey_id: surveyId,
         profile_id: private_profile_id,
         response: responseData,
         is_submitted: isSubmitted
@@ -144,12 +167,12 @@ export default function SurveyTakingPage() {
 
       return data;
     },
-    [survey, private_profile_id, controller.client]
+    [surveyId, private_profile_id, controller.client]
   );
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model) => {
-      if (!private_profile_id || !survey) {
+      if (!private_profile_id || !surveyId) {
         console.error("Cannot submit survey: Missing profile_id or survey");
         return;
       }
@@ -194,13 +217,13 @@ export default function SurveyTakingPage() {
         isSubmittingRef.current = false;
       }
     },
-    [private_profile_id, survey, course_id, router, saveResponseToDb]
+    [private_profile_id, surveyId, course_id, router, saveResponseToDb]
   );
 
   const handleValueChanged = useCallback(
     (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
-      if (!private_profile_id || !survey || !survey.allow_response_editing) return;
+      if (!private_profile_id || !surveyId || !allowResponseEditing) return;
       if (isSubmittingRef.current || hasSubmittedRef.current) return;
 
       // Extract only the survey data from the model, not the entire model object
@@ -222,7 +245,7 @@ export default function SurveyTakingPage() {
         });
       }, AUTOSAVE_DEBOUNCE_MS);
     },
-    [private_profile_id, survey, saveResponseToDb]
+    [private_profile_id, surveyId, allowResponseEditing, saveResponseToDb]
   );
 
   const handleBackToSurveys = useCallback(() => {
