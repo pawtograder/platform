@@ -64,6 +64,7 @@ a11y-verdicts/
 a11y-trajectories/
 a11y-videos/
 a11y-vo-artifacts/
+a11y-nvda-artifacts/
 
 # Claude Code local session state
 .claude/
@@ -92,5 +93,7 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+ai-slop-report.md
+
 # a11y-judge v2: generated replay specs are artifacts until promoted (Wave-4 gate)
 tests/e2e/a11y-tasks/

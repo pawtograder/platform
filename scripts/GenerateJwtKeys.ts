@@ -22,6 +22,7 @@
 //   PAWTOGRADER_PASSWORD         — application-role password
 //   END_TO_END_SECRET            — E2E load-test shared secret
 //   EDGE_FUNCTION_SECRET         — Edge Functions runtime secret
+//   CACHE_INVALIDATION_SECRET    — DB-trigger -> web cache-invalidation secret
 //   SUPAVISOR_SECRET_KEY_BASE    — Phoenix endpoint key (≥64 chars)
 //   SUPAVISOR_VAULT_ENC_KEY      — exactly 32 bytes (Vault encryption)
 //   SUPAVISOR_API_JWT_SECRET     — signs tenant-management API JWTs
@@ -101,6 +102,10 @@ const pawtograderPassword = safePass(24);
 // --- E2E load-test secrets (used only when edgeFunctions.e2e.enabled) ---
 const endToEndSecret = randomBytes(32).toString("hex");
 const edgeFunctionSecret = randomBytes(32).toString("hex");
+// Shared secret for DB-trigger -> web cache invalidation. Lives in
+// pawtograder-e2e (web envFroms it, and the migrations Job seeds the vault
+// cache_invalidation_secret from it) so both sides match.
+const cacheInvalidationSecret = randomBytes(32).toString("hex");
 
 // --- Supavisor: each env var needs its own distinct secret. See
 // templates/supavisor.yaml for length/role requirements per key.
@@ -201,6 +206,7 @@ if (mode === "env") {
   console.log(`PAWTOGRADER_PASSWORD=${pawtograderPassword}`); // codeql[js/clear-text-logging]
   console.log(`END_TO_END_SECRET=${endToEndSecret}`); // codeql[js/clear-text-logging]
   console.log(`EDGE_FUNCTION_SECRET=${edgeFunctionSecret}`); // codeql[js/clear-text-logging]
+  console.log(`CACHE_INVALIDATION_SECRET=${cacheInvalidationSecret}`); // codeql[js/clear-text-logging]
   console.log(`SUPAVISOR_SECRET_KEY_BASE=${supavisorSecretKeyBase}`); // codeql[js/clear-text-logging]
   console.log(`SUPAVISOR_VAULT_ENC_KEY=${supavisorVaultEncKey}`); // codeql[js/clear-text-logging]
   console.log(`SUPAVISOR_API_JWT_SECRET=${supavisorApiJwtSecret}`); // codeql[js/clear-text-logging]
@@ -245,6 +251,7 @@ if (mode === "env") {
   console.log("    e2e:");
   console.log(`      endToEndSecret: '${escSingle(endToEndSecret)}'`); // codeql[js/clear-text-logging]
   console.log(`      edgeFunctionSecret: '${escSingle(edgeFunctionSecret)}'`); // codeql[js/clear-text-logging]
+  console.log(`      cacheInvalidationSecret: '${escSingle(cacheInvalidationSecret)}'`); // codeql[js/clear-text-logging]
 } else if (mode === "kv") {
   // bao kv put accepts @file or KEY=value pairs; large JSON values escape
   // poorly on a single shell line, so use stdin-based input.

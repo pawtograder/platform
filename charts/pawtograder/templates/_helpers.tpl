@@ -6,6 +6,28 @@ Expand the name of the chart.
 {{- end -}}
 
 {{/*
+Version-STABLE component labels: the full componentLabels set MINUS the two
+chart-version-carrying lines (helm.sh/chart, app.kubernetes.io/version). Use on
+a StatefulSet POD TEMPLATE so a chart-only version bump does not mutate the
+template and roll the pod, while still carrying the stable common/managed labels
+(app.kubernetes.io/managed-by, global.commonLabels, name/instance/component)
+that policy/cost-allocation/admission selectors rely on.
+Usage: {{ include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres") }}
+*/}}
+{{- define "pawtograder.componentStableLabels" -}}
+{{ include "pawtograder.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
+{{- /* commonLabels last, but strip the reserved selector keys: this label set
+     goes on a StatefulSet/Deployment pod template, and the selector is immutable
+     and must equal the template labels — a commonLabels override of name/
+     instance/component would break that contract, so drop those keys. */}}
+{{- with omit (.ctx.Values.global.commonLabels | default dict) "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Fully qualified app name. Truncated to 63 chars (DNS-1123 limit).
 */}}
 {{- define "pawtograder.fullname" -}}
@@ -258,6 +280,46 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "web") -}}
 {{- end -}}
 
+{{- define "pawtograder.postgres.replica.host" -}}
+{{- include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- end -}}
+
+{{/*
+WAL-G environment (the WALG_ and AWS_ vars). Shared verbatim by the primary
+container (runs archive_command), the base-backup sidecar, and the replica (restore_command
+fallback), so wal-g behaves identically wherever it runs. Call with the root
+context and nindent (see the postgres StatefulSet for a call site). S3
+credentials come from secrets.names.s3 (the same secret backup.yaml uses).
+*/}}
+{{- define "pawtograder.walg.env" -}}
+- name: WALG_S3_PREFIX
+  value: {{ required "postgres.walg.s3Prefix is required when postgres.walg.enabled=true" .Values.postgres.walg.s3Prefix | quote }}
+- name: WALG_COMPRESSION_METHOD
+  value: {{ .Values.postgres.walg.compressionMethod | default "zstd" | quote }}
+- name: AWS_REGION
+  value: {{ .Values.postgres.walg.region | default "us-east-1" | quote }}
+{{- if .Values.postgres.walg.s3Endpoint }}
+- name: AWS_ENDPOINT
+  value: {{ .Values.postgres.walg.s3Endpoint | quote }}
+{{- end }}
+- name: AWS_S3_FORCE_PATH_STYLE
+  # `dig` (not `| default true`): sprig's `default` treats a boolean false as
+  # empty and would force "true", making forcePathStyle: false impossible to
+  # set. `dig` returns the actual value when the key is present — including
+  # false — and only falls back to true when the key is absent.
+  value: {{ dig "forcePathStyle" true .Values.postgres.walg | quote }}
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_ACCESS_KEY_ID
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_SECRET_ACCESS_KEY
+{{- end -}}
+
 {{/*
 Postgres connection URL — pointed at supavisor by default. Components that
 need the unpooled connection use pawtograder.postgres.directUrl.
@@ -377,5 +439,12 @@ Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web
 {{- with .component.updateStrategy }}
 strategy:
   {{- toYaml . | nindent 2 }}
-{{- end -}}
+{{- end }}
+{{- /* Deployment progress deadline. Default 1200s, not the k8s default 600s:
+     a chart-version bump rolls the postgres StatefulSet (its pod template
+     checksums postgres-config.yaml, whose labels carry the chart version), and
+     dependent tiers wait on postgres to come back — which on slow (NFS) storage
+     can exceed 600s and make `helm --wait` report a false failure even though
+     the rollout converges seconds later. Per-component overridable. */}}
+progressDeadlineSeconds: {{ .component.progressDeadlineSeconds | default 1200 }}
 {{- end -}}

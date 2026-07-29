@@ -2,7 +2,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import * as Sentry from "npm:@sentry/deno";
-import { createRepo, getOctoKit, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  getOctoKit,
+  NonRetryableRepoError,
+  reinviteToOrgTeam,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import {
   assertUserIsInstructor,
   SecurityError,
@@ -10,6 +16,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import type {
   GitHubLinkStatus,
   GitHubMembershipStatus,
@@ -118,22 +125,34 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   }
 
   let madeChanges = false;
+  const errorMessages: string[] = [];
 
   for (const c of classes) {
-    if (c!.classes.github_org) {
+    // Require both org and slug: the student team name is derived as `${slug}-students`, so a class
+    // with github_org set but slug still NULL would reconcile against a bogus `null-students` team.
+    // Mirrors the staff loop above and the team-sync migration (20260611120001).
+    if (c!.classes.github_org && c!.classes.slug) {
       Sentry.addBreadcrumb({
         category: "github",
-        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug! + "-students"}`,
+        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug + "-students"}`,
         level: "info"
       });
-      const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug! + "-students", githubUsername);
-      madeChanges = madeChanges || resp;
-      if (!resp) {
-        await adminSupabase
-          .from("user_roles")
-          .update({ github_org_confirmed: true })
-          .eq("user_id", userID)
-          .eq("class_id", c!.class_id);
+      // Reconcile each enrolled org independently: a failure in one org (broken installation,
+      // transient GitHub/DB error) must not abort reconciliation of the user's other orgs. Record
+      // and continue rather than throwing out of the whole sync.
+      try {
+        const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug + "-students", githubUsername);
+        madeChanges = madeChanges || resp;
+        if (!resp) {
+          await adminSupabase
+            .from("user_roles")
+            .update({ github_org_confirmed: true })
+            .eq("user_id", userID)
+            .eq("class_id", c!.class_id);
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        errorMessages.push(`Error reconciling org membership for ${c!.classes.github_org}/${c!.classes.slug}-students`);
       }
     }
   }
@@ -166,15 +185,25 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const assignments = allAssignments.filter(
     (a) =>
       a.template_repo?.includes("/") &&
+      // Skip assignments in classes that aren't GitHub-ready (no org, or slug still NULL): the repo
+      // name is built from `${slug}-...` and the row from `${github_org}/...`, so a partially
+      // configured class would produce bogus `null-*` repos. Mirrors the invite-loop guard above.
+      a.classes?.github_org &&
+      a.classes?.slug &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
 
-  const errorMessages: string[] = [];
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
-    classes.flatMap((c) =>
-      c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
+    classes.flatMap((c) => {
+      // Skip classes that aren't GitHub-ready (no org, or slug still NULL): repo names/rows below are
+      // built from `${slug}-...` / `${github_org}/...`, so a partially configured class would create
+      // bogus `null-*` repositories. Mirrors the invite-loop guard above.
+      if (!c!.classes.github_org || !c!.classes.slug) {
+        return [];
+      }
+      return c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
@@ -212,6 +241,21 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
+            // E2E fixtures must never hit real GitHub. Skip createRepo + syncRepoPermissions and mark
+            // the row ready with a fake SHA. Stub-record tests still fall through.
+            if (
+              shouldSkipRealGithubForE2eFixture({
+                org: c.classes!.github_org,
+                courseSlug: c.classes!.slug,
+                repoName
+              })
+            ) {
+              await adminSupabase
+                .from("repositories")
+                .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+                .eq("id", dbRepo!.id);
+              return assignment;
+            }
             const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
             const { error: updateRepoError } = await adminSupabase
               .from("repositories")
@@ -225,7 +269,14 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             }
           } catch (e) {
             Sentry.captureException(e, scope);
-            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            // Keep the row (is_github_ready stays false) so the reconciler + self-healing createRepo
+            // can auto-repair a transient failure; deleting would orphan a possibly-blank GitHub repo
+            // and hide it from the reconciler. Only a terminal (non-retryable) failure records
+            // creation_error to park the row for an instructor (matches
+            // autograder-create-repos-for-student).
+            if (e instanceof NonRetryableRepoError) {
+              await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+            }
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -258,8 +309,8 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           Sentry.captureException(e, scope);
           errorMessages.push(`Error syncing repo permissions for ${repoName}`);
         }
-      })
-    )
+      });
+    })
   );
 
   const requests = assignments!
@@ -316,6 +367,18 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           message: `Creating repo and syncing permissions for ${repoName}, githubUsername: ${githubUsername}`,
           level: "info"
         });
+        // E2E fixtures must never hit real GitHub (see group-repo path above).
+        if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
+          await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: `e2e-skip-${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha,
+              is_github_ready: true
+            })
+            .eq("id", dbRepo!.id);
+          return `e2e-skip-${repoName}`;
+        }
         const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
         await adminSupabase
@@ -331,7 +394,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       } catch (e) {
         Sentry.captureException(e, scope);
         errorMessages.push(`Error creating repo: ${repoName}`);
-        await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+        // Keep the row so the reconciler + self-healing createRepo can auto-repair a transient
+        // failure (deleting would orphan a possibly-blank GitHub repo and hide it from the
+        // reconciler). Only a terminal (non-retryable) failure records creation_error to park the
+        // row for an instructor (matches the group path above and autograder-create-repos-for-student).
+        if (e instanceof NonRetryableRepoError) {
+          await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+        }
       }
     });
   await Promise.all(requests);
@@ -806,22 +875,62 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: classData, error: classError } = await supabase
+  const { data: classRows, error: classError } = await supabase
     .from("classes")
-    .select("github_org, user_roles!inner(user_id, disabled)")
+    .select("github_org, user_roles!inner(user_id, disabled, github_org_confirmed)")
     .eq("user_roles.user_id", user.id)
     .eq("user_roles.disabled", false)
-    .not("github_org", "is", "null")
-    .limit(1)
-    .single();
+    .not("github_org", "is", "null");
   if (classError) {
     Sentry.captureException(classError, scope);
     throw new UserVisibleError("Error fetching class");
   }
-  if (!classData) {
+  const orgs = [...new Set((classRows ?? []).map((c) => c.github_org).filter((o): o is string => Boolean(o)))];
+  if (orgs.length === 0) {
     throw new UserVisibleError("User not in any classes");
   }
-  return await syncGitHubUser(user.id, classData.github_org!, false, scope);
+
+  // Force past syncGitHubUser's 24h recent-sync throttle when the user still has an unconfirmed
+  // org enrollment. syncGitHubUser stamps last_github_user_sync before reconciling, so a run that
+  // failed part-way (e.g. a transient error in ensureAllReposExist) would otherwise leave the user
+  // throttled with github_org_confirmed = false — the "accept your invitation" banner stuck for 24h.
+  // Deciding force server-side from github_org_confirmed (not a client flag) keeps the throttle's
+  // anti-spam guarantee for already-reconciled users while letting a stuck user retry each login.
+  // Treat NULL github_org_confirmed as unconfirmed too (the column is nullable): the invitation
+  // banner shows whenever github_org_confirmed is falsy, so `!== true` keeps this force decision
+  // aligned with the banner instead of skipping NULL rows that still show the stuck banner.
+  const hasUnconfirmedEnrollment = (classRows ?? []).some((c) =>
+    (c.user_roles ?? []).some((r) => r.github_org_confirmed !== true)
+  );
+
+  // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see
+  // ensureAllReposExist + ensureStaffOrgMembership), so a single successful call covers every org.
+  // The org argument only selects which org's GitHub App installation resolves the login from the
+  // github_user_id — so try each until one succeeds, ensuring one mis-installed org doesn't block
+  // reconciliation of the rest.
+  let lastError: unknown;
+  for (let i = 0; i < orgs.length; i++) {
+    const org = orgs[i];
+    // The first attempt respects the throttle decision (hasUnconfirmedEnrollment). RETRIES force
+    // past it: syncGitHubUser stamps last_github_user_sync before reconciling, so a first attempt
+    // that throws mid-reconcile would leave a retry hitting the 24h recent-sync gate — which returns
+    // a benign "synced recently" response that would mask the real failure and report a repair that
+    // never happened. Forcing retries makes them actually run (and surface a real error if they too
+    // fail).
+    const force = i > 0 || hasUnconfirmedEnrollment;
+    try {
+      return await syncGitHubUser(user.id, org, force, scope);
+    } catch (e) {
+      lastError = e;
+      Sentry.captureException(e, scope);
+      scope?.addBreadcrumb({
+        category: "github",
+        level: "warning",
+        message: `GitHub sync via org ${org} failed, trying next org if any: ${e}`
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new UserVisibleError("Error syncing GitHub account");
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

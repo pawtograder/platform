@@ -30,15 +30,43 @@ spec:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
   template:
     metadata:
+      # Version-STABLE labels: full componentLabels MINUS helm.sh/chart +
+      # app.kubernetes.io/version (which change on every chart bump). A
+      # StatefulSet rolls its pods whenever the template changes, so the full
+      # componentLabels rolled the PRIMARY on every version bump (no real config
+      # change) — a needless restart that, with the sidecars' slow SIGTERM, took
+      # the DB down ~10 min. componentStableLabels keeps the stable common/managed
+      # labels (managed-by, global.commonLabels — needed by policy/cost/admission
+      # selectors) but drops only the version labels; with the version-independent
+      # checksum/config, the template changes only when the postgres config does.
       labels:
-        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
+        {{- include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/postgres-config.yaml") . | sha256sum }}
+        # Hash only the CONFIG content, not the chart-version-carrying metadata
+        # labels (helm.sh/chart, app.kubernetes.io/version) that
+        # pawtograder.componentLabels stamps on the rendered ConfigMap. Without
+        # the strip, every chart-version bump changed this hash and needlessly
+        # rolled the primary StatefulSet — a brief write outage that also
+        # cascaded into false `helm --wait` failures on dependent tiers. Proven:
+        # with the strip the hash is identical across versions yet still changes
+        # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
+        # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
+        #
+        # Also hash monitoring.yaml (empty unless monitoring.enabled): it renders
+        # the postgres_exporter custom-queries ConfigMap the exporter SIDECAR mounts
+        # and reads ONLY at startup. Without this, adding/altering a collector (e.g.
+        # the replication-lag query) on an in-place upgrade would update the mounted
+        # file but never restart the sidecar, so the new metric stays absent until a
+        # manual roll. The strip drops the version labels AND the ServiceMonitor
+        # `interval`/`scrapeTimeout` lines, so a scrape-cadence tweak (unrelated to
+        # the exporter's query set) does NOT needlessly roll the primary — only a
+        # real query change does.
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version|interval|scrapeTimeout):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) (include (print $.Template.BasePath "/monitoring.yaml") .)) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
-      {{- /* fsGroup 999 + seccomp; see postgres.podSecurityContext in values */}}
+      {{- /* fsGroup 102 (supabase/postgres group) + seccomp; see postgres.podSecurityContext in values */}}
       {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
       # Long grace so a busy postgres can checkpoint + flush WAL instead of
       # being SIGKILLed 30s into a drain and paying a recovery replay on the
@@ -51,6 +79,34 @@ spec:
           {{- /* opted out by default (postgres.containerSecurityContext: {});
                renders only if an overlay sets one */}}
           {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 10 }}
+          # Fast shutdown on pod termination. k8s sends SIGTERM, which postgres
+          # treats as SMART shutdown — it waits for existing sessions to close,
+          # and the app holds many long-lived ones (realtime/PostgREST LISTEN),
+          # so termination could ride the full terminationGracePeriodSeconds to a
+          # SIGKILL. This preStop does a FAST shutdown (disconnect clients, roll
+          # back open txns, checkpoint, exit — seconds) BEFORE the SIGTERM, so a
+          # roll / node drain terminates promptly and cleanly.
+          #
+          # pg_ctl REFUSES to run as root. The container may be root (chart
+          # default: containerSecurityContext {} — the entrypoint needs root for
+          # first-boot chown, then drops to postgres itself) or already postgres
+          # (when an overlay sets runAsUser, as values-prod does). Drop to the
+          # postgres user via gosu when root; run directly otherwise. No `|| true`
+          # mask: a failed fast shutdown must surface (k8s proceeds to SIGTERM +
+          # the grace backstop regardless), instead of silently falling back to
+          # the slow smart shutdown this hook exists to avoid.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    if [ "$(id -u)" = "0" ]; then
+                      exec gosu postgres pg_ctl -D "$PGDATA" -m fast -w -t {{ .Values.postgres.fastShutdownTimeoutSeconds | default 120 }} stop
+                    else
+                      exec pg_ctl -D "$PGDATA" -m fast -w -t {{ .Values.postgres.fastShutdownTimeoutSeconds | default 120 }} stop
+                    fi
           ports:
             - name: postgres
               containerPort: 5432
@@ -86,6 +142,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_SECRET
+            {{- if .Values.postgres.walg.enabled }}
+            # wal-g config for archive_command (postgres runs it, inheriting
+            # this env). Shared with the base-backup sidecar + replica.
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
@@ -142,6 +203,73 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
+        {{- if and .Values.postgres.walg.enabled .Values.postgres.walg.baseBackup.enabled }}
+        # Base-backup sidecar. wal-g backup-push reads the data directory
+        # directly, so it must run co-located with PGDATA (shares the `data`
+        # volume, same pod). A plain interval loop — postgres has no cron for
+        # this — takes a full backup every intervalHours, then prunes so only
+        # keepBackups remain (wal-g delete also drops WAL older than the oldest
+        # retained base backup). Uses the postgres socket in /var/run/postgresql
+        # to read control data; connects as the local supabase_admin.
+        - name: base-backup
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - |
+              set -uo pipefail
+              export PGDATA=/var/lib/postgresql/data/pgdata
+              INTERVAL=$(( {{ .Values.postgres.walg.baseBackup.intervalHours | default 24 }} * 3600 ))
+              KEEP={{ .Values.postgres.walg.baseBackup.keepBackups | default 8 }}
+              # Exit promptly on SIGTERM. Every long op runs as a backgrounded
+              # child that we `wait` on, and the trap kills it and exits. Without
+              # this, bash defers the signal until the foreground `sleep ${INTERVAL}`
+              # (up to intervalHours) returns — so on a pod roll postgres shuts
+              # down cleanly but this sidecar pins the pod in Terminating until the
+              # 600s grace SIGKILL, stalling the StatefulSet's replacement primary
+              # (and cascading DB_HOST=nxdomain crashes in dependents).
+              CHILD=""
+              trap 'echo "[base-backup] SIGTERM — exiting"; [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null; exit 0' TERM INT
+              # Clear CHILD once the child reaps, so a SIGTERM landing between
+              # `run` calls can't kill an exited/reused PID.
+              run() { "$@" & CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return $rc; }
+              echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s (keep ${KEEP})"
+              run sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
+              while true; do
+                echo "[base-backup] $(date -u +%FT%TZ) wal-g backup-push"
+                if run wal-g backup-push "$PGDATA"; then
+                  # Retention: keep the newest ${KEEP} full backups; --confirm
+                  # actually deletes (dry-run without it). Non-fatal if it fails
+                  # — a failed prune must not stop future backups.
+                  run wal-g delete retain FULL "${KEEP}" --confirm || echo "[base-backup] WARN: retention prune failed"
+                else
+                  echo "[base-backup] ERROR: backup-push failed; will retry next cycle"
+                fi
+                run sleep "${INTERVAL}"
+              done
+          env:
+            # Connect over TCP to the postgres container in the same pod. Per
+            # pg_hba.conf, 127.0.0.1/32 is `trust`, so backup-push's connection
+            # (pg_backup_start/stop) needs no password.
+            - name: PGHOST
+              value: "127.0.0.1"
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+          volumeMounts:
+            # Read-only view of the data dir wal-g backs up (same PVC as the
+            # primary — safe because backup-push only reads it).
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              readOnly: true
+          resources:
+            {{- toYaml .Values.postgres.walg.baseBackup.resources | nindent 12 }}
+        {{- end }}
         {{- if .Values.monitoring.enabled }}
         # postgres_exporter sidecar — connects via TCP to localhost (the
         # postgres container in the same pod). pg_stat_statements is
@@ -239,6 +367,13 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        {{- with .Values.postgres.persistence.annotations }}
+        # Provisioner hints applied at PVC-creation time — e.g. NetApp Trident
+        # `trident.netapp.io/unixPermissions` so a non-root (uid 101) postgres
+        # can create PGDATA on a fresh root-squashed NFS volume.
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       spec:
         accessModes:
           - {{ .Values.postgres.persistence.accessMode }}

@@ -62,16 +62,30 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" $r) | nindent 6 }}
       containers:
         - name: redis
           image: {{ include "pawtograder.image" (dict "ctx" . "image" $r.image) }}
           imagePullPolicy: {{ $r.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" $r) | nindent 10 }}
           args:
             - redis-server
             - --maxmemory
             - {{ $r.maxmemory | default "768mb" | quote }}
             - --maxmemory-policy
             - {{ $r.maxmemoryPolicy | default "allkeys-lru" | quote }}
+            # Reap idle client connections after N seconds (0 = never). Guards
+            # against connection leaks in clients that open a socket and don't
+            # close it (e.g. per-scrape ioredis clients): with the default 0,
+            # such sockets accumulate until maxclients and Redis starts replying
+            # "ERR max number of clients reached". ioredis auto-reconnects, so
+            # reaping a genuinely-idle connection is transparent to callers.
+            - --timeout
+            # `dig` (not `| default 300`): sprig's `default` treats numeric 0 as
+            # empty and would force 300, making the documented `timeout: 0`
+            # ("0 = never") impossible to set. `dig` returns the actual value when
+            # the key is present — including 0 — and only falls back when absent.
+            - {{ dig "timeout" 300 $r | quote }}
             {{- if $r.auth.enabled }}
             # Password interpolated from the env var below (k8s expands $(VAR)).
             - --requirepass

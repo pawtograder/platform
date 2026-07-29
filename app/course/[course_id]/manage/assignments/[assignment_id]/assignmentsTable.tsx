@@ -37,6 +37,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
+  Badge,
   Box,
   Button,
   HStack,
@@ -412,7 +413,8 @@ export default function AssignmentsTable({
       created_at: false,
       gradername: true,
       checkername: false,
-      grading_complete: false
+      grading_complete: false,
+      placeholder: false
     };
   });
 
@@ -772,6 +774,30 @@ export default function AssignmentsTable({
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           const isReleased = row.original.released;
           const status = isReleased ? "Released" : "Not Released";
+          return values.includes(status);
+        }
+      },
+      {
+        id: "placeholder",
+        accessorKey: "is_placeholder",
+        header: "Placeholder",
+        enableColumnFilter: true,
+        cell: (props) =>
+          props.row.original.is_placeholder ? (
+            <Badge
+              colorPalette="orange"
+              cursor="help"
+              title="Placeholder submission created for grading — no student-submitted work."
+            >
+              Yes
+            </Badge>
+          ) : (
+            <Text color="fg.muted">No</Text>
+          ),
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const status = row.original.is_placeholder ? "Yes" : "No";
           return values.includes(status);
         }
       }
@@ -1137,6 +1163,12 @@ export default function AssignmentsTable({
             >
               Grading Complete
             </Checkbox>
+            <Checkbox
+              checked={columnVisibility.placeholder}
+              onCheckedChange={() => toggleColumnVisibility("placeholder")}
+            >
+              Placeholder
+            </Checkbox>
           </HStack>
         </Box>
         <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
@@ -1372,6 +1404,21 @@ export default function AssignmentsTable({
                                   { label: "Not Released", value: "Not Released" }
                                 ]}
                                 placeholder="Filter by release status..."
+                              />
+                            )}
+                            {header.id === "placeholder" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Yes", value: "Yes" },
+                                  { label: "No", value: "No" }
+                                ]}
+                                placeholder="Filter by placeholder..."
                               />
                             )}
                             {header.id === "created_at" && (

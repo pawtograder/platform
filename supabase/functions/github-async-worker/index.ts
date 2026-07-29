@@ -14,9 +14,15 @@ import type {
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
+import {
+  PrimaryRateLimitError,
+  SecondaryRateLimitError,
+  NonRetryableRepoError,
+  getCreateContentLimiter
+} from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -737,11 +743,7 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          args.org === "pawtograder-playground" &&
-          args.courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -831,11 +833,7 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          args.org === "pawtograder-playground" &&
-          args.courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -937,12 +935,8 @@ export async function processEnvelope(
         // pawtograder-playground org's e2e test fixtures. When the github stub
         // is active we WANT the call to fall through (the stub records it for
         // assertions and returns a fake SHA), so only skip when the stub is
-        // disabled.
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
-        ) {
+        // disabled — all handled by shouldSkipRealGithubForE2eFixture.
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug, repoName })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -988,7 +982,9 @@ export async function processEnvelope(
               .update({
                 is_github_ready: true,
                 synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha,
+                // Clear any prior failure now that the repo is populated and ready.
+                creation_error: null
               })
               .eq("id", envelope.repo_id);
             if (updateError) throw updateError;
@@ -1000,7 +996,8 @@ export async function processEnvelope(
               .update({
                 is_github_ready: true,
                 synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha
+                synced_handout_sha: latestHandoutCommit?.latest_template_sha,
+                creation_error: null
               })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
@@ -1083,11 +1080,7 @@ export async function processEnvelope(
         if (repoName.startsWith(org + "/")) {
           repoName = repoName.substring(org.length + 1);
         }
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          courseSlug?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1120,11 +1113,7 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
-        if (
-          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
-          org === "pawtograder-playground" &&
-          repo?.startsWith("e2e-ignore-")
-        ) {
+        if (shouldSkipRealGithubForE2eFixture({ org, repoName: repo })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -2190,6 +2179,12 @@ export async function processEnvelope(
       }
     }
 
+    // A misconfigured template affects every student in an assignment, which would otherwise
+    // create one Sentry issue per repo. Group them into a single issue by method + error type.
+    if (error instanceof NonRetryableRepoError) {
+      scope.setFingerprint(["github-non-retryable-repo", envelope.method]);
+    }
+
     const errorId = Sentry.captureException(error, scope);
     console.log(`Recorded error with ID: ${errorId}`);
 
@@ -2213,6 +2208,53 @@ export async function processEnvelope(
     })();
 
     try {
+      // Per-repo deterministic failure (e.g. the template/source repo is empty or missing).
+      // Retrying will never succeed and this is not a systemic problem, so record the reason on the
+      // repository row and send the job straight to the DLQ — WITHOUT tripping the shared circuit
+      // breaker or feeding the error-threshold counter (which are reserved for rate limits / outages
+      // that warrant slowing the whole org down).
+      if (error instanceof NonRetryableRepoError) {
+        scope.setTag("non_retryable_repo_error", "true");
+        const reason = error.message;
+        try {
+          if (envelope.repo_id) {
+            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+          } else if (envelope.method === "create_repo" && envelope.class_id) {
+            const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
+            await adminSupabase
+              .from("repositories")
+              .update({ creation_error: reason })
+              .eq("class_id", envelope.class_id)
+              .eq("repository", `${eo}/${ern}`);
+          }
+        } catch (markErr) {
+          console.error("Failed to record creation_error on repository row:", markErr);
+          Sentry.captureException(markErr, scope);
+        }
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 422,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        } else {
+          console.error(`Failed to send non-retryable message ${meta.msg_id} to DLQ, leaving unarchived`);
+          Sentry.captureMessage(`Non-retryable message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
+        return false;
+      }
+
       if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
         const retryAfter = rt.retryAfter;
         // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)

@@ -7,6 +7,7 @@ import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -124,6 +125,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // explicit override skips the extra resolve_class_template_repos round-trip.
   const sourceTemplateRepo = template_repo_override ?? (await resolveTemplateRepos(adminSupabase, class_id)).handout;
   scope.setTag("source_template_repo", sourceTemplateRepo);
+
+  // E2E fixtures (pawtograder-playground + e2e-ignore-* class) must never hit real GitHub. Return
+  // before every GitHub call below (createRepo + syncRepoPermissions + updateAutograderWorkflowHash).
+  // Don't persist template_repo: no repo was created, so leaving it null keeps the DB honest
+  // (mirrors the noop branch above). Stub-record tests still fall through (predicate returns false).
+  if (
+    shouldSkipRealGithubForE2eFixture({
+      org: handoutRepoOrg,
+      courseSlug: assignment.classes.slug,
+      repoName: handoutRepoName
+    })
+  ) {
+    return {
+      repo_name: handoutRepoName,
+      org_name: handoutRepoOrg,
+      skipped: true,
+      repo_mode: assignment.repo_mode
+    };
+  }
 
   // The protect_* columns configure STUDENT repos. The staff handout repo must
   // never require pull requests / approving reviews — that would block

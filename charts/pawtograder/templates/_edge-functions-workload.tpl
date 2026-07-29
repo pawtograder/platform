@@ -47,10 +47,21 @@ metadata:
   namespace: {{ $ctx.Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
+  {{- if $ctx.Values.edgeFunctions.reloader.enabled }}
+  annotations:
+    # Stakater Reloader: roll this Deployment when a referenced Secret changes.
+    # The edge-functions env (incl. GITHUB_PRIVATE_KEY_STRING) comes from a
+    # SealedSecret applied OUTSIDE helm, so a rotation does NOT change the pod
+    # template — without this annotation the pods keep the stale value until a
+    # manual `kubectl rollout restart`. Requires the Reloader controller to be
+    # installed cluster-wide; harmless (ignored) if it is not.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
 spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}
   {{- end }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.edgeFunctions) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -61,10 +72,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $ctx.Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.edgeFunctions) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ $ctx.Values.edgeFunctions.service.port }}
@@ -79,6 +95,15 @@ spec:
             - "{{ $ctx.Values.edgeFunctions.service.port }}"
             - --policy
             - {{ $ctx.Values.edgeFunctions.policy | quote }}
+            {{- with $ctx.Values.edgeFunctions.gracefulExitTimeoutSeconds }}
+            # On SIGTERM (scale-down / rolling deploy / node drain) edge-runtime
+            # stops new intake and lets in-flight handlers finish for up to this
+            # many seconds before forcibly terminating, then exits (immediately if
+            # idle). Sized >= worker.timeoutMs so the longest request can complete;
+            # terminationGracePeriodSeconds is the SIGKILL backstop above it.
+            - --graceful-exit-timeout
+            - {{ . | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.maxParallelism }}
             # Cap on simultaneous isolates; under per_request this bounds max
             # concurrent requests/pod (excess queue via --request-wait-timeout).
@@ -183,6 +208,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
           resources:
             {{- toYaml $ctx.Values.edgeFunctions.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
@@ -193,4 +224,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions "name" $component) | nindent 6 }}
 {{- end -}}

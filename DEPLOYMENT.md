@@ -110,7 +110,17 @@ permissions. Grant exactly these (least privilege):
 | **Members**        | Read & write | Create teams, add/remove team memberships, send org invitations. |
 | **Administration** | Read         | Resolve org metadata for install deep-links.                     |
 
-**Account permissions** — email address (read) is enough for sign-in identity.
+**Account permissions**
+
+| Permission          | Access | Why                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Email addresses** | Read   | **Required for sign-in.** GoTrue's GitHub provider calls `GET /user/emails` on every login/identity-link. Without this, GitHub returns `403 Resource not accessible by integration`, GoTrue answers `500 Error getting user profile from external provider`, and the user is bounced back with `?error=server_error&error_code=unexpected_failure`. |
+
+> Because Pawtograder authenticates users through the **GitHub App** (not a
+> classic OAuth App), GitHub **ignores the `user:email` OAuth scope** GoTrue
+> requests — email access is governed solely by this App permission. Granting
+> it changes a user-scoped permission, so anyone who already authorized the App
+> is re-prompted by GitHub to approve it on their next sign-in.
 
 ### 3. Subscribe to webhook events
 

@@ -1,0 +1,90 @@
+{{- /*
+Post-deploy smoke gate (`helm test`). PRODUCTION-READINESS §5 / Deferred #7
+tracked this as missing: today the only deploy gate is `helm upgrade --wait`,
+which proves pods are *Ready*, not that the stack actually *serves*. This Job
+runs as a Helm test hook — `helm test <release>` (and CI after a deploy) runs
+it, and a non-zero exit fails the release.
+
+It is intentionally in-cluster and dependency-light: it hits the web Service's
+readiness path and GoTrue's health endpoint through Kong, exercising the web
+tier, the gateway, and (via GoTrue's health) that auth booted. It does NOT sign
+in or read application data — that is the human smoke checklist in
+docs/operations/production-install.md. Keep this fast and deterministic so it
+is safe to run on every deploy.
+*/ -}}
+{{- if .Values.tests.smoke.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "smoke-test") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smoke-test") | nindent 4 }}
+  annotations:
+    # test hook: run on `helm test`, not during install. delete the previous
+    # run's Pod before the next so repeated `helm test` calls don't collide.
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  # Must exceed the two checks' worst-case retry budget: each check loops 30×
+  # (curl --max-time 5 + sleep 2) ≈ 210s, two back-to-back ≈ 420s. A deadline
+  # below that (the old 120s) kills a slow-but-recovering rollout with an opaque
+  # DeadlineExceeded instead of letting a check exhaust its retries or a real
+  # failure print the intended `[smoke] FAIL` diagnostic.
+  activeDeadlineSeconds: {{ .Values.tests.smoke.activeDeadlineSeconds | default 480 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smoke-test") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: smoke
+          image: {{ .Values.tests.smoke.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              WEB="http://{{ include "pawtograder.web.host" . }}:{{ .Values.web.service.port }}/"
+              # Kong gateway, hitting the /auth/v1 route. The supabase Kong config
+              # enforces `apikey` on this route, so an unauthenticated probe gets
+              # 401 — which still proves the gateway is up and routing to the auth
+              # upstream. We therefore accept any non-5xx HTTP response here (200,
+              # 401, 404, …) and fail only on a connection failure (000) or a 5xx
+              # (gateway/upstream down). This exercises the real public path.
+              GW="http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}/auth/v1/health"
+
+              # Retry: even after --wait, the gateway's upstream may need a beat.
+              # $1 = label, $2 = url, $3 = mode ("200" = strict 200; "up" = any
+              # non-5xx HTTP response, i.e. reachable and not server-erroring).
+              check() {
+                for i in $(seq 1 30); do
+                  # curl already writes '000' to stdout on a failed transfer
+                  # (connection refused / timeout / DNS) AND exits non-zero, so
+                  # `|| echo 000` would APPEND a second 000 -> code="000000",
+                  # which the "up" check reads as a reachable non-5xx code and
+                  # falsely passes when the gateway is down. Swallow the exit and
+                  # normalize an empty capture to 000 instead.
+                  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$2" || true)
+                  [ -n "$code" ] || code=000
+                  if [ "$3" = "200" ] && [ "$code" = "200" ]; then
+                    echo "[smoke] OK $1 ($2) -> 200"; return 0
+                  fi
+                  if [ "$3" = "up" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+                    echo "[smoke] OK $1 ($2) -> $code (gateway reachable)"; return 0
+                  fi
+                  echo "[smoke] waiting $1 ($2) -> $code ($i/30)"
+                  sleep 2
+                done
+                echo "[smoke] FAIL $1 ($2): last=$code" >&2
+                return 1
+              }
+              check "web"     "$WEB" "200"
+              check "gateway" "$GW"  "up"
+              echo "[smoke] all checks passed"
+          resources:
+            {{- toYaml .Values.tests.smoke.resources | nindent 12 }}
+{{- end }}
