@@ -191,6 +191,36 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-maintenance","port":{"number":8080}}}]'
    ```
 
+   > **Restore every patched field to its exact prior value.** Under server-side
+   > apply, `kubectl patch`/`scale` take ownership of the fields they touch, and
+   > reverting the value does not release that claim. Ownership alone is harmless:
+   > SSA raises a conflict only when a later apply would **change** a field owned
+   > by someone else. So the rule that matters is byte-exactness. If what you
+   > restore differs from what the chart renders, even by one character, the next
+   > `helm upgrade` fails:
+   >
+   > ```
+   > UPGRADE FAILED: conflict occurred while applying object ...
+   >   Apply failed with 1 conflict: conflict with "kubectl-patch" using v1: .data.index.html
+   > ```
+   >
+   > and it fails on a deploy that may be days later and unrelated to the window.
+   >
+   > `--field-manager=helm` does **not** avoid this. Verified in production, it
+   > only changes the name in the message to `conflict with "helm"`, because a
+   > manager's `Update` entry is distinct from Helm's `Apply` entry. The escape
+   > hatch is to force ownership back to Helm on the next server-side apply,
+   > after confirming the live value is the one you want:
+   >
+   > ```bash
+   > helm upgrade <release> <chart> -n "$NS" -f <values> --server-side --force-conflicts
+   > ```
+   >
+   > `--force-conflicts` and `--server-side` are Helm 4 flags. Stock Helm 3
+   > `helm upgrade` has neither and rejects `--force-conflicts` as an unknown flag.
+   > On a GitOps/Fleet deploy path, force via the wrapper's own flag or re-apply
+   > input.
+
    **This reroutes the web host ONLY — it is not a write fence.** The API/kong
    host is a separate ingress rule and stays open, so the page is a user-facing
    banner, not protection for the database. Fencing writes is a separate step, and
