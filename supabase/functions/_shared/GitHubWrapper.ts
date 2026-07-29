@@ -2544,9 +2544,6 @@ export async function syncRepoPermissions(
     });
 
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing collaborator in ${org}`, newScope);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
