@@ -195,7 +195,10 @@ test("S1: complete + submit the survey using only AtHarness SR commands", async 
   // Artifacts: raw spoken log (S3/Wave-1 diffs), full step records, bindings.
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const rawLog = harness.steps.flatMap((s) => s.rawSpoken);
-  fs.writeFileSync(path.join(OUT_DIR, `survey-spoken-log.${VARIANT}${RUN_SUFFIX}.json`), JSON.stringify(rawLog, null, 2));
+  fs.writeFileSync(
+    path.join(OUT_DIR, `survey-spoken-log.${VARIANT}${RUN_SUFFIX}.json`),
+    JSON.stringify(rawLog, null, 2)
+  );
   fs.writeFileSync(
     path.join(OUT_DIR, `survey-steps.${VARIANT}${RUN_SUFFIX}.json`),
     JSON.stringify(harness.steps, null, 2)

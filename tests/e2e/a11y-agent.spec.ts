@@ -131,7 +131,9 @@ for (const task of activeTasks) {
         setupError = e instanceof Error ? (e.stack ?? e.message) : String(e);
       }
 
-      const predicate = result ? await task.predicate(result.verdict, taskContext) : { success: false, detail: "run threw before a verdict was produced" };
+      const predicate = result
+        ? await task.predicate(result.verdict, taskContext)
+        : { success: false, detail: "run threw before a verdict was produced" };
       const isError = setupError !== null || (result?.isError ?? true);
       fs.writeFileSync(
         path.join(outDir, "verdict.json"),

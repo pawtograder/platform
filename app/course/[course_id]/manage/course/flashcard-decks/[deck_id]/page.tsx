@@ -336,7 +336,6 @@ export default function FlashcardDeckPage() {
         deckId={deck_id}
         onSuccess={handleDeckUpdated}
       />
-
     </VStack>
   );
 }

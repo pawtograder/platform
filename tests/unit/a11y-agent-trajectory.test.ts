@@ -31,7 +31,8 @@ function makeTrajectoryBody(startedTimestamp: string): Omit<Trajectory, "content
         index: 0,
         tool: "next",
         argsJson: "{}",
-        resultJson: '{"spokenSinceLastAction":["heading, Survey, level 1"],"currentItem":"heading, Survey, level 1","domFocus":null}',
+        resultJson:
+          '{"spokenSinceLastAction":["heading, Survey, level 1"],"currentItem":"heading, Survey, level 1","domFocus":null}',
         rawSpoken: ["heading, Survey, level 1"],
         startedTimestamp,
         endedTimestamp: startedTimestamp

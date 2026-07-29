@@ -192,7 +192,6 @@ export default function StudentExtensionsTable() {
           </Portal>
         </Dialog.Root>
       )}
-
     </VStack>
   );
 }

@@ -42,11 +42,22 @@ describe("sequenceEditDistance", () => {
 describe("meanPairwiseToolVariance", () => {
   it("is 0 for one or identical sequences", () => {
     expect(meanPairwiseToolVariance([["a", "b"]])).toBe(0);
-    expect(meanPairwiseToolVariance([["a", "b"], ["a", "b"], ["a", "b"]])).toBe(0);
+    expect(
+      meanPairwiseToolVariance([
+        ["a", "b"],
+        ["a", "b"],
+        ["a", "b"]
+      ])
+    ).toBe(0);
   });
 
   it("normalizes by the longer sequence", () => {
-    expect(meanPairwiseToolVariance([["a", "b"], ["a", "c"]])).toBeCloseTo(0.5);
+    expect(
+      meanPairwiseToolVariance([
+        ["a", "b"],
+        ["a", "c"]
+      ])
+    ).toBeCloseTo(0.5);
   });
 });
 
@@ -77,11 +88,29 @@ describe("mutationDetection", () => {
     const d = mutationDetection(
       [
         // blocked, no matching barrier
-        sample({ predicateSuccess: false, outcome: "blocked", mutationId: "412-strip-labels", mutationCriterion: criterion, barrierCriteria: [] }),
+        sample({
+          predicateSuccess: false,
+          outcome: "blocked",
+          mutationId: "412-strip-labels",
+          mutationCriterion: criterion,
+          barrierCriteria: []
+        }),
         // not blocked, but reported the matching SC
-        sample({ predicateSuccess: true, outcome: "completed_with_barriers", mutationId: "412-strip-labels", mutationCriterion: criterion, barrierCriteria: ["4.1.2"] }),
+        sample({
+          predicateSuccess: true,
+          outcome: "completed_with_barriers",
+          mutationId: "412-strip-labels",
+          mutationCriterion: criterion,
+          barrierCriteria: ["4.1.2"]
+        }),
         // clean pass, missed it
-        sample({ predicateSuccess: true, outcome: "completed", mutationId: "412-strip-labels", mutationCriterion: criterion, barrierCriteria: [] })
+        sample({
+          predicateSuccess: true,
+          outcome: "completed",
+          mutationId: "412-strip-labels",
+          mutationCriterion: criterion,
+          barrierCriteria: []
+        })
       ],
       25
     );

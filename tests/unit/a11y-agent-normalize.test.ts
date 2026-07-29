@@ -44,7 +44,9 @@ describe("normalizePhrase", () => {
 describe("templateMatches", () => {
   it("matches a recorded template against a live phrase under fresh bindings", () => {
     const recorded = normalizePhrase("heading, Agent Assignment, level 2", { assignmentName: "Agent Assignment" })!;
-    expect(templateMatches(recorded, "heading, Agent Assignment, level 2", { assignmentName: "Agent Assignment" })).toBe(true);
+    expect(
+      templateMatches(recorded, "heading, Agent Assignment, level 2", { assignmentName: "Agent Assignment" })
+    ).toBe(true);
   });
 
   it("lets {{number}} match any number, but not different text", () => {

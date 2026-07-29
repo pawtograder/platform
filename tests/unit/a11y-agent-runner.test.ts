@@ -112,7 +112,12 @@ describe("salvageStructuredOutput", () => {
 
   it("prefers the LAST parseable attempt", () => {
     const first = { ...base, narrative: "first attempt" };
-    const last = { ...base, narrative: "last attempt", barriersJson: '[{"summary":"s","severity":"2","evidenceRefs":["0"],"elementPointer":{},"suggestedFix":"f","wcagCriterion":"4.1.2"}]' };
+    const last = {
+      ...base,
+      narrative: "last attempt",
+      barriersJson:
+        '[{"summary":"s","severity":"2","evidenceRefs":["0"],"elementPointer":{},"suggestedFix":"f","wcagCriterion":"4.1.2"}]'
+    };
     expect(salvageStructuredOutput([first, last])?.narrative).toBe("last attempt");
     expect(salvageStructuredOutput([first, last])?.barriersJson).toContain("4.1.2");
   });

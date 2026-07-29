@@ -338,7 +338,6 @@ export default function ReviewAssignmentsPage() {
 
   return (
     <Container maxW="container.xl" py={4}>
-
       <Heading size="lg">Manage Review Assignments</Heading>
       <Separator mb={4} />
 
