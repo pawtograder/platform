@@ -470,7 +470,10 @@ export class NvdaHarness implements AtDriver {
         const label = stripNvdaBoilerplate(await this.itemTextSafe()) ?? "";
         await this.hostFocusField(label);
         await new Promise((r) => setTimeout(r, 250));
-        await nvda.type(arg ?? "");
+        // capture:false — NVDA echoes each typed char into a live-region-chatty
+        // field, and guidepup's default post-type capture-poll waits for speech
+        // to stabilize, which never happens → the command hangs to its budget.
+        await nvda.type(arg ?? "", { capture: false });
         if (arg && arg.length >= 3 && this.hostEval) {
           if (!(await this.typedTextLanded(arg))) {
             this.debug("type: text not in focused field — host-assisted retype", {
@@ -480,7 +483,7 @@ export class NvdaHarness implements AtDriver {
             await this.hostFocusField(label);
             await new Promise((r) => setTimeout(r, 250));
             await nvda.press("Control+a");
-            await nvda.type(arg);
+            await nvda.type(arg, { capture: false });
             if (!(await this.typedTextLanded(arg)) && this.hostSetClipboard) {
               this.debug("type: retype missed too — atomic paste fallback");
               await this.hostFocusField(label);
