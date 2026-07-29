@@ -49,6 +49,26 @@ function toMsLatency(enqueuedAt: string): number {
   }
 }
 
+/**
+ * Resolves the handout SHA to stamp onto a freshly-created student/group repo, scoped to the repo's
+ * own assignment. We intentionally look this up by assignment id (not `template_repo`), because
+ * multiple assignments can legitimately share a handout repo (copied assignments, multi-section
+ * courses) and a reverse lookup by repo would be ambiguous.
+ */
+async function getAssignmentTemplateSha(
+  adminSupabase: SupabaseClient<Database>,
+  assignmentId: number | null | undefined
+): Promise<string | null> {
+  if (assignmentId == null) return null;
+  const { data, error } = await adminSupabase
+    .from("assignments")
+    .select("latest_template_sha")
+    .eq("id", assignmentId)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.latest_template_sha ?? null;
+}
+
 const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
 
 /**
@@ -841,13 +861,20 @@ export async function processEnvelope(
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
+          // maybeSingle (not single): on a role DELETE the trigger enqueues this sync with the
+          // removed user_id, so the row is already gone. That must NOT throw — the class-wide
+          // reconcile below is what removes them from the team and has to run regardless. A missing
+          // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
-            .single();
+            .in("role", ["instructor", "grader", "admin"])
+            // Never reinvite a disabled staff member: the disable-triggered sync routes their id here,
+            // and reconcile removes them from the team — reinviting would immediately undo that.
+            .eq("disabled", false)
+            .maybeSingle();
           if (error) throw error;
           if (
             data &&
@@ -872,8 +899,9 @@ export async function processEnvelope(
               .from("user_roles")
               .select("users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader"])
+              .in("role", ["instructor", "grader", "admin"])
               .eq("github_org_confirmed", true)
+              .eq("disabled", false)
               .limit(5000);
             if (error) throw error;
             return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
@@ -886,8 +914,11 @@ export async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
-            .single();
+            .in("role", ["instructor", "grader", "admin"])
+            // Same as the pre-reconcile lookup: skip disabled staff so we don't reinvite someone the
+            // reconcile just removed.
+            .eq("disabled", false)
+            .maybeSingle();
           if (
             !error &&
             ur &&
@@ -969,36 +1000,44 @@ export async function processEnvelope(
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
-          const { data: latestHandoutCommit, error: latestHandoutCommitError } = await adminSupabase
-            .from("assignments")
-            .select("latest_template_sha")
-            .eq("template_repo", templateRepo)
-            .maybeSingle();
-          if (latestHandoutCommitError) throw latestHandoutCommitError;
+          // Resolve the target repository row first, then read the handout SHA from THIS repo's own
+          // assignment. Looking the SHA up by `template_repo` is ambiguous whenever multiple assignments
+          // share a handout repo (copied assignments, multi-section courses), and the old
+          // `.maybeSingle()` there errored on >1 match — stranding the repo in an infinite requeue.
+          const repoUpdate = {
+            is_github_ready: true,
+            synced_repo_sha: headSha,
+            // Clear any prior failure now that the repo is populated and ready.
+            creation_error: null
+          };
           if (envelope.repo_id) {
             // Direct update using repo_id (more efficient and reliable)
+            const { data: repoRow, error: repoRowError } = await adminSupabase
+              .from("repositories")
+              .select("assignment_id")
+              .eq("id", envelope.repo_id)
+              .maybeSingle();
+            if (repoRowError) throw repoRowError;
+            const syncedHandoutSha = await getAssignmentTemplateSha(adminSupabase, repoRow?.assignment_id);
             const { error: updateError } = await adminSupabase
               .from("repositories")
-              .update({
-                is_github_ready: true,
-                synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha,
-                // Clear any prior failure now that the repo is populated and ready.
-                creation_error: null
-              })
+              .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("id", envelope.repo_id);
             if (updateError) throw updateError;
           } else if (envelope.class_id) {
             // Fallback to old method for backward compatibility
             const fullName = `${org}/${repoName}`;
+            const { data: repoRow, error: repoRowError } = await adminSupabase
+              .from("repositories")
+              .select("assignment_id")
+              .eq("class_id", envelope.class_id)
+              .eq("repository", fullName)
+              .maybeSingle();
+            if (repoRowError) throw repoRowError;
+            const syncedHandoutSha = await getAssignmentTemplateSha(adminSupabase, repoRow?.assignment_id);
             const { error: updateError } = await adminSupabase
               .from("repositories")
-              .update({
-                is_github_ready: true,
-                synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha,
-                creation_error: null
-              })
+              .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
             if (updateError) throw updateError;
