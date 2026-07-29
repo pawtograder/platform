@@ -1862,8 +1862,6 @@ export async function syncTeam(
     }
   }
   for (const username of removeMembers) {
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
