@@ -22,7 +22,9 @@ const {
   isRepoEmpty,
   isTeamAlreadyExistsError,
   NonRetryableRepoError,
-  resolveExistingTeamSlug
+  publicSupabaseUrl,
+  resolveExistingTeamSlug,
+  toPublicSupabaseUrl
 } = await import("./GitHubWrapper.ts");
 
 type Handler = (params: Record<string, unknown>) => unknown;
@@ -291,4 +293,65 @@ Deno.test("resolveExistingTeamSlug: non-404 error -> rethrows", async () => {
     }
   });
   await assertRejects(() => resolveExistingTeamSlug("org-d", "cs101-staff", octokit), RequestError);
+});
+
+// ── Public-vs-internal Supabase origin ──────────────────────────────────────
+// Edge functions reach storage through the in-cluster Kong service, so anything
+// handed to the GitHub Actions runner must carry the public origin instead —
+// otherwise the runner dies on "getaddrinfo ENOTFOUND pawtograder-kong".
+// toPublicSupabaseUrl rebases an already-signed URL; publicSupabaseUrl supplies
+// the base the runner builds its own client from (GradeResponse.supabase_url).
+
+function withSupabaseEnv(internal: string | undefined, pub: string | undefined, fn: () => void) {
+  const prevInternal = Deno.env.get("SUPABASE_URL");
+  const prevPublic = Deno.env.get("SUPABASE_PUBLIC_URL");
+  const set = (k: string, v: string | undefined) => (v === undefined ? Deno.env.delete(k) : Deno.env.set(k, v));
+  set("SUPABASE_URL", internal);
+  set("SUPABASE_PUBLIC_URL", pub);
+  try {
+    fn();
+  } finally {
+    set("SUPABASE_URL", prevInternal);
+    set("SUPABASE_PUBLIC_URL", prevPublic);
+  }
+}
+
+const KONG = "http://pawtograder-kong:8000";
+const PUBLIC = "https://api.pawtograder.khoury.northeastern.edu";
+
+Deno.test("publicSupabaseUrl: prefers SUPABASE_PUBLIC_URL over the in-cluster origin", () => {
+  withSupabaseEnv(KONG, PUBLIC, () => assertEquals(publicSupabaseUrl(), PUBLIC));
+});
+
+// supabase.com hosting sets no SUPABASE_PUBLIC_URL because SUPABASE_URL is already public.
+Deno.test("publicSupabaseUrl: falls back to SUPABASE_URL when no public origin is set", () => {
+  withSupabaseEnv("https://abc.supabase.co", undefined, () =>
+    assertEquals(publicSupabaseUrl(), "https://abc.supabase.co")
+  );
+});
+
+Deno.test("toPublicSupabaseUrl: rebases a signed URL, preserving path and query", () => {
+  withSupabaseEnv(KONG, PUBLIC, () =>
+    assertEquals(
+      toPublicSupabaseUrl(`${KONG}/storage/v1/object/sign/graders/a/b/archive.tgz?token=xyz`),
+      `${PUBLIC}/storage/v1/object/sign/graders/a/b/archive.tgz?token=xyz`
+    )
+  );
+});
+
+// A trailing slash on the public origin must not produce a double slash in the path.
+Deno.test("toPublicSupabaseUrl: strips trailing slashes from the public origin", () => {
+  withSupabaseEnv(KONG, `${PUBLIC}/`, () =>
+    assertEquals(toPublicSupabaseUrl(`${KONG}/storage/v1/x`), `${PUBLIC}/storage/v1/x`)
+  );
+});
+
+// Leave anything that isn't ours alone — a GitHub tarball URL must pass through.
+Deno.test("toPublicSupabaseUrl: no-op for URLs not on the internal origin", () => {
+  withSupabaseEnv(KONG, PUBLIC, () =>
+    assertEquals(
+      toPublicSupabaseUrl("https://codeload.github.com/o/r/tar.gz/sha"),
+      "https://codeload.github.com/o/r/tar.gz/sha"
+    )
+  );
 });

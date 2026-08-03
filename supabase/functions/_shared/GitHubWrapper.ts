@@ -507,6 +507,19 @@ export function toPublicSupabaseUrl(url: string): string {
   return publicBase.replace(/\/+$/, "") + url.slice(internalBase.length);
 }
 
+/**
+ * The Supabase origin to hand to a consumer OUTSIDE the cluster — a base URL to
+ * build a client from, rather than an already-signed URL to rebase.
+ *
+ * Same split as toPublicSupabaseUrl: SUPABASE_URL is the in-cluster Kong service
+ * and is unresolvable off-cluster, so anything we send out must use
+ * SUPABASE_PUBLIC_URL. Falls back to SUPABASE_URL when unset (supabase.com
+ * hosting, where SUPABASE_URL is already the public origin).
+ */
+export function publicSupabaseUrl(): string {
+  return Deno.env.get("SUPABASE_PUBLIC_URL") || Deno.env.get("SUPABASE_URL") || "";
+}
+
 export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_tarball_url");
   scope?.setTag("repository", repo);
@@ -1849,8 +1862,6 @@ export async function syncTeam(
     }
   }
   for (const username of removeMembers) {
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
@@ -2531,9 +2542,6 @@ export async function syncRepoPermissions(
     });
 
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing collaborator in ${org}`, newScope);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,

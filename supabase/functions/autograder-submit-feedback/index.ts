@@ -12,6 +12,7 @@ import {
 } from "../_shared/FunctionTypes.d.ts";
 import {
   resolveRef,
+  publicSupabaseUrl,
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   SecondaryRateLimitError,
@@ -901,7 +902,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         message: `Submission ${submission_id} registered`,
         details_url: `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
         artifacts: artifactUploadLinks,
-        supabase_url: Deno.env.get("SUPABASE_URL") || "",
+        // Must be the PUBLIC origin: the grading runner builds its Supabase
+        // client from this to upload artifacts via uploadToSignedUrl, and it
+        // can't resolve the in-cluster Kong host.
+        supabase_url: publicSupabaseUrl(),
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
       };
     } else {
@@ -916,7 +920,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         message,
         details_url: detailsUrl,
         artifacts: artifactUploadLinks,
-        supabase_url: Deno.env.get("SUPABASE_URL") || "",
+        // Must be the PUBLIC origin: the grading runner builds its Supabase
+        // client from this to upload artifacts via uploadToSignedUrl, and it
+        // can't resolve the in-cluster Kong host.
+        supabase_url: publicSupabaseUrl(),
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
       };
     }

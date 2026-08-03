@@ -24,6 +24,7 @@ import * as discussionsCommand from "./commands/discussions";
 import * as reviewsCommand from "./commands/reviews";
 import * as reposCommand from "./commands/repos";
 import * as assessmentCommand from "./commands/assessment";
+import { DEFAULT_API_URL } from "./utils/api";
 import { startLoginFlow, logout, getCurrentUser } from "./utils/auth";
 import { getCredentialsPath } from "./utils/credentials";
 import { logger, handleError } from "./utils/logger";
@@ -56,9 +57,11 @@ export function run(argv: string[] = hideBin(process.argv)): void {
             type: "string"
           })
           .option("url", {
-            describe:
-              "API gateway origin or full endpoint, e.g. https://api.example.edu " +
-              "(default: https://api.pawtograder.com/functions/v1/cli)",
+            // Interpolated rather than hardcoded (see #882): a literal here
+            // drifted from the real default once before. Self-hosted users need
+            // their own https://api.<zone>, which the app shows in
+            // Settings → API Tokens.
+            describe: `API gateway origin or full endpoint, e.g. https://api.example.edu (default: ${DEFAULT_API_URL})`,
             type: "string"
           });
       },

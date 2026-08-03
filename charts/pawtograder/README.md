@@ -160,7 +160,7 @@ time you want a clean slate — it's idempotent on a missing release.
 | Secret name (default)        | Required keys                                                                                                                                                                                                                                                |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
-| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
+| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `JWT_SIGNING_JWK` (MCP/CLI only), `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
 | `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`)                                                                                                                                                          |
 | `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
 | `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
@@ -185,6 +185,49 @@ The full set of keys consumed from `pawtograder-jwt`:
   PostgREST / storage-api verification.
 - `JWT_REALTIME_JWKS` — EC-only JWK Set (Joken can't accept `oct` JWK maps);
   Realtime falls back to `JWT_SECRET` for HS256 verification.
+- `JWT_SIGNING_JWK` — **required for MCP and the CLI**, optional otherwise. The
+  single EC private JWK (a bare JWK object, *not* a set) that
+  `_shared/MCPAuth.ts` signs short-lived per-user RLS JWTs with, using ES256. It
+  must be the **same EC entry that appears in `JWT_PRIVATE_JWKS`** — its public
+  half has to be in `JWT_PUBLIC_JWKS` or PostgREST rejects every token minted
+  with it.
+
+  The edge-functions container receives it as `JWT_SECRET`, which is confusing
+  but deliberate: that is the env var MCPAuth reads, and it is the *only*
+  consumer of `JWT_SECRET` inside the edge runtime. It is **not** the HS256
+  shared secret the rest of the stack uses — pointing it there is why MCP and
+  the CLI did not work on self-hosted installs before this key existed.
+
+  Where it comes from, by install type:
+
+  - **`secrets.autogenerate=true`** — handled for you, including on upgrade, where
+    the bootstrap Job extracts the key from the `JWT_PRIVATE_JWKS` already in the
+    namespace rather than generating a new one.
+  - **`secrets.create=true`** — set `secrets.values.jwt.signingJwk`.
+    `GenerateJwtKeys.ts --helm-values` emits it.
+  - **ESO / OpenBao** — `GenerateJwtKeys.ts` emits `JWT_SIGNING_JWK` into the JWT
+    bundle, and `examples/externalsecrets/pawtograder-jwt.yaml` maps it. A bundle
+    provisioned *before* this key existed does not have it: add it to the OpenBao
+    path with the extraction below, then force an ESO sync.
+  - **SealedSecrets / hand-made Secrets** — add it yourself with the extraction
+    below (`kubeseal --merge-into` adds one key without re-sealing the rest).
+
+  Because the `secretKeyRef` is `optional: true`, until the key is present the
+  edge tier runs normally and only MCP/CLI fail. Extract it from the JWKS you
+  already have:
+
+  ```bash
+  kubectl -n <ns> get secret pawtograder-jwt \
+    -o jsonpath='{.data.JWT_PRIVATE_JWKS}' | base64 -d \
+    | jq -c '(if type=="array" then . else .keys end)
+             | map(select(.kty=="EC" and .crv=="P-256" and .d)) | .[0]'
+  ```
+
+  Then add that JSON as `JWT_SIGNING_JWK` on the same Secret and restart the
+  functions Deployment. Users authenticate the CLI against
+  `https://api.<hostname>/functions/v1/cli` (with `apiOnSeparateHost`, the
+  default) — the app shows the exact URL for your deployment in the **user menu →
+  API Tokens**, alongside the MCP server URL for Claude Desktop.
 - `REALTIME_ENC_KEY` — AES-128 (exactly 16 bytes) for realtime tenant
   secret encryption.
 - `PG_META_CRYPTO_KEY` — AES-256 (base64) shared between postgres-meta and
