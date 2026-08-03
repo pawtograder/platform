@@ -197,8 +197,12 @@ test.describe("Admin Create Class workflow", () => {
 
     await page.locator("#name").fill(className);
     // Template prefix (slug) is required: staff enrollment triggers a GitHub team
-    // sync that needs both org and slug on the class.
-    await page.locator("#github_template_prefix").fill("hw");
+    // sync that needs both org and slug on the class. It has to be unique within the org --
+    // (github_org, slug) is unique, since the slug names the class's GitHub teams and repos --
+    // so a fixed value here would fail on the second run. The e2e-ignore- prefix additionally
+    // makes the async worker skip the real GitHub call for the resulting team sync.
+    const templatePrefix = `e2e-ignore-admin-created-${Date.now()}`;
+    await page.locator("#github_template_prefix").fill(templatePrefix);
 
     // The org dropdown is required and populated from the stubbed edge function.
     await expect(page.locator("#github_org_name")).toBeVisible();

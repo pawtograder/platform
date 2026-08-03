@@ -123,7 +123,12 @@ export async function createClass({
     // Final slug pattern is `<prefix><sanitized-name>-<id>`. Demo provisioning sets
     // slugPrefix="demo-" so mirrored repos don't carry the e2e-ignore prefix DB
     // cleanup scripts rely on.
-    const provisionalSlug = slugPrefix + className.toLowerCase().replace(/ /g, "-");
+    const baseSlug = slugPrefix + className.toLowerCase().replace(/ /g, "-");
+    // The id isn't known until after the insert, but (github_org, slug) is unique per org and
+    // parallel workers all create the same class name in pawtograder-playground -- so the
+    // pre-rename slug has to be unique too. Keep the prefix: the e2e GitHub guard and the DB
+    // cleanup scripts both match on it.
+    const provisionalSlug = `${baseSlug}-pending-${crypto.randomUUID().slice(0, 8)}`;
     const { data: classDataList, error: classError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("classes", () =>
@@ -151,14 +156,14 @@ export async function createClass({
     const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
       supabase
         .from("classes")
-        .update({ slug: `${classData.slug}-${classData.id}` })
+        .update({ slug: `${baseSlug}-${classData.id}` })
         .eq("id", classData.id)
         .select("id")
     );
     if (classError2) {
       throw new Error(`Failed to update class slug: ${classError2.message}`);
     }
-    classData.slug = `${classData.slug}-${classData.id}`;
+    classData.slug = `${baseSlug}-${classData.id}`;
     return classData;
   });
 }
