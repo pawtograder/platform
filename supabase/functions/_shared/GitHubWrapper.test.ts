@@ -349,6 +349,9 @@ Deno.test("toPublicSupabaseUrl: strips trailing slashes from the public origin",
 // Leave anything that isn't ours alone — a GitHub tarball URL must pass through.
 Deno.test("toPublicSupabaseUrl: no-op for URLs not on the internal origin", () => {
   withSupabaseEnv(KONG, PUBLIC, () =>
-    assertEquals(toPublicSupabaseUrl("https://codeload.github.com/o/r/tar.gz/sha"), "https://codeload.github.com/o/r/tar.gz/sha")
+    assertEquals(
+      toPublicSupabaseUrl("https://codeload.github.com/o/r/tar.gz/sha"),
+      "https://codeload.github.com/o/r/tar.gz/sha"
+    )
   );
 });
