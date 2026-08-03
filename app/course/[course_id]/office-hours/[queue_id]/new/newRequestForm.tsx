@@ -6,7 +6,7 @@ import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hou
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
@@ -661,7 +661,6 @@ export default function HelpRequestForm({
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
-      <Toaster />
       <Stack spaceY={4}>
         <Box>
           <Heading>Request Live Help</Heading>

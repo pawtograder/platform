@@ -2,7 +2,7 @@
 
 import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import dynamic from "next/dynamic";
@@ -10,6 +10,9 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
+import { useIsTableControllerReady } from "@/lib/TableController";
+
+const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -30,27 +33,75 @@ export default function SurveyTakingPage() {
 
   // Use the survey hook to get the survey with realtime updates
   const survey = useSurvey(survey_id as string);
+  const surveysReady = useIsTableControllerReady(controller.surveys);
 
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
+  // that can race the Complete upsert: an autosave carrying is_submitted:false
+  // that lands after the submit upsert silently reverts the submission. The
+  // refs (not state) are needed because the guards must be visible synchronously
+  // inside the SurveyJS event callbacks.
+  const isSubmittingRef = useRef(false);
+  const hasSubmittedRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
+  // Fires the pending autosave immediately. Held in a ref so the unmount
+  // cleanup can flush rather than merely cancel: `textUpdateMode = "onTyping"`
+  // restarts the debounce on every keystroke, so a student who navigates away
+  // while typing has an unwritten answer sitting in the timer.
+  const flushAutosaveRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+        flushAutosaveRef.current?.();
+      }
+    };
+  }, []);
+
+  // Derived from the survey row rather than the row object itself: the row comes
+  // from a TableController, so its identity changes on every realtime update or
+  // refetch. Keying the loader effect on the object re-ran the fetch and handed
+  // <SurveyComponent> a fresh `initialData` object mid-edit (issue #881).
+  const surveyId = survey?.id;
+  // The table controller yields `undefined` both while it is still loading and
+  // for a row that does not exist, so a miss is only knowable once its initial
+  // fetch has completed.
+  const surveyMissing = surveysReady && survey == null;
+  const allowResponseEditing = survey?.allow_response_editing ?? false;
+
   // Load existing response for this user
   useEffect(() => {
-    const loadExistingResponse = async () => {
-      if (!survey || !private_profile_id) {
-        setIsLoading(false);
-        return;
-      }
+    // Neither an id nor a confirmed miss: the course controller hasn't produced
+    // the row yet. Leave the loading gate up — dropping it here would render the
+    // survey before the saved draft has been fetched, and answers given in that
+    // window get overwritten when it lands.
+    if (!surveyId && !surveyMissing) return;
 
+    if (!surveyId || !private_profile_id) {
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+
+    const loadExistingResponse = async () => {
       try {
         // Fetch existing response for this student
         const { data, error } = await controller.client
           .from("survey_responses")
           .select("*")
-          .eq("survey_id", survey.id)
+          .eq("survey_id", surveyId)
           .eq("profile_id", private_profile_id)
           .single();
+
+        if (cancelled) return;
 
         if (error && error.code !== "PGRST116") {
           // PGRST116 = no rows found, which is fine
@@ -66,16 +117,20 @@ export default function SurveyTakingPage() {
       } catch (error) {
         console.error("Error loading existing response:", error);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     loadExistingResponse();
-  }, [survey, private_profile_id, controller.client]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [surveyId, surveyMissing, private_profile_id, controller.client]);
 
   // Handle survey not found or not published
   useEffect(() => {
-    if (!isLoading && survey === null) {
+    if (!isLoading && surveyMissing) {
       toaster.create({
         title: "Survey Not Found",
         description: "This survey is not available or has been removed.",
@@ -83,12 +138,14 @@ export default function SurveyTakingPage() {
       });
       router.push(`/course/${course_id}/surveys`);
     }
-  }, [isLoading, survey, course_id, router]);
+  }, [isLoading, surveyMissing, course_id, router]);
 
   // Save response helper using controller client
   const saveResponseToDb = useCallback(
     async (responseData: ResponseData, isSubmitted: boolean) => {
-      if (!survey || !private_profile_id) return;
+      if (!surveyId || !private_profile_id) return;
+      // Never downgrade a submitted response back to a draft.
+      if (!isSubmitted && hasSubmittedRef.current) return;
 
       const upsertData: {
         survey_id: string;
@@ -97,7 +154,7 @@ export default function SurveyTakingPage() {
         is_submitted: boolean;
         submitted_at?: string;
       } = {
-        survey_id: survey.id,
+        survey_id: surveyId,
         profile_id: private_profile_id,
         response: responseData,
         is_submitted: isSubmitted
@@ -121,12 +178,12 @@ export default function SurveyTakingPage() {
 
       return data;
     },
-    [survey, private_profile_id, controller.client]
+    [surveyId, private_profile_id, controller.client]
   );
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model) => {
-      if (!private_profile_id || !survey) {
+      if (!private_profile_id || !surveyId) {
         console.error("Cannot submit survey: Missing profile_id or survey");
         return;
       }
@@ -135,8 +192,20 @@ export default function SurveyTakingPage() {
       const surveyData = surveyModel.data;
 
       setIsSubmitting(true);
+      isSubmittingRef.current = true;
+      // Cancel any pending autosave and wait out any in-flight one so the
+      // submit upsert is guaranteed to be the last write.
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      flushAutosaveRef.current = null;
       try {
+        if (autosaveInFlightRef.current) {
+          await autosaveInFlightRef.current.catch(() => {});
+        }
         await saveResponseToDb(surveyData, true);
+        hasSubmittedRef.current = true;
 
         toaster.create({
           title: "Survey Submitted",
@@ -157,28 +226,42 @@ export default function SurveyTakingPage() {
         });
       } finally {
         setIsSubmitting(false);
+        isSubmittingRef.current = false;
       }
     },
-    [private_profile_id, survey, course_id, router, saveResponseToDb]
+    [private_profile_id, surveyId, course_id, router, saveResponseToDb]
   );
 
   const handleValueChanged = useCallback(
-    async (surveyModel: Model, options?: ValueChangedEvent) => {
+    (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
-      if (!private_profile_id || !survey || !survey.allow_response_editing) return;
+      if (!private_profile_id || !surveyId || !allowResponseEditing) return;
+      if (isSubmittingRef.current || hasSubmittedRef.current) return;
 
       // Extract only the survey data from the model, not the entire model object
       const surveyData = surveyModel.data;
 
-      // Auto-save on value change if editing is allowed
-      try {
-        await saveResponseToDb(surveyData, false);
-      } catch (error) {
-        console.error("Error auto-saving response:", error);
-        // Don't show error toast for auto-save failures to avoid spam
-      }
+      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke
+      // and again on blur; only the trailing edit needs persisting.
+      const runAutosave = () => {
+        autosaveTimerRef.current = null;
+        flushAutosaveRef.current = null;
+        if (isSubmittingRef.current || hasSubmittedRef.current) return;
+        const inFlight = saveResponseToDb(surveyData, false).catch((error) => {
+          console.error("Error auto-saving response:", error);
+          // Don't show error toast for auto-save failures to avoid spam
+        });
+        autosaveInFlightRef.current = inFlight;
+        void inFlight.finally(() => {
+          if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
+        });
+      };
+
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      flushAutosaveRef.current = runAutosave;
+      autosaveTimerRef.current = setTimeout(runAutosave, AUTOSAVE_DEBOUNCE_MS);
     },
-    [private_profile_id, survey, saveResponseToDb]
+    [private_profile_id, surveyId, allowResponseEditing, saveResponseToDb]
   );
 
   const handleBackToSurveys = useCallback(() => {
@@ -186,7 +269,7 @@ export default function SurveyTakingPage() {
   }, [router, course_id]);
 
   // Show loading while survey is being fetched
-  if (isLoading || survey === undefined) {
+  if (isLoading || (survey === undefined && !surveyMissing)) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <Box display="flex" alignItems="center" justifyContent="center" p={8}>

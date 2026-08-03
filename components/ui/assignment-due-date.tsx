@@ -19,7 +19,7 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import { toaster, Toaster } from "./toaster";
+import { toaster } from "./toaster";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
@@ -88,7 +88,6 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         setOpen(details.open);
       }}
     >
-      <Toaster />
       <Dialog.Trigger asChild>
         <Button size="xs" variant="surface" colorPalette="yellow">
           Extend Due Date

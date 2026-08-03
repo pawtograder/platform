@@ -225,7 +225,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // race the in-flight replace and leave the URL on /files while the previous tab stays mounted,
     // so the file source never renders (flaky under CI load).
     await page.waitForURL(/\/submissions\/\d+\/(?:results|files|grade)(?:[/?#]|$)/);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await page.waitForURL(/\/submissions\/\d+\/files(?:[/?#]|$)/);
 
     // Scroll grading rubric to top of its container
@@ -355,7 +355,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     const doMathLine = page.getByText("public int doMath(int a, int");
     await expect(doMathLine).toBeVisible();
     // toBeVisible() only requires a non-empty bounding box, not that the element is in

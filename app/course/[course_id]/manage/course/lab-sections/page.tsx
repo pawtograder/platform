@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
@@ -1323,7 +1323,6 @@ export default function LabSectionsPage() {
   return (
     <Container maxW="6xl">
       <LabSectionsTable />
-      <Toaster />
     </Container>
   );
 }

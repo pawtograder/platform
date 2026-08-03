@@ -236,7 +236,7 @@ export function OfficeHoursStatusCard() {
             <Text color="fg.muted" mb={4}>
               Office hours are currently closed. No staff are working on any queues right now.
             </Text>
-            <HStack gap={2}>
+            <HStack gap={2} flexWrap="wrap">
               <Tooltip content={tooltipText} positioning={{ placement: "bottom" }}>
                 <Button onClick={openDrawer} colorPalette="green" size="sm" whiteSpace="normal" textAlign="left">
                   <Icon as={FaQuestionCircle} mr={2} />

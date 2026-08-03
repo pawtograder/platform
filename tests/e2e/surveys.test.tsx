@@ -643,6 +643,58 @@ test.describe("Surveys Page", () => {
       .toBe("First response");
   });
 
+  test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
+    // SurveyJS renders its own DOM (axe-excluded), so probe the emitted markup directly:
+    // the question title must be a real h2 that PRECEDES the choice inputs in DOM order,
+    // and nothing may be auto-focused on load (focusFirstQuestionAutomatic=false) — both
+    // are set in components/Survey.tsx and regressed here.
+    const surveyJson = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "radiogroup",
+              name: "q1",
+              title: "Which reading order is correct?",
+              choices: ["Question first", "Answers first"]
+            }
+          ]
+        }
+      ]
+    };
+
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Reading Order Survey",
+      status: "published",
+      json: surveyJson
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+
+    const questionHeading = page.getByRole("heading", { level: 2, name: /which reading order is correct/i });
+    await expect(questionHeading).toBeVisible();
+    const firstChoice = page.getByRole("radio", { name: "Question first" });
+    await expect(firstChoice).toBeVisible();
+
+    const headingPrecedesChoices = await page.evaluate(() => {
+      const headings = Array.from(document.querySelectorAll("h2"));
+      const heading = headings.find((h) => /which reading order is correct/i.test(h.textContent ?? ""));
+      const input = document.querySelector('input[type="radio"]');
+      if (!heading || !input) return false;
+      return Boolean(heading.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(headingPrecedesChoices, "question h2 precedes its answer inputs in DOM order").toBe(true);
+
+    // No answer input steals focus on load (would cause SR to read choices before the question).
+    const autoFocused = await page.evaluate(() => {
+      const el = document.activeElement;
+      return Boolean(el && el !== document.body && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName));
+    });
+    expect(autoFocused, "no form control is auto-focused when the survey opens").toBe(false);
+  });
+
   test("instructor can apply filters on responses", async ({ page }) => {
     const surveyJson = {
       pages: [
