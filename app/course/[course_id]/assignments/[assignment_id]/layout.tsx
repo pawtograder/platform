@@ -20,14 +20,23 @@ export default async function AssignmentLayout({
   if (!user_id) {
     redirect("/");
   }
-  // Validate access: if not released and not grader or instructor, redirect to course page.
-  // Honor view-as so an instructor masquerading as a student gets the student release-date gate.
+  // Validate access: an unreleased assignment is off limits to students. Honor view-as so an
+  // instructor masquerading as a student gets the same release-date gate the student would.
   const role = await getEffectiveCourseIdentity(Number(course_id), user_id);
   if (!role) {
     redirect("/");
   }
 
-  if (role.role !== "instructor" && role.role !== "grader") {
+  // Staff previewing their own test-assignment submissions are exempt: the release date gates
+  // *enrolled students* out of an assignment, and staff own the assignment they are testing.
+  // Applying it to them bounced the Manage → Test Assignment submission links to the dashboard
+  // for any assignment not yet released (issue #883). The student-facing content filters
+  // (grade release, rubric visibility, hidden autograder output) still apply.
+  const isStaff = role.role === "instructor" || role.role === "grader";
+  if (!isStaff && !role.isViewingAsSelf) {
+    // Send staff masquerading as an enrolled student back to the course rather than the
+    // all-courses dashboard, so the view-as banner (and its exit button) stays in reach.
+    const blockedDestination = role.isViewingAs ? `/course/${course_id}` : "/";
     const client = await createClientWithCaching({ tags: ["assignment-release-date"] });
     const { data: assignment } = await client
       .from("assignments")
@@ -36,7 +45,7 @@ export default async function AssignmentLayout({
       .eq("class_id", Number(course_id))
       .single();
     if (!assignment) {
-      redirect("/");
+      redirect(blockedDestination);
     }
     if (
       assignment.release_date &&
@@ -45,13 +54,12 @@ export default async function AssignmentLayout({
         new TZDate(new Date(), assignment.classes.time_zone)
       )
     ) {
-      redirect("/");
+      redirect(blockedDestination);
     }
   }
 
   // Keep instructor/grader assignment pages responsive for very large classes by
   // skipping heavyweight SSR prefetch. Students retain SSR prefetch for faster first paint.
-  const isStaff = role.role === "instructor" || role.role === "grader";
   const initialData = isStaff ? undefined : await fetchAssignmentControllerData(assignmentId, false);
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>

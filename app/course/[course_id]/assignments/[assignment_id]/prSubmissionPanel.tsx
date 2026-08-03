@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { confirmPrLink } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SubmissionPrLink } from "@/utils/supabase/DatabaseTypes";
@@ -79,7 +79,6 @@ export default function PrSubmissionPanel({
 
   return (
     <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
-      <Toaster />
       <Heading size="md" mb={2}>
         Pull request submission
       </Heading>

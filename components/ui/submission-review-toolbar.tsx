@@ -53,7 +53,7 @@ import { FaRegCheckCircle } from "react-icons/fa";
 import { useRouter } from "next/navigation";
 import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
-import { Toaster, toaster } from "./toaster";
+import { toaster } from "./toaster";
 
 function ActiveReviewPicker() {
   const activeSubmissionReviewId = useActiveSubmissionReviewId();
@@ -435,7 +435,6 @@ export function CompleteReviewButton() {
       </Popover.Trigger>
       <Popover.Positioner>
         <Popover.Content>
-          <Toaster />
           <Popover.Arrow>
             <Popover.ArrowTip />
           </Popover.Arrow>

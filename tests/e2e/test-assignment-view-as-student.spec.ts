@@ -22,6 +22,9 @@ let course: Course;
 let instructor: TestingUser;
 let grader: TestingUser;
 let assignmentId: number;
+/** An assignment whose release date is still in the future, as it is while staff test it. */
+let unreleasedAssignmentId: number;
+let unreleasedSubmissionId: number;
 const staffSubmissions = new Map<string, number>();
 
 async function requireNoError<T>(result: { data: T; error: { message: string } | null }, context: string): Promise<T> {
@@ -207,6 +210,23 @@ test.beforeAll(async ({}, testInfo) => {
 
   staffSubmissions.set("grader", await seedStaffTestSubmission(grader, instructor.private_profile_id));
   staffSubmissions.set("instructor", await seedStaffTestSubmission(instructor, instructor.private_profile_id));
+
+  // Staff normally test an assignment before releasing it to students, so seed a second
+  // assignment whose release date is still ahead of us.
+  const unreleasedAssignment = await insertAssignment({
+    due_date: addDays(new Date(), 10).toUTCString(),
+    release_date: addDays(new Date(), 5).toUTCString(),
+    class_id: course.id,
+    name: "Test Assignment Unreleased Preview E2E"
+  });
+  unreleasedAssignmentId = unreleasedAssignment.id;
+  unreleasedSubmissionId = (
+    await insertPreBakedSubmission({
+      student_profile_id: instructor.private_profile_id,
+      assignment_id: unreleasedAssignmentId,
+      class_id: course.id
+    })
+  ).submission_id;
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
@@ -236,7 +256,7 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("button", { name: "Submission History" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Commit History" })).toHaveCount(0);
     await expect(page.getByText("Student's Due Date:")).toHaveCount(0);
-    await expect(page.getByRole("group").filter({ hasText: "Course Settings" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Course Settings menu" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: /Overall Score/ })).toHaveCount(0);
     await expect(page.getByText("Released to student")).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Complete Review/ })).toHaveCount(0);
@@ -289,5 +309,32 @@ test.describe("Test Assignment student preview", () => {
 
     await banner.getByRole("button", { name: "Exit student view" }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+  });
+
+  // Issue #883: the student release-date gate on the assignment layout also fired for staff
+  // previewing their own test submission, bouncing them to the all-courses dashboard while
+  // leaving the view-as cookie set.
+  test("instructor previews a test submission on an assignment that is not yet released", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${unreleasedAssignmentId}/test`);
+    await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
+
+    await page.getByRole("link", { name: String(unreleasedSubmissionId), exact: true }).click();
+
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/course/${course.id}/assignments/${unreleasedAssignmentId}/submissions/${unreleasedSubmissionId}/(results|files|grade)`
+      )
+    );
+    const banner = page.getByRole("alert", { name: "Viewing as student" });
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("Test Assignment View Instructor");
+
+    // Exiting returns the same page under the instructor's own identity.
+    await banner.getByRole("button", { name: "Exit student view" }).click();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expect(page).toHaveURL(
+      new RegExp(`/course/${course.id}/assignments/${unreleasedAssignmentId}/submissions/${unreleasedSubmissionId}/`)
+    );
   });
 });

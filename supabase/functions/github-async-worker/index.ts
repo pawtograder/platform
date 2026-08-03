@@ -17,7 +17,9 @@ import * as github from "../_shared/GitHubWrapper.ts";
 import {
   PrimaryRateLimitError,
   SecondaryRateLimitError,
+  NonRetryableGitHubError,
   NonRetryableRepoError,
+  NonRetryableUserError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -789,7 +791,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -833,7 +836,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -887,7 +891,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -931,7 +936,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -2222,6 +2228,11 @@ export async function processEnvelope(
     // create one Sentry issue per repo. Group them into a single issue by method + error type.
     if (error instanceof NonRetryableRepoError) {
       scope.setFingerprint(["github-non-retryable-repo", envelope.method]);
+    } else if (error instanceof NonRetryableUserError) {
+      // Same reasoning for unresolvable usernames: a class import can turn up several at once, and
+      // one issue per method is enough. The offending login is on the tag and in the message.
+      scope.setFingerprint(["github-non-retryable-user", envelope.method]);
+      scope.setTag("github_username", error.githubUsername);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2247,13 +2258,16 @@ export async function processEnvelope(
     })();
 
     try {
-      // Per-repo deterministic failure (e.g. the template/source repo is empty or missing).
-      // Retrying will never succeed and this is not a systemic problem, so record the reason on the
-      // repository row and send the job straight to the DLQ — WITHOUT tripping the shared circuit
-      // breaker or feeding the error-threshold counter (which are reserved for rate limits / outages
-      // that warrant slowing the whole org down).
-      if (error instanceof NonRetryableRepoError) {
-        scope.setTag("non_retryable_repo_error", "true");
+      // Deterministic failure about one repo or one person (an empty/missing template repo, a
+      // GitHub login that no longer exists). Retrying will never succeed and this is not a systemic
+      // problem, so record what we can and send the job straight to the DLQ — WITHOUT tripping the
+      // shared circuit breaker or feeding the error-threshold counter (which are reserved for rate
+      // limits / outages that warrant slowing the whole org down).
+      if (error instanceof NonRetryableGitHubError) {
+        scope.setTag("non_retryable_error", error.name);
+        if (error instanceof NonRetryableRepoError) {
+          scope.setTag("non_retryable_repo_error", "true");
+        }
         const reason = error.message;
         try {
           if (envelope.repo_id) {

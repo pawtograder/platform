@@ -18,6 +18,7 @@ import { Octokit, RequestError } from "npm:octokit";
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const {
   assertSourceNotEmpty,
+  getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
   isRepoEmpty,
   isTeamAlreadyExistsError,
@@ -293,6 +294,37 @@ Deno.test("resolveExistingTeamSlug: non-404 error -> rethrows", async () => {
     }
   });
   await assertRejects(() => resolveExistingTeamSlug("org-d", "cs101-staff", octokit), RequestError);
+});
+
+// ── Looking up a GitHub login that may no longer exist ─────────────────────
+// A 404 here means "this login doesn't exist", which is a fact about one person, not a GitHub
+// failure. reinviteToOrgTeam relies on getting null (not a throw) so it can re-resolve the current
+// login from the stored account id before giving up. Any other status has to propagate, or a blip
+// would be misread as a deleted account.
+Deno.test("getGitHubUserIfExists: login exists -> returns the response", async () => {
+  const octokit = fakeOctokit({
+    "GET /users/{username}": () => ({ data: { id: 1234, login: "some-student" } })
+  });
+  const user = await getGitHubUserIfExists(octokit, "some-student");
+  assertEquals(user?.data.id, 1234);
+});
+
+Deno.test("getGitHubUserIfExists: 404 -> null", async () => {
+  const octokit = fakeOctokit({
+    "GET /users/{username}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await getGitHubUserIfExists(octokit, "renamed-away"), null);
+});
+
+Deno.test("getGitHubUserIfExists: non-404 error -> rethrows", async () => {
+  const octokit = fakeOctokit({
+    "GET /users/{username}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => getGitHubUserIfExists(octokit, "some-student"), RequestError);
 });
 
 // ── Public-vs-internal Supabase origin ──────────────────────────────────────

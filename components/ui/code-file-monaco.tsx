@@ -52,6 +52,21 @@ export { isRubricCheckDataWithOptions };
 // Module-scoped so it is shared across all panes in the (single, client-only) bundle.
 let paneInstanceSeq = 0;
 
+/**
+ * Whether to force Monaco's screen-reader-optimized rendering instead of letting
+ * it decide with `accessibilitySupport: "auto"`.
+ *
+ * Only our a11y harness sets this (it injects a virtual screen reader that
+ * Monaco's own detection cannot see). Real assistive tech is detected by "auto",
+ * and forcing SR mode for everyone would change rendering and mirror
+ * `accessibilityPageSize` lines into a hidden textarea for every student and
+ * grader — a test accommodation, not product behavior.
+ */
+function forceScreenReaderMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return (window as { __a11yForceScreenReader?: boolean }).__a11yForceScreenReader === true;
+}
+
 // Map file extensions to Monaco language IDs
 function getMonacoLanguage(fileName: string): string {
   const extension = fileName.split(".").pop()?.toLowerCase() || "";
@@ -1326,6 +1341,15 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             onMount={handleEditorDidMount}
             options={{
               readOnly: true,
+              // Screen-reader support: name the editor after the file, read in
+              // large chunks, and let Tab move focus out — a read-only viewer
+              // must not be a keyboard trap (WCAG 2.1.2).
+              ariaLabel: currentFile ? `Code viewer: ${currentFile.name}` : "Code viewer",
+              accessibilitySupport: forceScreenReaderMode() ? "on" : "auto",
+              // Only takes effect once Monaco is in screen-reader mode, so this
+              // costs nothing for everyone else.
+              accessibilityPageSize: 100,
+              tabFocusMode: true,
               lineNumbers: "on",
               glyphMargin: true,
               minimap: { enabled: true },

@@ -4,7 +4,7 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { useColorMode } from "@/components/ui/color-mode";
 import { PreviewRubricProvider } from "@/components/ui/preview-rubric-provider";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import {
   AssignmentController,
   useAssignmentController,
@@ -1491,7 +1491,6 @@ function InnerRubricPage() {
   return (
     <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column" role="region" aria-label="Rubric Editor">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
-        <Toaster />
         <VStack align="start">
           <Heading size="md">
             {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubrics

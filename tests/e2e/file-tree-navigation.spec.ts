@@ -82,7 +82,7 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 async function openFiles(page: Parameters<typeof loginAsUser>[0]) {
   await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
   await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-  await page.getByRole("button", { name: "Files" }).click();
+  await page.getByRole("link", { name: "Files" }).click();
   await expect(page.getByLabel("File navigator")).toBeVisible();
 }
 

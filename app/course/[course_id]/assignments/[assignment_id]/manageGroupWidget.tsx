@@ -3,7 +3,7 @@
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -1014,7 +1014,6 @@ export default function ManageGroupWidget({
   }
   return (
     <Box>
-      <Toaster />
       <Heading size="md">{heading}</Heading>
       <Text fontSize="sm" color="fg.muted">
         {description}

@@ -10,7 +10,18 @@ export const toaster = createToaster({
 export const Toaster = () => {
   return (
     <Portal>
-      <ChakraToaster toaster={toaster} insetInline={{ mdDown: "4" }} data-visual-test="removed">
+      {/*
+        `aria-label` is set explicitly because zag's default group label concatenates the
+        placement token and the focus hotkey into the accessible name — VoiceOver reads the
+        region as "bottom-end Notifications alt+T". Passing `aria-label` here wins over the
+        generated one (Ark merges caller props last). See issue #881.
+      */}
+      <ChakraToaster
+        toaster={toaster}
+        insetInline={{ mdDown: "4" }}
+        aria-label="Notifications"
+        data-visual-test="removed"
+      >
         {(toast) => (
           <Toast.Root width={{ md: "sm" }}>
             {toast.type === "loading" ? <Spinner size="sm" color="blue.solid" /> : <Toast.Indicator />}

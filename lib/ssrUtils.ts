@@ -140,6 +140,12 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
 export type EffectiveCourseIdentity = UserRoleData & {
   /** True when real staff are viewing the course as a student. */
   isViewingAs: boolean;
+  /**
+   * True when staff are previewing their *own* test-assignment work as a student, rather than
+   * masquerading as an enrolled student. These viewers keep staff-level access to the assignment
+   * itself (they own it) — only the student-facing content filters apply.
+   */
+  isViewingAsSelf: boolean;
   /** The viewer's actual role in the course (unchanged by view-as). */
   realRole: Database["public"]["Enums"]["app_role"];
   /** The target private profile id when viewing as, otherwise null. */
@@ -169,6 +175,7 @@ export async function getEffectiveCourseIdentity(
   const base: EffectiveCourseIdentity = {
     ...realRole,
     isViewingAs: false,
+    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: null
   };
@@ -191,6 +198,7 @@ export async function getEffectiveCourseIdentity(
       public_profile_id: realRole.public_profile_id,
       private_profile_id: realRole.private_profile_id,
       isViewingAs: true,
+      isViewingAsSelf: true,
       realRole: realRole.role,
       viewAsProfileId: realRole.private_profile_id
     };
@@ -223,6 +231,7 @@ export async function getEffectiveCourseIdentity(
     public_profile_id: targetRole.public_profile_id,
     private_profile_id: targetRole.private_profile_id,
     isViewingAs: true,
+    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: targetRole.private_profile_id
   };

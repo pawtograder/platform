@@ -32,15 +32,39 @@ export class PrimaryRateLimitError extends Error {
 }
 
 /**
- * Deterministic, non-retryable repo-creation failure — e.g. the template/source repo is empty or
- * missing, so no amount of retrying will produce a populated student repo. The async worker treats
- * this specially: it records the reason on the repository row and sends the job to the DLQ WITHOUT
- * tripping the shared circuit breaker (which is reserved for systemic failures like rate limits).
+ * A deterministic failure that retrying cannot fix. The async worker treats these specially: it
+ * records the reason, sends the job straight to the DLQ, and deliberately does NOT trip the shared
+ * circuit breaker (which is reserved for systemic failures like rate limits and outages). Without
+ * that distinction one bad row burns all 6 retries and re-opens the method circuit each time,
+ * slowing every other job for the same org — most visibly during a class import, when the whole
+ * roster is enqueued at once.
  */
-export class NonRetryableRepoError extends Error {
+export class NonRetryableGitHubError extends Error {}
+
+/**
+ * Deterministic, non-retryable repo-creation failure — e.g. the template/source repo is empty or
+ * missing, so no amount of retrying will produce a populated student repo. The worker also records
+ * the reason on the repository row.
+ */
+export class NonRetryableRepoError extends NonRetryableGitHubError {
   constructor(message: string) {
     super(message);
     this.name = "NonRetryableRepoError";
+  }
+}
+
+/**
+ * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
+ * from the numeric account id we stored when they linked their account (see
+ * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
+ * theirs — a typo at enrollment. Someone has to correct the username; retrying won't.
+ */
+export class NonRetryableUserError extends NonRetryableGitHubError {
+  readonly githubUsername: string;
+  constructor(message: string, githubUsername: string) {
+    super(message);
+    this.name = "NonRetryableUserError";
+    this.githubUsername = githubUsername;
   }
 }
 
@@ -1969,7 +1993,26 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
   return pending;
 }
 
-export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
+export async function reinviteToOrgTeam(
+  org: string,
+  team_slug: string,
+  githubUsername: string,
+  scope?: Sentry.Scope,
+  options: {
+    /**
+     * Set on the one recursive retry after a username was re-resolved, so a login that 404s again
+     * fails instead of looping.
+     */
+    skipUsernameReresolve?: boolean;
+    /**
+     * The Pawtograder user this login belongs to. Optional, but pass it when you have it: it's the
+     * only stable handle on the user if their GitHub login has to be re-resolved. Looking them up by
+     * the login instead is racy — a concurrent (or, in `github-user-sync`, merely earlier) invitation
+     * for the same person may already have replaced it.
+     */
+    userId?: string;
+  } = {}
+) {
   scope?.setTag("github_operation", "reinvite_to_team");
   scope?.setTag("org", org);
   scope?.setTag("team_slug", team_slug);
@@ -1989,9 +2032,31 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   // team_slug for markUserRoleOrgConfirmedForTeam, which derives the class slug from our naming
   // convention (`{classSlug}-staff|-students`), not GitHub's normalization.
   const resolvedSlug = team.data.slug ?? team_slug;
-  const user = await octokit.request("GET /users/{username}", {
-    username: githubUsername
-  });
+  const user = await getGitHubUserIfExists(octokit, githubUsername);
+  if (!user) {
+    // The login we have on file doesn't exist on GitHub. Usually that means the student renamed
+    // their account, so recover the current login from the account id we stored at link time and
+    // start over with it — every membership check and write below has to use the same username,
+    // and recursing is how they all get the new one. `reresolveMissingGitHubLogin` throws
+    // NonRetryableUserError when there's nothing to recover, which keeps a single bad username out
+    // of the retry/circuit-breaker machinery.
+    if (options.skipUsernameReresolve) {
+      throw new NonRetryableUserError(
+        `GitHub user ${githubUsername} does not exist, even after re-resolving from the stored GitHub account id`,
+        githubUsername
+      );
+    }
+    const currentUsername = await reresolveMissingGitHubLogin(octokit, githubUsername, scope, options.userId);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Login ${githubUsername} no longer exists; re-resolved to ${currentUsername} from the stored account id, retrying invitation`,
+      level: "info"
+    });
+    return await reinviteToOrgTeam(org, team_slug, currentUsername, scope, {
+      skipUsernameReresolve: true,
+      userId: options.userId
+    });
+  }
   const userID = user.data.id;
   const teamID = team.data.id;
   scope?.addBreadcrumb({
@@ -2210,18 +2275,136 @@ async function getOrgMembers(
   });
   return members;
 }
+/**
+ * `GET /users/{login}`, returning null when GitHub says the login doesn't exist instead of throwing.
+ * A missing login is a data problem about one person, not a GitHub failure, so callers get to decide
+ * what to do about it (see `reresolveMissingGitHubLogin`).
+ */
+export async function getGitHubUserIfExists(octokit: Octokit, username: string) {
+  try {
+    return await octokit.request("GET /users/{username}", { username });
+  } catch (e) {
+    if ((e as { status?: number })?.status === 404) {
+      return null;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Recover the current GitHub login for a user whose stored login has stopped resolving.
+ *
+ * GitHub logins are mutable but account ids are not, so `users.github_user_id` — captured when the
+ * user linked their account — still points at the right account after a rename. Look the account up
+ * by id, write the new login back to `users`, and return it.
+ *
+ * Throws NonRetryableUserError ONLY for a verdict about the account itself: a user row with no
+ * account id on file (the username was typed by hand and never linked), or an id GitHub 404s on
+ * (deleted account). Everything else — a 5xx or rate limit from GitHub, a failed Postgres read or
+ * write, a user row we couldn't locate — propagates as itself, because the worker turns a
+ * NonRetryableUserError into an immediate DLQ. Writing a student's invitation off permanently
+ * because GitHub was briefly unavailable is exactly the outcome the retry machinery exists to
+ * prevent, so this deliberately does not use `updateGitHubUsernameForUser`, which swallows
+ * operational failures to keep bulk syncs going.
+ */
+async function reresolveMissingGitHubLogin(
+  octokit: Octokit,
+  username: string,
+  scope?: Sentry.Scope,
+  userId?: string
+): Promise<string> {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+  // Prefer the caller's stable user id. Finding the row by login is inherently racy here: the login
+  // we were handed is one GitHub says doesn't exist, and another invitation for the same person —
+  // concurrently in a worker batch, or an earlier iteration of github-user-sync's per-class loop —
+  // may already have replaced it with the current one.
+  const userQuery = adminSupabase.from("users").select("user_id, github_user_id");
+  const { data: userData, error: userError } = await (
+    userId ? userQuery.eq("user_id", userId) : userQuery.ilike("github_username", username)
+  ).maybeSingle();
+  if (userError) {
+    throw new Error(`Error looking up stored GitHub account id for ${username}: ${userError.message}`);
+  }
+  if (!userData) {
+    // Retryable on purpose. A missing row is not evidence about the account: most likely someone
+    // else just renamed this user out from under us, in which case the next attempt re-reads the
+    // current login upstream and never gets here at all.
+    throw new Error(
+      `GitHub user ${username} does not exist and no user row matches that login (it may have just been re-resolved by a concurrent invitation)`
+    );
+  }
+  if (!userData.github_user_id) {
+    throw new NonRetryableUserError(
+      `GitHub user ${username} does not exist and we have no GitHub account id on file to re-resolve them from (the username was never linked to an account)`,
+      username
+    );
+  }
+
+  let account;
+  try {
+    account = await octokit.request("GET /user/{account_id}", {
+      account_id: Number(userData.github_user_id),
+      headers: { "X-GitHub-Api-Version": "2022-11-28" }
+    });
+  } catch (e) {
+    if ((e as { status?: number })?.status === 404) {
+      throw new NonRetryableUserError(
+        `GitHub user ${username} does not exist and neither does GitHub account id ${userData.github_user_id} on file for them (account deleted)`,
+        username
+      );
+    }
+    throw e;
+  }
+
+  const currentLogin = account.data.login?.toLowerCase();
+  if (!currentLogin) {
+    throw new NonRetryableUserError(
+      `GitHub returned no login for account id ${userData.github_user_id} (stored for ${username})`,
+      username
+    );
+  }
+  if (currentLogin === username.toLowerCase()) {
+    // GitHub says this login doesn't exist, yet the account id we hold still resolves to it. Not a
+    // rename, and not something a retry changes.
+    throw new NonRetryableUserError(
+      `GitHub user ${username} does not exist, but account id ${userData.github_user_id} still resolves to that same login`,
+      username
+    );
+  }
+
+  const { error: updateError } = await adminSupabase
+    .from("users")
+    .update({ github_username: currentLogin, last_github_user_sync: new Date().toISOString() })
+    .eq("user_id", userData.user_id);
+  if (updateError) {
+    // Retryable on purpose: we know the new login, but proceeding without recording it would leave
+    // every later job re-discovering the rename.
+    throw new Error(
+      `Failed to record re-resolved GitHub username ${currentLogin} for ${username}: ${updateError.message}`
+    );
+  }
+  scope?.setTag("github_username_reresolved", currentLogin);
+  return currentLogin;
+}
+
 async function updateGitHubUsernameForUser(
   oldUsername: string,
   octokit: Octokit,
   adminSupabase: ReturnType<typeof createClient<Database>>,
   scope?: Sentry.Scope
 ): Promise<{ oldUsername: string; newUsername: string | null }> {
-  // Find the github user id from the public.users table for the given github username
+  // Find the github user id from the public.users table for the given github username.
+  // Match case-insensitively (as the rest of this file does): callers pass logins lowercased from
+  // GitHub's API while the stored value can be mixed case, and an exact match would miss the row and
+  // silently skip the rename. `maybeSingle` so a missing row is a null, not a thrown error.
   const { data: userData, error: userError } = await adminSupabase
     .from("users")
     .select("github_user_id, user_id")
-    .eq("github_username", oldUsername)
-    .single();
+    .ilike("github_username", oldUsername)
+    .maybeSingle();
 
   if (userError || !userData?.github_user_id) {
     // User not found or no github_user_id, skip

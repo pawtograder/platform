@@ -271,7 +271,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
 
     await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     //Make sure that we get a very nice screenshot with a fully-loaded page
@@ -388,13 +388,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     // Released submissions now default students to the Grade tab; switch to the autograder
     // detail (results) view that this test exercises.
-    await page.getByRole("button", { name: "Autograder Detail" }).click();
+    await page.getByRole("link", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
     // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
     // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
     await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
     await assertStudentPageAccessible(page, "grading results /results route");
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);

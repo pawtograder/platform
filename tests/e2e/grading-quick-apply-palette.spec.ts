@@ -73,7 +73,7 @@ test.describe("Quick-apply palette + shortcuts (productivity layer)", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
 
     // Wait for the Monaco editor to mount, then place the cursor on a line.
     await expect(page.locator(".monaco-editor").first()).toBeVisible();
@@ -115,7 +115,7 @@ test.describe("Quick-apply palette + shortcuts (productivity layer)", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByLabel("File navigator")).toBeVisible();
 
     // Press "?" with focus on the page body (handled by the global keyboard infra).

@@ -63,7 +63,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const resp = await reinviteToOrgTeam(
             classData.github_org!,
             classData.slug! + "-students",
-            user.users.github_username!
+            user.users.github_username!,
+            undefined,
+            { userId: user.user_id }
           );
           if (!resp) {
             await adminSupabase

@@ -4,7 +4,7 @@ import AutograderConfiguration from "@/components/ui/autograder-configuration";
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -101,7 +101,6 @@ export default function AutograderPage() {
   return (
     <div>
       <Heading size="md">Autograder Configuration</Heading>
-      <Toaster />
       <form
         onSubmit={async (e) => {
           e.preventDefault();

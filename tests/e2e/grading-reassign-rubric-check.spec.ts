@@ -90,7 +90,7 @@ test.describe("Reassign a rubric-check annotation to a different check", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.locator(".monaco-editor").first()).toBeVisible();
 
     // Apply "Grading Review Check 1" (10 pts) on the cursor line via the quick-apply palette.
