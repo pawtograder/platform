@@ -648,26 +648,32 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!name) {
       throw new Error("No name provided to recordWorkflowRunError");
     }
-    const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").insert({
-      run_number: Number.parseInt(run_id),
-      run_attempt: Number.parseInt(run_attempt),
-      class_id: repoData.assignments.class_id!,
-      submission_id: submission_id ?? null,
-      repository_id: repoData.id,
-      name: name.length > 500 ? name.slice(0, 500) : name,
-      data,
-      is_private
-    });
+    const insertWorkflowRunError = (submissionId: number | null) =>
+      adminSupabase.from("workflow_run_error").insert({
+        run_number: Number.parseInt(run_id),
+        run_attempt: Number.parseInt(run_attempt),
+        class_id: repoData.assignments.class_id!,
+        submission_id: submissionId,
+        repository_id: repoData.id,
+        name: name.length > 500 ? name.slice(0, 500) : name,
+        data,
+        is_private
+      });
+
+    let { error: workflowRunErrorError } = await insertWorkflowRunError(submission_id ?? null);
+    if (workflowRunErrorError?.code === "23503" && workflowRunErrorError.details?.includes("submission_id")) {
+      // FK violation on submission_id: the submission was deleted after we captured its id (a
+      // rejected submission is cleaned up before the error is recorded). The error itself still
+      // belongs in the instructors' workflow error list, so re-record it unattached rather than
+      // dropping it.
+      console.log(`Recording workflow run error without a submission: ${workflowRunErrorError.message}`);
+      ({ error: workflowRunErrorError } = await insertWorkflowRunError(null));
+    }
     if (workflowRunErrorError) {
       // Ignore duplicate workflow run errors (constraint: workflow_run_error_repo_run_attempt_name_key)
       // This can happen when GitHub retries the workflow run
       if (workflowRunErrorError.code === "23505") {
         console.log(`Workflow run error already exists, ignoring duplicate: ${name}`);
-      } else if (workflowRunErrorError.code === "23503" && workflowRunErrorError.details?.includes("submission_id")) {
-        // FK violation on submission_id: submission was already deleted (e.g. empty submission rejected).
-        // Log but don't throw - caller should propagate the original user-visible error.
-        console.log(`Cannot record workflow run error: submission no longer exists (${workflowRunErrorError.message})`);
-        Sentry.captureException(workflowRunErrorError, scope);
       } else {
         console.error(workflowRunErrorError);
         Sentry.captureException(workflowRunErrorError, scope);
@@ -1264,6 +1270,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           ) {
             try {
               await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+              submission_id = undefined;
             } catch (cleanupErr) {
               Sentry.captureException(cleanupErr, scope);
             }
@@ -1551,6 +1558,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
             try {
               await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+              // The submission row is gone; clear the id so the workflow_run_error recorded for
+              // this rejection doesn't reference it (a dangling FK loses the instructor-visible
+              // error entirely). Matches the oversized/no-matching-files rejection paths.
+              submission_id = undefined;
             } catch (cleanupErr) {
               Sentry.captureException(cleanupErr, scope);
             }
