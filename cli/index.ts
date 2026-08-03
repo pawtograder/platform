@@ -17,6 +17,7 @@
 import "./load-env";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import { DEFAULT_API_URL } from "./utils/api";
 
 // Import command modules
 import * as classesCommand from "./commands/classes";
@@ -48,7 +49,12 @@ yargs(hideBin(process.argv))
           type: "string"
         })
         .option("url", {
-          describe: "API URL (default: https://pawtograder.com/functions/v1/cli)",
+          // Interpolated, not hardcoded: the literal here said
+          // https://pawtograder.com/functions/v1/cli while the actual default is
+          // the API host (api.pawtograder.com). Self-hosted users need their own
+          // https://api.<zone>/functions/v1/cli, which the app now shows in
+          // Settings → API Tokens.
+          describe: `API URL (default: ${DEFAULT_API_URL})`,
           type: "string"
         });
     },
