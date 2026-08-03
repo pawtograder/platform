@@ -176,6 +176,128 @@ export interface RubricYaml {
   _source?: RubricYamlSource;
 }
 
+/**
+ * Fields accepted at each level of the rubric tree, kept beside the interfaces above so
+ * the two are edited together.
+ *
+ * Unknown keys are rejected rather than ignored. A typo — `point` for `points`,
+ * `is_indvidual_grading` for `is_individual_grading` — otherwise leaves the intended
+ * field absent, and `buildUpdateRubricFullPayload` defaults an absent numeric to 0 and
+ * an absent boolean to false. `update_rubric_full` then cascades that points change
+ * into existing grading comments and recomputes scores, so a single misspelling silently
+ * rewrites grades. Failing on the unrecognised key is the only way an operator finds out.
+ */
+const RUBRIC_YAML_KEYS = new Set([
+  // Accepted and ignored. Exported documents carry the source rubric's id, but the
+  // rubric being written is the one `--assignment` and `--type` resolve to, so
+  // honouring it would let a file target a rubric the operator did not name.
+  "id",
+  "name",
+  "description",
+  "is_private",
+  "review_round",
+  "cap_score_to_assignment_points",
+  "hide_unless_assigned",
+  "parts",
+  "_source"
+]);
+
+const PART_KEYS = new Set([
+  "id",
+  "name",
+  "description",
+  "ordinal",
+  "data",
+  "is_individual_grading",
+  "is_assign_to_student",
+  "criteria"
+]);
+
+const CRITERIA_KEYS = new Set([
+  "id",
+  "name",
+  "description",
+  "ordinal",
+  "total_points",
+  "is_additive",
+  "is_deduction_only",
+  "min_checks_per_submission",
+  "max_checks_per_submission",
+  "data",
+  "checks"
+]);
+
+const CHECK_KEYS = new Set([
+  "id",
+  "name",
+  "description",
+  "ordinal",
+  "points",
+  "is_annotation",
+  "is_comment_required",
+  "is_required",
+  "annotation_target",
+  "artifact",
+  "file",
+  "group",
+  "max_annotations",
+  "student_visibility",
+  "kpi_category",
+  "data",
+  "references"
+]);
+
+/** Records an error for each key not in `allowed`, naming the nearest known field. */
+function checkNoUnknownKeys(
+  row: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  path: string,
+  errors: YamlIssue[]
+): void {
+  for (const key of Object.keys(row)) {
+    if (allowed.has(key)) continue;
+    const suggestion = nearestKey(key, allowed);
+    errors.push({
+      path: `${path}.${key}`,
+      message:
+        `unknown field "${key}"` +
+        (suggestion ? `; did you mean "${suggestion}"?` : "") +
+        ". Unknown fields are rejected because the field you meant would be treated as " +
+        "absent, and an absent points value defaults to 0."
+    });
+  }
+}
+
+/**
+ * The allowed key closest to `key` by edit distance, when one is close enough to be a
+ * plausible typo. Cheap on purpose: these sets have at most 17 entries.
+ */
+function nearestKey(key: string, allowed: ReadonlySet<string>): string | null {
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  for (const candidate of allowed) {
+    const distance = editDistance(key, candidate);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  // Two edits on a short name is still recognisable; beyond that a guess misleads.
+  return best !== null && bestDistance <= Math.max(2, Math.floor(best.length / 4)) ? best : null;
+}
+
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
 // ── update_rubric_full payload ──────────────────────────────────────────────
 
 export interface PayloadCheck {
@@ -397,6 +519,8 @@ export function validateRubricYaml(input: unknown): ValidateResult {
     return { ok: false, errors: [{ path: "", message: "rubric must be an object" }] };
   }
 
+  checkNoUnknownKeys(input, RUBRIC_YAML_KEYS, "rubric", errors);
+
   const name = input.name;
   if (typeof name !== "string" || name.trim() === "") {
     errors.push({ path: "name", message: "rubric name is required" });
@@ -437,6 +561,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
     if (typeof rawPart.name !== "string" || rawPart.name.trim() === "") {
       errors.push({ path: `${partPath}.name`, message: "part name is required" });
     }
+    checkNoUnknownKeys(rawPart, PART_KEYS, partPath, errors);
     checkOptionalId(rawPart.id, partPath, errors);
     const partId = optionalId(rawPart.id);
     if (partId !== undefined) {
@@ -469,6 +594,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
       if (typeof rawCriteria.name !== "string" || rawCriteria.name.trim() === "") {
         errors.push({ path: `${critPath}.name`, message: "criteria name is required" });
       }
+      checkNoUnknownKeys(rawCriteria, CRITERIA_KEYS, critPath, errors);
       checkOptionalId(rawCriteria.id, critPath, errors);
       const critId = optionalId(rawCriteria.id);
       if (critId !== undefined) {
@@ -510,6 +636,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         if (typeof rawCheck.name !== "string" || rawCheck.name.trim() === "") {
           errors.push({ path: `${checkPath}.name`, message: "check name is required" });
         }
+        checkNoUnknownKeys(rawCheck, CHECK_KEYS, checkPath, errors);
         checkOptionalId(rawCheck.id, checkPath, errors);
         const checkId = optionalId(rawCheck.id);
         if (checkId !== undefined) {
@@ -522,8 +649,17 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         checkInteger(rawCheck.max_annotations, checkPath, "max_annotations", errors, "it is stored as an integer");
 
         if (rawCheck.points !== undefined && rawCheck.points !== null) {
-          if (typeof rawCheck.points !== "number" || Number.isNaN(rawCheck.points)) {
-            errors.push({ path: `${checkPath}.points`, message: `${String(rawCheck.points)} is not a number` });
+          // Number.isFinite, not just !isNaN: YAML has literal forms for infinity
+          // (`.inf`, and any overflowing literal such as `1e999`). JSON has no way to
+          // carry Infinity, so it serializes to null on the way here, and an absent
+          // points value defaults to 0 — which update_rubric_full then cascades into
+          // existing grading comments. The CLI rejects these before serializing; this
+          // is the second line of defence for any other caller.
+          if (typeof rawCheck.points !== "number" || !Number.isFinite(rawCheck.points)) {
+            errors.push({
+              path: `${checkPath}.points`,
+              message: `${String(rawCheck.points)} is not a finite number`
+            });
           } else if (rawCheck.points < 0) {
             // Not silently made positive the way the web's sanitizer does: quietly
             // turning -3 into 3 on a graded rubric would cascade to every existing

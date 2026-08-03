@@ -475,6 +475,44 @@ describe("planStaleRetargets", () => {
     expect(plan.contestedRowIds).toEqual([1]);
   });
 
+  it("treats a stale whole-rubric row as colliding with any part already assigned", () => {
+    // `submission:all` and `submission:1` are not unrelated slots: whole-rubric coverage
+    // includes every part, so retargeting would overlap the existing part assignment.
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: null }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: 1 })
+    ]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds).toEqual([1]);
+  });
+
+  it("treats a stale part row as colliding with an existing whole-rubric assignment", () => {
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 3 }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: null })
+    ]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds).toEqual([1]);
+  });
+
+  it("does not confuse submission 20 with submission 200", () => {
+    // A prefix-matched key would have let 200's part claims contest 20's whole-rubric row.
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 20, rubricPartId: null }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: 1 })
+    ]);
+    expect(plan.retargetDrafts).toEqual([{ assignee_profile_id: "ta-1", submission_id: 100, rubric_part_id: null }]);
+    expect(plan.contestedRowIds).toEqual([]);
+  });
+
+  it("still repairs a stale whole-rubric row when nothing else claims the submission", () => {
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: null })
+    ]);
+    expect(plan.retargetDrafts).toHaveLength(1);
+    expect(plan.contestedRowIds).toEqual([]);
+  });
+
   it("passes through rows that are not stale, without repairing anything", () => {
     const plan = planStaleRetargets([row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 100 })]);
     expect(plan.retargetDrafts).toEqual([]);

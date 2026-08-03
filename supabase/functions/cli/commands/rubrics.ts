@@ -189,12 +189,37 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
     // A template rather than a round-trip artifact: without ids every row is created
     // new on import, which is what you want when seeding a different assignment.
     delete exportData._source;
+    const idBackedReferences: string[] = [];
     for (const part of exportData.parts) {
       delete part.id;
       for (const criteria of part.criteria) {
         delete criteria.id;
-        for (const check of criteria.checks) delete check.id;
+        for (const check of criteria.checks) {
+          delete check.id;
+          // A reference falls back to `{id: N}` when the target is outside this
+          // assignment or its name path is ambiguous. Stripping row ids does not make
+          // that portable: the id names a row in *this* database, so importing the
+          // template elsewhere resolves nothing and the importer drops the reference
+          // with a warning — a copied rubric quietly missing a cross-round dependency.
+          // Better to fail the export, which the operator can fix by disambiguating the
+          // names.
+          for (const ref of check.references ?? []) {
+            if (ref.id !== undefined && ref.check === undefined) {
+              idBackedReferences.push(`${part.name} › ${criteria.name} › ${check.name} → check id ${ref.id}`);
+            }
+          }
+        }
       }
+    }
+    if (idBackedReferences.length > 0) {
+      throw new CLICommandError(
+        "This rubric cannot be exported as a portable template: these references identify their target " +
+          "by database id, because the target is on another assignment or its part/criterion/check names " +
+          `are not unique within this one. Importing elsewhere would silently drop them.\n  ` +
+          `${idBackedReferences.join("\n  ")}\n` +
+          "Rename the ambiguous checks so each reference resolves by name, or export without --strip-ids.",
+        409
+      );
     }
   }
 

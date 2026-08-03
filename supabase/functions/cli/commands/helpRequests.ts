@@ -29,6 +29,8 @@ interface HelpRequestsListParams {
   status?: string;
   queue?: string | number;
   limit?: number;
+  /** Rows to skip. Pass `next_offset` from a truncated page to continue. */
+  offset?: number;
 }
 
 interface HelpRequestsCloseParams {
@@ -75,14 +77,20 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
   if (!Number.isFinite(limit) || limit < 1) {
     throw new CLICommandError("limit must be a positive integer", 400);
   }
-  // Rejected rather than silently clamped: this command exposes no cursor, so a
-  // clamped limit would leave the rest of the queue unreachable while appearing
-  // to have honored the request.
+  // Capped per page rather than overall: a queue with more than MAX_LIMIT requests
+  // matching one status is normal on a long-running course, and narrowing --status or
+  // --queue cannot reach the older ones. `--offset` walks past the cap instead.
   if (limit > MAX_LIMIT) {
     throw new CLICommandError(
-      `limit must be ${MAX_LIMIT} or less (got ${limit}). Narrow the result set with --status or --queue instead.`,
+      `limit must be ${MAX_LIMIT} or less (got ${limit}); it is the page size, not a total. ` +
+        "Pass --offset (or the next_offset from a truncated page) to read further.",
       400
     );
+  }
+
+  const offset = p.offset === undefined || p.offset === null ? 0 : Math.floor(Number(p.offset));
+  if (!Number.isFinite(offset) || offset < 0) {
+    throw new CLICommandError("offset must be zero or a positive integer", 400);
   }
 
   const supabase = getAdminClient();
@@ -131,8 +139,12 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
         "resolved_at, resolved_by, created_at, updated_at, help_queues!inner(name)"
     )
     .eq("class_id", classData.id)
+    // Tie-broken by id: `created_at` alone is not a total order — two requests created
+    // in the same instant could swap between pages, so a row could be seen twice or
+    // skipped entirely while paging.
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("id", { ascending: false })
+    .range(offset, offset + limit - 1);
 
   if (statuses) query = query.in("status", statuses);
   if (queueId !== null) query = query.eq("help_queue", queueId);
@@ -186,7 +198,10 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
       summary: {
         total: requests.length,
         by_status: byStatus,
-        truncated: requests.length >= limit
+        offset,
+        truncated: requests.length >= limit,
+        /** Pass as --offset to continue past a truncated page. */
+        next_offset: requests.length >= limit ? offset + requests.length : null
       }
     }
   };

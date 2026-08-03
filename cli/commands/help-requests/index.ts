@@ -39,9 +39,14 @@ export const builder = (yargs: Argv) => {
               type: "string"
             })
             .option("limit", {
-              describe: "Maximum requests to return (1-1000)",
+              describe: "Requests per page (1-1000)",
               type: "number",
               default: 100
+            })
+            .option("offset", {
+              describe: "Skip this many requests. Use the offset reported by a truncated page to continue.",
+              type: "number",
+              default: 0
             })
         );
       },
@@ -51,7 +56,8 @@ export const builder = (yargs: Argv) => {
             class: args.class as string,
             status: args.status as string,
             queue: args.queue as string | undefined,
-            limit: args.limit as number
+            limit: args.limit as number,
+            offset: args.offset as number
           });
 
           if (emitJson(args, data)) return;
@@ -84,11 +90,12 @@ export const builder = (yargs: Argv) => {
             .join(", ");
           logger.info(`Total: ${data.summary.total} request(s)${byStatus ? ` (${byStatus})` : ""}`);
           if (data.summary.truncated) {
-            const atMax = (args.limit as number) >= 1000;
+            // A page boundary, not a wall: older requests used to be unreachable once a
+            // queue passed 1000 matching rows, because narrowing --status or --queue
+            // cannot reach further back.
             logger.warning(
-              atMax
-                ? "Output truncated at the maximum of 1000; narrow the results with --status or --queue."
-                : `Output truncated at --limit ${args.limit}; pass a higher --limit (up to 1000) for more.`
+              `More requests match. Continue with --offset ${data.summary.next_offset}` +
+                ((args.limit as number) < 1000 ? ", or raise --limit (up to 1000)." : ".")
             );
           }
         } catch (error) {

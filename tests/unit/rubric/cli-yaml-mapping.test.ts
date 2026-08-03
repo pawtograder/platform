@@ -384,6 +384,62 @@ describe("validateRubricYaml", () => {
     expect(validateRubricYaml(explicitUndefined).ok).toBe(true);
   });
 
+  it("rejects an unknown field rather than treating the intended one as absent", () => {
+    // `point` for `points` left points absent, which defaults to 0 — and
+    // update_rubric_full cascades that zero into existing grading comments.
+    const doc = {
+      name: "r",
+      parts: [{ name: "p", criteria: [{ name: "c", checks: [{ name: "k", point: 5 }] }] }]
+    };
+    const result = validateRubricYaml(doc);
+    expect(result.ok).toBe(false);
+    const errors = result.ok ? [] : result.errors;
+    expect(errors.map((e) => e.path)).toContain("parts[0].criteria[0].checks[0].point");
+    expect(errors.map((e) => e.message).join(" ")).toMatch(/did you mean "points"/);
+  });
+
+  it("suggests the intended field for a misspelled flag", () => {
+    const doc = {
+      name: "r",
+      parts: [{ name: "p", is_indvidual_grading: true, criteria: [{ name: "c", checks: [{ name: "k" }] }] }]
+    };
+    const result = validateRubricYaml(doc);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.errors.map((e) => e.message).join(" ")).toMatch(
+      /did you mean "is_individual_grading"/
+    );
+  });
+
+  it("rejects unknown fields at rubric, part and criteria level", () => {
+    for (const doc of [
+      { name: "r", parts: [], nonsense: 1 },
+      { name: "r", parts: [{ name: "p", nonsense: 1, criteria: [] }] },
+      { name: "r", parts: [{ name: "p", criteria: [{ name: "c", nonsense: 1, checks: [] }] }] }
+    ]) {
+      const result = validateRubricYaml(doc);
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.errors.map((e) => e.message).join(" ")).toMatch(/unknown field "nonsense"/);
+    }
+  });
+
+  it("accepts a top-level id, which exported documents carry", () => {
+    // Ignored rather than rejected: the rubric written is the one --assignment and
+    // --type resolve to, but a legitimate export has this field.
+    expect(validateRubricYaml({ id: 42, ...ok }).ok).toBe(true);
+  });
+
+  it("rejects non-finite points, which JSON would flatten to null and then zero", () => {
+    for (const points of [Infinity, -Infinity, NaN]) {
+      const doc = {
+        name: "r",
+        parts: [{ name: "p", criteria: [{ name: "c", checks: [{ name: "k", points }] }] }]
+      };
+      const result = validateRubricYaml(doc);
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.errors.map((e) => e.message).join(" ")).toMatch(/is not a finite number/);
+    }
+  });
+
   it("rejects a duplicate criteria id across different parts", () => {
     // The RPC keys rows by id, so one row would be updated and moved twice, surviving
     // only under whichever part came last.

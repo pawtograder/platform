@@ -609,23 +609,46 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     // silently swallowing it is how `--overwrite` used to appear to work while
     // leaving the storage object orphaned.
     if (existing && overwrite) {
+      // Ordered comments → row → storage object, and it stops at the first failure.
+      //
+      // Deleting the object first was wrong in a way that compounds: a failed comment
+      // delete leaves comments whose foreign key then blocks the row delete, so the old
+      // artifact row survives pointing at a blob that no longer exists, and the grading
+      // comments attached to it point at nothing. Removing the object last means every
+      // failure leaves a *complete* old artifact — redundant, but coherent, and the
+      // operator can retry.
+      const failCleanup = (reason: string) => {
+        errors.push({
+          submission_id: art.submission_id,
+          artifact_name: art.name,
+          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${existing.id} failed: ${reason}`
+        });
+      };
+
       const { error: commentsErr } = await supabase
         .from("submission_artifact_comments")
         .delete()
         .eq("submission_artifact_id", existing.id);
-      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
-      const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
-      const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", existing.id);
-
-      const cleanupErr = commentsErr ?? rowErr ?? objectErr;
-      if (cleanupErr) {
-        errors.push({
-          submission_id: art.submission_id,
-          artifact_name: art.name,
-          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${existing.id} failed: ${cleanupErr.message}`
-        });
+      if (commentsErr) {
+        failCleanup(commentsErr.message);
         continue;
       }
+
+      const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", existing.id);
+      if (rowErr) {
+        failCleanup(rowErr.message);
+        continue;
+      }
+
+      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
+      const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
+      if (objectErr) {
+        // The row is gone, so nothing references this blob any more. Reported so the
+        // orphan can be swept, but the data model is consistent.
+        failCleanup(`its storage object was left behind: ${objectErr.message}`);
+        continue;
+      }
+
       overwritten++;
       continue;
     }

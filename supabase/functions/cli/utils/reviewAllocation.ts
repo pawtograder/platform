@@ -315,18 +315,42 @@ export interface StaleRetargetPlan {
  * `reviews clear`'s job — so it is reported instead.
  */
 export function planStaleRetargets(rows: ExistingAssignmentRow[]): StaleRetargetPlan {
-  /** How many rows land on each (active submission, part) slot. */
-  const slotOccupants = new Map<string, number>();
-  const slotKey = (submissionId: number, rubricPartId: number | null) => `${submissionId}:${rubricPartId ?? "all"}`;
+  // Occupancy per active submission, split into whole-rubric claims and per-part ones.
+  //
+  // Whole-rubric coverage overlaps *every* part, so `submission:all` and
+  // `submission:3` are not unrelated keys: comparing them as exact strings let a stale
+  // whole-rubric row retarget onto a submission that already had part assignments (and
+  // a stale part retarget onto an existing whole-rubric row), which is the overlapping
+  // grading work and uniqueness-constraint abort this function exists to prevent.
+  const wholeRubricClaims = new Map<number, number>();
+  /** Every part claim on a submission, however many distinct parts. */
+  const anyPartClaims = new Map<number, number>();
+  const partClaims = new Map<string, number>();
+  const partKey = (submissionId: number, rubricPartId: number) => `${submissionId}:${rubricPartId}`;
+  const bump = <K>(map: Map<K, number>, key: K) => map.set(key, (map.get(key) ?? 0) + 1);
+
   for (const row of rows) {
-    const slot = slotKey(row.activeSubmissionId, row.rubricPartId);
-    slotOccupants.set(slot, (slotOccupants.get(slot) ?? 0) + 1);
+    if (row.rubricPartId === null) {
+      bump(wholeRubricClaims, row.activeSubmissionId);
+    } else {
+      bump(anyPartClaims, row.activeSubmissionId);
+      bump(partClaims, partKey(row.activeSubmissionId, row.rubricPartId));
+    }
   }
+
+  /** How many claims overlap this row's coverage on the active submission, itself included. */
+  const overlappingClaims = (row: ExistingAssignmentRow): number => {
+    const whole = wholeRubricClaims.get(row.activeSubmissionId) ?? 0;
+    // A whole-rubric row overlaps every part on that submission; a part row overlaps
+    // only its own part, plus any whole-rubric claim.
+    if (row.rubricPartId === null) return whole + (anyPartClaims.get(row.activeSubmissionId) ?? 0);
+    return whole + (partClaims.get(partKey(row.activeSubmissionId, row.rubricPartId)) ?? 0);
+  };
 
   const contested = new Set<number>();
   for (const row of rows) {
     if (row.activeSubmissionId === row.rawSubmissionId) continue;
-    if ((slotOccupants.get(slotKey(row.activeSubmissionId, row.rubricPartId)) ?? 0) > 1) contested.add(row.rowId);
+    if (overlappingClaims(row) > 1) contested.add(row.rowId);
   }
 
   const existing: DraftAssignment[] = [];
