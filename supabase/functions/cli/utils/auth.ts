@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import { pageAll } from "./paging.ts";
 import { CLICommandError } from "../errors.ts";
 
 /** Roles that grant a CLI caller access to a class's data. */
@@ -34,15 +35,21 @@ const CLI_CLASS_ROLES = ["instructor", "grader"] as const;
  * would grant broader access than the token gate itself.
  */
 export async function listAccessibleClassIds(supabase: SupabaseClient<Database>, userId: string): Promise<number[]> {
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("class_id")
-    .eq("user_id", userId)
-    .eq("disabled", false)
-    .in("role", CLI_CLASS_ROLES);
-
-  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  return [...new Set((data ?? []).map((row) => row.class_id))];
+  // Paged: a long-lived instructor account can hold roles in more than max_rows
+  // classes, and a truncated set would permanently hide the remainder from
+  // classes.list while still reporting success.
+  const rows = await pageAll<{ class_id: number }>(
+    () =>
+      supabase
+        .from("user_roles")
+        .select("class_id")
+        .eq("user_id", userId)
+        .eq("disabled", false)
+        .in("role", CLI_CLASS_ROLES)
+        .order("class_id", { ascending: true }),
+    "Failed to verify class access"
+  );
+  return [...new Set(rows.map((row) => row.class_id))];
 }
 
 /**

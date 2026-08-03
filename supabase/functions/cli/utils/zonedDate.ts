@@ -14,8 +14,17 @@
 /** `YYYY-MM-DD` with nothing after it. */
 const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** `YYYY-MM-DDTHH:MM(:SS)?` with no trailing offset or `Z`. */
-const LOCAL_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/;
+/**
+ * `YYYY-MM-DDTHH:MM(:SS(.mmm)?)?` with no trailing offset or `Z`.
+ *
+ * Fractional seconds are matched because the client will forward them
+ * (`cli/utils/schedule.ts` accepts `.\d+`); without this they fell through to
+ * `new Date(raw)` and were read as UTC rather than in the class's zone.
+ */
+const LOCAL_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?$/;
+
+/** Ends in `Z` or `±HH:MM` / `±HHMM`. */
+const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 
 /**
  * Milliseconds to add to a "wall clock read as UTC" value to get the real UTC
@@ -130,7 +139,7 @@ export function resolveDueDate(input: string, timeZone: string | null | undefine
 
   const localDateTime = raw.match(LOCAL_DATE_TIME_RE);
   if (localDateTime) {
-    const [, y, m, d, hh, mm, ss] = localDateTime;
+    const [, y, m, d, hh, mm, ss, frac] = localDateTime;
     assertRealCalendarDate(Number(y), Number(m), Number(d), raw);
     const instant = utcFromWallClock(
       Number(y),
@@ -139,18 +148,32 @@ export function resolveDueDate(input: string, timeZone: string | null | undefine
       Number(hh),
       Number(mm),
       ss === undefined ? 0 : Number(ss),
-      0,
+      // "5" means 500ms, not 5ms — pad before parsing.
+      frac === undefined ? 0 : Number(frac.padEnd(3, "0")),
       zone
     );
     if (Number.isNaN(instant.getTime())) throw new ZonedDateError(`Invalid date: ${raw}`);
     return instant.toISOString();
   }
 
-  // Has an explicit offset or Z, or some other format Date understands.
+  // Only trust Date for input that states its own offset. ECMAScript reads an
+  // offset-less date-time as *local* time, and the Edge runtime's local zone is
+  // UTC — so anything that reached here without an offset would be silently
+  // shifted out of the class's zone, which is the failure this module exists to
+  // prevent. Rejecting also keeps formats like `09/15/2026` from being read in
+  // the wrong zone.
+  if (!HAS_OFFSET_RE.test(raw)) {
+    throw new ZonedDateError(
+      `Could not parse due date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
+        "or a timestamp with an explicit offset such as 2026-09-15T17:00:00-04:00."
+    );
+  }
+
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     throw new ZonedDateError(
-      `Could not parse due date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM, or a timestamp with an offset.`
+      `Could not parse due date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
+        "or a timestamp with an explicit offset."
     );
   }
   return parsed.toISOString();

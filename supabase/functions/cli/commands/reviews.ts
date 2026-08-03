@@ -25,6 +25,7 @@ const PAGE = 1000;
 const FETCH_ALL = Number.POSITIVE_INFINITY;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_LIST_LIMIT = 1000;
+const MAX_LIST_LIMIT = 5000;
 
 interface ReviewsListParams {
   class?: string | number;
@@ -169,8 +170,18 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
     throw new CLICommandError(`Invalid status: ${status}. Must be pending, completed, or all`, 400);
   }
 
-  const limit = p.limit === undefined || p.limit === null ? DEFAULT_LIST_LIMIT : Math.floor(Number(p.limit));
-  if (!Number.isFinite(limit) || limit < 1) throw new CLICommandError("limit must be a positive integer", 400);
+  const limit = p.limit === undefined || p.limit === null ? DEFAULT_LIST_LIMIT : Number(p.limit);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new CLICommandError(`limit must be a positive integer (got ${String(p.limit)})`, 400);
+  }
+  // Bounded rather than clamped, matching help_requests.list: an unbounded limit
+  // pages the whole table through the edge function.
+  if (limit > MAX_LIST_LIMIT) {
+    throw new CLICommandError(
+      `limit must be ${MAX_LIST_LIMIT} or less (got ${limit}). Narrow the results with --status, --assignee, or --rubric.`,
+      400
+    );
+  }
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
@@ -361,6 +372,8 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   let drafts: DraftAssignment[];
   let allocation: ReturnType<typeof allocateRoundRobin> | null = null;
   let retargetCount = 0;
+  /** review_assignment id -> deadline to restore after the RPC rewrites it. */
+  let deadlinesToRestore = new Map<number, string>();
 
   if (p.drafts !== undefined && p.drafts !== null) {
     drafts = parseDraftManifest(p.drafts);
@@ -536,6 +549,12 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // carry the *stale* submission id — which the RPC accepts, since it validates
     // class and assignment membership without requiring is_active.
     const retargetDrafts: DraftAssignment[] = [];
+    // The RPC sets due_date = p_due_date on every assignment it *reuses*, and a
+    // repair draft reuses the stale row by design. Left alone, a rerun with a new
+    // deadline would silently reschedule exactly the stale assignments while
+    // leaving every other existing one untouched. Their original deadlines are
+    // captured here and restored after the write.
+    const staleDueDates = new Map<number, string>();
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
       const rawSubmissionId = row.submission_id as number;
@@ -552,6 +571,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
             submission_id: rawSubmissionId,
             rubric_part_id: rubricPartId
           });
+          staleDueDates.set(row.id as number, row.due_date as string);
         }
       }
     }
@@ -569,6 +589,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // assignments left pointing at superseded submissions.
     drafts = [...retargetDrafts, ...allocation.drafts];
     retargetCount = retargetDrafts.length;
+    deadlinesToRestore = staleDueDates;
   }
 
   const response = {
@@ -630,7 +651,37 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     );
   }
 
-  return { success: true, data: { ...response, dry_run: false, result: rpcResult } };
+  // Undo the deadline rewrite the RPC applied to repaired rows. Grouped by value
+  // so a large repair is a handful of updates rather than one per row.
+  let deadlinesRestored = 0;
+  if (deadlinesToRestore.size > 0) {
+    const idsByDueDate = new Map<string, number[]>();
+    for (const [id, dueDate] of deadlinesToRestore) {
+      const ids = idsByDueDate.get(dueDate) ?? [];
+      ids.push(id);
+      idsByDueDate.set(dueDate, ids);
+    }
+    for (const [dueDate, ids] of idsByDueDate) {
+      for (let i = 0; i < ids.length; i += 500) {
+        const { error: restoreError } = await supabase
+          .from("review_assignments")
+          .update({ due_date: dueDate })
+          .in("id", ids.slice(i, i + 500));
+        if (restoreError) {
+          throw new CLICommandError(
+            `Assignments were written, but restoring the original deadline on repaired rows failed: ${restoreError.message}`,
+            500
+          );
+        }
+      }
+    }
+    deadlinesRestored = deadlinesToRestore.size;
+  }
+
+  return {
+    success: true,
+    data: { ...response, dry_run: false, result: rpcResult, deadlines_preserved: deadlinesRestored }
+  };
 }
 
 /**

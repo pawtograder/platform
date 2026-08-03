@@ -9,6 +9,7 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -19,58 +20,69 @@ import type {
   ReposCrossAssignmentCopyPair
 } from "../types.ts";
 
-const PAGE_SIZE = 1000;
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
-async function fetchRepositoriesForAssignment(assignmentId: number): Promise<ReposListRepositoryRow[]> {
+/**
+ * Repositories for an assignment, excluding those owned by a disabled enrollment.
+ *
+ * The disabled filter is applied in memory rather than as an embedded
+ * `user_roles!inner(disabled)` join. That join was on
+ * `repositories.profile_id -> user_roles.private_profile_id`, and group repos are
+ * inserted with a **null** `profile_id`
+ * (`assignment-create-all-repos/index.ts` never sets one on the group branch), so
+ * an inner join on a null key matched nothing and every group repository was
+ * silently dropped. `repos list` printed "No repositories" for a group
+ * assignment, and `repos sync-grade-workflow` reported success having pushed to
+ * none of them — while the code just below this branches on
+ * `assignment_group_id != null && !profile_id`, i.e. rows the query could never
+ * return.
+ */
+async function fetchRepositoriesForAssignment(
+  classId: number,
+  assignmentId: number
+): Promise<ReposListRepositoryRow[]> {
   const supabase = getAdminClient();
-  const out: ReposListRepositoryRow[] = [];
-  let offset = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("repositories")
-      .select(
-        `
-        id,
-        repository,
-        profile_id,
-        assignment_group_id,
-        user_roles!inner(disabled)
-      `
-      )
-      .eq("assignment_id", assignmentId)
-      .eq("user_roles.disabled", false)
-      .order("id", { ascending: true })
-      .range(offset, offset + PAGE_SIZE - 1);
 
-    if (error) {
-      throw new CLICommandError(`Failed to fetch repositories: ${error.message}`, 500);
-    }
-    const rows = data ?? [];
-    for (const row of rows) {
-      const r = row as unknown as ReposListRepositoryRow & { user_roles?: { disabled: boolean } | null };
-      out.push({
-        id: r.id,
-        repository: r.repository,
-        profile_id: r.profile_id,
-        assignment_group_id: r.assignment_group_id
-      });
-    }
-    if (rows.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-  return out;
+  const rows = await pageAll<ReposListRepositoryRow>(
+    () =>
+      supabase
+        .from("repositories")
+        .select("id, repository, profile_id, assignment_group_id")
+        .eq("assignment_id", assignmentId)
+        .order("id", { ascending: true }),
+    "Failed to fetch repositories"
+  );
+
+  const disabledProfiles = await pageAll<{ private_profile_id: string }>(
+    () =>
+      supabase
+        .from("user_roles")
+        .select("private_profile_id")
+        .eq("class_id", classId)
+        .eq("disabled", true)
+        .order("id", { ascending: true }),
+    "Failed to load disabled enrollments"
+  );
+  const disabled = new Set(disabledProfiles.map((r) => r.private_profile_id));
+
+  // A group repo has no profile_id, so there is no individual enrollment to
+  // disable; it is kept.
+  return rows.filter((r) => !r.profile_id || !disabled.has(r.profile_id));
 }
 
 async function fetchGroupIdToName(assignmentId: number): Promise<Map<number, string>> {
   const supabase = getAdminClient();
-  const { data, error } = await supabase.from("assignment_groups").select("id, name").eq("assignment_id", assignmentId);
-
-  if (error) {
-    throw new CLICommandError(`assignment_groups: ${error.message}`, 500);
-  }
+  const rows = await pageAll<{ id: number; name: string }>(
+    () =>
+      supabase
+        .from("assignment_groups")
+        .select("id, name")
+        .eq("assignment_id", assignmentId)
+        .order("id", { ascending: true }),
+    "assignment_groups"
+  );
   const map = new Map<number, string>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     map.set(row.id, row.name);
   }
   return map;
@@ -98,17 +110,23 @@ async function fetchGroupRepresentativeProfiles(groupIds: number[]): Promise<Map
   if (groupIds.length === 0) return map;
   const unique = [...new Set(groupIds)];
   const supabase = getAdminClient();
-  const BATCH = 500;
+  const BATCH = 200;
   for (let i = 0; i < unique.length; i += BATCH) {
     const batch = unique.slice(i, i + BATCH);
-    const { data, error } = await supabase
-      .from("assignment_groups_members")
-      .select("assignment_group_id, profile_id")
-      .in("assignment_group_id", batch);
-    if (error) {
-      throw new CLICommandError(`assignment_groups_members: ${error.message}`, 500);
-    }
-    const sorted = [...(data ?? [])].sort((a, b) => {
+    // Paged within the batch: 500 group ids can return far more than max_rows
+    // member rows, and a truncated read leaves later groups without a
+    // representative profile, which surfaces as a bogus
+    // "could not resolve profile for due date" error per repo.
+    const data = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", batch)
+          .order("id", { ascending: true }),
+      "assignment_groups_members"
+    );
+    const sorted = [...data].sort((a, b) => {
       const g = a.assignment_group_id - b.assignment_group_id;
       if (g !== 0) return g;
       return a.profile_id.localeCompare(b.profile_id);
@@ -146,7 +164,7 @@ async function handleReposList(ctx: MCPAuthContext, params: Record<string, unkno
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
-  const repositories = await fetchRepositoriesForAssignment(assignment.id);
+  const repositories = await fetchRepositoriesForAssignment(classData.id, assignment.id);
 
   return {
     success: true,
@@ -196,7 +214,7 @@ async function handleSyncGradeWorkflowContext(
     throw new CLICommandError(`Could not read ${GRADE_WORKFLOW_PATH} from ${templateRepo}: ${msg}`, 400);
   }
 
-  const repositories = await fetchRepositoriesForAssignment(assignment.id);
+  const repositories = await fetchRepositoriesForAssignment(classData.id, assignment.id);
   const gradeYmlBase64 = Buffer.from(gradeContent, "utf8").toString("base64");
 
   return {
@@ -238,8 +256,8 @@ async function handleCrossAssignmentCopyContext(
   }
 
   const [sourceRepos, targetRepos, sourceGroupNames, targetGroupNames] = await Promise.all([
-    fetchRepositoriesForAssignment(source.id),
-    fetchRepositoriesForAssignment(target.id),
+    fetchRepositoriesForAssignment(classData.id, source.id),
+    fetchRepositoriesForAssignment(classData.id, target.id),
     fetchGroupIdToName(source.id),
     fetchGroupIdToName(target.id)
   ]);

@@ -10,27 +10,69 @@ import { dedupeSurveysToLatestVersion } from "./surveyCopy.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Escapes LIKE metacharacters so an identifier is matched literally.
+ *
+ * Without this, `--class "%"` matches every class and `cs_500` matches `cs-500`,
+ * so a command could silently run against a class the operator did not name.
+ */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export async function resolveClass(supabase: SupabaseClient<Database>, identifier: string | number): Promise<ClassRow> {
   // Try by ID first
   if (typeof identifier === "number" || /^\d+$/.test(String(identifier))) {
-    const { data, error } = await supabase.from("classes").select("*").eq("id", Number(identifier)).single();
-    if (!error && data) return data as ClassRow;
+    const { data, error } = await supabase.from("classes").select("*").eq("id", Number(identifier)).maybeSingle();
+    if (error) throw new CLICommandError(`Failed to resolve class: ${error.message}`, 500);
+    if (data) return data as ClassRow;
   }
 
-  // Try by slug
-  const { data: bySlug } = await supabase.from("classes").select("*").eq("slug", String(identifier)).single();
-  if (bySlug) return bySlug as ClassRow;
-
-  // Try by exact name
-  const { data: byExactName } = await supabase.from("classes").select("*").eq("name", String(identifier)).maybeSingle();
-  if (byExactName) return byExactName as ClassRow;
-
-  // Try by name (partial match); multiple hits are ambiguous
-  const { data: byName } = await supabase
+  // Try by slug. Not `.single()`: classes.slug carries no unique constraint, and
+  // reusing a course code across terms is normal. `.single()` errored on the
+  // second match and — with the error discarded — resolution fell through to the
+  // name search and usually ended at "Class not found" for a class that plainly
+  // exists, making every --class <slug> invocation unusable.
+  const { data: bySlug, error: slugError } = await supabase
     .from("classes")
     .select("*")
-    .ilike("name", `%${String(identifier)}%`)
+    .eq("slug", String(identifier))
+    .order("id", { ascending: false })
     .limit(2);
+  if (slugError) throw new CLICommandError(`Failed to resolve class: ${slugError.message}`, 500);
+  const slugMatches = (bySlug ?? []) as ClassRow[];
+  if (slugMatches.length > 1) {
+    throw new CLICommandError(
+      `Ambiguous class slug "${String(identifier)}": ${slugMatches.map((c) => c.id).join(", ")}. Pass a class id.`,
+      400
+    );
+  }
+  if (slugMatches.length === 1) return slugMatches[0]!;
+
+  // Try by exact name
+  const { data: byExactName, error: exactNameError } = await supabase
+    .from("classes")
+    .select("*")
+    .eq("name", String(identifier))
+    .order("id", { ascending: false })
+    .limit(2);
+  if (exactNameError) throw new CLICommandError(`Failed to resolve class: ${exactNameError.message}`, 500);
+  const exactMatches = (byExactName ?? []) as ClassRow[];
+  if (exactMatches.length > 1) {
+    throw new CLICommandError(
+      `Ambiguous class name "${String(identifier)}": ${exactMatches.map((c) => c.id).join(", ")}. Pass a class id.`,
+      400
+    );
+  }
+  if (exactMatches.length === 1) return exactMatches[0]!;
+
+  // Try by name (partial match); multiple hits are ambiguous
+  const { data: byName, error: nameError } = await supabase
+    .from("classes")
+    .select("*")
+    .ilike("name", `%${escapeLikePattern(String(identifier))}%`)
+    .limit(2);
+  if (nameError) throw new CLICommandError(`Failed to resolve class: ${nameError.message}`, 500);
   const nameMatches = (byName ?? []) as ClassRow[];
   if (nameMatches.length > 1) {
     throw new CLICommandError(
@@ -50,23 +92,35 @@ export async function resolveAssignment(
 ): Promise<AssignmentRow> {
   // Try by ID first
   if (typeof identifier === "number" || /^\d+$/.test(String(identifier))) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("assignments")
       .select("*")
       .eq("id", Number(identifier))
       .eq("class_id", classId)
-      .single();
+      .maybeSingle();
+    if (error) throw new CLICommandError(`Failed to resolve assignment: ${error.message}`, 500);
     if (data) return data as AssignmentRow;
   }
 
-  // Try by slug
-  const { data: bySlug } = await supabase
+  // Try by slug. As with classes, assignments.slug has no unique constraint, so
+  // `.single()` broke on a duplicate instead of reporting the ambiguity.
+  const { data: bySlug, error: slugError } = await supabase
     .from("assignments")
     .select("*")
     .eq("slug", String(identifier))
     .eq("class_id", classId)
-    .single();
-  if (bySlug) return bySlug as AssignmentRow;
+    .order("id", { ascending: false })
+    .limit(2);
+  if (slugError) throw new CLICommandError(`Failed to resolve assignment: ${slugError.message}`, 500);
+  const slugMatches = (bySlug ?? []) as AssignmentRow[];
+  if (slugMatches.length > 1) {
+    throw new CLICommandError(
+      `Ambiguous assignment slug "${String(identifier)}" in class ${classId}: ` +
+        `${slugMatches.map((a) => a.id).join(", ")}. Pass an assignment id.`,
+      400
+    );
+  }
+  if (slugMatches.length === 1) return slugMatches[0]!;
 
   throw new CLICommandError(`Assignment not found: ${identifier} in class ${classId}`, 404);
 }

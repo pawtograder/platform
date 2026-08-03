@@ -16,6 +16,7 @@ import type {
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
 import { gradingTotalForStudent } from "../utils/gradingTotals.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
 import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
@@ -82,6 +83,10 @@ async function fetchAssigneesForRubricPart(
         .from("review_assignments")
         .select("id, submission_id, assignee_profile_id")
         .in("submission_id", batch)
+        // Ordered: unordered .range() paging can skip or duplicate rows, and the
+        // first match below becomes the recorded comment author — so without a
+        // stable order the attribution varied between runs.
+        .order("id", { ascending: true })
         .range(page * PAGE, (page + 1) * PAGE - 1);
       if (error) throw new CLICommandError(`review_assignments: ${error.message}`, 500);
       if (!rows?.length) {
@@ -112,6 +117,7 @@ async function fetchAssigneesForRubricPart(
         .from("review_assignment_rubric_parts")
         .select("review_assignment_id, rubric_part_id")
         .in("review_assignment_id", batch)
+        .order("id", { ascending: true })
         .range(page * PAGE, (page + 1) * PAGE - 1);
       if (error) throw new CLICommandError(`review_assignment_rubric_parts: ${error.message}`, 500);
       if (!rows?.length) {
@@ -690,11 +696,58 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
   }
 
   if (section === "files") {
-    const submissionIds = params.submission_ids;
-    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+    const rawSubmissionIds = params.submission_ids;
+    if (!Array.isArray(rawSubmissionIds) || rawSubmissionIds.length === 0) {
       throw new CLICommandError("submission_ids is required for section=files", 400);
     }
-    const filesBatchIndex = typeof params.files_batch_index === "number" ? params.files_batch_index : 0;
+
+    const requestedIds = [...new Set(rawSubmissionIds.map((id) => Number(id)))];
+    if (requestedIds.some((id) => !Number.isInteger(id) || id < 1)) {
+      throw new CLICommandError("submission_ids must all be positive integers", 400);
+    }
+
+    // Scope the caller's ids to the class and assignment they were authorized for.
+    //
+    // Without this the only predicate downstream is `.in("submission_id", ids)` on
+    // the service-role client, so anyone holding cli:read in a single class could
+    // pass ids belonging to any other class and receive full submission_files
+    // contents — student source code — for the whole deployment. Submission ids
+    // are sequential, so enumeration is trivial. `assignment` was already
+    // resolved here but never applied to the query.
+    const ownedIds: number[] = [];
+    for (let i = 0; i < requestedIds.length; i += 500) {
+      const batch = requestedIds.slice(i, i + 500);
+      const rows = await pageAll<{ id: number }>(
+        () =>
+          supabase
+            .from("submissions")
+            .select("id")
+            .eq("class_id", classData.id)
+            .eq("assignment_id", assignment.id)
+            .in("id", batch)
+            .order("id", { ascending: true }),
+        "Failed to validate submission_ids"
+      );
+      ownedIds.push(...rows.map((r) => r.id));
+    }
+
+    const ownedSet = new Set(ownedIds);
+    const foreignIds = requestedIds.filter((id) => !ownedSet.has(id));
+    if (foreignIds.length > 0) {
+      throw new CLICommandError(
+        `These submission ids do not belong to assignment ${assignment.id} in class ${classData.id}: ` +
+          foreignIds.slice(0, 20).join(", ") +
+          (foreignIds.length > 20 ? ` (and ${foreignIds.length - 20} more)` : ""),
+        400
+      );
+    }
+
+    const submissionIds = ownedIds;
+    const rawBatchIndex = params.files_batch_index ?? 0;
+    if (!Number.isInteger(Number(rawBatchIndex)) || Number(rawBatchIndex) < 0) {
+      throw new CLICommandError("files_batch_index must be a non-negative integer", 400);
+    }
+    const filesBatchIndex = Number(rawBatchIndex);
 
     return streamNdjson(async (writer) => {
       const { fileCount, nextFilesBatchIndex } = await streamSubmissionFiles(supabase, tokenizer, writer, {
@@ -723,6 +776,7 @@ function normalizePatternList(raw: string[] | undefined): string[] {
 
 const SUBMISSIONS_LIST_PAGE = 1000;
 const SUBMISSIONS_LIST_DEFAULT_LIMIT = 1000;
+const SUBMISSIONS_LIST_MAX_LIMIT = 10000;
 
 interface SubmissionsListParams {
   class?: string | number;
@@ -756,10 +810,15 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
   if (!p.class) throw new CLICommandError("class is required");
   if (!p.assignment) throw new CLICommandError("assignment is required");
 
-  const limit =
-    p.limit === undefined || p.limit === null ? SUBMISSIONS_LIST_DEFAULT_LIMIT : Math.floor(Number(p.limit));
-  if (!Number.isFinite(limit) || limit < 1) {
-    throw new CLICommandError("limit must be a positive integer", 400);
+  const limit = p.limit === undefined || p.limit === null ? SUBMISSIONS_LIST_DEFAULT_LIMIT : Number(p.limit);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new CLICommandError(`limit must be a positive integer (got ${String(p.limit)})`, 400);
+  }
+  if (limit > SUBMISSIONS_LIST_MAX_LIMIT) {
+    throw new CLICommandError(
+      `limit must be ${SUBMISSIONS_LIST_MAX_LIMIT} or less (got ${limit}). A class roster does not exceed that.`,
+      400
+    );
   }
 
   const supabase = getAdminClient();

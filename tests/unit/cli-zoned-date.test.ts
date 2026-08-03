@@ -73,6 +73,22 @@ describe("resolveDueDate — wall-clock date and time", () => {
     expect(resolveDueDate("2026-09-15T17:00:30", NY)).toBe("2026-09-15T21:00:30.000Z");
   });
 
+  it("accepts fractional seconds in the class's zone, not UTC", () => {
+    // The client forwards `.\d+`, so this must be recognized as a *local*
+    // timestamp. Falling through to `new Date(raw)` read it as UTC, turning a
+    // requested 5 PM Eastern into 1 PM.
+    expect(resolveDueDate("2026-09-15T17:00:00.500", NY)).toBe("2026-09-15T21:00:00.500Z");
+    expect(wallClock(resolveDueDate("2026-09-15T17:00:00.500", NY), NY)).toBe("2026-09-15, 17:00:00");
+  });
+
+  it("reads a single fractional digit as tenths, not milliseconds", () => {
+    expect(resolveDueDate("2026-09-15T17:00:00.5", NY)).toBe("2026-09-15T21:00:00.500Z");
+  });
+
+  it("truncates sub-millisecond precision rather than rejecting it", () => {
+    expect(resolveDueDate("2026-09-15T17:00:00.123456", NY)).toBe("2026-09-15T21:00:00.123Z");
+  });
+
   it("does not shift a spring-forward gap time into a wildly wrong instant", () => {
     // 02:30 on 2026-03-08 does not exist in New York. It should resolve to a
     // stable instant near the transition rather than throwing or jumping a day.
@@ -99,6 +115,15 @@ describe("resolveDueDate — rejections", () => {
 
   it("rejects unparseable input with an actionable message", () => {
     expect(() => resolveDueDate("next tuesday", NY)).toThrow(/Could not parse due date/);
+  });
+
+  it("rejects offset-less formats rather than reading them in the runtime's zone", () => {
+    // The Edge runtime's local zone is UTC, so anything Date accepts without an
+    // offset would be silently shifted out of the class's zone. Better to refuse
+    // than to set a deadline hours off.
+    expect(() => resolveDueDate("09/15/2026", NY)).toThrow(/explicit offset/);
+    expect(() => resolveDueDate("Sep 15 2026 17:00", NY)).toThrow(/explicit offset/);
+    expect(() => resolveDueDate("2026-09-15T17:00:00.123456789", NY)).not.toThrow();
   });
 
   it("rejects an unknown class time zone instead of quietly using UTC", () => {

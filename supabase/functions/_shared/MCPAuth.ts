@@ -220,8 +220,11 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
     .maybeSingle();
 
   if (error) {
-    // Fail closed - treat as revoked if we can't check
-    return true;
+    // Still fail closed — the request is rejected — but as a reportable server
+    // fault rather than a 401 "revoked". A database or permission outage here
+    // rejects every valid token, and reporting it as a revocation made that
+    // invisible to monitoring: a 401 is deliberately not sent to Sentry.
+    throw new MCPAuthError(`Could not verify token revocation status: ${error.message}`, 503);
   }
 
   return !!data;

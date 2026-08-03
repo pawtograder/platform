@@ -346,8 +346,12 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
       request: updated,
       previous_status: existing.status,
       activity_logged: activityLogged,
-      /** True when a Chime call is still up; no trigger tears it down. */
-      video_still_live: existing.is_video_live === true
+      /**
+       * True when a Chime call is still up; no trigger tears it down. Read from
+       * the updated row, not the pre-update one: a call that ended between the
+       * read and the write would otherwise be reported as still running.
+       */
+      video_still_live: updated.is_video_live === true
     }
   };
 }

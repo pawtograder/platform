@@ -9,6 +9,7 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { resolveDueDate } from "../utils/zonedDate.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
 import { copyRubricStructure, copyRubricCheckReferencesForAssignment } from "../utils/rubric.ts";
 import { repoExistsOnGitHub } from "../utils/github.ts";
@@ -209,6 +210,28 @@ function mergeScheduleDueDateOverrides(
     );
   }
   return dueDate ?? latestDueDate;
+}
+
+/**
+ * Resolves a schedule CSV date override in the target class's time zone.
+ *
+ * The client normalizes `--schedule` rows to a bare `YYYY-MM-DD`
+ * (`cli/utils/schedule.ts`), which Postgres would resolve in the session zone
+ * (UTC) when written to a `timestamptz` — making `2026-01-22` mean Jan 21, 7 PM
+ * Eastern, a day early. `reviews assign` already resolves the identical input as
+ * end-of-day in the class zone, so without this the two commands disagreed about
+ * what a bare date means.
+ */
+function resolveScheduleDate(value: string | undefined, timeZone: string | null, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return resolveDueDate(value, timeZone);
+  } catch (err) {
+    throw new CLICommandError(
+      `Invalid ${field} in schedule: ${err instanceof Error ? err.message : String(value)}`,
+      400
+    );
+  }
 }
 
 async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
@@ -570,8 +593,11 @@ async function copySingleAssignment(
       title: sourceAssignment.title,
       slug: sourceAssignment.slug,
       description: sourceAssignment.description,
-      release_date: options.releaseDateOverride ?? sourceAssignment.release_date,
-      due_date: options.dueDateOverride ?? sourceAssignment.due_date,
+      release_date:
+        resolveScheduleDate(options.releaseDateOverride, targetClass.time_zone, "release_date") ??
+        sourceAssignment.release_date,
+      due_date:
+        resolveScheduleDate(options.dueDateOverride, targetClass.time_zone, "due_date") ?? sourceAssignment.due_date,
       total_points: sourceAssignment.total_points,
       max_late_tokens: sourceAssignment.max_late_tokens,
       group_config: sourceAssignment.group_config,
