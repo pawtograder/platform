@@ -37,8 +37,11 @@ export default function SelfReviewDueDateInformation() {
     if (settings.allow_early) {
       return (
         // Wraps so the finalize button drops below the text at narrow/zoomed widths (WCAG 1.4.10).
-        <HStack flexWrap="wrap">
-          <VStack justifyContent="start" alignItems="start" w="100%" minW={0} flex="1 1 16rem">
+        // Only below md: at desktop widths the row stays no-wrap and the text column keeps its
+        // w=100% flex basis, so the button shrinks into place exactly as it did before — giving
+        // the basis to the column instead made it ~20px narrower and broke the sentence early.
+        <HStack flexWrap={{ base: "wrap", md: "nowrap" }}>
+          <VStack justifyContent="start" alignItems="start" w="100%" minW={0}>
             <Text>
               A self review will be due at <TimeZoneAwareDate date={selfReviewDueDate} format="full" /> (
               {settings.deadline_offset} hours after the coding assignment due date).

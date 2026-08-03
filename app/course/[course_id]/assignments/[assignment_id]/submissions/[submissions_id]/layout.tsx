@@ -1567,7 +1567,11 @@ function TestResults() {
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
-            <Heading as="h3" size="sm">
+            {/* display=inline keeps the check name on the icon's line. The heading now wraps the
+                link (rather than the reverse) for correct semantics, but an h3 is block-level, so
+                without this it starts a new line — Chakra's Link is inline-flex, which is why the
+                old link-wrapping-heading markup sat inline. */}
+            <Heading as="h3" size="sm" display="inline">
               <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
               </Link>
