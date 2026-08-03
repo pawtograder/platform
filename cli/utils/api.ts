@@ -17,6 +17,29 @@ export interface Credentials {
   api_url: string;
 }
 
+/**
+ * Accept either a full endpoint URL or a bare API host and return the
+ * `cli` Edge Function endpoint. Self-hosted deployments serve it from the
+ * API gateway origin (`https://api.<hostname>` by default), not the web host.
+ */
+export function normalizeApiUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new CLIError(`Invalid API URL: ${url}`);
+  }
+
+  const path = parsed.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/functions/v1/cli")) return parsed.toString().replace(/\/+$/, "");
+
+  parsed.pathname = path.endsWith("/functions/v1") ? `${path}/cli` : `${path}/functions/v1/cli`;
+  return parsed.toString();
+}
+
 interface CLIApiResponse {
   success: boolean;
   data?: any;
@@ -132,6 +155,13 @@ export async function apiCall(command: string, params: Record<string, unknown> =
         `Server error (HTTP ${response.status}) after ${elapsed}s.\n` +
           `   Response body: ${rawBody.slice(0, 200)}${rawBody.length > 200 ? "..." : ""}\n` +
           "   The server may be overloaded. Try again later."
+      );
+    }
+    if (/^\s*<(!doctype|html)/i.test(rawBody)) {
+      throw new CLIError(
+        `API returned an HTML page (HTTP ${response.status}) from ${creds.api_url}.\n` +
+          "   That URL is serving the web app, not the 'cli' Edge Function.\n" +
+          "   Point --url at your deployment's API gateway origin (usually https://api.<hostname>)."
       );
     }
     throw new CLIError(`API returned invalid JSON (HTTP ${response.status}): ${rawBody.slice(0, 150)}`);
