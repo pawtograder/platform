@@ -1,0 +1,5 @@
+# Built bundle — produced by `npm run build`, never committed.
+dist/
+
+# Tarballs left behind by `npm pack` during release checks.
+*.tgz

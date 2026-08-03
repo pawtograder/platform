@@ -14,7 +14,9 @@
  */
 
 import {
+  activeSubmissionFor,
   allocateRoundRobin,
+  buildActiveSubmissionIndex,
   summarizeLoad,
   type DraftAssignment
 } from "../../supabase/functions/cli/utils/reviewAllocation";
@@ -264,5 +266,70 @@ describe("summarizeLoad", () => {
 
   it("returns an empty list for no drafts", () => {
     expect(summarizeLoad([])).toEqual([]);
+  });
+});
+
+describe("retargeting stale submissions", () => {
+  // A resubmission supersedes the submission an existing review assignment points
+  // at. If coverage were keyed on the raw id, the current submission would look
+  // unassigned and get drafted again — usually to a different assignee, since the
+  // stale assignment still counts toward reviewer load — and bulk_assign_reviews
+  // would leave the stale row in place. The work would then be graded twice.
+  const active = [
+    { id: 500, profile_id: "student-1", assignment_group_id: null },
+    { id: 501, profile_id: null, assignment_group_id: 42 }
+  ];
+  const index = buildActiveSubmissionIndex(active);
+
+  it("maps an individual's stale submission onto their active one", () => {
+    expect(activeSubmissionFor({ groupId: null, profileId: "student-1" }, 400, index)).toBe(500);
+  });
+
+  it("maps a group's stale submission onto the group's active one", () => {
+    expect(activeSubmissionFor({ groupId: 42, profileId: "member-a" }, 401, index)).toBe(501);
+  });
+
+  it("prefers group ownership when a submission carries both", () => {
+    // Group submissions record a submitting profile too; the group is the unit
+    // the assignment follows.
+    expect(activeSubmissionFor({ groupId: 42, profileId: "student-1" }, 402, index)).toBe(501);
+  });
+
+  it("keeps the original id when the owner has no active submission", () => {
+    expect(activeSubmissionFor({ groupId: 99, profileId: null }, 403, index)).toBe(403);
+    expect(activeSubmissionFor({ groupId: null, profileId: "unknown" }, 404, index)).toBe(404);
+    expect(activeSubmissionFor(null, 405, index)).toBe(405);
+  });
+
+  it("treats the retargeted assignment as covering the active submission", () => {
+    // End to end: the stale assignment is remapped, so no duplicate is drafted.
+    const stale = { assignee_profile_id: "grader-a", submission_id: 400, rubric_part_id: null };
+    const remapped: DraftAssignment = {
+      ...stale,
+      submission_id: activeSubmissionFor({ groupId: null, profileId: "student-1" }, stale.submission_id, index)
+    };
+
+    const { drafts, skippedAlreadyAssigned } = allocateRoundRobin({
+      submissionIds: [500],
+      assigneeProfileIds: ["grader-a", "grader-b"],
+      rubricPartIds: null,
+      existing: [remapped]
+    });
+
+    expect(drafts).toEqual([]);
+    expect(skippedAlreadyAssigned).toBe(1);
+  });
+
+  it("would have duplicated the work without retargeting", () => {
+    // Guards the regression: keeping the stale id drafts the active submission.
+    const { drafts } = allocateRoundRobin({
+      submissionIds: [500],
+      assigneeProfileIds: ["grader-a", "grader-b"],
+      rubricPartIds: null,
+      existing: [{ assignee_profile_id: "grader-a", submission_id: 400, rubric_part_id: null }]
+    });
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].submission_id).toBe(500);
   });
 });

@@ -96,14 +96,29 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
       .eq("class_id", classData.id);
     if (queueError) throw new CLICommandError(`Failed to list help queues: ${queueError.message}`, 500);
 
-    const match = /^\d+$/.test(raw)
-      ? (queues ?? []).find((q) => q.id === Number(raw))
-      : (queues ?? []).find((q) => q.name.toLowerCase() === raw.toLowerCase());
-    if (!match) {
-      const available = (queues ?? []).map((q) => `${q.id} (${q.name})`).join(", ") || "none";
-      throw new CLICommandError(`Help queue not found: ${raw}. Available: ${available}`, 404);
+    const available = (queues ?? []).map((q) => `${q.id} (${q.name})`).join(", ") || "none";
+
+    if (/^\d+$/.test(raw)) {
+      const match = (queues ?? []).find((q) => q.id === Number(raw));
+      if (!match) throw new CLICommandError(`Help queue not found: ${raw}. Available: ${available}`, 404);
+      queueId = match.id;
+    } else {
+      // Nothing stops a class having two queues whose names differ only by case,
+      // and the query has no ordering, so picking the first match would filter an
+      // unpredictable queue. Make the caller disambiguate by id instead.
+      const matches = (queues ?? []).filter((q) => q.name.toLowerCase() === raw.toLowerCase());
+      if (matches.length === 0) {
+        throw new CLICommandError(`Help queue not found: ${raw}. Available: ${available}`, 404);
+      }
+      if (matches.length > 1) {
+        throw new CLICommandError(
+          `Multiple help queues in this class are named "${raw}": ${matches.map((q) => q.id).join(", ")}. ` +
+            "Pass the queue id instead.",
+          400
+        );
+      }
+      queueId = matches[0]!.id;
     }
-    queueId = match.id;
   }
 
   let query = supabase

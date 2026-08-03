@@ -8,7 +8,13 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment, resolveRubricIdForType, RUBRIC_TYPES } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
-import { allocateRoundRobin, summarizeLoad, type DraftAssignment } from "../utils/reviewAllocation.ts";
+import {
+  activeSubmissionFor,
+  allocateRoundRobin,
+  buildActiveSubmissionIndex,
+  summarizeLoad,
+  type DraftAssignment
+} from "../utils/reviewAllocation.ts";
 import { resolveDueDate } from "../utils/zonedDate.ts";
 import { CLICommandError } from "../errors.ts";
 import type { AssignmentRow, CLIResponse } from "../types.ts";
@@ -72,6 +78,35 @@ async function resolveRubricParam(
     throw new CLICommandError(`Assignment ${assignment.slug ?? assignment.id} has no ${value} rubric`, 400);
   }
   return rubricId;
+}
+
+/**
+ * Drains a query that has no natural bound.
+ *
+ * PostgREST caps every response at `max_rows` (1000, see supabase/config.toml),
+ * and it does so silently — an unpaged `select` over a large course returns a
+ * truncated page that looks like the whole answer. For allocation inputs that is
+ * not a display glitch: a missing submission goes unassigned, and a missing
+ * conflict or group member lets someone be handed their own work.
+ *
+ * `makeQuery` must build a fresh builder each call, since `.range()` cannot be
+ * re-applied to a spent one.
+ */
+async function pageAll<T>(
+  makeQuery: () => PromiseLike<{ data: T[] | null; error: { message: string } | null }> & {
+    range: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
+  },
+  label: string
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await makeQuery().range(offset, offset + PAGE - 1);
+    if (error) throw new CLICommandError(`${label}: ${error.message}`, 500);
+    const rows = data ?? [];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
 }
 
 export interface ReviewAssignmentFilters {
@@ -279,16 +314,24 @@ function parseDraftManifest(raw: unknown): DraftAssignment[] {
       throw new CLICommandError(`drafts[${index}].assignee_profile_id must be a profile UUID`, 400);
     }
 
-    const submissionId = Math.floor(Number(record.submission_id));
-    if (!Number.isFinite(submissionId) || submissionId < 1) {
-      throw new CLICommandError(`drafts[${index}].submission_id must be a positive integer`, 400);
+    // Not floored: 123.4 would become a real but unintended submission, and this
+    // path writes grading assignments.
+    const submissionId = Number(record.submission_id);
+    if (!Number.isInteger(submissionId) || submissionId < 1) {
+      throw new CLICommandError(
+        `drafts[${index}].submission_id must be a positive integer (got ${String(record.submission_id)})`,
+        400
+      );
     }
 
     let rubricPartId: number | null = null;
     if (record.rubric_part_id !== undefined && record.rubric_part_id !== null) {
-      rubricPartId = Math.floor(Number(record.rubric_part_id));
-      if (!Number.isFinite(rubricPartId) || rubricPartId < 1) {
-        throw new CLICommandError(`drafts[${index}].rubric_part_id must be a positive integer or null`, 400);
+      rubricPartId = Number(record.rubric_part_id);
+      if (!Number.isInteger(rubricPartId) || rubricPartId < 1) {
+        throw new CLICommandError(
+          `drafts[${index}].rubric_part_id must be a positive integer or null (got ${String(record.rubric_part_id)})`,
+          400
+        );
       }
     }
 
@@ -363,14 +406,25 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     }
 
     const submissionIds = [...new Set(drafts.map((d) => d.submission_id))];
-    const { data: validSubmissions, error: submissionError } = await supabase
-      .from("submissions")
-      .select("id")
-      .eq("assignment_id", assignment.id)
-      .in("id", submissionIds);
-    if (submissionError) throw new CLICommandError(`Failed to validate submissions: ${submissionError.message}`, 500);
+    // Batched: an `.in()` of more than max_rows ids would come back truncated and
+    // report perfectly good submissions as not belonging to the assignment.
+    const validSubmissions: Array<{ id: number }> = [];
+    for (let i = 0; i < submissionIds.length; i += 500) {
+      const batch = submissionIds.slice(i, i + 500);
+      const rows = await pageAll<{ id: number }>(
+        () =>
+          supabase
+            .from("submissions")
+            .select("id")
+            .eq("assignment_id", assignment.id)
+            .in("id", batch)
+            .order("id", { ascending: true }),
+        "Failed to validate submissions"
+      );
+      validSubmissions.push(...rows);
+    }
 
-    const validIds = new Set((validSubmissions ?? []).map((s) => s.id));
+    const validIds = new Set(validSubmissions.map((s) => s.id));
     const badSubmissions = submissionIds.filter((id) => !validIds.has(id));
     if (badSubmissions.length > 0) {
       throw new CLICommandError(
@@ -401,16 +455,24 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // too. bulk_assign_reviews does not enforce them, so skipping this check
     // would let `--file` quietly do what the round-robin path refuses to: hand
     // someone their own submission, or a student they are conflicted with.
-    const { data: manifestSubmissions, error: manifestSubmissionError } = await supabase
-      .from("submissions")
-      .select("id, profile_id, assignment_group_id")
-      .eq("assignment_id", assignment.id)
-      .in("id", submissionIds);
-    if (manifestSubmissionError) {
-      throw new CLICommandError(`Failed to load submissions: ${manifestSubmissionError.message}`, 500);
+    const manifestSubmissions: Array<{ id: number; profile_id: string | null; assignment_group_id: number | null }> =
+      [];
+    for (let i = 0; i < submissionIds.length; i += 500) {
+      const batch = submissionIds.slice(i, i + 500);
+      const rows = await pageAll<{ id: number; profile_id: string | null; assignment_group_id: number | null }>(
+        () =>
+          supabase
+            .from("submissions")
+            .select("id, profile_id, assignment_group_id")
+            .eq("assignment_id", assignment.id)
+            .in("id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load submissions"
+      );
+      manifestSubmissions.push(...rows);
     }
 
-    const excluded = await buildConflictExclusions(supabase, classData.id, manifestSubmissions ?? []);
+    const excluded = await buildConflictExclusions(supabase, classData.id, manifestSubmissions);
     const violations = drafts
       .filter((d) => excluded.get(d.submission_id)?.has(d.assignee_profile_id))
       .map((d) => `${d.assignee_profile_id} -> submission ${d.submission_id}`);
@@ -439,13 +501,17 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
       throw new CLICommandError("No active graders or instructors in this class to assign work to", 400);
     }
 
-    const { data: submissions, error: submissionError } = await supabase
-      .from("submissions")
-      .select("id, profile_id, assignment_group_id")
-      .eq("assignment_id", assignment.id)
-      .eq("is_active", true);
-    if (submissionError) throw new CLICommandError(`Failed to load submissions: ${submissionError.message}`, 500);
-    if (!submissions || submissions.length === 0) {
+    const submissions = await pageAll<{ id: number; profile_id: string | null; assignment_group_id: number | null }>(
+      () =>
+        supabase
+          .from("submissions")
+          .select("id, profile_id, assignment_group_id")
+          .eq("assignment_id", assignment.id)
+          .eq("is_active", true)
+          .order("id", { ascending: true }),
+      "Failed to load submissions"
+    );
+    if (submissions.length === 0) {
       throw new CLICommandError(`Assignment ${assignment.id} has no active submissions to assign`, 400);
     }
 
@@ -469,20 +535,39 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // same work. That is reachable in a large by-part round and would break
     // rerun idempotence.
     const existingRows = await fetchReviewAssignments(supabase, assignment.id, FETCH_ALL, { rubricId });
+
+    // Existing assignments can still point at a submission that has since been
+    // superseded by a resubmission. Comparing raw submission ids would treat the
+    // student's current active submission as unassigned and draft it again —
+    // usually to a different assignee, because the stale assignment still seeds
+    // reviewer load. bulk_assign_reviews only retargets rows its own drafts
+    // touch, so the stale assignment would survive and the work would be graded
+    // twice. Coverage is therefore keyed on the *active* submission for the same
+    // student or group.
+    const activeSubmissionByOwner = buildActiveSubmissionIndex(submissions);
+
+    /** Maps a possibly-stale submission id onto its owner's active submission. */
+    const toActiveSubmissionId = (row: Record<string, unknown>): number => {
+      const embedded = row.submissions as { assignment_group_id: number | null; profile_id: string | null } | null;
+      const owner = embedded ? { groupId: embedded.assignment_group_id, profileId: embedded.profile_id } : null;
+      return activeSubmissionFor(owner, row.submission_id as number, activeSubmissionByOwner);
+    };
+
     const existing: DraftAssignment[] = [];
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
+      const submissionId = toActiveSubmissionId(row);
       if (parts.length === 0) {
         existing.push({
           assignee_profile_id: row.assignee_profile_id as string,
-          submission_id: row.submission_id as number,
+          submission_id: submissionId,
           rubric_part_id: null
         });
       } else {
         for (const part of parts) {
           existing.push({
             assignee_profile_id: row.assignee_profile_id as string,
-            submission_id: row.submission_id as number,
+            submission_id: submissionId,
             rubric_part_id: part.rubric_part_id
           });
         }
@@ -575,15 +660,25 @@ async function buildConflictExclusions(
 
   const groupMembers = new Map<number, string[]>();
   if (groupIds.length > 0) {
-    const { data, error } = await supabase
-      .from("assignment_groups_members")
-      .select("assignment_group_id, profile_id")
-      .in("assignment_group_id", groupIds);
-    if (error) throw new CLICommandError(`Failed to load group members: ${error.message}`, 500);
-    for (const row of data ?? []) {
-      const list = groupMembers.get(row.assignment_group_id) ?? [];
-      list.push(row.profile_id);
-      groupMembers.set(row.assignment_group_id, list);
+    // Batched by group *and* paged within each batch: a truncated read here drops
+    // a group member, and a dropped member can be handed their own submission.
+    const BATCH = 200;
+    for (let i = 0; i < groupIds.length; i += BATCH) {
+      const batch = groupIds.slice(i, i + BATCH);
+      const rows = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+        () =>
+          supabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, profile_id")
+            .in("assignment_group_id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load group members"
+      );
+      for (const row of rows) {
+        const list = groupMembers.get(row.assignment_group_id) ?? [];
+        list.push(row.profile_id);
+        groupMembers.set(row.assignment_group_id, list);
+      }
     }
   }
 
@@ -596,15 +691,19 @@ async function buildConflictExclusions(
     submitters.set(s.id, owners);
   }
 
-  const { data: conflicts, error: conflictError } = await supabase
-    .from("grading_conflicts")
-    .select("grader_profile_id, student_profile_id")
-    .eq("class_id", classId);
-  if (conflictError) throw new CLICommandError(`Failed to load grading conflicts: ${conflictError.message}`, 500);
+  const conflicts = await pageAll<{ grader_profile_id: string; student_profile_id: string }>(
+    () =>
+      supabase
+        .from("grading_conflicts")
+        .select("grader_profile_id, student_profile_id")
+        .eq("class_id", classId)
+        .order("id", { ascending: true }),
+    "Failed to load grading conflicts"
+  );
 
   // student -> graders barred from grading them.
   const conflictsByStudent = new Map<string, string[]>();
-  for (const c of conflicts ?? []) {
+  for (const c of conflicts) {
     const list = conflictsByStudent.get(c.student_profile_id) ?? [];
     list.push(c.grader_profile_id);
     conflictsByStudent.set(c.student_profile_id, list);

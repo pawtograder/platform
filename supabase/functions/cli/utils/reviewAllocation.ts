@@ -139,6 +139,55 @@ export function allocateRoundRobin(input: AllocateRoundRobinInput): AllocateRoun
   return { drafts, skippedAlreadyAssigned, unassignable };
 }
 
+/** Who a submission belongs to: a group, or an individual student. */
+export interface SubmissionOwner {
+  groupId: number | null;
+  profileId: string | null;
+}
+
+/**
+ * Indexes active submissions by owner, so a stale submission id can be mapped
+ * onto whatever is current for the same student or group.
+ */
+export function buildActiveSubmissionIndex(
+  active: Array<{ id: number; profile_id: string | null; assignment_group_id: number | null }>
+): Map<string, number> {
+  const index = new Map<string, number>();
+  for (const submission of active) {
+    if (submission.assignment_group_id != null) {
+      index.set(`g:${submission.assignment_group_id}`, submission.id);
+    }
+    if (submission.profile_id) {
+      index.set(`p:${submission.profile_id}`, submission.id);
+    }
+  }
+  return index;
+}
+
+/**
+ * The current active submission for `owner`, falling back to `fallbackId`.
+ *
+ * Existing review assignments can point at a submission that a resubmission has
+ * since superseded. Comparing raw ids would make the student's current
+ * submission look unassigned, so the allocator would draft it again — usually to
+ * a different assignee, since the stale assignment still counts toward reviewer
+ * load. `bulk_assign_reviews` only retargets rows its own drafts touch, so the
+ * stale assignment would survive and the submission would be graded twice.
+ *
+ * Group ownership wins over the individual profile: a group submission carries
+ * both, and the group is the unit the assignment follows.
+ */
+export function activeSubmissionFor(
+  owner: SubmissionOwner | null,
+  fallbackId: number,
+  index: Map<string, number>
+): number {
+  if (!owner) return fallbackId;
+  if (owner.groupId != null) return index.get(`g:${owner.groupId}`) ?? fallbackId;
+  if (owner.profileId) return index.get(`p:${owner.profileId}`) ?? fallbackId;
+  return fallbackId;
+}
+
 /** Per-reviewer draft counts, for the summary the CLI prints. */
 export function summarizeLoad(drafts: DraftAssignment[]): Array<{ assignee_profile_id: string; count: number }> {
   const counts = new Map<string, number>();
