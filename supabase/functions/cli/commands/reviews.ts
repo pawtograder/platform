@@ -18,6 +18,7 @@ import {
   activeSubmissionFor,
   allocateRoundRobin,
   buildActiveSubmissionIndex,
+  findCoverageConflicts,
   summarizeLoad,
   type DraftAssignment
 } from "../utils/reviewAllocation.ts";
@@ -346,6 +347,38 @@ function parseDraftManifest(raw: unknown): DraftAssignment[] {
 }
 
 /**
+ * Existing assignments flattened to (assignee, submission, part) coverage, using
+ * raw submission ids. The allocation path additionally remaps stale ids onto the
+ * active submission; the manifest path only needs to know what is already
+ * covered.
+ */
+async function loadExistingCoverage(
+  supabase: ReturnType<typeof getAdminClient>,
+  assignmentId: number,
+  rubricId: number
+): Promise<DraftAssignment[]> {
+  const rows = await fetchReviewAssignments(supabase, assignmentId, FETCH_ALL, { rubricId });
+  const out: DraftAssignment[] = [];
+  for (const row of rows) {
+    const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
+    const assignee = row.assignee_profile_id as string;
+    const submissionId = row.submission_id as number;
+    if (parts.length === 0) {
+      out.push({ assignee_profile_id: assignee, submission_id: submissionId, rubric_part_id: null });
+    } else {
+      for (const part of parts) {
+        out.push({
+          assignee_profile_id: assignee,
+          submission_id: submissionId,
+          rubric_part_id: part.rubric_part_id
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * reviews.assign — creates grading assignments through the `bulk_assign_reviews`
  * RPC, the same entry point the bulk-assign page uses.
  *
@@ -479,6 +512,20 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
         "Failed to load submissions"
       );
       manifestSubmissions.push(...rows);
+    }
+
+    // Coverage, checked against the manifest's own rows and against what already
+    // exists. The round-robin path gets this from allocateRoundRobin; --file
+    // bypassed it, and the RPC does not check either — so a manifest could narrow
+    // a whole-rubric assignment to a single part, or hand the same work to two
+    // reviewers, and the dry run would approve it.
+    const existingForCoverage = await loadExistingCoverage(supabase, assignment.id, rubricId);
+    const coverageConflicts = findCoverageConflicts(drafts, existingForCoverage);
+    if (coverageConflicts.length > 0) {
+      throw new CLICommandError(
+        `These manifest entries would narrow or duplicate existing grading work:\n  ${coverageConflicts.join("\n  ")}`,
+        400
+      );
     }
 
     const excluded = await buildConflictExclusions(supabase, classData.id, manifestSubmissions);

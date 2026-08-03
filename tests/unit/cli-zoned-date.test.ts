@@ -12,7 +12,7 @@
  * implementation goes wrong.
  */
 
-import { resolveDueDate, ZonedDateError } from "../../supabase/functions/cli/utils/zonedDate";
+import { resolveDueDate, resolveReleaseDate, ZonedDateError } from "../../supabase/functions/cli/utils/zonedDate";
 
 const NY = "America/New_York";
 const TOKYO = "Asia/Tokyo";
@@ -132,5 +132,30 @@ describe("resolveDueDate — rejections", () => {
 
   it("rejects an impossible calendar date", () => {
     expect(() => resolveDueDate("2026-02-30", NY)).toThrow(ZonedDateError);
+  });
+});
+
+describe("resolveReleaseDate", () => {
+  it("puts a bare date at the start of that day, not the end", () => {
+    // A release date at 23:59:59.999 would keep the assignment hidden for
+    // essentially the whole day the operator named.
+    const iso = resolveReleaseDate("2026-01-15", NY);
+    expect(wallClock(iso, NY)).toBe("2026-01-15, 00:00:00");
+    expect(iso).toBe("2026-01-15T05:00:00.000Z");
+  });
+
+  it("differs from a due date on the same input", () => {
+    expect(resolveReleaseDate("2026-01-15", NY)).not.toBe(resolveDueDate("2026-01-15", NY));
+    expect(new Date(resolveReleaseDate("2026-01-15", NY)).getTime()).toBeLessThan(
+      new Date(resolveDueDate("2026-01-15", NY)).getTime()
+    );
+  });
+
+  it("uses the same wall-clock handling as due dates once a time is given", () => {
+    expect(resolveReleaseDate("2026-01-15T09:00", NY)).toBe(resolveDueDate("2026-01-15T09:00", NY));
+  });
+
+  it("respects DST on the start boundary", () => {
+    expect(resolveReleaseDate("2026-06-15", NY)).toBe("2026-06-15T04:00:00.000Z");
   });
 });

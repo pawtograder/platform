@@ -9,7 +9,7 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
-import { resolveDueDate } from "../utils/zonedDate.ts";
+import { resolveDueDate, resolveReleaseDate } from "../utils/zonedDate.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
 import { copyRubricStructure, copyRubricCheckReferencesForAssignment } from "../utils/rubric.ts";
 import { repoExistsOnGitHub } from "../utils/github.ts";
@@ -222,10 +222,17 @@ function mergeScheduleDueDateOverrides(
  * end-of-day in the class zone, so without this the two commands disagreed about
  * what a bare date means.
  */
-function resolveScheduleDate(value: string | undefined, timeZone: string | null, field: string): string | undefined {
+function resolveScheduleDate(
+  value: string | undefined,
+  timeZone: string | null,
+  field: "release_date" | "due_date"
+): string | undefined {
   if (value === undefined) return undefined;
   try {
-    return resolveDueDate(value, timeZone);
+    // Opposite boundaries for a bare date: a due date is the end of the named
+    // day, a release date is the start of it. Using the deadline convention for a
+    // release kept the assignment hidden for almost the whole day requested.
+    return field === "release_date" ? resolveReleaseDate(value, timeZone) : resolveDueDate(value, timeZone);
   } catch (err) {
     throw new CLICommandError(
       `Invalid ${field} in schedule: ${err instanceof Error ? err.message : String(value)}`,

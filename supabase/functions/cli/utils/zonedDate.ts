@@ -104,17 +104,29 @@ function assertRealCalendarDate(year: number, month: number, day: number, raw: s
 }
 
 /**
- * Resolves a caller-supplied due date to an ISO instant.
+ * Which end of the day a bare `YYYY-MM-DD` means.
  *
- * - `YYYY-MM-DD` is taken as the **end** of that day in `timeZone`
- *   (23:59:59.999). "Due September 15" reads as "by the end of the 15th", and
- *   erring later is the safer direction for a deadline.
- * - `YYYY-MM-DDTHH:MM[:SS]` with no offset is that wall-clock time in `timeZone`.
+ * A deadline reads as "by the end of the 15th"; a release date reads as "from the
+ * start of the 15th". Using the deadline convention for a release would keep the
+ * assignment hidden for almost the whole day the operator named.
+ */
+export type DateOnlyBoundary = "end-of-day" | "start-of-day";
+
+/**
+ * Resolves a caller-supplied date to an ISO instant, interpreting bare dates and
+ * offset-less times in `timeZone`.
+ *
+ * - `YYYY-MM-DD` maps to the boundary given by `dateOnly`.
+ * - `YYYY-MM-DDTHH:MM[:SS[.mmm]]` with no offset is that wall-clock time in `timeZone`.
  * - Anything carrying its own offset or `Z` is respected as written.
  *
  * `timeZone` falls back to UTC when a class has none recorded.
  */
-export function resolveDueDate(input: string, timeZone: string | null | undefined): string {
+export function resolveZonedTimestamp(
+  input: string,
+  timeZone: string | null | undefined,
+  dateOnly: DateOnlyBoundary
+): string {
   const raw = input.trim();
   if (raw === "") throw new ZonedDateError("due date is empty");
 
@@ -128,11 +140,14 @@ export function resolveDueDate(input: string, timeZone: string | null | undefine
     throw new ZonedDateError(`Unknown time zone for this class: ${zone}`);
   }
 
-  const dateOnly = raw.match(DATE_ONLY_RE);
-  if (dateOnly) {
-    const [, y, m, d] = dateOnly;
+  const dateOnlyMatch = raw.match(DATE_ONLY_RE);
+  if (dateOnlyMatch) {
+    const [, y, m, d] = dateOnlyMatch;
     assertRealCalendarDate(Number(y), Number(m), Number(d), raw);
-    const instant = utcFromWallClock(Number(y), Number(m), Number(d), 23, 59, 59, 999, zone);
+    const instant =
+      dateOnly === "start-of-day"
+        ? utcFromWallClock(Number(y), Number(m), Number(d), 0, 0, 0, 0, zone)
+        : utcFromWallClock(Number(y), Number(m), Number(d), 23, 59, 59, 999, zone);
     if (Number.isNaN(instant.getTime())) throw new ZonedDateError(`Invalid date: ${raw}`);
     return instant.toISOString();
   }
@@ -177,4 +192,19 @@ export function resolveDueDate(input: string, timeZone: string | null | undefine
     );
   }
   return parsed.toISOString();
+}
+
+/**
+ * A grading deadline. Bare dates mean the end of that day in the class's zone.
+ */
+export function resolveDueDate(input: string, timeZone: string | null | undefined): string {
+  return resolveZonedTimestamp(input, timeZone, "end-of-day");
+}
+
+/**
+ * A release date. Bare dates mean the start of that day, so an assignment
+ * released "on the 15th" is available for all of the 15th.
+ */
+export function resolveReleaseDate(input: string, timeZone: string | null | undefined): string {
+  return resolveZonedTimestamp(input, timeZone, "start-of-day");
 }

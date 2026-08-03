@@ -296,11 +296,18 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   // resolve from the office-hours UI (or another operator) between the read and
   // the write would be silently overwritten, including its resolved_by and
   // resolved_at, even though the caller did not pass force.
-  const { data: updated, error: updateError } = await supabase
-    .from("help_requests")
-    .update(update)
-    .eq("id", id)
-    .eq("status", existing.status)
+  let closeQuery = supabase.from("help_requests").update(update).eq("id", id).eq("status", existing.status);
+
+  // Also predicated on the call state for a non-force close. The is_video_live
+  // check above is a read, and staff can start a call between that read and this
+  // write (video-call-controls updates the flag independently); the status
+  // predicate alone would let the close through and strand the meeting, since
+  // both Join and End Call are disabled once the request is terminal.
+  if (p.force !== true) {
+    closeQuery = closeQuery.eq("is_video_live", false);
+  }
+
+  const { data: updated, error: updateError } = await closeQuery
     .select(
       "id, class_id, help_queue, status, resolved_at, resolved_by, resolution_status, resolution_notes, is_video_live"
     )
@@ -308,9 +315,20 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   if (updateError) throw new CLICommandError(`Failed to close help request: ${updateError.message}`, 500);
   if (!updated) {
+    // Either the status moved or a call started; re-read so the message says
+    // which, rather than making the operator guess.
+    const { data: current } = await supabase
+      .from("help_requests")
+      .select("status, is_video_live")
+      .eq("id", id)
+      .maybeSingle();
+
+    const reason =
+      current?.is_video_live === true
+        ? "a video call is now live on it"
+        : `its status is now ${current?.status ?? "unknown"} (it was ${existing.status})`;
     throw new CLICommandError(
-      `Help request ${id} changed while this command was running (it was ${existing.status}). ` +
-        "Re-run to see its current state.",
+      `Help request ${id} changed while this command was running: ${reason}. Re-run to see its current state.`,
       409
     );
   }

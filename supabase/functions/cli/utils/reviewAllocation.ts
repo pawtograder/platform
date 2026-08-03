@@ -188,6 +188,82 @@ export function activeSubmissionFor(
   return fallbackId;
 }
 
+/**
+ * Coverage conflicts in an explicit set of drafts.
+ *
+ * The round-robin path cannot produce these — `allocateRoundRobin` skips anything
+ * already covered — but an explicit `--file` manifest bypasses that reasoning
+ * entirely, and `bulk_assign_reviews` does not check coverage either. Two shapes
+ * corrupt grading state:
+ *
+ *   - A whole-rubric draft and a part draft for the same submission. The RPC
+ *     reuses the assignee's row and adds the part link, converting a whole-rubric
+ *     assignment into a part-only one — silently narrowing what gets graded.
+ *   - Overlapping drafts for different assignees, which duplicates the work.
+ *
+ * Checked against the manifest's own entries and against what already exists.
+ */
+export function findCoverageConflicts(drafts: DraftAssignment[], existing: DraftAssignment[]): string[] {
+  const conflicts: string[] = [];
+
+  const wholeRubric = new Map<number, Set<string>>();
+  const byPart = new Map<string, Set<string>>();
+  const record = (map: Map<string, Set<string>>, key: string, assignee: string) => {
+    const set = map.get(key) ?? new Set<string>();
+    set.add(assignee);
+    map.set(key, set);
+  };
+
+  for (const entry of [...existing, ...drafts]) {
+    if (entry.rubric_part_id === null) {
+      const set = wholeRubric.get(entry.submission_id) ?? new Set<string>();
+      set.add(entry.assignee_profile_id);
+      wholeRubric.set(entry.submission_id, set);
+    } else {
+      record(byPart, `${entry.submission_id}:${entry.rubric_part_id}`, entry.assignee_profile_id);
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const draft of drafts) {
+    const submissionId = draft.submission_id;
+
+    if (draft.rubric_part_id === null) {
+      const parts = [...byPart.keys()].filter((k) => k.startsWith(`${submissionId}:`));
+      if (parts.length > 0 && !seen.has(`whole:${submissionId}`)) {
+        seen.add(`whole:${submissionId}`);
+        conflicts.push(
+          `submission ${submissionId}: a whole-rubric assignment overlaps part assignment(s) ` +
+            parts.map((k) => k.split(":")[1]).join(", ")
+        );
+      }
+      const holders = wholeRubric.get(submissionId);
+      if (holders && holders.size > 1 && !seen.has(`dupwhole:${submissionId}`)) {
+        seen.add(`dupwhole:${submissionId}`);
+        conflicts.push(`submission ${submissionId}: assigned to more than one reviewer for the whole rubric`);
+      }
+    } else {
+      const key = `${submissionId}:${draft.rubric_part_id}`;
+      if (wholeRubric.has(submissionId) && !seen.has(`whole:${submissionId}`)) {
+        seen.add(`whole:${submissionId}`);
+        conflicts.push(
+          `submission ${submissionId}: rubric part ${draft.rubric_part_id} overlaps an existing ` +
+            "whole-rubric assignment, which would be narrowed to that part"
+        );
+      }
+      const holders = byPart.get(key);
+      if (holders && holders.size > 1 && !seen.has(`dup:${key}`)) {
+        seen.add(`dup:${key}`);
+        conflicts.push(
+          `submission ${submissionId}, rubric part ${draft.rubric_part_id}: assigned to more than one reviewer`
+        );
+      }
+    }
+  }
+
+  return conflicts;
+}
+
 /** Per-reviewer draft counts, for the summary the CLI prints. */
 export function summarizeLoad(drafts: DraftAssignment[]): Array<{ assignee_profile_id: string; count: number }> {
   const counts = new Map<string, number>();

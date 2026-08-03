@@ -17,6 +17,7 @@ import {
   activeSubmissionFor,
   allocateRoundRobin,
   buildActiveSubmissionIndex,
+  findCoverageConflicts,
   summarizeLoad,
   type DraftAssignment
 } from "../../supabase/functions/cli/utils/reviewAllocation";
@@ -331,5 +332,67 @@ describe("retargeting stale submissions", () => {
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0].submission_id).toBe(500);
+  });
+});
+
+describe("findCoverageConflicts", () => {
+  // The --file manifest is the escape hatch around allocateRoundRobin, and
+  // bulk_assign_reviews checks coverage no more than it does. Two shapes corrupt
+  // grading state, and a dry run would otherwise approve both.
+  const whole = (assignee: string, submission: number): DraftAssignment => ({
+    assignee_profile_id: assignee,
+    submission_id: submission,
+    rubric_part_id: null
+  });
+  const part = (assignee: string, submission: number, rubricPart: number): DraftAssignment => ({
+    assignee_profile_id: assignee,
+    submission_id: submission,
+    rubric_part_id: rubricPart
+  });
+
+  it("accepts a manifest that covers distinct work", () => {
+    expect(findCoverageConflicts([part(GRADER_A, 1, 100), part(GRADER_B, 1, 200)], [])).toEqual([]);
+    expect(findCoverageConflicts([whole(GRADER_A, 1), whole(GRADER_B, 2)], [])).toEqual([]);
+  });
+
+  it("rejects a whole-rubric row alongside a part row for the same submission", () => {
+    // The RPC would reuse the row and add the part link, narrowing a whole-rubric
+    // assignment to just that part.
+    const conflicts = findCoverageConflicts([whole(GRADER_A, 1), part(GRADER_A, 1, 100)], []);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatch(/submission 1/);
+  });
+
+  it("rejects a part row that overlaps an existing whole-rubric assignment", () => {
+    const conflicts = findCoverageConflicts([part(GRADER_B, 1, 100)], [whole(GRADER_A, 1)]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatch(/narrowed/);
+  });
+
+  it("rejects the same part assigned to two reviewers", () => {
+    const conflicts = findCoverageConflicts([part(GRADER_A, 1, 100), part(GRADER_B, 1, 100)], []);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatch(/more than one reviewer/);
+  });
+
+  it("rejects a whole rubric assigned to two reviewers", () => {
+    const conflicts = findCoverageConflicts([whole(GRADER_A, 1), whole(GRADER_B, 1)], []);
+    expect(conflicts.some((c) => /more than one reviewer/.test(c))).toBe(true);
+  });
+
+  it("detects an overlap against existing part work too", () => {
+    const conflicts = findCoverageConflicts([whole(GRADER_A, 1)], [part(GRADER_B, 1, 100)]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatch(/overlaps part assignment/);
+  });
+
+  it("does not flag re-assigning identical work to the same reviewer", () => {
+    // Idempotent rerun: the RPC reuses the row, which is the intended behavior.
+    expect(findCoverageConflicts([part(GRADER_A, 1, 100)], [part(GRADER_A, 1, 100)])).toEqual([]);
+  });
+
+  it("reports each conflicting submission once, not once per row", () => {
+    const conflicts = findCoverageConflicts([whole(GRADER_A, 1), part(GRADER_A, 1, 100), part(GRADER_A, 1, 200)], []);
+    expect(conflicts).toHaveLength(1);
   });
 });
