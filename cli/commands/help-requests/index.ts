@@ -9,7 +9,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, truncate, formatDateTime } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, truncate, formatDateTime, formatZoneLabel } from "@/cli/utils/output";
 
 export const command = "help-requests <action>";
 export const describe = "Manage help requests";
@@ -56,7 +56,8 @@ export const builder = (yargs: Argv) => {
 
           if (emitJson(args, data)) return;
 
-          logger.step(`Help requests for ${data.class.name}`);
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Help requests for ${data.class.name}${formatZoneLabel(tz)}`);
 
           const requests = data.requests ?? [];
           if (requests.length === 0) {
@@ -72,7 +73,7 @@ export const builder = (yargs: Argv) => {
               r.status as string,
               (r.created_by_name as string | null) ?? null,
               (r.assignee_name as string | null) ?? null,
-              formatDateTime(r.created_at as string | null),
+              formatDateTime(r.created_at as string | null, tz),
               truncate(r.request as string | null, 50)
             ])
           );

@@ -27,7 +27,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { CLICommandError } from "../errors.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { streamNdjson } from "../utils/ndjson.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
@@ -95,7 +95,7 @@ async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unk
       dump_id: dumpId,
       identity_mode: mode,
       exported_at: new Date().toISOString(),
-      class: { id: classData.id, slug: classData.slug, name: classData.name }
+      class: classSummary(classData)
     });
 
     const subjectCount = await streamStudents(supabase, classData.id, mode, tokenizer, writer);

@@ -5,7 +5,7 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
@@ -146,7 +146,7 @@ async function handleDiscussionsList(ctx: MCPAuthContext, params: Record<string,
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       topics: rows,
       summary: {
         topics: rows.length,

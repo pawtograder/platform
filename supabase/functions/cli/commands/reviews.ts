@@ -12,6 +12,7 @@ import {
   type ReviewAssignmentStatusRow
 } from "../utils/reviewStatus.ts";
 import {
+  classSummary,
   escapeLikePattern,
   resolveClass,
   resolveAssignment,
@@ -333,7 +334,7 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
       rubric_id: rubricId,
       reviews,
@@ -817,7 +818,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   }
 
   const response = {
-    class: { id: classData.id, slug: classData.slug, name: classData.name },
+    class: classSummary(classData),
     assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
     rubric_id: rubricId,
     due_date: dueDateIso,

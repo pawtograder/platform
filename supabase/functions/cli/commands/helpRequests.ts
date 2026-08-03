@@ -7,7 +7,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveClass } from "../utils/resolvers.ts";
 import { UUID_IN_BATCH_SIZE } from "../utils/paging.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivateProfileId } from "../utils/auth.ts";
 import {
@@ -181,7 +181,7 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       requests,
       summary: {
         total: requests.length,

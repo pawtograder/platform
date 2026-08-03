@@ -9,7 +9,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, formatDate } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel } from "@/cli/utils/output";
 
 export const command = "flashcards <action>";
 export const describe = "Manage flashcard decks";
@@ -35,7 +35,8 @@ export const builder = (yargs: Argv) => {
 
           if (emitJson(args, data)) return;
 
-          logger.step(`Flashcard decks for ${data.class.name}`);
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Flashcard decks for ${data.class.name}${formatZoneLabel(tz)}`);
 
           const decks = data.decks;
 
@@ -50,7 +51,7 @@ export const builder = (yargs: Argv) => {
               deck.id as number,
               deck.name as string,
               (deck.card_count as number | null) ?? null,
-              formatDate(deck.created_at as string | null)
+              formatDate(deck.created_at as string | null, tz)
             ])
           );
           logger.blank();

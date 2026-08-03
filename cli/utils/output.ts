@@ -82,16 +82,34 @@ export function truncate(value: string | null | undefined, max: number): string 
   return `${collapsed.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** Formats an ISO timestamp as a locale date, or `-` when unset. */
-export function formatDate(iso: string | null | undefined): string {
+/**
+ * Formats an ISO timestamp as a date, or `-` when unset.
+ *
+ * Pass the class time zone (every command echoes it back on `data.class.time_zone`).
+ * Without it these render in the operator's local zone, which moves a deadline onto the
+ * wrong day for anyone working away from campus — an 11pm Boston due date reads as the
+ * next morning from Europe. `formatZoneLabel` names the zone in the surrounding output
+ * so the dates are not merely correct but legible as such.
+ */
+export function formatDate(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString();
+  if (Number.isNaN(d.getTime())) return "-";
+  return timeZone ? d.toLocaleDateString(undefined, { timeZone }) : d.toLocaleDateString();
 }
 
-/** Formats an ISO timestamp as a locale date and time, or `-` when unset. */
-export function formatDateTime(iso: string | null | undefined): string {
+/** Formats an ISO timestamp as a date and time, or `-` when unset. See {@link formatDate}. */
+export function formatDateTime(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return "-";
+  return timeZone ? d.toLocaleString(undefined, { timeZone }) : d.toLocaleString();
+}
+
+/**
+ * A parenthesised note naming the zone dates are shown in, or empty when unknown.
+ * Empty rather than guessing: claiming a zone we were not told is worse than silence.
+ */
+export function formatZoneLabel(timeZone?: string | null): string {
+  return timeZone ? ` (times in ${timeZone})` : "";
 }

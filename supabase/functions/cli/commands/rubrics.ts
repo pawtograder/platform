@@ -5,7 +5,7 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
+import { classSummary, resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import {
@@ -69,7 +69,7 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
       rubrics
     }

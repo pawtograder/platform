@@ -14,7 +14,7 @@ import type {
   SubmissionsCommentsImportParams
 } from "../types.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { pageAll } from "../utils/paging.ts";
 import { gradingTotalForStudent } from "../utils/gradingTotals.ts";
@@ -716,7 +716,7 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
         identity_mode: mode,
         dump_id: dumpId,
         exported_at: new Date().toISOString(),
-        class: { id: classData.id, slug: classData.slug, name: classData.name },
+        class: classSummary(classData),
         assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
         submissions_scope: allSubmissions ? "all" : "active",
         with_binary: withBinary,
@@ -883,7 +883,7 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
         "id, activesubmissionid, ordinal, name, sortable_name, groupname, student_private_profile_id, " +
           "sha, repository, autograder_score, total_score, tweak, released, tokens_consumed, hours, " +
           "due_date, late_due_date, gradername, assignedgradername, completed_at, checkername, " +
-          "class_section_name, lab_section_name, is_placeholder, created_at, " +
+          "class_section_name, lab_section_name, is_placeholder, created_at, assignment_group_id, " +
           "per_student_grading_totals, individual_scores"
       )
       .eq("class_id", classData.id)
@@ -915,6 +915,12 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
   // students, so the resolved figure is exposed as student_total_score.
   const submissions = rows.map((r) => ({
     ...r,
+    /**
+     * The deadline this student is actually held to: the view's `late_due_date` is
+     * `due_date` plus the `hours` of extension granted to them, not a separate grace
+     * period, and naming it "late" invited reading it as one.
+     */
+    effective_due_date: r.late_due_date ?? r.due_date ?? null,
     student_total_score: gradingTotalForStudent(
       {
         total_score: (r.total_score as number | null) ?? null,
@@ -929,10 +935,24 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
     rows.map((r) => r.activesubmissionid).filter((id): id is number => typeof id === "number")
   );
 
+  // Counted with its own query rather than from `rows`. The default fetch filters
+  // non-submitters out, so counting them in the result was structurally always zero;
+  // and even with --include-non-submitters the count would describe the page rather
+  // than the class as soon as `limit` bit.
+  const { count: nonSubmitterCount, error: nonSubmitterError } = await supabase
+    .from("submissions_with_grades_for_assignment_nice")
+    .select("id", { count: "exact", head: true })
+    .eq("class_id", classData.id)
+    .eq("assignment_id", assignment.id)
+    .is("activesubmissionid", null);
+  if (nonSubmitterError) {
+    throw new CLICommandError(`Failed to count non-submitters: ${nonSubmitterError.message}`, 500);
+  }
+
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: {
         id: assignment.id,
         slug: assignment.slug,
@@ -944,7 +964,10 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
       summary: {
         rows: rows.length,
         distinct_submissions: distinctSubmissions.size,
-        non_submitters: rows.filter((r) => r.activesubmissionid == null).length,
+        /** Enrolled students with no active submission, across the whole assignment. */
+        non_submitters: nonSubmitterCount ?? 0,
+        /** Non-submitters present in `submissions`; zero unless --include-non-submitters. */
+        non_submitters_listed: rows.filter((r) => r.activesubmissionid == null).length,
         truncated: rows.length >= limit
       }
     }

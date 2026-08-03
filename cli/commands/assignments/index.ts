@@ -11,7 +11,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, formatDate } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel } from "@/cli/utils/output";
 import { copyAssignmentsHandler } from "./copy";
 import { deleteAssignmentHandler } from "./delete";
 
@@ -39,7 +39,8 @@ export const builder = (yargs: Argv) => {
 
           if (emitJson(args, data)) return;
 
-          logger.step(`Assignments for ${data.class.name}`);
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Assignments for ${data.class.name}${formatZoneLabel(tz)}`);
 
           const assignments = data.assignments;
 
@@ -54,7 +55,7 @@ export const builder = (yargs: Argv) => {
               a.id as number,
               a.slug as string,
               a.title as string,
-              formatDate(a.due_date as string | null)
+              formatDate(a.due_date as string | null, tz)
             ])
           );
           logger.blank();

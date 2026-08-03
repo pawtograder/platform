@@ -102,6 +102,11 @@ const assignHelp = await runBin(["reviews", "assign", "--help"]);
 check("reviews assign --help exits 0", assignHelp.code === 0, assignHelp.stderr.trim());
 check("reviews assign declares --due-date", assignHelp.stdout.includes("--due-date"));
 check("reviews assign declares --by-part", assignHelp.stdout.includes("by-part"));
+check(
+  "reviews assign declares --include-non-submitters",
+  assignHelp.stdout.includes("include-non-submitters"),
+  assignHelp.stdout
+);
 
 const listHelp = await runBin(["submissions", "list", "--help"]);
 check("submissions list --help exits 0", listHelp.code === 0, listHelp.stderr.trim());

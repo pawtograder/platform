@@ -198,3 +198,23 @@ export async function resolveSurvey(
 
   throw new CLICommandError(`Survey not found: ${identifier}`, 404);
 }
+
+/**
+ * The class identity block every command echoes back. `time_zone` is included so the
+ * CLI can render timestamps in the class's zone: dates were formatted in whatever zone
+ * the operator's machine happened to be in, which silently moved deadlines across day
+ * boundaries for anyone working away from campus.
+ */
+export function classSummary(classData: ClassRow): {
+  id: number;
+  slug: string | null;
+  name: string | null;
+  time_zone: string;
+} {
+  return {
+    id: classData.id,
+    slug: classData.slug,
+    name: classData.name,
+    time_zone: classData.time_zone
+  };
+}

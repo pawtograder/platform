@@ -11,7 +11,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, formatDate } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel } from "@/cli/utils/output";
 import { buildCommentsCommands } from "./comments";
 import { buildArtifactsCommands } from "./artifacts";
 import { exportBuilder, exportHandler } from "./export";
@@ -68,7 +68,8 @@ export const builder = (yargs: Argv) => {
 
           if (emitJson(args, data)) return;
 
-          logger.step(`Submissions for ${data.assignment.title} (${data.class.name})`);
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Submissions for ${data.assignment.title} (${data.class.name})${formatZoneLabel(tz)}`);
 
           const submissions = data.submissions ?? [];
           if (submissions.length === 0) {
@@ -90,7 +91,7 @@ export const builder = (yargs: Argv) => {
               // On this view `released` is a timestamp, not a boolean.
               s.released ? "Yes" : "No",
               (s.gradername as string | null) ?? (s.assignedgradername as string | null),
-              formatDate(s.completed_at as string | null)
+              formatDate(s.completed_at as string | null, tz)
             ])
           );
 

@@ -11,7 +11,7 @@ import * as fs from "fs";
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, formatDate, truncate } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel, truncate } from "@/cli/utils/output";
 import { normalizeDate } from "@/cli/utils/schedule";
 
 export const command = "reviews <action>";
@@ -100,7 +100,8 @@ export const builder = (yargs: Argv) => {
 
           if (emitJson(args, data)) return;
 
-          logger.step(`Review assignments for ${data.assignment.title} (${data.class.name})`);
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Review assignments for ${data.assignment.title} (${data.class.name})${formatZoneLabel(tz)}`);
 
           const reviews = data.reviews ?? [];
           if (reviews.length === 0) {
@@ -115,11 +116,11 @@ export const builder = (yargs: Argv) => {
               (r.assignee_name as string | null) ?? (r.assignee_profile_id as string),
               r.submission_id as number,
               truncate((r.rubric_part_names as string[]).join(", ") || "(whole rubric)", 32),
-              formatDate(r.due_date as string | null),
+              formatDate(r.due_date as string | null, tz),
               // The composite rule: the assignment itself, or the linked review
               // completed by this assignee. Matching the web reviews table.
               r.review_completed_by_assignee
-                ? formatDate((r.completed_at as string | null) ?? (r.review_completed_at as string | null))
+                ? formatDate((r.completed_at as string | null) ?? (r.review_completed_at as string | null), tz)
                 : "-",
               r.review_total_score as number | null
             ])

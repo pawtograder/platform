@@ -7,7 +7,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { getFileFromRepo } from "../../_shared/GitHubWrapper.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
@@ -196,7 +196,7 @@ async function handleReposList(ctx: MCPAuthContext, params: Record<string, unkno
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: {
         id: assignment.id,
         slug: assignment.slug,

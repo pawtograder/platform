@@ -7,7 +7,7 @@ import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
+import { classSummary, resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { resolveDueDate, resolveReleaseDate } from "../utils/zonedDate.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
@@ -108,7 +108,7 @@ async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string,
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignments: (assignments ?? []).map((a) => ({
         id: a.id,
         slug: a.slug,
@@ -141,7 +141,7 @@ async function handleAssignmentsShow(ctx: MCPAuthContext, params: Record<string,
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: {
         id: assignment.id,
         slug: assignment.slug,
