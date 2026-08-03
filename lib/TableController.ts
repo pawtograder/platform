@@ -1855,8 +1855,14 @@ export default class TableController<
           this._bumpMaxUpdatedAtFrom(r);
         }
 
-        // Set up realtime subscription if controller is provided
-        if (!this._closed && this._classRealTimeController) {
+        // Set up realtime subscription if controller is provided.
+        //
+        // `isClosed` matters as much as our own `_closed`: the initial fetch above is awaited,
+        // and a navigation during that fetch closes the class controller without closing this
+        // TableController. Subscribing then throws out of this promise executor as an unhandled
+        // rejection. A closed controller has torn down its channels and can never be revived, so
+        // there is nothing to subscribe to — skip it and leave the fetched rows in place.
+        if (!this._closed && this._classRealTimeController && !this._classRealTimeController.isClosed) {
           if (this._submissionId) {
             this._classRealtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
               table,
@@ -1885,6 +1891,11 @@ export default class TableController<
         // Subscribe to additional realtime controllers (e.g., per-thread, office hours)
         if (!this._closed && this._additionalRealTimeControllers.length > 0) {
           for (const controller of this._additionalRealTimeControllers) {
+            // Same teardown race as the class controller above: skip any that closed while the
+            // initial fetch was in flight.
+            if (controller.isClosed) {
+              continue;
+            }
             // Subscribe to table changes
             const unsubscribe = controller.subscribeToTable(table, messageHandler);
             this._additionalRealtimeUnsubscribes.push(unsubscribe);

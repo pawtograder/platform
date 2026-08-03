@@ -160,13 +160,6 @@ Sentry.init({
         if (exception.value?.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'")) {
           return null;
         }
-        // Teardown race in the realtime controllers: a reconnect scheduled before a navigation
-        // fires after the ClassRealTimeController for the page being left was closed, and the
-        // throw surfaces as an unhandled rejection. The controller is already gone and the new
-        // page subscribes through its own, so there is nothing to act on.
-        if (exception.value?.includes("Cannot subscribe to channels after they have been closed")) {
-          return null;
-        }
         // Discard the stale-bundle sibling of ChunkLoadError: a deploy lands
         // mid-session, the chunk file loads (200) but the loaded webpack runtime
         // is missing the requested module factory, so `__webpack_require__` hits
