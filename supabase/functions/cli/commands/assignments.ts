@@ -8,7 +8,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { resolveDueDate, resolveReleaseDate } from "../utils/zonedDate.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
 import { copyRubricStructure, copyRubricCheckReferencesForAssignment } from "../utils/rubric.ts";
@@ -171,18 +171,26 @@ async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<strin
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
-  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  // Instructor-level, not grader: this deletes an assignment and archives its
+  // student repositories. The callee now admits service-role callers (it has to,
+  // since we invoke it with the admin client), so this is the check that actually
+  // gates the operation.
+  await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   const { data, error } = await supabase.functions.invoke("assignment-delete", {
     body: { assignment_id: assignment.id, class_id: classData.id }
   });
 
-  if (error) throw new CLICommandError(`Failed to delete assignment: ${error.message}`);
+  // A failure to invoke, or an error reported by the callee, is a server-side fault
+  // rather than a bad request — classified 500 so it reaches Sentry instead of being
+  // reported to the operator as their mistake.
+  if (error) throw new CLICommandError(`Failed to delete assignment: ${error.message}`, 500);
   const invokeError = data as { error?: { details?: string; message?: string }; message?: string } | null;
   if (invokeError?.error) {
     throw new CLICommandError(
-      `Failed to delete assignment: ${invokeError.error.details ?? invokeError.error.message ?? "Unknown error"}`
+      `Failed to delete assignment: ${invokeError.error.details ?? invokeError.error.message ?? "Unknown error"}`,
+      500
     );
   }
 

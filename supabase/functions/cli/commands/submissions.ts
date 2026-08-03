@@ -147,6 +147,25 @@ async function fetchAssigneesForRubricPart(
   return out;
 }
 
+/**
+ * Decodes base64, returning null when the input was not valid base64.
+ *
+ * `Buffer.from(x, "base64")` never throws — it drops characters outside the
+ * alphabet — so the only way to know the input decoded losslessly is to re-encode
+ * and compare. Without this a corrupt manifest uploaded truncated artifact bytes
+ * and reported success.
+ */
+function decodeBase64Strict(input: string): Uint8Array | null {
+  if (typeof input !== "string" || input.length === 0) return null;
+  const normalized = input.replace(/\s+/g, "");
+  const buf = Buffer.from(normalized, "base64");
+  // Re-encoding is canonical, so compare against the canonicalized input: strip
+  // padding from both sides rather than requiring the caller to pad exactly.
+  const reencoded = buf.toString("base64").replace(/=+$/, "");
+  if (reencoded !== normalized.replace(/=+$/, "")) return null;
+  return new Uint8Array(buf);
+}
+
 type WorkItem =
   | { kind: "file"; row: ImportCommentsPayload["file_comments"][number] }
   | { kind: "artifact"; row: ImportCommentsPayload["artifact_comments"][number] }
@@ -514,10 +533,12 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(Buffer.from(art.content_base64, "base64"));
-    } catch {
+    // Validated, not try/caught: Buffer.from(x, "base64") never throws. It silently
+    // drops characters outside the alphabet, so the old guard was dead code and a
+    // corrupt manifest uploaded truncated bytes and reported success. Re-encoding and
+    // comparing is the cheap way to prove the input decoded losslessly.
+    const bytes = decodeBase64Strict(art.content_base64);
+    if (bytes === null) {
       errors.push({
         submission_id: art.submission_id,
         artifact_name: art.name,
@@ -538,14 +559,12 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    if (existing && overwrite) {
-      await supabase.from("submission_artifact_comments").delete().eq("submission_artifact_id", existing.id);
-      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
-      await supabase.storage.from("submission-artifacts").remove([oldPath]);
-      await supabase.from("submission_artifacts").delete().eq("id", existing.id);
-      overwritten++;
-    }
-
+    // The old artifact is deleted *after* the replacement is safely stored, further
+    // down. Deleting first meant that when the upload failed we rolled back only the
+    // new row, so the original artifact and all of its grading comments were already
+    // gone — reported as one entry in errors[] under success: true. Two rows can
+    // coexist here: submission_artifacts has no unique constraint on
+    // (submission_id, name), only its primary key.
     const { data: inserted, error: insErr } = await supabase
       .from("submission_artifacts")
       .insert({
@@ -574,6 +593,8 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       contentType: "application/octet-stream"
     });
     if (upErr) {
+      // Roll back only the new row. The old artifact and its comments are still
+      // intact because they have not been touched yet.
       await supabase.from("submission_artifacts").delete().eq("id", inserted.id);
       errors.push({
         submission_id: art.submission_id,
@@ -582,6 +603,33 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       });
       continue;
     }
+
+    // The replacement is stored, so the old artifact can go. Errors here are
+    // reported rather than discarded: a failure leaves a duplicate row behind, and
+    // silently swallowing it is how `--overwrite` used to appear to work while
+    // leaving the storage object orphaned.
+    if (existing && overwrite) {
+      const { error: commentsErr } = await supabase
+        .from("submission_artifact_comments")
+        .delete()
+        .eq("submission_artifact_id", existing.id);
+      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
+      const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
+      const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", existing.id);
+
+      const cleanupErr = commentsErr ?? rowErr ?? objectErr;
+      if (cleanupErr) {
+        errors.push({
+          submission_id: art.submission_id,
+          artifact_name: art.name,
+          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${existing.id} failed: ${cleanupErr.message}`
+        });
+        continue;
+      }
+      overwritten++;
+      continue;
+    }
+
     uploaded++;
   }
 
