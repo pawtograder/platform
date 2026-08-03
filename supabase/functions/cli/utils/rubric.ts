@@ -119,6 +119,7 @@ export async function copyRubricStructure(
         name: sourceRubric.name,
         description: sourceRubric.description,
         cap_score_to_assignment_points: sourceRubric.cap_score_to_assignment_points,
+        hide_unless_assigned: sourceRubric.hide_unless_assigned,
         is_private: sourceRubric.is_private,
         review_round: sourceRubric.review_round
       })
@@ -156,6 +157,7 @@ export async function copyRubricStructure(
         name: sourceRubric.name,
         description: sourceRubric.description,
         cap_score_to_assignment_points: sourceRubric.cap_score_to_assignment_points,
+        hide_unless_assigned: sourceRubric.hide_unless_assigned,
         is_private: sourceRubric.is_private,
         review_round: sourceRubric.review_round
       })
@@ -179,8 +181,11 @@ export async function copyRubricStructure(
         description: part.description,
         ordinal: part.ordinal,
         data: part.data,
-        // Carry over the per-part grading mode (assign-to-student / individual);
-        // otherwise the copy silently downgrades those parts to regular grading.
+        // Carry over every column that changes behaviour rather than appearance:
+        // the per-part grading mode (assign-to-student / individual), the `data`
+        // blobs, `kpi_category`, and `hide_unless_assigned`. Omitting any of them
+        // silently downgrades the copy — per-part grading in particular collapses
+        // every group member's grade to the shared total.
         is_individual_grading: part.is_individual_grading,
         is_assign_to_student: part.is_assign_to_student
       })
@@ -253,6 +258,7 @@ export async function copyRubricStructure(
             group: check.group,
             max_annotations: check.max_annotations,
             student_visibility: check.student_visibility,
+            kpi_category: check.kpi_category,
             data: check.data
           })
           .select("id")
