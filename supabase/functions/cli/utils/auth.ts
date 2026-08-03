@@ -109,12 +109,19 @@ export async function getCallerPrivateProfileId(
   userId: string,
   classId: number
 ): Promise<string> {
+  // Scoped to the CLI roles and explicitly ordered. A user can hold more than one
+  // active role row in a class, and those rows can carry different
+  // private_profile_id values, so an unordered limit(1) would attribute
+  // `resolved_by` to whichever row the planner happened to return — and could
+  // attribute it differently on the next run.
   const { data, error } = await supabase
     .from("user_roles")
-    .select("private_profile_id")
+    .select("id, private_profile_id")
     .eq("user_id", userId)
     .eq("class_id", classId)
     .eq("disabled", false)
+    .in("role", CLI_CLASS_ROLES)
+    .order("id", { ascending: true })
     .limit(1)
     .maybeSingle();
 

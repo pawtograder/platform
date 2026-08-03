@@ -1,0 +1,111 @@
+/**
+ * @jest-environment node
+ */
+
+/**
+ * Due dates for `reviews assign` are interpreted in the class's time zone.
+ *
+ * `new Date("2026-09-15")` is midnight UTC, which for a New York course is the
+ * evening of the 14th — so a deadline entered as a bare date silently landed on
+ * the wrong day, a day earlier than the instructor typed. These tests pin the
+ * zone handling, including the DST transitions where a naive fixed-offset
+ * implementation goes wrong.
+ */
+
+import { resolveDueDate, ZonedDateError } from "../../supabase/functions/cli/utils/zonedDate";
+
+const NY = "America/New_York";
+const TOKYO = "Asia/Tokyo";
+
+/** What a given instant looks like on the wall clock in `tz`. */
+function wallClock(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(iso));
+}
+
+describe("resolveDueDate — date-only input", () => {
+  it("keeps the date the instructor typed, in the class's zone", () => {
+    const iso = resolveDueDate("2026-09-15", NY);
+    // The bug: this used to resolve to 2026-09-14 in New York.
+    expect(wallClock(iso, NY)).toBe("2026-09-15, 23:59:59");
+  });
+
+  it("resolves to end of day rather than the start", () => {
+    const iso = resolveDueDate("2026-09-15", NY);
+    expect(iso).toBe(new Date("2026-09-16T03:59:59.999Z").toISOString());
+  });
+
+  it("handles a zone ahead of UTC, where the naive reading is a day late", () => {
+    const iso = resolveDueDate("2026-09-15", TOKYO);
+    expect(wallClock(iso, TOKYO)).toBe("2026-09-15, 23:59:59");
+  });
+
+  it("treats a missing class time zone as UTC", () => {
+    expect(resolveDueDate("2026-09-15", null)).toBe("2026-09-15T23:59:59.999Z");
+    expect(resolveDueDate("2026-09-15", "")).toBe("2026-09-15T23:59:59.999Z");
+  });
+
+  it("uses the correct offset on each side of a DST boundary", () => {
+    // EDT (UTC-4) before the November transition, EST (UTC-5) after.
+    expect(resolveDueDate("2026-11-01", NY)).toBe("2026-11-02T04:59:59.999Z");
+    expect(resolveDueDate("2026-11-02", NY)).toBe("2026-11-03T04:59:59.999Z");
+    expect(resolveDueDate("2026-06-15", NY)).toBe("2026-06-16T03:59:59.999Z");
+    expect(resolveDueDate("2026-01-15", NY)).toBe("2026-01-16T04:59:59.999Z");
+  });
+});
+
+describe("resolveDueDate — wall-clock date and time", () => {
+  it("interprets a bare date-time in the class's zone", () => {
+    const iso = resolveDueDate("2026-09-15T17:00", NY);
+    expect(wallClock(iso, NY)).toBe("2026-09-15, 17:00:00");
+    expect(iso).toBe("2026-09-15T21:00:00.000Z");
+  });
+
+  it("accepts seconds", () => {
+    expect(resolveDueDate("2026-09-15T17:00:30", NY)).toBe("2026-09-15T21:00:30.000Z");
+  });
+
+  it("does not shift a spring-forward gap time into a wildly wrong instant", () => {
+    // 02:30 on 2026-03-08 does not exist in New York. It should resolve to a
+    // stable instant near the transition rather than throwing or jumping a day.
+    const iso = resolveDueDate("2026-03-08T02:30", NY);
+    const ms = new Date(iso).getTime();
+    expect(Math.abs(ms - new Date("2026-03-08T07:30:00Z").getTime())).toBeLessThanOrEqual(60 * 60 * 1000);
+  });
+});
+
+describe("resolveDueDate — explicit offsets are respected", () => {
+  it("passes through a Z timestamp unchanged", () => {
+    expect(resolveDueDate("2026-09-15T12:00:00Z", NY)).toBe("2026-09-15T12:00:00.000Z");
+  });
+
+  it("honors an explicit numeric offset over the class zone", () => {
+    expect(resolveDueDate("2026-09-15T12:00:00+09:00", NY)).toBe("2026-09-15T03:00:00.000Z");
+  });
+});
+
+describe("resolveDueDate — rejections", () => {
+  it("rejects empty input", () => {
+    expect(() => resolveDueDate("   ", NY)).toThrow(ZonedDateError);
+  });
+
+  it("rejects unparseable input with an actionable message", () => {
+    expect(() => resolveDueDate("next tuesday", NY)).toThrow(/Could not parse due date/);
+  });
+
+  it("rejects an unknown class time zone instead of quietly using UTC", () => {
+    expect(() => resolveDueDate("2026-09-15", "Mars/Olympus_Mons")).toThrow(/Unknown time zone/);
+  });
+
+  it("rejects an impossible calendar date", () => {
+    expect(() => resolveDueDate("2026-02-30", NY)).toThrow(ZonedDateError);
+  });
+});

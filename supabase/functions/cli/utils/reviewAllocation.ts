@@ -53,21 +53,49 @@ export interface AllocateRoundRobinResult {
   unassignable: Array<{ submission_id: number; rubric_part_id: number | null }>;
 }
 
-function pairKey(submissionId: number, rubricPartId: number | null): string {
-  return `${submissionId}:${rubricPartId ?? "all"}`;
-}
-
 /**
  * Deals each (submission, rubric part) pair to the eligible reviewer holding the
  * least work, breaking ties by profile id. Inputs are sorted first, so the same
  * inputs always produce the same output.
+ *
+ * Coverage, not key equality, decides what is already assigned. An assignment
+ * with no rubric-part links covers the *whole* rubric, so it also covers every
+ * individual part: treating `submission:null` as merely a different key from
+ * `submission:<part>` meant `--by-part` after a whole-rubric assignment re-dealt
+ * every part, and `bulk_assign_reviews` would then either duplicate the work
+ * across assignees or, reusing the same assignee's row, silently narrow that
+ * whole-rubric assignment down to the added parts. The reverse direction was
+ * equally wrong.
  */
 export function allocateRoundRobin(input: AllocateRoundRobinInput): AllocateRoundRobinResult {
   const submissionIds = [...new Set(input.submissionIds)].sort((a, b) => a - b);
   const assignees = [...new Set(input.assigneeProfileIds)].sort((a, b) => a.localeCompare(b));
   const parts = input.rubricPartIds === null ? [null] : [...new Set(input.rubricPartIds)].sort((a, b) => a - b);
 
-  const alreadyAssigned = new Set(input.existing.map((e) => pairKey(e.submission_id, e.rubric_part_id)));
+  /** Submissions already covered by a whole-rubric assignment. */
+  const wholeRubricCovered = new Set<number>();
+  /** submission id -> rubric part ids already assigned individually. */
+  const partsCovered = new Map<number, Set<number>>();
+  for (const e of input.existing) {
+    if (e.rubric_part_id === null) {
+      wholeRubricCovered.add(e.submission_id);
+    } else {
+      const set = partsCovered.get(e.submission_id) ?? new Set<number>();
+      set.add(e.rubric_part_id);
+      partsCovered.set(e.submission_id, set);
+    }
+  }
+
+  /** Whether this (submission, part) slot is already someone's job. */
+  const isCovered = (submissionId: number, rubricPartId: number | null): boolean => {
+    if (wholeRubricCovered.has(submissionId)) return true;
+    const covered = partsCovered.get(submissionId);
+    if (!covered || covered.size === 0) return false;
+    // A whole-rubric draft would overlap any part that is already assigned;
+    // "the remaining parts" is not expressible as a single assignment.
+    if (rubricPartId === null) return true;
+    return covered.has(rubricPartId);
+  };
 
   const load = new Map<string, number>();
   for (const id of assignees) load.set(id, 0);
@@ -87,7 +115,7 @@ export function allocateRoundRobin(input: AllocateRoundRobinInput): AllocateRoun
     const excluded = input.excludedBySubmission?.get(submissionId);
 
     for (const rubricPartId of parts) {
-      if (alreadyAssigned.has(pairKey(submissionId, rubricPartId))) {
+      if (isCovered(submissionId, rubricPartId)) {
         skippedAlreadyAssigned++;
         continue;
       }

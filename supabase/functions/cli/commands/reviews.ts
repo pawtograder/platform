@@ -9,10 +9,14 @@ import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment, resolveRubricIdForType, RUBRIC_TYPES } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { allocateRoundRobin, summarizeLoad, type DraftAssignment } from "../utils/reviewAllocation.ts";
+import { resolveDueDate } from "../utils/zonedDate.ts";
 import { CLICommandError } from "../errors.ts";
 import type { AssignmentRow, CLIResponse } from "../types.ts";
 
 const PAGE = 1000;
+/** Sentinel for fetchReviewAssignments: page until the table is exhausted. */
+const FETCH_ALL = Number.POSITIVE_INFINITY;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_LIST_LIMIT = 1000;
 
 interface ReviewsListParams {
@@ -70,12 +74,27 @@ async function resolveRubricParam(
   return rubricId;
 }
 
-/** Every review_assignment for an assignment, paged. */
+export interface ReviewAssignmentFilters {
+  rubricId?: number | null;
+  /** Completion state; `completed_at` lives on review_assignments. */
+  status?: "pending" | "completed" | "all";
+  /** Restrict to these assignee profile ids. */
+  assigneeProfileIds?: string[] | null;
+}
+
+/**
+ * Every review_assignment for an assignment matching `filters`, paged.
+ *
+ * Filters are applied in Postgres rather than to the fetched page. Applying them
+ * afterwards meant `--status pending --limit 1000` returned nothing when the
+ * first thousand rows happened to be completed — the limit selected the slice
+ * before the predicate ever ran.
+ */
 async function fetchReviewAssignments(
   supabase: ReturnType<typeof getAdminClient>,
   assignmentId: number,
-  rubricId: number | null,
-  limit: number
+  limit: number,
+  filters: ReviewAssignmentFilters = {}
 ): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
   for (let offset = 0; out.length < limit; offset += PAGE) {
@@ -92,7 +111,12 @@ async function fetchReviewAssignments(
       )
       .eq("assignment_id", assignmentId);
 
-    if (rubricId !== null) query = query.eq("rubric_id", rubricId);
+    if (filters.rubricId !== null && filters.rubricId !== undefined) {
+      query = query.eq("rubric_id", filters.rubricId);
+    }
+    if (filters.status === "pending") query = query.is("completed_at", null);
+    if (filters.status === "completed") query = query.not("completed_at", "is", null);
+    if (filters.assigneeProfileIds) query = query.in("assignee_profile_id", filters.assigneeProfileIds);
 
     const { data, error } = await query.order("id", { ascending: true }).range(offset, offset + page - 1);
 
@@ -152,14 +176,40 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
       ? null
       : await resolveRubricParam(supabase, assignment, p.rubric);
 
-  const rows = await fetchReviewAssignments(supabase, assignment.id, rubricId, limit);
+  // Resolve --assignee to concrete profile ids up front so the filter can run in
+  // Postgres. A bare UUID is used directly; anything else is matched against
+  // staff names in this class.
+  let assigneeProfileIds: string[] | null = null;
+  if (p.assignee && String(p.assignee).trim() !== "") {
+    const needle = String(p.assignee).trim();
+    if (UUID_RE.test(needle)) {
+      assigneeProfileIds = [needle];
+    } else {
+      const { data: matches, error: matchError } = await supabase
+        .from("profiles")
+        .select("id, name")
+        .eq("class_id", classData.id)
+        .ilike("name", `%${needle}%`);
+      if (matchError) throw new CLICommandError(`Failed to resolve assignee: ${matchError.message}`, 500);
+      assigneeProfileIds = (matches ?? []).map((m) => m.id);
+      if (assigneeProfileIds.length === 0) {
+        throw new CLICommandError(`No one in this class matches assignee "${needle}"`, 404);
+      }
+    }
+  }
+
+  const rows = await fetchReviewAssignments(supabase, assignment.id, limit, {
+    rubricId,
+    status: status as "pending" | "completed" | "all",
+    assigneeProfileIds
+  });
 
   const names = await fetchProfileNames(supabase, [
     ...rows.map((r) => r.assignee_profile_id as string | null),
     ...rows.map((r) => r.completed_by as string | null)
   ]);
 
-  let reviews = rows.map((r) => {
+  const reviews = rows.map((r) => {
     const parts = (r.review_assignment_rubric_parts ?? []) as Array<{
       rubric_part_id: number;
       rubric_parts?: { id: number; name: string } | null;
@@ -188,17 +238,6 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
       review_completed_at: review?.completed_at ?? null
     };
   });
-
-  if (p.assignee) {
-    const needle = String(p.assignee).trim().toLowerCase();
-    reviews = reviews.filter(
-      (r) =>
-        String(r.assignee_profile_id).toLowerCase() === needle || (r.assignee_name ?? "").toLowerCase().includes(needle)
-    );
-  }
-
-  if (status === "pending") reviews = reviews.filter((r) => r.completed_at == null);
-  if (status === "completed") reviews = reviews.filter((r) => r.completed_at != null);
 
   return {
     success: true,
@@ -275,14 +314,19 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   if (!p.assignment) throw new CLICommandError("assignment is required");
   if (!p.due_date) throw new CLICommandError("due_date is required");
 
-  const dueDate = new Date(p.due_date);
-  if (Number.isNaN(dueDate.getTime())) {
-    throw new CLICommandError(`due_date is not a valid date: ${p.due_date}`, 400);
-  }
-
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
+
+  // Resolved after the class, because a date-only deadline has to be read in the
+  // class's time zone. Parsing it as UTC put a New York course's deadline on the
+  // previous evening.
+  let dueDateIso: string;
+  try {
+    dueDateIso = resolveDueDate(String(p.due_date), classData.time_zone);
+  } catch (err) {
+    throw new CLICommandError(err instanceof Error ? err.message : `Invalid due_date: ${String(p.due_date)}`, 400);
+  }
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
   const rubricId = await resolveRubricParam(supabase, assignment, p.rubric);
 
@@ -352,6 +396,31 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
         );
       }
     }
+
+    // Grading conflicts and self-review exclusions apply to explicit manifests
+    // too. bulk_assign_reviews does not enforce them, so skipping this check
+    // would let `--file` quietly do what the round-robin path refuses to: hand
+    // someone their own submission, or a student they are conflicted with.
+    const { data: manifestSubmissions, error: manifestSubmissionError } = await supabase
+      .from("submissions")
+      .select("id, profile_id, assignment_group_id")
+      .eq("assignment_id", assignment.id)
+      .in("id", submissionIds);
+    if (manifestSubmissionError) {
+      throw new CLICommandError(`Failed to load submissions: ${manifestSubmissionError.message}`, 500);
+    }
+
+    const excluded = await buildConflictExclusions(supabase, classData.id, manifestSubmissions ?? []);
+    const violations = drafts
+      .filter((d) => excluded.get(d.submission_id)?.has(d.assignee_profile_id))
+      .map((d) => `${d.assignee_profile_id} -> submission ${d.submission_id}`);
+    if (violations.length > 0) {
+      throw new CLICommandError(
+        "These assignments conflict with a grading_conflicts entry or would have someone review their own " +
+          `submission:\n  ${violations.join("\n  ")}`,
+        400
+      );
+    }
   } else {
     // ── Round-robin allocation ─────────────────────────────────────────────
     let pool = [...staffProfileIds];
@@ -394,7 +463,12 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
       rubricPartIds = parts.map((part) => part.id);
     }
 
-    const existingRows = await fetchReviewAssignments(supabase, assignment.id, rubricId, DEFAULT_LIST_LIMIT * 10);
+    // Every existing assignment, not a capped slice: a hidden row makes the
+    // allocator treat covered work as unassigned, and if it then picks a
+    // different assignee, bulk_assign_reviews adds a second assignment for the
+    // same work. That is reachable in a large by-part round and would break
+    // rerun idempotence.
+    const existingRows = await fetchReviewAssignments(supabase, assignment.id, FETCH_ALL, { rubricId });
     const existing: DraftAssignment[] = [];
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
@@ -431,7 +505,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     class: { id: classData.id, slug: classData.slug, name: classData.name },
     assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
     rubric_id: rubricId,
-    due_date: dueDate.toISOString(),
+    due_date: dueDateIso,
     drafts,
     load: summarizeLoad(drafts),
     skipped_already_assigned: allocation?.skippedAlreadyAssigned ?? 0,
@@ -459,7 +533,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     p_assignment_id: assignment.id,
     p_rubric_id: rubricId,
     p_draft_assignments: drafts as unknown as Json,
-    p_due_date: dueDate.toISOString()
+    p_due_date: dueDateIso
   });
 
   if (rpcError) {

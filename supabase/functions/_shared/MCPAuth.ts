@@ -12,11 +12,19 @@ import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
 
-// Environment variable names
+// Environment variable names.
+//
+// These two are different kinds of key and are easy to confuse:
+
+/** Raw HMAC-SHA256 secret used to sign and verify our own `mcp_` API tokens. */
 const MCP_JWT_SECRET_ENV = "MCP_JWT_SECRET";
-// The ES256 private signing JWK (JSON object), NOT the HS256 shared secret
-// that GoTrue/PostgREST/Realtime use — deployments must scope this env var to
-// the edge runtime accordingly.
+
+/**
+ * The ES256 private signing JWK (a JSON object), used to mint short-lived
+ * Supabase JWTs for RLS. NOT the HS256 shared secret that
+ * GoTrue/PostgREST/Realtime use — deployments must scope this env var to the
+ * edge runtime accordingly.
+ */
 const SUPABASE_JWT_SECRET_ENV = "JWT_SECRET";
 const SUPABASE_URL_ENV = "SUPABASE_URL";
 const SUPABASE_ANON_KEY_ENV = "SUPABASE_ANON_KEY";
@@ -154,8 +162,12 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
     token = token.slice(MCP_TOKEN_PREFIX.length);
   }
 
+  // Resolved outside the try: a missing or too-short MCP_JWT_SECRET is a
+  // deployment fault, and swallowing it below would report the caller's token as
+  // invalid (401) for a problem they cannot fix.
+  const key = await getMcpJwtKey();
+
   try {
-    const key = await getMcpJwtKey();
     const payload = (await verify(token, key)) as MCPApiTokenPayload;
 
     // Validate required claims

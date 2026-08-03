@@ -171,17 +171,45 @@ describe("allocateRoundRobin", () => {
     expect(pairs).toEqual(["1:100", "1:200", "2:100", "2:200"]);
   });
 
-  it("treats a per-part pair as distinct from a whole-rubric assignment", () => {
-    // An existing whole-rubric assignment must not suppress per-part work.
+  it("treats a whole-rubric assignment as covering every part", () => {
+    // An assignment with no rubric-part links covers the whole rubric, so
+    // --by-part must not re-deal its parts. Doing so either duplicates the work
+    // across assignees or, when bulk_assign_reviews reuses the same assignee's
+    // row, silently narrows the existing whole-rubric assignment to those parts.
     const { drafts, skippedAlreadyAssigned } = allocateRoundRobin({
       submissionIds: [1],
-      assigneeProfileIds: [GRADER_A],
-      rubricPartIds: [100],
+      assigneeProfileIds: [GRADER_A, GRADER_B],
+      rubricPartIds: [100, 200],
       existing: [{ assignee_profile_id: GRADER_A, submission_id: 1, rubric_part_id: null }]
     });
 
-    expect(skippedAlreadyAssigned).toBe(0);
-    expect(drafts).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 1, rubric_part_id: 100 }]);
+    expect(drafts).toEqual([]);
+    expect(skippedAlreadyAssigned).toBe(2);
+  });
+
+  it("does not deal a whole-rubric assignment over already-assigned parts", () => {
+    // The inverse direction: "the remaining parts" cannot be expressed as a
+    // single whole-rubric assignment, so it would overlap part 100.
+    const { drafts, skippedAlreadyAssigned } = allocateRoundRobin({
+      submissionIds: [1],
+      assigneeProfileIds: [GRADER_A, GRADER_B],
+      rubricPartIds: null,
+      existing: [{ assignee_profile_id: GRADER_A, submission_id: 1, rubric_part_id: 100 }]
+    });
+
+    expect(drafts).toEqual([]);
+    expect(skippedAlreadyAssigned).toBe(1);
+  });
+
+  it("still fills in parts that are genuinely unassigned", () => {
+    const { drafts } = allocateRoundRobin({
+      submissionIds: [1],
+      assigneeProfileIds: [GRADER_A, GRADER_B],
+      rubricPartIds: [100, 200, 300],
+      existing: [{ assignee_profile_id: GRADER_A, submission_id: 1, rubric_part_id: 100 }]
+    });
+
+    expect(drafts.map((d) => d.rubric_part_id).sort()).toEqual([200, 300]);
   });
 
   it("returns nothing when there are no graders, without throwing", () => {

@@ -73,6 +73,15 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
   if (!Number.isFinite(limit) || limit < 1) {
     throw new CLICommandError("limit must be a positive integer", 400);
   }
+  // Rejected rather than silently clamped: this command exposes no cursor, so a
+  // clamped limit would leave the rest of the queue unreachable while appearing
+  // to have honored the request.
+  if (limit > MAX_LIMIT) {
+    throw new CLICommandError(
+      `limit must be ${MAX_LIMIT} or less (got ${limit}). Narrow the result set with --status or --queue instead.`,
+      400
+    );
+  }
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
@@ -106,7 +115,7 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
     )
     .eq("class_id", classData.id)
     .order("created_at", { ascending: false })
-    .limit(Math.min(limit, MAX_LIMIT));
+    .limit(limit);
 
   if (statuses) query = query.in("status", statuses);
   if (queueId !== null) query = query.eq("help_queue", queueId);
@@ -160,7 +169,7 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
       summary: {
         total: requests.length,
         by_status: byStatus,
-        truncated: requests.length >= Math.min(limit, MAX_LIMIT)
+        truncated: requests.length >= limit
       }
     }
   };
@@ -186,8 +195,13 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
  */
 async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as HelpRequestsCloseParams;
-  const id = p.id === undefined || p.id === null ? NaN : Math.floor(Number(p.id));
-  if (!Number.isFinite(id) || id < 1) throw new CLICommandError("id is required and must be a positive integer", 400);
+  // Not floored: this command is destructive, yargs happily accepts `--id 123.4`
+  // for a numeric option, and silently truncating would close a different
+  // request than the caller named.
+  const id = p.id === undefined || p.id === null ? NaN : Number(p.id);
+  if (!Number.isInteger(id) || id < 1) {
+    throw new CLICommandError(`id must be a positive integer (got ${String(p.id)})`, 400);
+  }
 
   const targetStatus = (p.status ?? "closed") as HelpRequestStatus;
   if (!TERMINAL_HELP_REQUEST_STATUSES.includes(targetStatus)) {
@@ -218,7 +232,31 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   // Authorization is keyed on the request's own class, so a token scoped to one
   // class cannot close another class's requests.
-  await assertUserIsClassInstructor(supabase, ctx.userId, existing.class_id);
+  //
+  // A 403 here would be its own disclosure: paired with the 404 above it tells
+  // the caller that the id exists in some class they cannot see. Both cases
+  // answer identically.
+  try {
+    await assertUserIsClassInstructor(supabase, ctx.userId, existing.class_id);
+  } catch (err) {
+    if (err instanceof CLICommandError && err.status === 403) {
+      throw new CLICommandError(`Help request not found: ${id}`, 404);
+    }
+    throw err;
+  }
+
+  // Refused rather than warned after the fact: video-call-controls disables both
+  // Join and End Call once the request is resolved/closed, so closing first
+  // strands the Chime meeting with no way to end it from the UI. Ending the call
+  // while the request is still open is possible, so that is what we ask for.
+  if (existing.is_video_live === true && p.force !== true) {
+    throw new CLICommandError(
+      `Help request ${id} has a live video call. End the call from the office-hours page first — ` +
+        "once the request is closed, the End Call button is disabled and the meeting cannot be torn down. " +
+        "Pass force to close anyway and leave the meeting running.",
+      409
+    );
+  }
 
   if (TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status) && p.force !== true) {
     throw new CLICommandError(
@@ -237,22 +275,62 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   if (resolutionStatus) update.resolution_status = resolutionStatus;
   if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;
 
+  // Conditional on the status we observed above. Without this, a concurrent
+  // resolve from the office-hours UI (or another operator) between the read and
+  // the write would be silently overwritten, including its resolved_by and
+  // resolved_at, even though the caller did not pass force.
   const { data: updated, error: updateError } = await supabase
     .from("help_requests")
     .update(update)
     .eq("id", id)
+    .eq("status", existing.status)
     .select(
       "id, class_id, help_queue, status, resolved_at, resolved_by, resolution_status, resolution_notes, is_video_live"
     )
-    .single();
+    .maybeSingle();
 
   if (updateError) throw new CLICommandError(`Failed to close help request: ${updateError.message}`, 500);
+  if (!updated) {
+    throw new CLICommandError(
+      `Help request ${id} changed while this command was running (it was ${existing.status}). ` +
+        "Re-run to see its current state.",
+      409
+    );
+  }
+
+  // The staff UI writes one student_help_activity row per participant after
+  // resolving, and no trigger does it. Without this, CLI-resolved requests
+  // vanish from per-student help histories and the analytics built on them.
+  // Best-effort, matching the UI, which does not block resolution on it.
+  let activityLogged = 0;
+  try {
+    const { data: participants } = await supabase
+      .from("help_request_students")
+      .select("profile_id")
+      .eq("help_request_id", id);
+
+    const rows = (participants ?? []).map((participant) => ({
+      student_profile_id: participant.profile_id,
+      class_id: existing.class_id,
+      help_request_id: id,
+      activity_type: "request_resolved" as const,
+      activity_description: `Request ${targetStatus} by instructor via CLI`
+    }));
+
+    if (rows.length > 0) {
+      const { error: activityError } = await supabase.from("student_help_activity").insert(rows);
+      if (!activityError) activityLogged = rows.length;
+    }
+  } catch {
+    // Activity logging is not worth failing an otherwise successful close over.
+  }
 
   return {
     success: true,
     data: {
       request: updated,
       previous_status: existing.status,
+      activity_logged: activityLogged,
       /** True when a Chime call is still up; no trigger tears it down. */
       video_still_live: existing.is_video_live === true
     }

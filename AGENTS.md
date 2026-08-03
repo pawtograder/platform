@@ -99,7 +99,9 @@ Write commands:
 | `rubrics import` / `flashcards copy` / `surveys copy`                | Import a rubric; copy decks or surveys between classes.           |
 | `submissions comments import\|sync` / `submissions artifacts import` | Batch comment and artifact ingestion.                             |
 
-`reviews assign` allocates round-robin across active graders and instructors, honoring `grading_conflicts` and never assigning someone their own submission. Pass `--by-part` to fan out per rubric part, or `--file <manifest.json>` to supply explicit `{assignee_profile_id, submission_id, rubric_part_id}` triples. `--dry-run` shows the plan without writing.
+`reviews assign` allocates round-robin across active graders and instructors, honoring `grading_conflicts` and never assigning someone their own submission — including for explicit `--file` manifests, which are validated against the same exclusions. Pass `--by-part` to fan out per rubric part, or `--file <manifest.json>` to supply explicit `{assignee_profile_id, submission_id, rubric_part_id}` triples. `--dry-run` shows the plan without writing.
+
+A bare `--due-date` is interpreted as the end of that day **in the class's time zone**, not UTC. Append `T17:00` for a specific time, or pass an explicit offset.
 
 Local git commands run **SSH git on your machine**, not in the Edge Function, and need a writable `--workdir`:
 

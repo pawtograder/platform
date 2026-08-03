@@ -39,7 +39,7 @@ export const builder = (yargs: Argv) => {
               type: "string"
             })
             .option("limit", {
-              describe: "Maximum requests to return",
+              describe: "Maximum requests to return (1-1000)",
               type: "number",
               default: 100
             })
@@ -83,7 +83,12 @@ export const builder = (yargs: Argv) => {
             .join(", ");
           logger.info(`Total: ${data.summary.total} request(s)${byStatus ? ` (${byStatus})` : ""}`);
           if (data.summary.truncated) {
-            logger.warning(`Output truncated at --limit ${args.limit}; pass a higher --limit for more.`);
+            const atMax = (args.limit as number) >= 1000;
+            logger.warning(
+              atMax
+                ? "Output truncated at the maximum of 1000; narrow the results with --status or --queue."
+                : `Output truncated at --limit ${args.limit}; pass a higher --limit (up to 1000) for more.`
+            );
           }
         } catch (error) {
           handleError(error);
@@ -116,7 +121,9 @@ export const builder = (yargs: Argv) => {
             type: "string"
           })
           .option("force", {
-            describe: "Overwrite the resolution of an already resolved/closed request",
+            describe:
+              "Close even if the request is already resolved/closed, or has a live video call " +
+              "(the call will be left running)",
             type: "boolean",
             default: false
           });
@@ -140,11 +147,15 @@ export const builder = (yargs: Argv) => {
             logger.info(`Notes: ${request.resolution_notes}`);
           }
 
+          if (data.activity_logged > 0) {
+            logger.info(`Logged help activity for ${data.activity_logged} participant(s)`);
+          }
+
           if (data.video_still_live) {
             logger.blank();
             logger.warning(
-              "This request had a live video call. Closing it does not end the meeting — " +
-                "end the call from the office-hours page to tear down the Chime session."
+              "This request had a live video call and was closed with --force. The Chime meeting is " +
+                "still running, and the End Call button is disabled now that the request is closed."
             );
           }
         } catch (error) {

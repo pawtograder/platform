@@ -104,7 +104,11 @@ For allocations the round-robin cannot express, supply them yourself:
 pawtograder reviews assign -c cs3500-fall-2026 -a hw-1 --due-date 2026-09-15 --file drafts.json
 ```
 
-Re-running is safe: existing assignments are reused rather than duplicated, and work already assigned is left alone.
+Re-running is safe: existing assignments are reused rather than duplicated, and work already assigned is left alone. An assignment covering the whole rubric counts as covering each of its parts, so `--by-part` will not re-deal work that someone already holds.
+
+A bare `--due-date` is the **end of that day in the class's time zone** — `2026-09-15` for a New York course means 23:59:59 Eastern, not midnight UTC. Append a time (`2026-09-15T17:00`) for something specific, or pass a timestamp with an offset to bypass the class zone entirely.
+
+Explicit manifests are held to the same rules as the round-robin: a `--file` entry that would assign someone their own submission, or a student they have a `grading_conflicts` entry for, is rejected rather than written.
 
 ### Bulk export
 

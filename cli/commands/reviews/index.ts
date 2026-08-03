@@ -151,7 +151,10 @@ export const builder = (yargs: Argv) => {
               default: "grading"
             })
             .option("due-date", {
-              describe: "Due date for the created assignments (YYYY-MM-DD or MM/DD/YYYY)",
+              describe:
+                "Due date for the created assignments. A bare date (YYYY-MM-DD or MM/DD/YYYY) means " +
+                "end of that day in the class's time zone; append T17:00 for a specific time, or " +
+                "pass a timestamp with an offset to be explicit.",
               type: "string",
               demandOption: true
             })
@@ -187,7 +190,12 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const dueDate = normalizeDate(args.dueDate as string, "--due-date");
+          // A timestamp that already carries an offset is passed through untouched;
+          // the server interprets bare dates and times in the class's time zone.
+          const rawDueDate = String(args.dueDate);
+          const dueDate = /(?:Z|[+-]\d{2}:?\d{2})$/.test(rawDueDate)
+            ? rawDueDate
+            : normalizeDate(rawDueDate, "--due-date");
 
           const params: Record<string, unknown> = {
             class: args.class as string,
