@@ -198,12 +198,23 @@ The full set of keys consumed from `pawtograder-jwt`:
   shared secret the rest of the stack uses — pointing it there is why MCP and
   the CLI did not work on self-hosted installs before this key existed.
 
-  `secrets.autogenerate=true` handles this for you, including on upgrade, where
-  it extracts the key from the `JWT_PRIVATE_JWKS` already in the namespace rather
-  than generating a new one. **Externally managed Secrets (ESO/OpenBao,
-  SealedSecrets) must add it by hand** — the `secretKeyRef` is `optional: true`,
-  so until you do, the edge tier runs normally and only MCP/CLI fail. Extract it
-  from the JWKS you already have:
+  Where it comes from, by install type:
+
+  - **`secrets.autogenerate=true`** — handled for you, including on upgrade, where
+    the bootstrap Job extracts the key from the `JWT_PRIVATE_JWKS` already in the
+    namespace rather than generating a new one.
+  - **`secrets.create=true`** — set `secrets.values.jwt.signingJwk`.
+    `GenerateJwtKeys.ts --helm-values` emits it.
+  - **ESO / OpenBao** — `GenerateJwtKeys.ts` emits `JWT_SIGNING_JWK` into the JWT
+    bundle, and `examples/externalsecrets/pawtograder-jwt.yaml` maps it. A bundle
+    provisioned *before* this key existed does not have it: add it to the OpenBao
+    path with the extraction below, then force an ESO sync.
+  - **SealedSecrets / hand-made Secrets** — add it yourself with the extraction
+    below (`kubeseal --merge-into` adds one key without re-sealing the rest).
+
+  Because the `secretKeyRef` is `optional: true`, until the key is present the
+  edge tier runs normally and only MCP/CLI fail. Extract it from the JWKS you
+  already have:
 
   ```bash
   kubectl -n <ns> get secret pawtograder-jwt \

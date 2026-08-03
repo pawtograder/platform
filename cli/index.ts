@@ -17,7 +17,7 @@
 import "./load-env";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DEFAULT_API_URL } from "./utils/api";
+import { DEFAULT_API_URL } from "@/cli/utils/api";
 
 // Import command modules
 import * as classesCommand from "./commands/classes";

@@ -44,6 +44,16 @@ spec:
       remoteRef:
         key: apps/pawtograder/jwt-production
         property: JWT_REALTIME_JWKS
+    # --- Required for MCP + the CLI; harmless to omit otherwise ---
+    # The EC private JWK alone (same key as the EC entry in JWT_PRIVATE_JWKS).
+    # GenerateJwtKeys.ts emits it as JWT_SIGNING_JWK, so it is already in the
+    # bundle above. The edge runtime consumes it as JWT_SECRET; without it MCP and
+    # the CLI cannot mint per-user tokens, while everything else runs normally
+    # (the chart marks that secretKeyRef optional).
+    - secretKey: JWT_SIGNING_JWK
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_SIGNING_JWK
     - secretKey: REALTIME_ENC_KEY
       remoteRef:
         key: apps/pawtograder/jwt-production
