@@ -143,19 +143,39 @@ env var the specs are byte-identical to the plain replay.
 - The judge is stochastic (no temperature control on current models); use
   `--samples 3` and read the unanimity markers in the report.
 - Agent mode inherits the virtual screen reader's fidelity: it is a simulator,
-  not NVDA/VoiceOver (impossible on this Linux CI box). Real-AT coverage now
-  exists as a validated lane: `vo/` replays the promoted task plans through
-  real macOS VoiceOver + real Safari on a dedicated Mac runner (`npm run
-a11y:vo`, dispatched via `.github/workflows/a11y-voiceover.yml`, setup in
-  `docs/a11y-voiceover-mac-runbook.md`) — full suite green against a live
-  deploy preview (9/9, 2026-07-25). VSR→real-VO phrasing drift is absorbed by
-  the `VO_*` normalizer lists + alternate item renderings in `vo/voHarness.ts`
-  and bounded bidirectional/unstick resyncs in `agent/replay.ts` (all
+  not NVDA/VoiceOver (impossible on this Linux CI box). Real-AT coverage exists
+  as two lanes, both green in enforce mode against a live deploy preview:
+
+  - **VoiceOver:** `vo/` replays the promoted task plans through real macOS
+    VoiceOver + real Safari on a dedicated Mac runner (`npm run a11y:vo`,
+    dispatched via `.github/workflows/a11y-voiceover.yml`, setup in
+    `docs/a11y-voiceover-mac-runbook.md`) — 9/9.
+  - **NVDA:** `nvda/` is the Windows counterpart on a dedicated Windows runner
+    (`npm run a11y:nvda`, `npm run a11y:nvda:doctor`,
+    `.github/workflows/a11y-nvda.yml`) — 9/9, with zero type steps carried by
+    the harness's DOM-write fallback. Green means something narrower here than
+    on the VO lane, so read `~/a11y-nvda-HANDOFF.md` before running it. In
+    guidepup, `nvda.itemText()` is an alias for `lastSpokenPhrase()` (there is no
+    review-cursor accessor on NVDA), so milestone matching reads a speech-log
+    tail and a stale utterance can satisfy a milestone. The lane passes because
+    NVDA is _asked_ where its cursor is (`reportCurrentObject`, wired in through
+    the optional `AtDriver.verifyCursor` hook, which lets a contradicted reading
+    reject a claimed match) and because the resync ladder gained a control-level
+    hop for the controls NVDA coalesces onto one browse line. The recorded plans
+    still do not walk NVDA cleanly by themselves: the three write tasks need 3–6
+    resyncs and reach 3-of-4 to 3-of-5 cursor agreement. `--calibrate` also skips
+    the write predicate, so a green calibrate is not evidence the text landed.
+
+  VSR→real-AT phrasing drift is absorbed by the `VO_*` / `NVDA_*` normalizer
+  lists + alternate item renderings in `vo/voHarness.ts` and
+  `nvda/nvdaHarness.ts` (on NVDA including comma-aligned suffixes of a browse
+  line, since it names inline controls mid-utterance), and by the bounded
+  line-wise, control-wise and post-unstick resyncs in `agent/replay.ts` (all
   logged); `--calibrate` remains the tuning tool when promoting new plans.
-  Purely visual criteria (e.g. 2.4.7 focus-outline loss) are outside the
-  spoken channel by construction, so the agent legitimately will not "see"
-  them; that is a scope boundary, not a miss, and the static judge covers
-  them.
+  Purely visual criteria (e.g. 2.4.7 focus-outline loss) are outside the spoken
+  channel by construction, so the agent legitimately will not "see" them; that
+  is a scope boundary, not a miss, and the static judge covers them.
+
 - The `claude -p` CLI can drop a structured-output property that follows a long
   string after ~100-turn sessions; the agent schema keeps the long `narrative`
   last and encodes barriers as a JSON string, with a salvage fallback.

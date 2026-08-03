@@ -30,10 +30,19 @@ export class NvdaDebugLog {
   /** Full harness command record (written live, unlike the per-task steps.json). */
   step(record: AtStepRecord): void {
     const durationMs = new Date(record.endedTimestamp).getTime() - new Date(record.startedTimestamp).getTime();
+    // The alternates are the driver's INFERENCE about what the cursor is on when
+    // NVDA's utterance is not just the item's name — the announced and role-free
+    // renderings, and the comma-aligned suffixes of a line that carries context
+    // words or several inline controls (nvdaLineSegmentAlternates). Milestone
+    // matching accepts any of them, so a reader of run 30702006927's sweeps had
+    // no way to tell WHICH rendering a match came from, or why one never came.
+    const alternates = record.observation.currentItemAlternates ?? [];
     console.log(
       `[a11y:nvda:debug] cmd#${record.index} ${record.command}${record.arg ? `(${JSON.stringify(record.arg)})` : ""} ` +
         `${durationMs}ms item=${JSON.stringify(record.observation.currentItem.slice(0, 120))} ` +
-        `spoken=${record.rawSpoken.length}${record.observation.error ? ` ERROR=${record.observation.error}` : ""}`
+        `spoken=${record.rawSpoken.length}` +
+        `${alternates.length ? ` alt=${JSON.stringify(alternates.map((a) => a.slice(0, 120)))}` : ""}` +
+        `${record.observation.error ? ` ERROR=${record.observation.error}` : ""}`
     );
     this.append({ ts: record.endedTimestamp, stage: "command", durationMs, ...record });
   }

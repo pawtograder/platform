@@ -1,5 +1,103 @@
 # a11y-judge — Progress Tracker
 
+## 2026-08-03 work cycle: NVDA (Windows) real-AT lane — enforcing, 9/9
+
+`tools/a11y-judge/nvda/` mirrors `vo/` on a Windows runner (Proxmox VM 9001; provisioning in
+the ops vault, `ops/ripley-cluster.md` → "Windows screen-reader runner"). Base lane
+`4c6ddcb3`. Detailed handoff, including runner gotchas, corrections and open questions:
+`~/a11y-nvda-HANDOFF.md`.
+
+**Status: green in ENFORCE mode, 9/9** (runs `30776973574` + rerun; a third confirming run was in
+flight at the time of writing). Zero degraded type steps. Doctor 7/7 on the runner. Enforce checks
+what calibrate never did: the DB write predicate per write task, a task failure for any typing that
+fell back to `hostSetValue`, a task failure for any state-changing step where NVDA's own cursor
+contradicted the plan, and a thrown `ReplayMilestoneError` on an unmatched milestone instead of a
+recorded miss. The 6 read tasks pass at 0 resyncs; the 3 write tasks need 3–6 resyncs and land at
+3-of-4 / 3-of-5 / 3-of-5 cursor agreement, which is the honest half of the headline (below).
+**VoiceOver stays 9/9 in enforce** (run `30778249419`) with all of the shared-code changes in
+place, confirming on the runner that the new hooks are inert where they are not implemented.
+
+**The structural gotcha that invalidated the first round of results:** guidepup's
+`nvda.itemText()` is an **alias for `lastSpokenPhrase()`**
+(`@guidepup/guidepup/lib/windows/NVDA/NVDA.js:527-532`; `itemTextLog()` aliases
+`spokenPhraseLog()` at `:621-626`), unlike VoiceOver's genuine caption read. No guidepup accessor
+reports the review cursor, so `milestoneMatches` and the resync/needle sweeps in `agent/replay.ts`
+match a **speech-log tail** on this lane: a stale utterance satisfies a milestone and the ladder
+never engages. Run `30682097759` measured the damage — 11 of 14 state-changing steps fired on
+elements the plan never recorded while all three write tasks reported success.
+
+**NVDA can be asked, and that is what closed the lane.** `reportCurrentObject` (NVDA-NumPad5)
+speaks the navigator object on demand; probe run `30681006352` measured that the answer tracks the
+cursor, repeats when the cursor holds still, and survives a poisoned speech tail. Three pieces:
+
+- **Record** (`NvdaCursorCheck`/`takeCursorChecks`): every state-changing step carrying a milestone
+  is checked, with five verdicts, because "the oracle can't say" and "the oracle disagrees" are
+  different findings. Recording alone changed nothing — nothing consulted it in time.
+- **Gate** (`AtDriver.verifyCursor` + `createMilestoneGate` in `agent/replay.ts`): asked one layer
+  earlier, where `contradicted` means the milestone is UNMET and the ladder keeps searching, with no
+  proceed-anyway fallback. `abstained` never blocks (NVDA collapses plain text to a bare role).
+- **Bounds:** a consultation is a ~1.5–2.5 s round trip (~8.4 s worst case), spent only on an
+  already-claimed match, memoized per `(milestone, speechItem)`, and capped at
+  `MAX_CURSOR_VERIFICATIONS_PER_STEP = 8`.
+
+**Turning the gate on exposed two matching/navigation defects the stale speech had been hiding:**
+
+- **Head-anchored matching vs mid-line names.** NVDA speaks a browse line as one comma-joined run
+  and buries the name mid-line (`"Like (0 likes), button, Edit, button, Reply"`), so a milestone it
+  speaks anywhere but first can never match. `nvdaLineSegmentAlternates` offers comma-aligned
+  SUFFIXES as `currentItemAlternates` (one degree of freedom, not containment; suffixes starting on
+  role/state words dropped). Replaying all 193 distinct items of run `30702006927` against the write
+  plans' 13 milestones flips exactly 9 verdicts, each one the item's own accessible name.
+- **`next`/`previous` move by LINE.** They are ArrowDown/ArrowUp, so they cannot rest on one of
+  three buttons sharing a coalesced line (run `30760469666`: every press rested on Like while the
+  milestone was Reply). `AtDriver.moveToControl` adds a control-level rung, NVDA-implemented as
+  quick-nav `B`/`Shift-B`. `CONTROL_SWEEP_LIMIT = 32` is measured, not guessed: run `30775582313`
+  showed a budget of 8 consumed entirely by seven header buttons before the discussion region.
+
+**Two evidence-integrity fixes to the lane itself** (both bit us, both are the "fix-the-harness"
+loop again):
+
+- `--calibrate` skips the write predicate (`run.ts`, `plan.taskKind === "write" && !args.calibrate`),
+  so a green calibrate on a write task means "nothing timed out", not "the text landed".
+- Rung 4 of the type ladder (`hostSetValue`) writes the field value from the DOM, bypassing the
+  keyboard entirely, and until `199f686d` that only reached `debug()` — the step recorded clean
+  and the task went green. Per-type-step `TypeStepFidelity` is now recorded, drained per task,
+  and surfaced in console/`summary.md`/junit; enforce fails a degraded step, calibrate warns.
+  Verification also now requires whole-text EQUALity (`0306599e`): containment matching had
+  passed survey-taking with a field holding 64 chars of doubled text for 32 expected.
+
+**Fixes landed.** Write path: `f1a95bc6` focus-routing ladder before typing (the port had dropped
+VoiceOver's `voHarness.ts:500` rung; adds a foreground guard, probe-first, AT-native routing, and a
+single-character safety valve because in NVDA browse mode a stray letter is quick-nav, so a
+mis-routed 68-char string is 68 caret jumps) · `199f686d` typing fidelity · `955edbf6` `interact`
+guarded on both sides + speech-loss detect/recover/fail-fast (`interact` on a landmark makes NVDA
+stop speaking: `item=""` for ~270 consecutive commands, ~10 min/attempt) · `0306599e` exact
+verification + deterministic host-clear. Cursor oracle: `b6ce02f9` milestone threaded to drivers via
+optional `AtStepContext` (the type path's only non-speech label source) · `0f803b40` oracle as record
+· `f548098b` oracle as gate · `1806be51` comma-aligned segment alternates · `5abea7b4` control-level
+hop · `50b3ff13` sweep budget 8 → 32. All three `AtDriver` hooks (`unstick`, `verifyCursor`,
+`moveToControl`) are optional and guarded at their call sites, which is why the VO lane is untouched.
+
+**Limitations to state plainly, alongside the 9/9:** (1) the recorded plans still do not walk
+cleanly on NVDA — the lane now CORRECTS drift rather than the drift being fixed at source, and the
+3-of-5 cursor-agreement ratios are the visible evidence; (2) the oracle abstains on prose
+(`reportCurrentObject` gives name+role for controls, a bare `"paragraph"` for text), so it
+corroborates the speech tail rather than replacing it; (3) unfixed app finding — `ThreadActions`
+(`app/course/[course_id]/discussion/[root_id]/page.tsx`) renders a flat run of icon-only buttons
+that NVDA coalesces into one browse line, so arrow keys cannot reach them individually (Tab does,
+and VoiceOver walks them as three items, so it is not a clear WCAG violation); (4) `calibratePlan`
+records a milestone miss and runs the step anyway, and changing it to record-and-skip would affect
+the VO lane too, so it is undecided; (5) `vo/run.ts`'s `calibratePlan` still calls
+`milestoneMatches` directly rather than the shared gate — identical behavior today, since VO
+supplies no `verifyCursor`, but an inconsistency.
+
+**Environment note:** the NVDA lane must run against a PR preview built from the branch, never
+staging — staging lacks 15+ of this branch's app-side a11y fixes (incl. `177ebb67` office-hours
+render-phase `redirect()` crash) and the replay hits a client-side exception page. Earlier
+"calibrate clean" numbers were collected on staging and are measuring the wrong build.
+`workflow_dispatch` on `a11y-nvda.yml` becomes available once the workflow reaches the default
+branch; until then the lane is dispatched from wherever the workflow lives.
+
 ## 2026-07-23 work cycle: fixes landed + coverage grind + Monaco + videos
 
 All four previously-found app defects are **fixed on this branch** (same PR as the tool):

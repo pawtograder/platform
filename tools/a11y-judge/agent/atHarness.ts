@@ -84,12 +84,48 @@ export interface AtObservation {
 }
 
 /**
+ * What the PLAN knows about the step being dispatched and the driver cannot
+ * observe. Optional and additive on purpose: a driver that needs none of it
+ * (the virtual SR, real VoiceOver) simply declares fewer parameters and still
+ * satisfies AtDriver, and extra arguments are inert at runtime.
+ */
+export interface AtStepContext {
+  /**
+   * The step's recorded milestone — the normalized template (agent/normalize.ts)
+   * of the item the cursor rested on when the trajectory was recorded, so for a
+   * `type` step it names the target FIELD. Real NVDA needs it because its
+   * itemText() is an alias for lastSpokenPhrase() (no cursor read), and the
+   * `interact` that precedes every `type` speaks only "focus mode": every
+   * speech-derived label source is therefore blind exactly where the driver has
+   * to choose a field (run 30483480823). Drivers with a real cursor ignore it.
+   */
+  milestone?: string;
+}
+
+/**
+ * What a driver's own cursor oracle can say about a claimed milestone match.
+ *
+ * "abstained" is the load-bearing member: it means the driver ASKED and got an
+ * answer that carries no evidence either way (real NVDA's reportCurrentObject
+ * collapses plain text to a bare role — "paragraph", "label"), which is not
+ * disagreement and must never block progress.
+ */
+export type CursorVerdict = "agreed" | "contradicted" | "abstained";
+
+/**
+ * Which way AtDriver.moveToControl hops. Deliberately the same two words the
+ * line-wise moves already use ("next"/"previous"), because it is the same
+ * question asked at a different granularity.
+ */
+export type ControlHopDirection = "next" | "previous";
+
+/**
  * The command surface replay/agent code depends on. Implemented by AtHarness
  * (virtual SR over Playwright) and by the real-VoiceOver harness
  * (tools/a11y-judge/vo/voHarness.ts), so replayPlan can drive either.
  */
 export interface AtDriver {
-  run(command: AtCommand, arg?: string): Promise<AtObservation>;
+  run(command: AtCommand, arg?: string, context?: AtStepContext): Promise<AtObservation>;
   /**
    * Optional last-resort recovery: called by replayPlan when a milestone
    * resync exhausts BOTH directions — real AT cursors get trapped inside
@@ -98,6 +134,69 @@ export interface AtDriver {
    * the content area. The virtual SR needs no implementation.
    */
   unstick?(): Promise<void>;
+  /**
+   * OPTIONAL cursor gate: ask the DRIVER — not its speech log — whether the
+   * cursor really is on `milestone`, and answer without moving it.
+   *
+   * replayPlan decides "the cursor is on the right item" from
+   * observation.currentItem. On a driver whose currentItem is a tail of the
+   * speech log (real NVDA: itemText() is an alias for lastSpokenPhrase()) a
+   * STALE utterance satisfies a milestone, the resync ladder never engages, and
+   * the state-changing step fires on whatever the cursor happens to be on. Run
+   * 30682097759 measured the damage: 11 of 14 state-changing steps fired on
+   * unrecorded elements while all three tasks reported success — milestone
+   * "reply" matched while NVDA's navigator object was "E 2E A 11y Agent Class,
+   * link, linked".
+   *
+   * A driver that can read its cursor independently implements this; replayPlan
+   * then consults it ONLY when a milestone is already claimed to match, and
+   * treats "contradicted" as "the milestone is not satisfied" — the resync
+   * ladder proceeds exactly as if the speech had never matched. "agreed" and
+   * "abstained" both allow the match.
+   *
+   * Optional on purpose. A driver with a real, independently readable cursor
+   * (the virtual SR) or no second opinion to offer (real VoiceOver, whose
+   * currentItem already IS a cursor read) simply does not implement it, still
+   * satisfies AtDriver, and the gate is inert for it.
+   *
+   * Implementations MUST NOT move the cursor, MUST bound their own latency (the
+   * caller applies no timeout), and MUST prefer "abstained" over "contradicted"
+   * whenever the reading is inconclusive.
+   */
+  verifyCursor?(milestone: string): Promise<CursorVerdict>;
+  /**
+   * OPTIONAL control-level cursor hop: move the review cursor to the next or
+   * previous CONTROL, not the next line.
+   *
+   * `next`/`previous` are ArrowDown/ArrowUp on a real browse-mode driver: they
+   * move by LINE and rest at the line start. When the app renders several inline
+   * controls on one line, that ladder can reach the line and never the control.
+   * Run 30760469666 is the measured case: NVDA coalesced a discussion post's
+   * Like / Edit / Reply buttons into the single browse line "Like (0 likes),
+   * button, Edit, button, Reply", every arrow press rested on Like, and the
+   * milestone "reply" was therefore claimed by the speech (the line NAMES Reply)
+   * and contradicted by the cursor oracle on every one of the 75 presses the
+   * resync ladder spends. VoiceOver walks those same three buttons as three
+   * separate items, which is why only NVDA needs this.
+   *
+   * Contract:
+   *  - it MOVES the cursor (unlike verifyCursor, which must not), by exactly one
+   *    control per call, and reports nothing: the caller reads where it landed
+   *    through an ordinary `observe`, so the hop stays inside the normal
+   *    observation pipeline (step record, noise filtering, speech-loss
+   *    detection) instead of growing a second one;
+   *  - it MUST bound its own latency — the caller applies no timeout;
+   *  - it MUST NOT throw when there is no such control (a driver at the last
+   *    button simply stays put; the caller's next observe sees the same item and
+   *    the sweep budget ends it).
+   *
+   * Optional on purpose, and NOT an AtCommand: both real drivers close their
+   * command switch with an exhaustiveness check, so widening AtCommand would
+   * break the VoiceOver build, and the virtual screen reader has no control
+   * mover at all. A driver that cannot hop by control simply omits this and
+   * still satisfies AtDriver — replayPlan's ladder then skips the rung.
+   */
+  moveToControl?(direction: ControlHopDirection): Promise<void>;
 }
 
 export interface AtStepRecord {
