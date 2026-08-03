@@ -36,13 +36,13 @@ import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
 import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
 import { prepareInstructorBuildOutput } from "../utils/sanitizeGradingPaths.ts";
 import { streamSubmissions } from "../utils/submissionExportStream.ts";
+import { UUID_IN_BATCH_SIZE } from "../utils/pagingLimits.ts";
 import { type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
 
 const SCHEMA_VERSION = 1;
 const STUDENT_PAGE_SIZE = 500;
 const FACT_PAGE_SIZE = 1000;
-/** Max UUIDs per PostgREST `.in()` filter — long lists exceed HTTP URL limits. */
-const UUID_IN_BATCH_SIZE = 50;
+
 const DEFAULT_TEST_OUTPUT_MAX_BYTES = 4096;
 const DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES = 4096;
 

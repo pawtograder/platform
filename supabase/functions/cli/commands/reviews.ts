@@ -6,7 +6,13 @@ import { createAuthenticatedSupabaseClient, type MCPAuthContext } from "../../_s
 import type { Json } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment, resolveRubricIdForType, RUBRIC_TYPES } from "../utils/resolvers.ts";
+import {
+  escapeLikePattern,
+  resolveClass,
+  resolveAssignment,
+  resolveRubricIdForType,
+  RUBRIC_TYPES
+} from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import {
   activeSubmissionFor,
@@ -16,7 +22,7 @@ import {
   type DraftAssignment
 } from "../utils/reviewAllocation.ts";
 import { resolveDueDate } from "../utils/zonedDate.ts";
-import { pageAll } from "../utils/paging.ts";
+import { pageAll, UUID_IN_BATCH_SIZE } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { AssignmentRow, CLIResponse } from "../types.ts";
 
@@ -146,7 +152,8 @@ async function fetchProfileNames(
   const unique = [...new Set(ids.filter((id): id is string => !!id))];
   if (unique.length === 0) return names;
 
-  const BATCH = 500;
+  // profiles.id is a UUID, so this is bounded by URL length, not max_rows.
+  const BATCH = UUID_IN_BATCH_SIZE;
   for (let i = 0; i < unique.length; i += BATCH) {
     const { data, error } = await supabase
       .from("profiles")
@@ -203,16 +210,32 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
     if (UUID_RE.test(needle)) {
       assigneeProfileIds = [needle];
     } else {
+      // Bounded, escaped, and ordered. The resulting ids go into an `.in()` on
+      // UUIDs, whose length is capped by the HTTP URL rather than by max_rows, so
+      // a broad needle like `--assignee e` must not be allowed to produce
+      // hundreds of matches. Escaping matters too: `%` or `_` would otherwise be
+      // treated as wildcards and silently widen the filter.
       const { data: matches, error: matchError } = await supabase
         .from("profiles")
         .select("id, name")
         .eq("class_id", classData.id)
-        .ilike("name", `%${needle}%`);
+        .ilike("name", `%${escapeLikePattern(needle)}%`)
+        .order("id", { ascending: true })
+        .limit(UUID_IN_BATCH_SIZE + 1);
       if (matchError) throw new CLICommandError(`Failed to resolve assignee: ${matchError.message}`, 500);
-      assigneeProfileIds = (matches ?? []).map((m) => m.id);
-      if (assigneeProfileIds.length === 0) {
+
+      const matched = matches ?? [];
+      if (matched.length === 0) {
         throw new CLICommandError(`No one in this class matches assignee "${needle}"`, 404);
       }
+      if (matched.length > UUID_IN_BATCH_SIZE) {
+        throw new CLICommandError(
+          `assignee "${needle}" matches more than ${UUID_IN_BATCH_SIZE} people in this class. ` +
+            "Use a longer name or pass the assignee's profile id.",
+          400
+        );
+      }
+      assigneeProfileIds = matched.map((m) => m.id);
     }
   }
 

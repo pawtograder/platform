@@ -8,6 +8,7 @@ import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass } from "../utils/resolvers.ts";
+import { UUID_IN_BATCH_SIZE } from "../utils/paging.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivateProfileId } from "../utils/auth.ts";
 import {
   HELP_REQUEST_RESOLUTION_STATUSES,
@@ -47,7 +48,8 @@ async function fetchProfileNames(
   const unique = [...new Set(ids.filter((id): id is string => !!id))];
   if (unique.length === 0) return names;
 
-  const BATCH = 500;
+  // profiles.id is a UUID, so this is bounded by URL length, not max_rows.
+  const BATCH = UUID_IN_BATCH_SIZE;
   for (let i = 0; i < unique.length; i += BATCH) {
     const { data, error } = await supabase
       .from("profiles")

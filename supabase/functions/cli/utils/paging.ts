@@ -3,9 +3,9 @@
  */
 
 import { CLICommandError } from "../errors.ts";
+import { PAGE_SIZE } from "./pagingLimits.ts";
 
-/** Rows fetched per request. Must not exceed the API's max_rows. */
-export const PAGE_SIZE = 1000;
+export { PAGE_SIZE, UUID_IN_BATCH_SIZE } from "./pagingLimits.ts";
 
 /**
  * Drains a query that has no natural bound.
