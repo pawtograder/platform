@@ -989,7 +989,10 @@ async function handlePushToTemplateRepo(
       Sentry.captureException(assignmentUpdateError, scope);
       throw assignmentUpdateError;
     }
-    //Store the commit for the template repo
+    //Store the commit for the template repo. This is instructor-facing history only, so a
+    //failure here must not fail the whole webhook: the delivery would be redelivered forever
+    //(and the handout file hashes below, which empty-submission detection depends on, would
+    //never be stored) for a row that no amount of retrying will insert.
     const { error } = await adminSupabase.from("assignment_handout_commits").upsert(
       payload.commits.map((commit: GitHubCommit) => ({
         assignment_id: assignment.id,
@@ -1003,8 +1006,8 @@ async function handlePushToTemplateRepo(
     if (error) {
       scope.setTag("error_source", "assignment_handout_commits_insert_failed");
       scope.setTag("error_context", "Failed to store assignment handout commit");
+      console.error(`Failed to store handout commits for assignment ${assignment.id}`, error);
       Sentry.captureException(error, scope);
-      throw error;
     }
   }
 
