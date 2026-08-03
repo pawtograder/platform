@@ -164,11 +164,34 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
               value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+            # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
+            # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
+            # mints short-lived per-user RLS JWTs for MCP and the CLI — with
+            # ES256, so it needs the EC *private JWK* (a JSON object), not the
+            # base64 random string GoTrue/PostgREST/Realtime/Kong share. Feeding
+            # it the shared secret is why MCP and the CLI have never worked on
+            # any self-hosted install: MCPAuth rejects it at
+            # `secret.startsWith("{")`.
+            #
+            # JWT_SIGNING_JWK holds the `pawtograder-session-v1` EC entry from
+            # JWT_PRIVATE_JWKS alone. Its public half is already in
+            # JWT_PUBLIC_JWKS, which PostgREST verifies against (rest.yaml), so
+            # tokens minted with it validate without any further wiring.
+            #
+            # optional: true is deliberate. Externally-managed Secrets
+            # (ESO/OpenBao/SealedSecrets) need this key added by hand, and a
+            # missing *required* secretKeyRef crash-loops the entire edge tier.
+            # Optional degrades to exactly the pre-existing behaviour instead:
+            # every function keeps working and only MCP/CLI fail, with
+            # MCPAuth's "JWT_SECRET must be set" pointing at the cause.
+            # Nothing else in this container reads JWT_SECRET and
+            # edgeFunctions.verifyJwt is false, so repointing it is safe.
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ $ctx.Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: JWT_SIGNING_JWK
+                  optional: true
             {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"

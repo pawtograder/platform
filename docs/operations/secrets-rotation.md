@@ -105,6 +105,16 @@ and the long-lived API keys. Rotating it is disruptive by design:
   new key alongside the old in `JWT_PUBLIC_JWKS` / `JWT_REALTIME_JWKS`, roll it
   out, cut GoTrue over to signing with the new `kid`, then drop the old public
   key after existing sessions expire. A hard swap (no overlap) logs everyone out.
+
+  **Rotate `JWT_SIGNING_JWK` with it.** That key is a copy of this same EC private
+  JWK, held on its own because `_shared/MCPAuth.ts` needs a bare JWK rather than a
+  set (it is what MCP and the CLI mint per-user RLS JWTs with, and it reaches the
+  edge runtime as `JWT_SECRET`). Leave it on the old key and MCP/CLI keep minting
+  tokens signed by a key you have just retired from `JWT_PUBLIC_JWKS`, so
+  PostgREST rejects all of them — while the rest of the app looks healthy. The
+  autogenerate bootstrap does not fix this for you: it only ever _backfills_ a
+  missing key, never overwrites an existing one.
+
 - **`ANON_KEY` / `SERVICE_ROLE_KEY` (HS256, derived from `JWT_SECRET`):** these
   are **baked into the web image at build time** (`NEXT_PUBLIC_SUPABASE_ANON_KEY`).
   Rotating `JWT_SECRET` therefore also requires a **new web image build** with
