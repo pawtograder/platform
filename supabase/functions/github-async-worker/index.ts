@@ -791,7 +791,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -835,7 +836,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -889,7 +891,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -933,7 +936,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
