@@ -964,9 +964,7 @@ function ConnectionStatusIndicator() {
       </Tooltip>
       {/* Separate polite live region (4.1.3) carrying the debounced copy, so transient
           join cycles are not announced while the control above stays correctly named. */}
-      <VisuallyHidden role="status">
-        {announcedText ? `Realtime connection status: ${announcedText}` : ""}
-      </VisuallyHidden>
+      <VisuallyHidden role="status">Realtime connection status: {announcedText}</VisuallyHidden>
     </>
   );
 }

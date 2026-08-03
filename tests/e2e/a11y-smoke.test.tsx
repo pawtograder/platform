@@ -115,10 +115,18 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await page.goto(`/course/${course.id}`);
     await expect(page.locator("#main-content")).toBeVisible();
 
-    // Connection indicator is a keyboard-focusable, named status region (4.1.2/4.1.3/1.4.13).
-    const connection = page.getByRole("status").filter({ hasText: /realtime connection status/i });
-    await expect(connection.first()).toBeVisible();
-    expect(await connection.first().getAttribute("tabindex")).toBe("0");
+    // The connection indicator is a keyboard-focusable control whose accessible
+    // name carries the CURRENT status (4.1.2/1.4.13)…
+    const connectionControl = page.getByRole("img", { name: /realtime connection status/i });
+    await expect(connectionControl.first()).toBeVisible();
+    expect(await connectionControl.first().getAttribute("tabindex")).toBe("0");
+
+    // …plus a SEPARATE polite region carrying the debounced copy (4.1.3). The two
+    // are distinct on purpose: the debounce keeps transient join cycles from
+    // being announced, and gating the control's name on it would leave the
+    // control with no status value for the first 3s and while channels flap.
+    const connectionRegion = page.getByRole("status").filter({ hasText: /realtime connection status/i });
+    await expect(connectionRegion.first()).toBeVisible();
 
     // Theme toggle announces the change via a polite live region / toast (4.1.3).
     await page.getByRole("button", { name: "Toggle color mode" }).first().click();
