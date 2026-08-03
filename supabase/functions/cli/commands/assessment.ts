@@ -37,11 +37,17 @@ import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
 import { prepareInstructorBuildOutput } from "../utils/sanitizeGradingPaths.ts";
 import { streamSubmissions } from "../utils/submissionExportStream.ts";
 import { UUID_IN_BATCH_SIZE } from "../utils/pagingLimits.ts";
+import { parseByteCap, parseNonNegativeInt } from "../utils/paramValidation.ts";
+import { pageAll } from "../utils/paging.ts";
 import { type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
 
 const SCHEMA_VERSION = 1;
 const STUDENT_PAGE_SIZE = 500;
 const FACT_PAGE_SIZE = 1000;
+/** Group ids per `.in()`; member rows within each batch are drained by pageAll. */
+const GROUP_ID_BATCH_SIZE = 200;
+/** Thread ids per `.in()` where the query also filters on a user/profile id list. */
+const CROSS_PRODUCT_ID_BATCH_SIZE = 100;
 
 const DEFAULT_TEST_OUTPUT_MAX_BYTES = 4096;
 const DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES = 4096;
@@ -487,14 +493,28 @@ async function resolveAssignmentExportContext(
   const withTestOutput = params.with_test_output === true;
   const withInstructorBuildOutput = params.with_instructor_build_output === true;
   const allSubmissions = params.all_submissions === true;
-  const testOutputMax = Math.max(
-    0,
-    Math.min(1024 * 1024, params.test_output_max_bytes ?? DEFAULT_TEST_OUTPUT_MAX_BYTES)
+  // Validated rather than clamped with Math.max/Math.min: a non-numeric value became
+  // NaN, and `slice(0, NaN)` emptied every output row while flagging it
+  // output_truncated — data loss presented as truncation. Zero and negatives did the
+  // same.
+  const testOutputMax = parseByteCap(params.test_output_max_bytes, DEFAULT_TEST_OUTPUT_MAX_BYTES, 1024 * 1024);
+  if (testOutputMax === null) {
+    throw new CLICommandError(
+      `test_output_max_bytes must be an integer of at least 1 (got ${String(params.test_output_max_bytes)})`,
+      400
+    );
+  }
+  const instructorBuildOutputMax = parseByteCap(
+    params.instructor_build_output_max_bytes,
+    DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES,
+    1024 * 1024
   );
-  const instructorBuildOutputMax = Math.max(
-    0,
-    Math.min(1024 * 1024, params.instructor_build_output_max_bytes ?? DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES)
-  );
+  if (instructorBuildOutputMax === null) {
+    throw new CLICommandError(
+      `instructor_build_output_max_bytes must be an integer of at least 1 (got ${String(params.instructor_build_output_max_bytes)})`,
+      400
+    );
+  }
   const instructorBuildOutputFromSentinel =
     typeof params.instructor_build_output_from_sentinel === "string" &&
     params.instructor_build_output_from_sentinel.length > 0
@@ -837,6 +857,22 @@ function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Respon
  * calls (meta → submissions → scores → tests → build_output → engagement) so each edge
  * invocation stays within CPU limits on large classes.
  */
+/**
+ * A batch index, or a 400.
+ *
+ * Must run before `streamNdjson` opens the response: the headers flush before the
+ * handler body runs, so anything thrown later can only surface as an in-band error
+ * record inside an HTTP 200 — which the client treats as a stream failure rather
+ * than a rejected request.
+ */
+function requireBatchIndex(raw: unknown, field: string): number {
+  const value = parseNonNegativeInt(raw);
+  if (value === null) {
+    throw new CLICommandError(`${field} must be a non-negative integer (got ${String(raw)})`, 400);
+  }
+  return value;
+}
+
 async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as AssignmentExportParams;
   const exportCtx = await resolveAssignmentExportContext(ctx, params);
@@ -855,13 +891,25 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
     case "submissions":
       return exportAssignmentSubmissions(exportCtx);
     case "scores":
-      return exportAssignmentScores(exportCtx, Math.max(0, params.score_review_batch_index ?? 0));
+      return exportAssignmentScores(
+        exportCtx,
+        requireBatchIndex(params.score_review_batch_index, "score_review_batch_index")
+      );
     case "tests":
-      return exportAssignmentTests(exportCtx, Math.max(0, params.test_submission_batch_index ?? 0));
+      return exportAssignmentTests(
+        exportCtx,
+        requireBatchIndex(params.test_submission_batch_index, "test_submission_batch_index")
+      );
     case "build_output":
-      return exportAssignmentBuildOutput(exportCtx, Math.max(0, params.build_output_submission_batch_index ?? 0));
+      return exportAssignmentBuildOutput(
+        exportCtx,
+        requireBatchIndex(params.build_output_submission_batch_index, "build_output_submission_batch_index")
+      );
     case "engagement":
-      return exportAssignmentEngagement(exportCtx, Math.max(0, params.engagement_submission_batch_index ?? 0));
+      return exportAssignmentEngagement(
+        exportCtx,
+        requireBatchIndex(params.engagement_submission_batch_index, "engagement_submission_batch_index")
+      );
     case "all":
       return exportAssignmentAll(exportCtx);
   }
@@ -1031,24 +1079,41 @@ async function streamGroups(
   tokenizer: Tokenizer | null,
   writer: { write: (record: Record<string, unknown>) => Promise<void> }
 ): Promise<number> {
-  const { data: groups, error: gErr } = await supabase
-    .from("assignment_groups")
-    .select("id, name")
-    .eq("assignment_id", assignmentId)
-    .eq("class_id", classId)
-    .order("id", { ascending: true });
-  if (gErr) throw new CLICommandError(`Failed to load groups: ${gErr.message}`, 500);
-  if (!groups || groups.length === 0) return 0;
+  // Both reads paged. Unpaged, the groups query capped at max_rows and the members
+  // query — one row per member, i.e. roughly class size — capped too, so later groups
+  // exported with empty or short `members` arrays. Nothing detected it: the meta
+  // section's group count is `groups.length` and the client never asserts it, so a
+  // group submission was silently attributed to a subset of its members.
+  const groups = await pageAll<{ id: number; name: string }>(
+    () =>
+      supabase
+        .from("assignment_groups")
+        .select("id, name")
+        .eq("assignment_id", assignmentId)
+        .eq("class_id", classId)
+        .order("id", { ascending: true }),
+    "Failed to load groups"
+  );
+  if (groups.length === 0) return 0;
 
   const groupIds = groups.map((g) => g.id);
-  const { data: members, error: mErr } = await supabase
-    .from("assignment_groups_members")
-    .select("assignment_group_id, profile_id")
-    .in("assignment_group_id", groupIds);
-  if (mErr) throw new CLICommandError(`Failed to load group members: ${mErr.message}`, 500);
+  const members: Array<{ assignment_group_id: number; profile_id: string }> = [];
+  for (const batch of chunked(groupIds, GROUP_ID_BATCH_SIZE)) {
+    members.push(
+      ...(await pageAll<{ assignment_group_id: number; profile_id: string }>(
+        () =>
+          supabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, profile_id")
+            .in("assignment_group_id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load group members"
+      ))
+    );
+  }
 
   const membersByGroup = new Map<number, string[]>();
-  for (const m of members ?? []) {
+  for (const m of members) {
     const list = membersByGroup.get(m.assignment_group_id) ?? [];
     list.push(m.profile_id);
     membersByGroup.set(m.assignment_group_id, list);
@@ -1116,13 +1181,26 @@ async function loadReviewScope(
 ): Promise<{ reviewIds: number[]; reviewToSubmission: Map<number, number> }> {
   const submissionToReview = new Map<number, number>();
   for (const batch of chunked(submissionIds, 500)) {
-    const { data, error } = await supabase.from("submissions").select("id, grading_review_id").in("id", batch);
+    const { data, error } = await supabase
+      .from("submissions")
+      .select("id, grading_review_id")
+      .in("id", batch)
+      .order("id", { ascending: true });
     if (error) throw new CLICommandError(`Failed to load grading review ids: ${error.message}`, 500);
     for (const r of data ?? []) {
       if (r.grading_review_id !== null) submissionToReview.set(r.id, r.grading_review_id);
     }
   }
-  const reviewIds = Array.from(submissionToReview.values());
+
+  // Sorted, and the query above is ordered, because `exportAssignmentScores` slices
+  // this array by batch index in a *separate* edge invocation and re-derives it from
+  // scratch each time. PostgREST's row order is unspecified without ORDER BY, and
+  // rows move physically as grading progresses — so a plan or heap change mid-export
+  // shifted the batch boundaries, exporting some score rows twice and never
+  // exporting others. Every per-page count assertion still passed, because each page
+  // was internally consistent. Deterministic order is what makes the batch index
+  // meaningful across calls.
+  const reviewIds = Array.from(submissionToReview.values()).sort((a, b) => a - b);
   const reviewToSubmission = new Map<number, number>();
   for (const [subId, revId] of submissionToReview.entries()) reviewToSubmission.set(revId, subId);
   return { reviewIds, reviewToSubmission };
@@ -1294,6 +1372,10 @@ async function streamGraderTests(
   // Step 1: resolve submission_id → grader_result_id list. Most submissions
   // have a single grader_result; multi-attempt runs can have several.
   const graderResultIdToSubmission = new Map<number, number>();
+  // 500 submission ids is safe here specifically because
+  // grader_results_submission_id_key_uniq (20250424014912_grader-keys.sql) makes
+  // submission_id UNIQUE, so the response is bounded at 500 rows and cannot be
+  // truncated by max_rows. Do not raise this without checking that still holds.
   for (const batch of chunked(submissionIds, 500)) {
     const { data, error } = await supabase
       .from("grader_results")
@@ -1429,6 +1511,10 @@ async function streamInstructorBuildOutput(
   let total = 0;
 
   const graderResultIdToSubmission = new Map<number, number>();
+  // 500 submission ids is safe here specifically because
+  // grader_results_submission_id_key_uniq (20250424014912_grader-keys.sql) makes
+  // submission_id UNIQUE, so the response is bounded at 500 rows and cannot be
+  // truncated by max_rows. Do not raise this without checking that still holds.
   for (const batch of chunked(submissionIds, 500)) {
     const { data, error } = await supabase
       .from("grader_results")
@@ -1574,6 +1660,10 @@ async function streamHints(
     }
   }
 
+  // 500 submission ids is safe here specifically because
+  // grader_results_submission_id_key_uniq (20250424014912_grader-keys.sql) makes
+  // submission_id UNIQUE, so the response is bounded at 500 rows and cannot be
+  // truncated by max_rows. Do not raise this without checking that still holds.
   for (const batch of chunked(submissionIds, 500)) {
     const graderResultIdToSubmission = new Map<number, number>();
     const { data: graderResults, error: grErr } = await supabase
@@ -1733,13 +1823,21 @@ async function loadSubmissionParticipants(
 
   const groupIds = unique(Array.from(groupIdsBySubmissionId.values()));
   const membersByGroupId = new Map<number, string[]>();
-  for (const batch of chunked(groupIds, 500)) {
-    const { data, error } = await supabase
-      .from("assignment_groups_members")
-      .select("assignment_group_id, profile_id")
-      .in("assignment_group_id", batch);
-    if (error) throw new CLICommandError(`Failed to load assignment group members: ${error.message}`, 500);
-    for (const row of data ?? []) {
+  // Batched by group *and* paged within each batch: 500 group ids return far more
+  // than max_rows member rows, and a dropped member loses that student's
+  // error_pin_engagement rows entirely — with the emitted count derived from the same
+  // truncated data, so the client's assertion still passed.
+  for (const batch of chunked(groupIds, GROUP_ID_BATCH_SIZE)) {
+    const rows = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", batch)
+          .order("id", { ascending: true }),
+      "Failed to load assignment group members"
+    );
+    for (const row of rows) {
       const profiles = membersByGroupId.get(row.assignment_group_id) ?? [];
       profiles.push(row.profile_id);
       membersByGroupId.set(row.assignment_group_id, profiles);
@@ -1871,15 +1969,25 @@ async function loadReadStatusByUserAndThread(
   userIds: string[]
 ): Promise<Map<string, string | null>> {
   const readAtByUserAndThread = new Map<string, string | null>();
-  for (const threadBatch of chunked(discussionThreadIds, 200)) {
+  // The batching here is a *cross product*, so the row count per request is
+  // threads x users, not max(threads, users): at 200 x 50 that is up to 10,000
+  // candidate rows, and read-status rows are dense. Truncation showed up as
+  // `read_at: null` for students who had in fact read the thread — a false negative
+  // in the engagement data, with the emitted row count unaffected so nothing caught
+  // it. Each query is now drained.
+  for (const threadBatch of chunked(discussionThreadIds, CROSS_PRODUCT_ID_BATCH_SIZE)) {
     for (const userBatch of chunked(userIds, UUID_IN_BATCH_SIZE)) {
-      const { data, error } = await supabase
-        .from("discussion_thread_read_status")
-        .select("user_id, discussion_thread_id, read_at")
-        .in("discussion_thread_id", threadBatch)
-        .in("user_id", userBatch);
-      if (error) throw new CLICommandError(`Failed to load discussion read status: ${error.message}`, 500);
-      for (const row of data ?? []) {
+      const rows = await pageAll<{ user_id: string; discussion_thread_id: number; read_at: string | null }>(
+        () =>
+          supabase
+            .from("discussion_thread_read_status")
+            .select("user_id, discussion_thread_id, read_at")
+            .in("discussion_thread_id", threadBatch)
+            .in("user_id", userBatch)
+            .order("id", { ascending: true }),
+        "Failed to load discussion read status"
+      );
+      for (const row of rows) {
         readAtByUserAndThread.set(compoundKey(row.user_id, row.discussion_thread_id), row.read_at);
       }
     }
@@ -1893,15 +2001,21 @@ async function loadLikesByProfileAndThread(
   profileIds: string[]
 ): Promise<Set<string>> {
   const likedByProfileAndThread = new Set<string>();
-  for (const threadBatch of chunked(discussionThreadIds, 200)) {
+  // Same cross-product hazard as read status above; likes are sparser but the shape
+  // is identical, so drain it rather than relying on that.
+  for (const threadBatch of chunked(discussionThreadIds, CROSS_PRODUCT_ID_BATCH_SIZE)) {
     for (const profileBatch of chunked(profileIds, UUID_IN_BATCH_SIZE)) {
-      const { data, error } = await supabase
-        .from("discussion_thread_likes")
-        .select("creator, discussion_thread")
-        .in("discussion_thread", threadBatch)
-        .in("creator", profileBatch);
-      if (error) throw new CLICommandError(`Failed to load discussion likes: ${error.message}`, 500);
-      for (const row of data ?? []) {
+      const rows = await pageAll<{ creator: string; discussion_thread: number }>(
+        () =>
+          supabase
+            .from("discussion_thread_likes")
+            .select("creator, discussion_thread")
+            .in("discussion_thread", threadBatch)
+            .in("creator", profileBatch)
+            .order("id", { ascending: true }),
+        "Failed to load discussion likes"
+      );
+      for (const row of rows) {
         likedByProfileAndThread.add(compoundKey(row.creator, row.discussion_thread));
       }
     }
