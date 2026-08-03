@@ -16,6 +16,7 @@ import type {
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { gradingTotalForStudent } from "../utils/gradingTotals.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
 import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
 import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
@@ -775,7 +776,8 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
         "id, activesubmissionid, ordinal, name, sortable_name, groupname, student_private_profile_id, " +
           "sha, repository, autograder_score, total_score, tweak, released, tokens_consumed, hours, " +
           "due_date, late_due_date, gradername, assignedgradername, completed_at, checkername, " +
-          "class_section_name, lab_section_name, is_placeholder, created_at"
+          "class_section_name, lab_section_name, is_placeholder, created_at, " +
+          "per_student_grading_totals, individual_scores"
       )
       .eq("class_id", classData.id)
       .eq("assignment_id", assignment.id);
@@ -798,6 +800,24 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
     if (batch.length < page) break;
   }
 
+  // `total_score` on this view is the review's shared total. For rubrics with
+  // individually graded or per-student-assigned parts, the authoritative figure
+  // for a roster row is that student's entry in per_student_grading_totals (or
+  // the legacy individual_scores), which is what the instructor table shows.
+  // Reporting the shared value for every group member would misstate individual
+  // students, so the resolved figure is exposed as student_total_score.
+  const submissions = rows.map((r) => ({
+    ...r,
+    student_total_score: gradingTotalForStudent(
+      {
+        total_score: (r.total_score as number | null) ?? null,
+        per_student_grading_totals: r.per_student_grading_totals,
+        individual_scores: r.individual_scores
+      },
+      r.student_private_profile_id as string | null
+    )
+  }));
+
   const distinctSubmissions = new Set(
     rows.map((r) => r.activesubmissionid).filter((id): id is number => typeof id === "number")
   );
@@ -813,7 +833,7 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
         due_date: assignment.due_date,
         total_points: assignment.total_points
       },
-      submissions: rows,
+      submissions,
       summary: {
         rows: rows.length,
         distinct_submissions: distinctSubmissions.size,

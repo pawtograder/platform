@@ -205,8 +205,10 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
-    // Fail closed - treat as revoked if we can't check
-    return true;
+    // A deployment fault, not a revoked token. Returning true here reported
+    // "API token has been revoked" (401) to every valid caller and never
+    // reached the config check below, so the misconfiguration was invisible.
+    throw new MCPConfigError("Server configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
   }
 
   const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);

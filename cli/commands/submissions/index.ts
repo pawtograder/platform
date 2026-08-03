@@ -84,7 +84,9 @@ export const builder = (yargs: Argv) => {
               s.activesubmissionid as number | null,
               typeof s.sha === "string" ? s.sha.slice(0, 8) : null,
               s.autograder_score as number | null,
-              s.total_score as number | null,
+              // Per-student figure, not the review's shared total: they differ
+              // for individually graded rubric parts.
+              s.student_total_score as number | null,
               // On this view `released` is a timestamp, not a boolean.
               s.released ? "Yes" : "No",
               (s.gradername as string | null) ?? (s.assignedgradername as string | null),

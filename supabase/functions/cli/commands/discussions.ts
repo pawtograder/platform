@@ -7,6 +7,7 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse } from "../types.ts";
 
@@ -83,23 +84,33 @@ async function handleDiscussionsList(ctx: MCPAuthContext, params: Record<string,
   const classData = await resolveClass(supabase, p.class);
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
-  const { data: topics, error } = await supabase
-    .from("discussion_topics")
-    .select("id, topic, description, color, ordinal, assignment_id, show_in_office_hours, created_at")
-    .eq("class_id", classData.id)
-    .order("ordinal", { ascending: true })
-    .order("id", { ascending: true });
-
-  if (error) {
-    throw new CLICommandError(`Failed to list discussion topics: ${error.message}`, 500);
-  }
+  // Paged for the same reason fetchTopicCounts is: an unpaged select is silently
+  // capped at max_rows, which would drop later topics while still reporting a
+  // complete summary.
+  const topics = await pageAll<{
+    id: number;
+    topic: string;
+    description: string;
+    color: string;
+    ordinal: number;
+    assignment_id: number | null;
+    show_in_office_hours: boolean;
+    created_at: string;
+  }>(
+    () =>
+      supabase
+        .from("discussion_topics")
+        .select("id, topic, description, color, ordinal, assignment_id, show_in_office_hours, created_at")
+        .eq("class_id", classData.id)
+        .order("ordinal", { ascending: true })
+        .order("id", { ascending: true }),
+    "Failed to list discussion topics"
+  );
 
   const counts = await fetchTopicCounts(supabase, classData.id);
 
   // Resolve linked assignment slugs in one query rather than per topic.
-  const assignmentIds = [
-    ...new Set((topics ?? []).map((t) => t.assignment_id).filter((id): id is number => id != null))
-  ];
+  const assignmentIds = [...new Set(topics.map((t) => t.assignment_id).filter((id): id is number => id != null))];
   const assignmentSlugs = new Map<number, string>();
   if (assignmentIds.length > 0) {
     const { data: assignments, error: assignmentError } = await supabase
@@ -114,7 +125,7 @@ async function handleDiscussionsList(ctx: MCPAuthContext, params: Record<string,
     }
   }
 
-  const rows = (topics ?? []).map((t) => {
+  const rows = topics.map((t) => {
     const c = counts.get(t.id) ?? { threads: 0, questions: 0, unanswered: 0 };
     return {
       id: t.id,

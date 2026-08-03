@@ -2,7 +2,7 @@
  * reviews.* CLI commands — reviews.list (cli:read), reviews.assign (cli:write).
  */
 
-import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
+import { createAuthenticatedSupabaseClient, type MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { Json } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
@@ -16,6 +16,7 @@ import {
   type DraftAssignment
 } from "../utils/reviewAllocation.ts";
 import { resolveDueDate } from "../utils/zonedDate.ts";
+import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { AssignmentRow, CLIResponse } from "../types.ts";
 
@@ -78,35 +79,6 @@ async function resolveRubricParam(
     throw new CLICommandError(`Assignment ${assignment.slug ?? assignment.id} has no ${value} rubric`, 400);
   }
   return rubricId;
-}
-
-/**
- * Drains a query that has no natural bound.
- *
- * PostgREST caps every response at `max_rows` (1000, see supabase/config.toml),
- * and it does so silently — an unpaged `select` over a large course returns a
- * truncated page that looks like the whole answer. For allocation inputs that is
- * not a display glitch: a missing submission goes unassigned, and a missing
- * conflict or group member lets someone be handed their own work.
- *
- * `makeQuery` must build a fresh builder each call, since `.range()` cannot be
- * re-applied to a spent one.
- */
-async function pageAll<T>(
-  makeQuery: () => PromiseLike<{ data: T[] | null; error: { message: string } | null }> & {
-    range: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
-  },
-  label: string
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await makeQuery().range(offset, offset + PAGE - 1);
-    if (error) throw new CLICommandError(`${label}: ${error.message}`, 500);
-    const rows = data ?? [];
-    out.push(...rows);
-    if (rows.length < PAGE) break;
-  }
-  return out;
 }
 
 export interface ReviewAssignmentFilters {
@@ -388,6 +360,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
 
   let drafts: DraftAssignment[];
   let allocation: ReturnType<typeof allocateRoundRobin> | null = null;
+  let retargetCount = 0;
 
   if (p.drafts !== undefined && p.drafts !== null) {
     drafts = parseDraftManifest(p.drafts);
@@ -554,21 +527,30 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     };
 
     const existing: DraftAssignment[] = [];
+    // Drafts whose only job is to make the RPC retarget a stale row. Remapping
+    // coverage alone was not enough: with nothing to assign, the handler returned
+    // without calling the RPC at all, so the grader stayed attached to the
+    // obsolete submission while the command reported everything as assigned.
+    // bulk_assign_reviews retargets only the review_assignments its own drafts
+    // resolve to (Phase 2 filters on the ids it collected), so the draft has to
+    // carry the *stale* submission id — which the RPC accepts, since it validates
+    // class and assignment membership without requiring is_active.
+    const retargetDrafts: DraftAssignment[] = [];
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
+      const rawSubmissionId = row.submission_id as number;
       const submissionId = toActiveSubmissionId(row);
-      if (parts.length === 0) {
-        existing.push({
-          assignee_profile_id: row.assignee_profile_id as string,
-          submission_id: submissionId,
-          rubric_part_id: null
-        });
-      } else {
-        for (const part of parts) {
-          existing.push({
-            assignee_profile_id: row.assignee_profile_id as string,
-            submission_id: submissionId,
-            rubric_part_id: part.rubric_part_id
+      const isStale = submissionId !== rawSubmissionId;
+      const assignee = row.assignee_profile_id as string;
+
+      const partIds: Array<number | null> = parts.length === 0 ? [null] : parts.map((part) => part.rubric_part_id);
+      for (const rubricPartId of partIds) {
+        existing.push({ assignee_profile_id: assignee, submission_id: submissionId, rubric_part_id: rubricPartId });
+        if (isStale) {
+          retargetDrafts.push({
+            assignee_profile_id: assignee,
+            submission_id: rawSubmissionId,
+            rubric_part_id: rubricPartId
           });
         }
       }
@@ -583,7 +565,10 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
       existing,
       excludedBySubmission
     });
-    drafts = allocation.drafts;
+    // Retargets first, so a run that has nothing new to assign still repairs
+    // assignments left pointing at superseded submissions.
+    drafts = [...retargetDrafts, ...allocation.drafts];
+    retargetCount = retargetDrafts.length;
   }
 
   const response = {
@@ -594,6 +579,8 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     drafts,
     load: summarizeLoad(drafts),
     skipped_already_assigned: allocation?.skippedAlreadyAssigned ?? 0,
+    /** Existing assignments repointed from a superseded submission to the current one. */
+    retargeted_stale: retargetCount,
     unassignable: allocation?.unassignable ?? []
   };
 
@@ -613,7 +600,13 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     };
   }
 
-  const { data: rpcResult, error: rpcError } = await ctx.supabase.rpc("bulk_assign_reviews", {
+  // A fresh client, not ctx.supabase: that one carries a 60-second JWT minted at
+  // authentication time with auto-refresh disabled, and the paging above can
+  // outlast it on a large course — which would fail an otherwise valid run right
+  // at the write. Re-minting reuses the cache when it is still comfortably valid.
+  const writeClient = await createAuthenticatedSupabaseClient(ctx.userId);
+
+  const { data: rpcResult, error: rpcError } = await writeClient.rpc("bulk_assign_reviews", {
     p_class_id: classData.id,
     p_assignment_id: assignment.id,
     p_rubric_id: rubricId,
@@ -633,11 +626,36 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
       `bulk_assign_reviews reported failure: ${result.error ?? "unknown error"}${
         result.error_code ? ` (${result.error_code})` : ""
       }`,
-      400
+      statusForRpcErrorCode(result.error_code)
     );
   }
 
   return { success: true, data: { ...response, dry_run: false, result: rpcResult } };
+}
+
+/**
+ * HTTP status for a `bulk_assign_reviews` failure payload.
+ *
+ * Every failure comes back through the RPC's `WHEN OTHERS` handler with the
+ * SQLSTATE attached, so its deliberate validation errors and a genuine internal
+ * fault are indistinguishable without inspecting the code. Treating them all as
+ * 400 blamed the caller for the server's problems and — because cli/index.ts
+ * only reports 5xx — kept statement timeouts out of Sentry entirely.
+ */
+function statusForRpcErrorCode(errorCode: string | undefined): number {
+  switch (errorCode) {
+    // Raised deliberately: assignee or caller lacks the required role.
+    case "42501": // insufficient_privilege
+      return 403;
+    // Raised deliberately: a submission, rubric part, or assignment does not
+    // belong where the caller claimed.
+    case "23503": // foreign_key_violation
+    case "P0001": // raise_exception — the RPC's bare RAISE EXCEPTION validations
+      return 400;
+    // Anything else is ours: statement timeout (57014), deadlock, a bug.
+    default:
+      return 500;
+  }
 }
 
 /**

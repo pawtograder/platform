@@ -244,6 +244,13 @@ export const builder = (yargs: Argv) => {
             logger.info(`Already assigned, left alone: ${data.skipped_already_assigned}`);
           }
 
+          if (data.retargeted_stale > 0) {
+            logger.info(
+              `Repointed to current submissions: ${data.retargeted_stale} ` +
+                "(existing assignments that referenced a superseded submission)"
+            );
+          }
+
           const unassignable = data.unassignable ?? [];
           if (unassignable.length > 0) {
             logger.warning(
