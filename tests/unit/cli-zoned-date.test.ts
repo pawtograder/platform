@@ -133,6 +133,13 @@ describe("resolveDueDate — rejections", () => {
   it("rejects an impossible calendar date", () => {
     expect(() => resolveDueDate("2026-02-30", NY)).toThrow(ZonedDateError);
   });
+
+  it("rejects an impossible date even when it carries an explicit offset", () => {
+    // V8 normalizes rather than rejecting, so this used to schedule March 2.
+    expect(() => resolveDueDate("2026-02-30T17:00:00-05:00", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("2026-13-01T00:00:00Z", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("2026-02-28T17:00:00-05:00", NY)).not.toThrow();
+  });
 });
 
 describe("resolveReleaseDate", () => {

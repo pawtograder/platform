@@ -184,6 +184,15 @@ export function resolveZonedTimestamp(
     );
   }
 
+  // Validate the calendar date before handing it to Date. V8 normalizes an
+  // impossible date rather than rejecting it, so `2026-02-30T17:00:00-05:00`
+  // silently becomes March 2 — the bare and offset-less forms are checked by
+  // assertRealCalendarDate, and this branch has to be too.
+  const offsetDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (offsetDate) {
+    assertRealCalendarDate(Number(offsetDate[1]), Number(offsetDate[2]), Number(offsetDate[3]), raw);
+  }
+
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     throw new ZonedDateError(

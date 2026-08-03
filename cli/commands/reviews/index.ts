@@ -75,9 +75,14 @@ export const builder = (yargs: Argv) => {
               default: "all"
             })
             .option("limit", {
-              describe: "Maximum review assignments to return",
+              describe: "Maximum review assignments to return (max 5000; use --offset to read past that)",
               type: "number",
               default: 1000
+            })
+            .option("offset", {
+              describe: "Skip this many review assignments before listing",
+              type: "number",
+              default: 0
             })
         );
       },
@@ -89,7 +94,8 @@ export const builder = (yargs: Argv) => {
             rubric: args.rubric as string | undefined,
             assignee: args.assignee as string | undefined,
             status: args.status as string,
-            limit: args.limit as number
+            limit: args.limit as number,
+            offset: args.offset as number
           });
 
           if (emitJson(args, data)) return;
@@ -120,7 +126,9 @@ export const builder = (yargs: Argv) => {
             `Total: ${data.summary.total} (${data.summary.completed} completed, ${data.summary.pending} pending)`
           );
           if (data.summary.truncated) {
-            logger.warning(`Output truncated at --limit ${args.limit}; pass a higher --limit for more.`);
+            logger.warning(
+              `Output truncated at --limit ${args.limit}. Continue with --offset ${data.summary.next_offset}.`
+            );
           }
         } catch (error) {
           handleError(error);
@@ -242,6 +250,14 @@ export const builder = (yargs: Argv) => {
 
           if (data.skipped_already_assigned > 0) {
             logger.info(`Already assigned, left alone: ${data.skipped_already_assigned}`);
+          }
+
+          if (data.stale_collisions > 0) {
+            logger.warning(
+              `${data.stale_collisions} assignment(s) still point at a superseded submission whose ` +
+                "replacement is already assigned. Retargeting them would collide or duplicate the work — " +
+                "clear the stale ones instead."
+            );
           }
 
           if (data.retargeted_stale > 0) {

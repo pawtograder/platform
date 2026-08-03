@@ -20,6 +20,9 @@ import type {
   ReposCrossAssignmentCopyPair
 } from "../types.ts";
 
+/** Group ids per `.in()` batch; rows per batch are drained by pageAll. */
+const BATCH = 200;
+
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
 /**
@@ -53,21 +56,46 @@ async function fetchRepositoriesForAssignment(
     "Failed to fetch repositories"
   );
 
-  const disabledProfiles = await pageAll<{ private_profile_id: string }>(
+  const activeProfiles = await pageAll<{ private_profile_id: string }>(
     () =>
       supabase
         .from("user_roles")
         .select("private_profile_id")
         .eq("class_id", classId)
-        .eq("disabled", true)
+        .eq("disabled", false)
         .order("id", { ascending: true }),
-    "Failed to load disabled enrollments"
+    "Failed to load active enrollments"
   );
-  const disabled = new Set(disabledProfiles.map((r) => r.private_profile_id));
+  const active = new Set(activeProfiles.map((r) => r.private_profile_id));
 
-  // A group repo has no profile_id, so there is no individual enrollment to
-  // disable; it is kept.
-  return rows.filter((r) => !r.profile_id || !disabled.has(r.profile_id));
+  // A group repo has no profile_id, so "is its owner disabled?" has to be asked of
+  // its membership instead. Keeping every null-profile row would have these
+  // commands clone and push to groups whose members have all dropped — work the
+  // equivalent individual filter excludes.
+  const groupIds = [...new Set(rows.map((r) => r.assignment_group_id).filter((id): id is number => id != null))];
+  const groupHasActiveMember = new Set<number>();
+  for (let i = 0; i < groupIds.length; i += BATCH) {
+    const batch = groupIds.slice(i, i + BATCH);
+    const members = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", batch)
+          .order("id", { ascending: true }),
+      "Failed to load group members"
+    );
+    for (const member of members) {
+      if (active.has(member.profile_id)) groupHasActiveMember.add(member.assignment_group_id);
+    }
+  }
+
+  return rows.filter((r) => {
+    if (r.assignment_group_id != null) return groupHasActiveMember.has(r.assignment_group_id);
+    if (r.profile_id) return active.has(r.profile_id);
+    // Neither an owner nor a group: nothing to attribute it to.
+    return false;
+  });
 }
 
 async function fetchGroupIdToName(assignmentId: number): Promise<Map<number, string>> {
@@ -110,7 +138,6 @@ async function fetchGroupRepresentativeProfiles(groupIds: number[]): Promise<Map
   if (groupIds.length === 0) return map;
   const unique = [...new Set(groupIds)];
   const supabase = getAdminClient();
-  const BATCH = 200;
   for (let i = 0; i < unique.length; i += BATCH) {
     const batch = unique.slice(i, i + BATCH);
     // Paged within the batch: 500 group ids can return far more than max_rows

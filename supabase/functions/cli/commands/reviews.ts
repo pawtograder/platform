@@ -41,6 +41,7 @@ interface ReviewsListParams {
   assignee?: string;
   status?: string;
   limit?: number;
+  offset?: number;
 }
 
 interface ReviewsAssignParams {
@@ -89,6 +90,11 @@ async function resolveRubricParam(
   return rubricId;
 }
 
+export interface ReviewAssignmentPage {
+  /** Rows to skip before collecting. */
+  offset?: number;
+}
+
 export interface ReviewAssignmentFilters {
   rubricId?: number | null;
   /** Completion state; `completed_at` lives on review_assignments. */
@@ -109,10 +115,11 @@ async function fetchReviewAssignments(
   supabase: ReturnType<typeof getAdminClient>,
   assignmentId: number,
   limit: number,
-  filters: ReviewAssignmentFilters = {}
+  filters: ReviewAssignmentFilters = {},
+  startOffset = 0
 ): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
-  for (let offset = 0; out.length < limit; offset += PAGE) {
+  for (let offset = startOffset; out.length < limit; offset += PAGE) {
     const page = Math.min(PAGE, limit - out.length);
     let query = supabase
       .from("review_assignments")
@@ -186,9 +193,19 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
   // pages the whole table through the edge function.
   if (limit > MAX_LIST_LIMIT) {
     throw new CLICommandError(
-      `limit must be ${MAX_LIST_LIMIT} or less (got ${limit}). Narrow the results with --status, --assignee, or --rubric.`,
+      `limit must be ${MAX_LIST_LIMIT} or less (got ${limit}). ` +
+        "Use --offset to read past that, or narrow with --status, --assignee, or --rubric.",
       400
     );
+  }
+
+  // A by-part round can exceed any single-response ceiling (500 submissions x 11
+  // parts is 5,500 rows), so the ceiling needs a way past it. Without an offset
+  // the truncation warning told the operator to raise a limit that this check
+  // rejects, leaving later rows permanently unreachable through the CLI.
+  const offset = p.offset === undefined || p.offset === null ? 0 : Number(p.offset);
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new CLICommandError(`offset must be a non-negative integer (got ${String(p.offset)})`, 400);
   }
 
   const supabase = getAdminClient();
@@ -240,11 +257,17 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
     }
   }
 
-  const rows = await fetchReviewAssignments(supabase, assignment.id, limit, {
-    rubricId,
-    status: status as "pending" | "completed" | "all",
-    assigneeProfileIds
-  });
+  const rows = await fetchReviewAssignments(
+    supabase,
+    assignment.id,
+    limit,
+    {
+      rubricId,
+      status: status as "pending" | "completed" | "all",
+      assigneeProfileIds
+    },
+    offset
+  );
 
   const names = await fetchProfileNames(supabase, [
     ...rows.map((r) => r.assignee_profile_id as string | null),
@@ -292,7 +315,10 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
         total: reviews.length,
         completed: reviews.filter((r) => r.completed_at != null).length,
         pending: reviews.filter((r) => r.completed_at == null).length,
-        truncated: rows.length >= limit
+        offset,
+        truncated: rows.length >= limit,
+        /** Pass as --offset to continue past a truncated page. */
+        next_offset: rows.length >= limit ? offset + rows.length : null
       }
     }
   };
@@ -415,19 +441,28 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   // ── Staff pool ───────────────────────────────────────────────────────────
   // bulk_assign_reviews rejects any assignee who is not a grader or instructor
   // in the class, so the pool is drawn from those roles only.
-  const { data: staffRoles, error: staffError } = await supabase
-    .from("user_roles")
-    .select("private_profile_id, role")
-    .eq("class_id", classData.id)
-    .eq("disabled", false)
-    .in("role", ["grader", "instructor"]);
-  if (staffError) throw new CLICommandError(`Failed to load class staff: ${staffError.message}`, 500);
+  // Paged: omitting --grader is documented to use every active grader and
+  // instructor, so a truncated read would quietly balance across an arbitrary
+  // subset of the staff.
+  const staffRoles = await pageAll<{ private_profile_id: string; role: string }>(
+    () =>
+      supabase
+        .from("user_roles")
+        .select("private_profile_id, role")
+        .eq("class_id", classData.id)
+        .eq("disabled", false)
+        .in("role", ["grader", "instructor"])
+        .order("id", { ascending: true }),
+    "Failed to load class staff"
+  );
 
-  const staffProfileIds = new Set((staffRoles ?? []).map((r) => r.private_profile_id));
+  const staffProfileIds = new Set(staffRoles.map((r) => r.private_profile_id));
 
   let drafts: DraftAssignment[];
   let allocation: ReturnType<typeof allocateRoundRobin> | null = null;
   let retargetCount = 0;
+  /** Stale rows left alone because the active submission is already covered. */
+  let staleCollisionCount = 0;
   /** review_assignment id -> deadline to restore after the RPC rewrites it. */
   let deadlinesToRestore = new Map<number, string>();
 
@@ -625,26 +660,72 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // leaving every other existing one untouched. Their original deadlines are
     // captured here and restored after the write.
     const staleDueDates = new Map<number, string>();
+
+    // First pass: flatten every row onto the active submission, remembering which
+    // rows are stale and how many rows land on each active slot.
+    interface FlatRow {
+      rowId: number;
+      assignee: string;
+      rawSubmissionId: number;
+      activeSubmissionId: number;
+      rubricPartId: number | null;
+      dueDate: string;
+      isStale: boolean;
+    }
+    const flat: FlatRow[] = [];
+    const slotOccupants = new Map<string, number>();
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
       const rawSubmissionId = row.submission_id as number;
-      const submissionId = toActiveSubmissionId(row);
-      const isStale = submissionId !== rawSubmissionId;
-      const assignee = row.assignee_profile_id as string;
-
+      const activeSubmissionId = toActiveSubmissionId(row);
       const partIds: Array<number | null> = parts.length === 0 ? [null] : parts.map((part) => part.rubric_part_id);
       for (const rubricPartId of partIds) {
-        existing.push({ assignee_profile_id: assignee, submission_id: submissionId, rubric_part_id: rubricPartId });
-        if (isStale) {
-          retargetDrafts.push({
-            assignee_profile_id: assignee,
-            submission_id: rawSubmissionId,
-            rubric_part_id: rubricPartId
-          });
-          staleDueDates.set(row.id as number, row.due_date as string);
-        }
+        flat.push({
+          rowId: row.id as number,
+          assignee: row.assignee_profile_id as string,
+          rawSubmissionId,
+          activeSubmissionId,
+          rubricPartId,
+          dueDate: row.due_date as string,
+          isStale: activeSubmissionId !== rawSubmissionId
+        });
+        const slot = `${activeSubmissionId}:${rubricPartId ?? "all"}`;
+        slotOccupants.set(slot, (slotOccupants.get(slot) ?? 0) + 1);
       }
     }
+
+    // Second pass: build coverage, and queue a repair only where the stale row is
+    // the *sole* claim on its active slot.
+    //
+    // When an assignment for the replacement submission already exists, repairing
+    // is wrong in both directions: with the same assignee the retarget collides
+    // with that row on (assignee_profile_id, submission_review_id) and aborts the
+    // whole RPC, and with a different assignee it leaves two reviewers holding the
+    // same work. Neither is repairable from here — the redundant stale row wants
+    // deleting, which is `reviews clear`'s job — so it is reported instead.
+    let staleCollisions = 0;
+    for (const entry of flat) {
+      existing.push({
+        assignee_profile_id: entry.assignee,
+        submission_id: entry.activeSubmissionId,
+        rubric_part_id: entry.rubricPartId
+      });
+      if (!entry.isStale) continue;
+
+      const slot = `${entry.activeSubmissionId}:${entry.rubricPartId ?? "all"}`;
+      if ((slotOccupants.get(slot) ?? 0) > 1) {
+        staleCollisions++;
+        continue;
+      }
+
+      retargetDrafts.push({
+        assignee_profile_id: entry.assignee,
+        submission_id: entry.rawSubmissionId,
+        rubric_part_id: entry.rubricPartId
+      });
+      staleDueDates.set(entry.rowId, entry.dueDate);
+    }
+    staleCollisionCount = staleCollisions;
 
     const excludedBySubmission = await buildConflictExclusions(supabase, classData.id, submissions);
 
@@ -672,6 +753,12 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     skipped_already_assigned: allocation?.skippedAlreadyAssigned ?? 0,
     /** Existing assignments repointed from a superseded submission to the current one. */
     retargeted_stale: retargetCount,
+    /**
+     * Stale assignments left in place because the replacement submission already
+     * has an assignment: retargeting would collide or duplicate. Clear them
+     * instead.
+     */
+    stale_collisions: staleCollisionCount,
     unassignable: allocation?.unassignable ?? []
   };
 
