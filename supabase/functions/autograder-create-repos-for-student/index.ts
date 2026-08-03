@@ -338,7 +338,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const inviteSent = await reinviteToOrgTeam(
             c.classes.github_org!,
             c.classes.slug! + "-students",
-            githubUsername!
+            githubUsername!,
+            undefined,
+            { userId }
           );
           // fresh invite dispatched => pending (false); already a member => confirmed (true).
           orgConfirmed = !inviteSent;

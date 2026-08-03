@@ -86,7 +86,9 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       level: "info"
     });
     try {
-      const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope);
+      const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope, {
+        userId: userID
+      });
       madeChanges = madeChanges || resp;
       if (!resp) {
         // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
@@ -141,7 +143,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       // transient GitHub/DB error) must not abort reconciliation of the user's other orgs. Record
       // and continue rather than throwing out of the whole sync.
       try {
-        const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug + "-students", githubUsername);
+        const resp = await reinviteToOrgTeam(
+          c!.classes.github_org,
+          c!.classes.slug + "-students",
+          githubUsername,
+          undefined,
+          { userId: userID }
+        );
         madeChanges = madeChanges || resp;
         if (!resp) {
           await adminSupabase
