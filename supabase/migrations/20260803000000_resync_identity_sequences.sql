@@ -20,6 +20,8 @@ DECLARE
   rec RECORD;
   max_id BIGINT;
   seq_last BIGINT;
+  seq_is_called BOOLEAN;
+  seq_consumed BIGINT;
   resynced INT := 0;
 BEGIN
   FOR rec IN
@@ -46,14 +48,21 @@ BEGIN
   LOOP
     EXECUTE format('SELECT COALESCE(max(%I), 0) FROM %I.%I', rec.col_name, rec.tbl_schema, rec.tbl_name)
       INTO max_id;
-    EXECUTE format('SELECT last_value FROM %I.%I', rec.seq_schema, rec.seq_name)
-      INTO seq_last;
+    EXECUTE format('SELECT last_value, is_called FROM %I.%I', rec.seq_schema, rec.seq_name)
+      INTO seq_last, seq_is_called;
 
-    IF max_id > seq_last THEN
+    -- Compare against the highest value the sequence has already handed out, not last_value:
+    -- an uncalled sequence (is_called = false, the state of one that has never been nextval'd)
+    -- returns last_value itself on the next call. Without this, a table holding exactly one
+    -- explicitly-inserted row at id = last_value looks in sync while the next insert still
+    -- collides with it.
+    seq_consumed := CASE WHEN seq_is_called THEN seq_last ELSE seq_last - 1 END;
+
+    IF max_id > seq_consumed THEN
       PERFORM setval(format('%I.%I', rec.seq_schema, rec.seq_name)::regclass, max_id, true);
       resynced := resynced + 1;
-      RAISE NOTICE 'Resynced sequence %.% for %.%.%: % -> %',
-        rec.seq_schema, rec.seq_name, rec.tbl_schema, rec.tbl_name, rec.col_name, seq_last, max_id;
+      RAISE NOTICE 'Resynced sequence %.% for %.%.%: last handed out % -> %',
+        rec.seq_schema, rec.seq_name, rec.tbl_schema, rec.tbl_name, rec.col_name, seq_consumed, max_id;
     END IF;
   END LOOP;
 

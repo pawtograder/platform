@@ -989,10 +989,10 @@ async function handlePushToTemplateRepo(
       Sentry.captureException(assignmentUpdateError, scope);
       throw assignmentUpdateError;
     }
-    //Store the commit for the template repo. This is instructor-facing history only, so a
-    //failure here must not fail the whole webhook: the delivery would be redelivered forever
-    //(and the handout file hashes below, which empty-submission detection depends on, would
-    //never be stored) for a row that no amount of retrying will insert.
+    //Store the commit for the template repo. A constraint violation here can never be fixed by
+    //redelivering the same push, so failing the webhook on one just loops forever (and blocks the
+    //handout file hashes below, which empty-submission detection depends on). Transient failures
+    //still throw so GitHub retries and the history isn't silently lost.
     const { error } = await adminSupabase.from("assignment_handout_commits").upsert(
       payload.commits.map((commit: GitHubCommit) => ({
         assignment_id: assignment.id,
@@ -1008,6 +1008,12 @@ async function handlePushToTemplateRepo(
       scope.setTag("error_context", "Failed to store assignment handout commit");
       console.error(`Failed to store handout commits for assignment ${assignment.id}`, error);
       Sentry.captureException(error, scope);
+      // SQLSTATE class 23 = integrity constraint violation (duplicate key, foreign key, not
+      // null): the same payload will fail identically on every redelivery, so record it and move
+      // on. Anything else may be transient — rethrow and let GitHub redeliver.
+      if (!error.code?.startsWith("23")) {
+        throw error;
+      }
     }
   }
 
