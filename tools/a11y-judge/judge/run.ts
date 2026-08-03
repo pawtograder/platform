@@ -336,7 +336,7 @@ async function main(): Promise<void> {
           usage: res.result.usage
         };
         putCached(p.cacheKey, value);
-        samples.push({
+        const sample: SampleResult = {
           pageId: p.task.pageId,
           criterion: p.task.criterion,
           sampleIndex: p.sampleIndex,
@@ -346,7 +346,13 @@ async function main(): Promise<void> {
           rejectedFindings: value.rejectedFindings,
           usage: value.usage,
           evidenceManifestPath: p.task.manifestPath
-        });
+        };
+        samples.push(sample);
+        // Same contract as the serial branch: samples/<…>.json is what the
+        // report renderer reads for per-sample rationale, findings and the
+        // rejected-citation audit. The catch-up loop below only covers cache
+        // hits, so a batch run that skipped this wrote no sample files at all.
+        writeSampleFile(runDir, sample);
       }
     } else {
       let done = 0;

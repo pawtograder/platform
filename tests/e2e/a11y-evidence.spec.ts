@@ -310,7 +310,12 @@ async function collectStandardBundles(
         });
         focusedId = att.id;
       }
-      const refBuf = await cropFromPristine(page, focus.pristineFullPage, s.rect, dpr).catch(() => null);
+      // documentRect, not rect: the pristine shot is a full-page (document
+      // coordinate) capture, while `rect` is viewport-relative and the Tab walk
+      // scrolls. Cutting with viewport coords pairs every below-the-fold stop
+      // with an unrelated region, which the 2.4.7 rubric then reads as
+      // "focused and unfocused differ" — a pass for a control with no indicator.
+      const refBuf = await cropFromPristine(page, focus.pristineFullPage, s.documentRect, dpr).catch(() => null);
       if (refBuf && refBuf.length > 0) {
         const att = await w.addAttachment({
           buffer: refBuf,

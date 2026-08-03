@@ -19,7 +19,7 @@ import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/ho
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
@@ -265,6 +265,17 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  /**
+   * Which responsive twin carries the landmark ids. Only the ids move with the
+   * breakpoint — the accessibility tree is left to the CSS `display` split (see
+   * the layout comments below). Without this, `#primary-nav` / `#user-menu`
+   * resolve to the `display:none` desktop copy on narrow or zoomed viewports,
+   * so the native fragment jump behind each skip link (used before hydration
+   * attaches SkipNav's onClick, and by bookmarked `…#primary-nav` URLs) lands
+   * on nothing — the exact WCAG 2.4.1 failure the skip links exist to prevent.
+   */
+  const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
+
   useEffect(() => {
     if (courseNavRef.current) {
       const height = courseNavRef.current.offsetHeight;
@@ -321,7 +332,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box data-landmark="user-menu">
+            <Box id={!isMdUp ? "user-menu" : undefined} data-landmark="user-menu">
               <UserMenu />
             </Box>
           </HStack>
@@ -329,6 +340,7 @@ export default function DynamicCourseNav() {
           {/* Navigation links - horizontal scroll on mobile */}
           <Box
             as="nav"
+            id={!isMdUp ? "primary-nav" : undefined}
             data-landmark="primary-nav"
             aria-label="Course navigation"
             overflowX="auto"
@@ -450,15 +462,16 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box id="user-menu" data-landmark="user-menu" flex="1" minWidth={0}>
+            <Box id={isMdUp ? "user-menu" : undefined} data-landmark="user-menu" flex="1" minWidth={0}>
               <UserMenu />
             </Box>
           </Flex>
           <HStack
             as="nav"
-            // Stable id on the desktop copy only (tests + skip-link hrefs); the mobile twin is
-            // reachable through data-landmark, and focusLandmark prefers whichever copy is visible.
-            id="primary-nav"
+            // The id follows the active breakpoint (see isMdUp above) so the skip link's native
+            // fragment jump lands on the rendered copy; focusLandmark uses data-landmark, which
+            // is on both twins, and prefers whichever one is visible.
+            id={isMdUp ? "primary-nav" : undefined}
             data-landmark="primary-nav"
             aria-label="Course navigation"
             width="100%"

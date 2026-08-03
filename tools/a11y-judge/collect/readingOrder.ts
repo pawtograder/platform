@@ -89,6 +89,10 @@ export async function collectReadingOrder(page: Page): Promise<ReadingOrderData>
           const tag = parent.tagName.toLowerCase();
           if (tag === "script" || tag === "style" || tag === "noscript") return NodeFilter.FILTER_REJECT;
           if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
+          // aria-hidden removes content from the accessibility tree while leaving
+          // it visible and in the DOM, so a screen reader never reaches it — it
+          // must not appear in the reading order we hand the judge.
+          if (parent.closest('[aria-hidden="true"]')) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       });

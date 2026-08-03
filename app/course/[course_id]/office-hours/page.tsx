@@ -248,9 +248,14 @@ export default function OfficeHoursPage() {
   // message rather than flashing a one-item browse list on the way out.
   if (soleQueueId !== null) {
     return (
-      <Box textAlign="center" py={8}>
+      <VStack textAlign="center" py={8} gap={2}>
         <Text>Opening the help queue…</Text>
-      </Box>
+        {/* Manual fallback. The redirect is latched to fire once per queue id
+            (soleQueueRedirectedTo) so re-renders cannot spam router.replace,
+            which means a navigation that never lands would otherwise leave this
+            placeholder as a dead end with no way out but a reload. */}
+        <Link href={`/course/${course_id}/office-hours/${soleQueueId}`}>Go to the help queue</Link>
+      </VStack>
     );
   }
 

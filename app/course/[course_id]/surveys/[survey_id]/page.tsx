@@ -10,6 +10,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
+import { useIsTableControllerReady } from "@/lib/TableController";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -32,6 +33,7 @@ export default function SurveyTakingPage() {
 
   // Use the survey hook to get the survey with realtime updates
   const survey = useSurvey(survey_id as string);
+  const surveysReady = useIsTableControllerReady(controller.surveys);
 
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,12 +48,18 @@ export default function SurveyTakingPage() {
   const hasSubmittedRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
+  // Fires the pending autosave immediately. Held in a ref so the unmount
+  // cleanup can flush rather than merely cancel: `textUpdateMode = "onTyping"`
+  // restarts the debounce on every keystroke, so a student who navigates away
+  // while typing has an unwritten answer sitting in the timer.
+  const flushAutosaveRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     return () => {
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
+        flushAutosaveRef.current?.();
       }
     };
   }, []);
@@ -61,7 +69,10 @@ export default function SurveyTakingPage() {
   // refetch. Keying the loader effect on the object re-ran the fetch and handed
   // <SurveyComponent> a fresh `initialData` object mid-edit (issue #881).
   const surveyId = survey?.id;
-  const surveyMissing = survey === null;
+  // The table controller yields `undefined` both while it is still loading and
+  // for a row that does not exist, so a miss is only knowable once its initial
+  // fetch has completed.
+  const surveyMissing = surveysReady && survey == null;
   const allowResponseEditing = survey?.allow_response_editing ?? false;
 
   // Load existing response for this user
@@ -119,7 +130,7 @@ export default function SurveyTakingPage() {
 
   // Handle survey not found or not published
   useEffect(() => {
-    if (!isLoading && survey === null) {
+    if (!isLoading && surveyMissing) {
       toaster.create({
         title: "Survey Not Found",
         description: "This survey is not available or has been removed.",
@@ -127,7 +138,7 @@ export default function SurveyTakingPage() {
       });
       router.push(`/course/${course_id}/surveys`);
     }
-  }, [isLoading, survey, course_id, router]);
+  }, [isLoading, surveyMissing, course_id, router]);
 
   // Save response helper using controller client
   const saveResponseToDb = useCallback(
@@ -188,6 +199,7 @@ export default function SurveyTakingPage() {
         clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
       }
+      flushAutosaveRef.current = null;
       try {
         if (autosaveInFlightRef.current) {
           await autosaveInFlightRef.current.catch(() => {});
@@ -231,9 +243,9 @@ export default function SurveyTakingPage() {
 
       // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke
       // and again on blur; only the trailing edit needs persisting.
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = setTimeout(() => {
+      const runAutosave = () => {
         autosaveTimerRef.current = null;
+        flushAutosaveRef.current = null;
         if (isSubmittingRef.current || hasSubmittedRef.current) return;
         const inFlight = saveResponseToDb(surveyData, false).catch((error) => {
           console.error("Error auto-saving response:", error);
@@ -243,7 +255,11 @@ export default function SurveyTakingPage() {
         void inFlight.finally(() => {
           if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
         });
-      }, AUTOSAVE_DEBOUNCE_MS);
+      };
+
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      flushAutosaveRef.current = runAutosave;
+      autosaveTimerRef.current = setTimeout(runAutosave, AUTOSAVE_DEBOUNCE_MS);
     },
     [private_profile_id, surveyId, allowResponseEditing, saveResponseToDb]
   );
@@ -253,7 +269,7 @@ export default function SurveyTakingPage() {
   }, [router, course_id]);
 
   // Show loading while survey is being fetched
-  if (isLoading || survey === undefined) {
+  if (isLoading || (survey === undefined && !surveyMissing)) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <Box display="flex" alignItems="center" justifyContent="center" p={8}>

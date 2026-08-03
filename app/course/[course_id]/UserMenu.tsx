@@ -942,25 +942,32 @@ function ConnectionStatusIndicator() {
   );
 
   return (
-    <Tooltip content={tooltipContent} showArrow>
-      {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13), and a
-          role=status live region so state changes are announced politely (4.1.3): the
-          visually-hidden text IS the status content — updating it triggers the announcement.
-          The dot color/tooltip track `status` live; the announced text is the debounced copy. */}
-      <Box
-        width={3}
-        height={3}
-        borderRadius="full"
-        bg={getStatusColor()}
-        role="status"
-        tabIndex={0}
-        cursor="help"
-        flexShrink={0}
-        _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
-      >
-        <VisuallyHidden>Realtime connection status: {announcedText}</VisuallyHidden>
-      </Box>
-    </Tooltip>
+    <>
+      <Tooltip content={tooltipContent} showArrow>
+        {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13). Its
+            accessible name is the UNdebounced status: a user who tabs here wants the current
+            state, and gating the name on the debounce would leave the control named
+            "Realtime connection status:" with no value for the first 3s and for as long as
+            channels keep flapping. */}
+        <Box
+          width={3}
+          height={3}
+          borderRadius="full"
+          bg={getStatusColor()}
+          role="img"
+          aria-label={`Realtime connection status: ${statusText}`}
+          tabIndex={0}
+          cursor="help"
+          flexShrink={0}
+          _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+        />
+      </Tooltip>
+      {/* Separate polite live region (4.1.3) carrying the debounced copy, so transient
+          join cycles are not announced while the control above stays correctly named. */}
+      <VisuallyHidden role="status">
+        {announcedText ? `Realtime connection status: ${announcedText}` : ""}
+      </VisuallyHidden>
+    </>
   );
 }
 

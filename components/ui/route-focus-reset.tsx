@@ -31,7 +31,11 @@ export default function RouteFocusReset() {
     // when the navigation genuinely dropped focus.
     const active = document.activeElement;
     if (active && active !== document.body) return;
-    focusLandmark("main-content");
+    // No scroll: this fires on ordinary in-page navigation, and aligning main's
+    // top edge with the viewport would smooth-scroll the course nav and any
+    // banners off-screen every time. Scrolling belongs to the explicit
+    // skip-link/Alt-chord path, where the user asked to jump to the landmark.
+    focusLandmark("main-content", { scroll: false });
   }, [pathname]);
 
   return null;

@@ -33,7 +33,7 @@ export function normalizePhrase(phrase: string, bindings: Bindings): string | nu
   let p = phrase;
   for (const [key, value] of Object.entries(bindings).sort((x, y) => y[1].length - x[1].length)) {
     if (!value) continue;
-    p = p.split(value).join(`{{${key}}}`);
+    p = p.replace(tokenBoundaryPattern(value, "g"), `{{${key}}}`);
   }
   for (const [re, placeholder] of GENERIC_RULES) p = p.replace(re, placeholder);
   return p.toLowerCase().replace(/\s+/g, " ").trim();
@@ -44,6 +44,24 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Match a seed value only as a whole token. A bare substring replace turns the
+ * incidental digits of unrelated speech into named placeholders — with
+ * autograderScore="5", "heading, level 5" normalizes to "heading, level
+ * {{autograderscore}}", which is enough to satisfy a read-task needle check the
+ * score cell never actually produced. The word-boundary lookarounds are applied
+ * only on the sides where the value itself ends in a word character, so values
+ * with punctuation edges (e.g. "#3", "O'Brien") still match.
+ *
+ * Exported because the read-task predicates need the same whole-token rule when
+ * checking an agent's answer against seed-derived ground truth.
+ */
+export function tokenBoundaryPattern(value: string, flags = ""): RegExp {
+  const left = /^\w/.test(value) ? "(?<!\\w)" : "";
+  const right = /\w$/.test(value) ? "(?!\\w)" : "";
+  return new RegExp(`${left}${escapeRegExp(value)}${right}`, flags);
+}
+
 /** Template → regex source (generic placeholders act as class wildcards). */
 function templateToPattern(template: string): string {
   return template
@@ -52,7 +70,11 @@ function templateToPattern(template: string): string {
       chunk === "{{number}}"
         ? "\\d+"
         : chunk === "{{date}}" || chunk === "{{time}}"
-          ? "\\{\\{(?:date|time)\\}\\}|[\\w:, ]+"
+          ? // Grouped: an ungrouped `|` here would split the whole anchored
+            // pattern into two top-level alternatives, so a template like
+            // "due {{date}} for assignment one" would match any phrase merely
+            // ending in "for assignment one".
+            "(?:\\{\\{(?:date|time)\\}\\}|[\\w:, ]+)"
           : escapeRegExp(chunk)
     )
     .join("");

@@ -43,7 +43,13 @@ function isVisible(el: HTMLElement) {
   return cs.display !== "none" && cs.visibility !== "hidden";
 }
 
-export function focusLandmark(id: string): boolean {
+/**
+ * Move focus to a landmark. `scroll` (default true) also brings it to the top
+ * of the viewport — right for an explicit skip-link/Alt-chord activation, wrong
+ * for automatic post-navigation focus management, where scrolling main content
+ * to the top edge would push the course header and banners off-screen.
+ */
+export function focusLandmark(id: string, { scroll = true }: { scroll?: boolean } = {}): boolean {
   // Same id may appear twice (mobile + desktop variants under responsive display).
   // Prefer the visible one. Fall back to the first element with a matching
   // data-landmark attribute, which we use where ids would collide.
@@ -63,8 +69,8 @@ export function focusLandmark(id: string): boolean {
   if (!target.hasAttribute("tabindex") && !/^(A|BUTTON|INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) {
     target.setAttribute("tabindex", "-1");
   }
-  target.focus({ preventScroll: false });
-  target.scrollIntoView({ block: "start", behavior: "smooth" });
+  target.focus({ preventScroll: !scroll });
+  if (scroll) target.scrollIntoView({ block: "start", behavior: "smooth" });
   return true;
 }
 
@@ -77,6 +83,15 @@ export default function SkipNav() {
     e.preventDefault();
     if (focusLandmark(id)) {
       history.replaceState(null, "", `#${id}`);
+      return;
+    }
+    // Contextual targets are matched on pathname, so a link can be reachable
+    // before its landmark has mounted (a submission page still resolving, say).
+    // preventDefault has already suppressed the native jump, so returning here
+    // would swallow the keystroke entirely and strand focus on the skip link;
+    // land on main content instead, which every route renders.
+    if (id !== "main-content" && focusLandmark("main-content")) {
+      history.replaceState(null, "", "#main-content");
     }
   };
 

@@ -286,6 +286,14 @@ export class AtHarness implements AtDriver {
     options: { noisePatterns?: RegExp[]; videoOverlay?: boolean } = {}
   ): Promise<AtHarness> {
     await page.addInitScript(getVsrBundleSource());
+    // Monaco's `accessibilitySupport: "auto"` detects real screen readers but not
+    // the virtual one we inject, so it would serve these runs the non-SR editor.
+    // The app reads this flag to opt into SR-optimized output; forcing it on in
+    // the shipped option set would put every student and grader into
+    // screen-reader rendering mode instead.
+    await page.addInitScript(() => {
+      (window as unknown as { __a11yForceScreenReader?: boolean }).__a11yForceScreenReader = true;
+    });
     if (options.videoOverlay) await installVideoOverlay(page);
     return new AtHarness(page, options.noisePatterns ?? DEFAULT_NOISE_PATTERNS);
   }

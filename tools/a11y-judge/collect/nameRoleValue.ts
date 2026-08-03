@@ -153,6 +153,39 @@ export async function collectNameRoleValue(page: Page): Promise<NameRoleValueDat
       return null;
     };
 
+    /**
+     * Text content as an accessibility tree would see it: `aria-hidden="true"`
+     * subtrees contribute nothing to an accessible name, but they are still in
+     * `innerText`/`textContent`. Without this,
+     * `<button><span aria-hidden="true">Save</span></button>` — whose real
+     * accessible name is empty — is recorded as properly named, which is
+     * exactly the 4.1.2 defect this collector exists to find.
+     */
+    const accessibleText = (el: Element): string => {
+      if (!el.querySelector('[aria-hidden="true"]')) return (el as HTMLElement).innerText ?? el.textContent ?? "";
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const parts: string[] = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        let p: Element | null = node.parentElement;
+        let skip = false;
+        while (p && p !== el.parentElement) {
+          if (p.getAttribute("aria-hidden") === "true") {
+            skip = true;
+            break;
+          }
+          const cs = window.getComputedStyle(p);
+          if (cs.display === "none" || cs.visibility === "hidden") {
+            skip = true;
+            break;
+          }
+          p = p.parentElement;
+        }
+        if (!skip) parts.push(node.textContent ?? "");
+      }
+      return parts.join(" ");
+    };
+
     const resolveName = (el: Element): { name: string; source: string } => {
       const ariaLabel = el.getAttribute("aria-label");
       if (ariaLabel && ariaLabel.trim()) return { name: clamp(ariaLabel, 200), source: "aria-label" };
@@ -170,16 +203,18 @@ export async function collectNameRoleValue(page: Page): Promise<NameRoleValueDat
       const id = el.getAttribute("id");
       if (id) {
         const forLabel = document.querySelector(`label[for="${CSS.escape(id)}"]`);
-        if (forLabel && forLabel.textContent && forLabel.textContent.trim()) {
-          return { name: clamp(forLabel.textContent, 200), source: "label[for]" };
+        const forText = forLabel ? accessibleText(forLabel) : "";
+        if (forText.trim()) {
+          return { name: clamp(forText, 200), source: "label[for]" };
         }
       }
       const wrapLabel = el.closest("label");
-      if (wrapLabel && wrapLabel.textContent && wrapLabel.textContent.trim()) {
-        return { name: clamp(wrapLabel.textContent, 200), source: "label-wrap" };
+      const wrapText = wrapLabel ? accessibleText(wrapLabel) : "";
+      if (wrapText.trim()) {
+        return { name: clamp(wrapText, 200), source: "label-wrap" };
       }
 
-      const inner = (el as HTMLElement).innerText;
+      const inner = accessibleText(el);
       if (inner && inner.trim()) return { name: clamp(inner, 200), source: "innerText" };
 
       const tag = el.tagName.toLowerCase();

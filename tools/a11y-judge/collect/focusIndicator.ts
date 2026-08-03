@@ -39,7 +39,17 @@ export interface FocusIndicatorStopData {
   boxShadow: string;
   borderColor: string;
   focusVisibleAttr: boolean;
+  /** Viewport-relative, as `page.screenshot({ clip })` expects. */
   rect: Rect;
+  /**
+   * The same rect in DOCUMENT coordinates (rect + scroll offset at measure
+   * time). The Tab walk scrolls each stop into view, so the caller must use
+   * this — not `rect` — to cut the reference crop out of the full-page pristine
+   * screenshot, which is itself in document coordinates. (Position-fixed
+   * elements are the known exception: Chromium renders them once at scroll 0 in
+   * a full-page capture, so their reference crop can still be off.)
+   */
+  documentRect: Rect;
   /** Clipped screenshot of the element (+padding) captured WHILE focus is live. */
   focusedCrop: Buffer;
 }
@@ -60,6 +70,8 @@ type LiveMeasurement = {
   borderColor: string;
   focusVisibleAttr: boolean;
   rect: Rect;
+  scrollX: number;
+  scrollY: number;
   isBody: boolean;
 };
 
@@ -128,7 +140,9 @@ export async function collectFocusIndicators(
         boxShadow: cs.boxShadow,
         borderColor: cs.borderColor,
         focusVisibleAttr: measured.hasAttribute("data-focus-visible"),
-        rect: { x: r.x, y: r.y, w: r.width, h: r.height }
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        scrollX: window.scrollX,
+        scrollY: window.scrollY
       } as LiveMeasurement;
     });
 
@@ -159,6 +173,7 @@ export async function collectFocusIndicators(
       borderColor: m.borderColor,
       focusVisibleAttr: m.focusVisibleAttr,
       rect: m.rect,
+      documentRect: { x: m.rect.x + m.scrollX, y: m.rect.y + m.scrollY, w: m.rect.w, h: m.rect.h },
       focusedCrop
     });
   }

@@ -7,6 +7,7 @@
  * context the HOST fills from its own seeding — the agent never sees it.
  */
 import type { AgentVerdict } from "../schema/trajectory";
+import { tokenBoundaryPattern } from "./normalize";
 
 export interface TaskContext {
   /** Host-seeded values (ids, expected answers) the predicates need. */
@@ -51,11 +52,16 @@ export function normalizeAnswer(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Read-task helper: every needle must appear in the normalized taskAnswer. */
+/**
+ * Read-task helper: every needle must appear in the normalized taskAnswer as a
+ * whole token. A plain substring check passes any answer that merely contains
+ * the digits — with the seeded score 5 out of 10, "50 out of 100" would be
+ * scored correct, so a real reading failure ships as a green run.
+ */
 function answerContains(verdict: AgentVerdict | null, needles: string[]): PredicateResult {
   if (!verdict) return { success: false, detail: "no verdict emitted" };
   const answer = normalizeAnswer(verdict.taskAnswer);
-  const missing = needles.filter((n) => !answer.includes(normalizeAnswer(n)));
+  const missing = needles.filter((n) => !tokenBoundaryPattern(normalizeAnswer(n)).test(answer));
   return missing.length === 0
     ? { success: true, detail: `taskAnswer contains ${JSON.stringify(needles)}` }
     : { success: false, detail: `taskAnswer ${JSON.stringify(answer)} missing ${JSON.stringify(missing)}` };

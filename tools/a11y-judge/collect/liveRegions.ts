@@ -106,6 +106,27 @@ export async function installLiveRegionRecorder(page: Page): Promise<void> {
       return el ? el.closest(SELECTOR) : null;
     };
 
+    /**
+     * Live regions in an inserted node: the node itself AND its descendants.
+     * React commits a new subtree by appending its ROOT node in a single
+     * insertion, so a region rendered as `<div><div role="status">…</div></div>`
+     * arrives as one addedNode that is not itself a region — checking only the
+     * node and its ancestors would log nothing and the judge would be told the
+     * status message was never announced.
+     */
+    const regionsWithin = (node: Node): Element[] => {
+      if (node.nodeType !== 1) return [];
+      const el = node as Element;
+      const found: Element[] = [];
+      if (el.matches != null && el.matches(SELECTOR)) found.push(el);
+      if (el.querySelectorAll != null) found.push(...Array.from(el.querySelectorAll(SELECTOR)));
+      return found;
+    };
+
+    // Elements already logged as "added" via an attribute promotion, so a later
+    // unrelated aria-live/role mutation does not re-log the same region.
+    const attrPromoted = new WeakSet<Element>();
+
     const push = (kind: "added" | "text-changed" | "removed", region: Element, text: string | null | undefined) => {
       log.push({
         t: Date.now() - START,
@@ -143,8 +164,9 @@ export async function installLiveRegionRecorder(page: Page): Promise<void> {
         else if (m.type === "characterData") pushVisible(m.target);
         if (m.type === "childList") {
           m.addedNodes.forEach((n) => {
-            if (isRegion(n)) {
-              push("added", n, n.textContent);
+            const regions = regionsWithin(n);
+            if (regions.length > 0) {
+              for (const region of regions) push("added", region, region.textContent);
             } else {
               const region = closestRegion(n);
               if (region) push("text-changed", region, n.textContent);
@@ -161,6 +183,18 @@ export async function installLiveRegionRecorder(page: Page): Promise<void> {
         } else if (m.type === "characterData") {
           const region = closestRegion(m.target);
           if (region) push("text-changed", region, m.target.textContent);
+        } else if (m.type === "attributes") {
+          // aria-live/role is in attributeFilter below: an element promoted into
+          // a live region in place never appears as an added node.
+          const el = m.target as Element;
+          if (el.nodeType === 1 && el.matches != null && el.matches(SELECTOR)) {
+            if (!attrPromoted.has(el)) {
+              attrPromoted.add(el);
+              push("added", el, el.textContent);
+            }
+          } else {
+            attrPromoted.delete(el);
+          }
         }
       }
     });
