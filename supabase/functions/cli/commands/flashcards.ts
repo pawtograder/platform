@@ -6,6 +6,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse, FlashcardsListParams, FlashcardsCopyParams } from "../types.ts";
 
@@ -15,6 +16,7 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const { data: decks, error } = await supabase
     .from("flashcard_decks")
@@ -72,6 +74,10 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
+  // Both sides: reading the source and writing the target each need access, or a
+  // grader in one class could copy content into a class they do not belong to.
+  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");
