@@ -116,14 +116,19 @@ export const builder = (yargs: Argv) => {
               r.submission_id as number,
               truncate((r.rubric_part_names as string[]).join(", ") || "(whole rubric)", 32),
               formatDate(r.due_date as string | null),
-              formatDate(r.completed_at as string | null),
+              // The composite rule: the assignment itself, or the linked review
+              // completed by this assignee. Matching the web reviews table.
+              r.review_completed_by_assignee
+                ? formatDate((r.completed_at as string | null) ?? (r.review_completed_at as string | null))
+                : "-",
               r.review_total_score as number | null
             ])
           );
 
           logger.blank();
           logger.info(
-            `Total: ${data.summary.total} (${data.summary.completed} completed, ${data.summary.pending} pending)`
+            `Showing ${data.summary.total} of ${data.summary.matching} matching ` +
+              `(${data.summary.completed} completed, ${data.summary.pending} pending across the assignment)`
           );
           if (data.summary.truncated) {
             logger.warning(
@@ -176,6 +181,13 @@ export const builder = (yargs: Argv) => {
               type: "boolean",
               default: false
             })
+            .option("include-non-submitters", {
+              describe:
+                "Also assign manual placeholder stubs (students who did not submit). Excluded by default, " +
+                "matching the web bulk-assign page.",
+              type: "boolean",
+              default: false
+            })
             .option("file", {
               alias: "f",
               describe: "JSON manifest of explicit assignments, instead of round-robin allocation",
@@ -187,9 +199,10 @@ export const builder = (yargs: Argv) => {
               default: false
             })
             .check((argv) => {
-              if (argv.file && (argv.grader || argv.byPart)) {
+              if (argv.file && (argv.grader || argv.byPart || argv.includeNonSubmitters)) {
                 throw new Error(
-                  "--file supplies explicit assignments; it cannot be combined with --grader or --by-part"
+                  "--file supplies explicit assignments; it cannot be combined with --grader, --by-part, " +
+                    "or --include-non-submitters"
                 );
               }
               return true;
@@ -218,6 +231,7 @@ export const builder = (yargs: Argv) => {
           } else {
             if (args.grader) params.graders = args.grader as string[];
             params.by_part = args.byPart as boolean;
+            params.include_non_submitters = args.includeNonSubmitters as boolean;
           }
 
           const data = await apiCall("reviews.assign", params);
@@ -234,18 +248,36 @@ export const builder = (yargs: Argv) => {
           logger.info(`Due: ${data.due_date}`);
           logger.blank();
 
+          // `load` and this count cover new assignments only; the repointed ones are
+          // reported separately below, because a grader keeping work they already had
+          // is not new load on them.
+          const load = (data.load ?? []) as Array<{ assignee_profile_id: string; count: number }>;
+          const newCount = drafts.length - (data.retargeted_stale ?? 0);
+
           if (drafts.length === 0) {
             logger.info(data.message ?? "Nothing to assign.");
+          } else if (newCount === 0) {
+            logger.info("Planned: no new review assignments.");
           } else {
             printTable(
-              ["Grader", "Reviews"],
-              (data.load as Array<{ assignee_profile_id: string; count: number }>).map((entry) => [
-                entry.assignee_profile_id,
-                entry.count
-              ])
+              ["Grader", "New reviews"],
+              load.map((entry) => [entry.assignee_profile_id, entry.count])
             );
             logger.blank();
-            logger.info(`Planned: ${drafts.length} review assignment(s)`);
+            logger.info(`Planned: ${newCount} new review assignment(s)`);
+          }
+
+          const excluded = data.submissions_excluded;
+          if (excluded && (excluded.stubs > 0 || excluded.dropped_students > 0)) {
+            if (excluded.stubs > 0) {
+              logger.info(
+                `Skipped ${excluded.stubs} placeholder stub(s) with no submission ` +
+                  "(pass --include-non-submitters to grade them)"
+              );
+            }
+            if (excluded.dropped_students > 0) {
+              logger.info(`Skipped ${excluded.dropped_students} submission(s) whose students are no longer enrolled`);
+            }
           }
 
           if (data.skipped_already_assigned > 0) {

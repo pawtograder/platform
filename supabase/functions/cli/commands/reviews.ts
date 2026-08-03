@@ -7,6 +7,11 @@ import type { Json } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import {
+  isReviewComplete,
+  selectAssignableSubmissions,
+  type ReviewAssignmentStatusRow
+} from "../utils/reviewStatus.ts";
+import {
   escapeLikePattern,
   resolveClass,
   resolveAssignment,
@@ -53,6 +58,8 @@ interface ReviewsAssignParams {
   graders?: string[];
   /** Fan out one assignment per rubric part instead of one per submission. */
   by_part?: boolean;
+  /** Include manual placeholder stubs, matching the web's toggle. */
+  include_non_submitters?: boolean;
   /** Explicit assignment list, bypassing round-robin allocation. */
   drafts?: unknown;
   dry_run?: boolean;
@@ -128,7 +135,7 @@ async function fetchReviewAssignments(
           "due_date, release_date, hard_deadline, max_allowable_late_tokens, completed_at, completed_by, created_at, " +
           "review_assignment_rubric_parts(rubric_part_id, " +
           "rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name)), " +
-          "submission_reviews(id, name, completed_at, total_score, released), " +
+          "submission_reviews(id, name, completed_at, total_score, released, grader), " +
           "submissions(id, ordinal, is_active, profile_id, assignment_group_id)"
       )
       .eq("assignment_id", assignmentId);
@@ -136,8 +143,9 @@ async function fetchReviewAssignments(
     if (filters.rubricId !== null && filters.rubricId !== undefined) {
       query = query.eq("rubric_id", filters.rubricId);
     }
-    if (filters.status === "pending") query = query.is("completed_at", null);
-    if (filters.status === "completed") query = query.not("completed_at", "is", null);
+    // `status` is deliberately not pushed down: completion is a condition spanning
+    // review_assignments and the embedded submission_review (see isReviewComplete),
+    // which PostgREST cannot express. The caller drains and filters instead.
     if (filters.assigneeProfileIds) query = query.in("assignee_profile_id", filters.assigneeProfileIds);
 
     const { data, error } = await query.order("id", { ascending: true }).range(offset, offset + page - 1);
@@ -173,6 +181,11 @@ async function fetchProfileNames(
     }
   }
   return names;
+}
+
+/** `fetchReviewAssignments` yields loose rows; narrow them for the status rule. */
+function isComplete(row: Record<string, unknown>): boolean {
+  return isReviewComplete(row as unknown as ReviewAssignmentStatusRow);
 }
 
 async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
@@ -257,17 +270,24 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
     }
   }
 
-  const rows = await fetchReviewAssignments(
-    supabase,
-    assignment.id,
-    limit,
-    {
-      rubricId,
-      status: status as "pending" | "completed" | "all",
-      assigneeProfileIds
-    },
-    offset
-  );
+  // Drained rather than limited in the database, because completion spans the
+  // review_assignment and its embedded submission_review and cannot be pushed into
+  // PostgREST. Filtering after a limited fetch was the bug fixed earlier for
+  // `status`; the fix there was pushdown, and now that pushdown is impossible the
+  // only correct order is drain -> filter -> paginate. Bounded by submissions x
+  // rubric parts for one assignment, so this is a handful of pages.
+  const allRows = await fetchReviewAssignments(supabase, assignment.id, FETCH_ALL, {
+    rubricId,
+    assigneeProfileIds
+  });
+
+  const matching = allRows.filter((r) => {
+    if (status === "all") return true;
+    const complete = isComplete(r);
+    return status === "completed" ? complete : !complete;
+  });
+
+  const rows = matching.slice(offset, offset + limit);
 
   const names = await fetchProfileNames(supabase, [
     ...rows.map((r) => r.assignee_profile_id as string | null),
@@ -299,7 +319,13 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
       completed_at: r.completed_at,
       completed_by: r.completed_by,
       completed_by_name: r.completed_by ? (names.get(r.completed_by as string) ?? null) : null,
-      review_total_score: review?.total_score ?? null,
+      /**
+       * The submission review's total for the whole rubric. Null on a by-part row,
+       * where it is not that part's score and repeating it invited the reader to
+       * treat it as one.
+       */
+      review_total_score: parts.length === 0 ? (review?.total_score ?? null) : null,
+      review_completed_by_assignee: isComplete(r),
       review_completed_at: review?.completed_at ?? null
     };
   });
@@ -312,13 +338,16 @@ async function handleReviewsList(ctx: MCPAuthContext, params: Record<string, unk
       rubric_id: rubricId,
       reviews,
       summary: {
+        /** Rows in this page. */
         total: reviews.length,
-        completed: reviews.filter((r) => r.completed_at != null).length,
-        pending: reviews.filter((r) => r.completed_at == null).length,
+        /** Every row matching the filter, not just this page. */
+        matching: matching.length,
+        completed: allRows.filter((r) => isComplete(r)).length,
+        pending: allRows.filter((r) => !isComplete(r)).length,
         offset,
-        truncated: rows.length >= limit,
+        truncated: offset + rows.length < matching.length,
         /** Pass as --offset to continue past a truncated page. */
-        next_offset: rows.length >= limit ? offset + rows.length : null
+        next_offset: offset + rows.length < matching.length ? offset + rows.length : null
       }
     }
   };
@@ -459,15 +488,24 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   const staffProfileIds = new Set(staffRoles.map((r) => r.private_profile_id));
 
   let drafts: DraftAssignment[];
+  /**
+   * `drafts` minus the retargets. The per-grader load table is built from this: a
+   * retarget moves work a grader already held onto the current submission, so
+   * counting it as newly assigned overstates what the run is adding.
+   */
+  let newDrafts: DraftAssignment[];
   let allocation: ReturnType<typeof allocateRoundRobin> | null = null;
   let retargetCount = 0;
   /** Stale rows left alone because the active submission is already covered. */
   let staleCollisionCount = 0;
+  /** Submissions kept out of the pool, reported so the operator can see why. */
+  let submissionsExcluded = { stubs: 0, dropped_students: 0 };
   /** review_assignment id -> deadline to restore after the RPC rewrites it. */
   let deadlinesToRestore = new Map<number, string>();
 
   if (p.drafts !== undefined && p.drafts !== null) {
     drafts = parseDraftManifest(p.drafts);
+    newDrafts = drafts;
     if (drafts.length === 0) throw new CLICommandError("drafts is empty; nothing to assign", 400);
 
     // Validate up front so a typo fails with a clear message instead of the
@@ -592,16 +630,50 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
       throw new CLICommandError("No active graders or instructors in this class to assign work to", 400);
     }
 
-    const submissions = await pageAll<{ id: number; profile_id: string | null; assignment_group_id: number | null }>(
+    const allActive = await pageAll<{
+      id: number;
+      profile_id: string | null;
+      assignment_group_id: number | null;
+      submitted_via: string | null;
+    }>(
       () =>
         supabase
           .from("submissions")
-          .select("id, profile_id, assignment_group_id")
+          .select("id, profile_id, assignment_group_id, submitted_via")
           .eq("assignment_id", assignment.id)
           .eq("is_active", true)
           .order("id", { ascending: true }),
       "Failed to load submissions"
     );
+
+    const activeProfiles = new Set(
+      (
+        await pageAll<{ private_profile_id: string }>(
+          () =>
+            supabase
+              .from("user_roles")
+              .select("private_profile_id")
+              .eq("class_id", classData.id)
+              .eq("disabled", false)
+              .order("id", { ascending: true }),
+          "Failed to load active enrollments"
+        )
+      ).map((r) => r.private_profile_id)
+    );
+
+    const assignable = selectAssignableSubmissions({
+      submissions: allActive,
+      activeProfiles,
+      groupMembers: await loadGroupMembers(supabase, [
+        ...new Set(allActive.map((s) => s.assignment_group_id).filter((id): id is number => id != null))
+      ]),
+      // A no_submission assignment has nothing but manual stubs, so excluding them
+      // there would leave nothing to grade.
+      excludeStubs: p.include_non_submitters !== true && assignment.repo_mode !== "no_submission"
+    });
+    const submissions = assignable.submissions;
+    submissionsExcluded = assignable.excluded;
+
     if (submissions.length === 0) {
       throw new CLICommandError(`Assignment ${assignment.id} has no active submissions to assign`, 400);
     }
@@ -739,6 +811,7 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // Retargets first, so a run that has nothing new to assign still repairs
     // assignments left pointing at superseded submissions.
     drafts = [...retargetDrafts, ...allocation.drafts];
+    newDrafts = allocation.drafts;
     retargetCount = retargetDrafts.length;
     deadlinesToRestore = staleDueDates;
   }
@@ -749,8 +822,9 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     rubric_id: rubricId,
     due_date: dueDateIso,
     drafts,
-    load: summarizeLoad(drafts),
+    load: summarizeLoad(newDrafts),
     skipped_already_assigned: allocation?.skippedAlreadyAssigned ?? 0,
+    submissions_excluded: submissionsExcluded,
     /** Existing assignments repointed from a superseded submission to the current one. */
     retargeted_stale: retargetCount,
     /**
@@ -867,6 +941,39 @@ function statusForRpcErrorCode(errorCode: string | undefined): number {
 }
 
 /**
+ * Group id → member profile ids, batched by group and paged within each batch.
+ *
+ * 500 group ids return far more than max_rows member rows, and a dropped member is
+ * how someone ends up reviewing their own group's submission.
+ */
+async function loadGroupMembers(
+  supabase: ReturnType<typeof getAdminClient>,
+  groupIds: number[]
+): Promise<Map<number, string[]>> {
+  const byGroup = new Map<number, string[]>();
+  if (groupIds.length === 0) return byGroup;
+
+  const BATCH = 200;
+  for (let i = 0; i < groupIds.length; i += BATCH) {
+    const rows = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", groupIds.slice(i, i + BATCH))
+          .order("id", { ascending: true }),
+      "Failed to load group members"
+    );
+    for (const row of rows) {
+      const list = byGroup.get(row.assignment_group_id) ?? [];
+      list.push(row.profile_id);
+      byGroup.set(row.assignment_group_id, list);
+    }
+  }
+  return byGroup;
+}
+
+/**
  * Reviewers who must not be given a given submission.
  *
  * Two sources: `grading_conflicts`, which the bulk-assign UI treats as hard
@@ -884,30 +991,7 @@ async function buildConflictExclusions(
   const submitters = new Map<number, Set<string>>();
   const groupIds = [...new Set(submissions.map((s) => s.assignment_group_id).filter((id): id is number => id != null))];
 
-  const groupMembers = new Map<number, string[]>();
-  if (groupIds.length > 0) {
-    // Batched by group *and* paged within each batch: a truncated read here drops
-    // a group member, and a dropped member can be handed their own submission.
-    const BATCH = 200;
-    for (let i = 0; i < groupIds.length; i += BATCH) {
-      const batch = groupIds.slice(i, i + BATCH);
-      const rows = await pageAll<{ assignment_group_id: number; profile_id: string }>(
-        () =>
-          supabase
-            .from("assignment_groups_members")
-            .select("assignment_group_id, profile_id")
-            .in("assignment_group_id", batch)
-            .order("id", { ascending: true }),
-        "Failed to load group members"
-      );
-      for (const row of rows) {
-        const list = groupMembers.get(row.assignment_group_id) ?? [];
-        list.push(row.profile_id);
-        groupMembers.set(row.assignment_group_id, list);
-      }
-    }
-  }
-
+  const groupMembers = await loadGroupMembers(supabase, groupIds);
   for (const s of submissions) {
     const owners = new Set<string>();
     if (s.profile_id) owners.add(s.profile_id);
