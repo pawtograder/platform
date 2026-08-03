@@ -9,6 +9,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson, printTable, formatDate } from "@/cli/utils/output";
 
 export const command = "flashcards <action>";
 export const describe = "Manage flashcard decks";
@@ -19,16 +20,20 @@ export const builder = (yargs: Argv) => {
       "list",
       "List flashcard decks for a class",
       (yargs) => {
-        return yargs.option("class", {
-          alias: "c",
-          describe: "Class ID, slug, or name",
-          type: "string",
-          demandOption: true
-        });
+        return addJsonOption(
+          yargs.option("class", {
+            alias: "c",
+            describe: "Class ID, slug, or name",
+            type: "string",
+            demandOption: true
+          })
+        );
       },
       async (args) => {
         try {
           const data = await apiCall("flashcards.list", { class: args.class as string });
+
+          if (emitJson(args, data)) return;
 
           logger.step(`Flashcard decks for ${data.class.name}`);
 
@@ -39,11 +44,15 @@ export const builder = (yargs: Argv) => {
             return;
           }
 
-          logger.tableHeader(["ID", "Name", "Cards", "Created"]);
-          for (const deck of decks) {
-            const created = new Date(deck.created_at).toLocaleDateString();
-            logger.tableRow([deck.id, deck.name, deck.card_count.toString(), created]);
-          }
+          printTable(
+            ["ID", "Name", "Cards", "Created"],
+            decks.map((deck: Record<string, unknown>) => [
+              deck.id as number,
+              deck.name as string,
+              (deck.card_count as number | null) ?? null,
+              formatDate(deck.created_at as string | null)
+            ])
+          );
           logger.blank();
           logger.info(`Total: ${decks.length} deck(s)`);
         } catch (error) {
@@ -114,10 +123,13 @@ export const builder = (yargs: Argv) => {
             logger.info(`Target: ${data.target_class.name} (${data.target_class.slug})`);
             logger.blank();
 
-            logger.tableHeader(["Deck Name", "Description"]);
-            for (const deck of data.decks_to_copy) {
-              logger.tableRow([deck.name, deck.description || "(none)"]);
-            }
+            printTable(
+              ["Deck Name", "Description"],
+              data.decks_to_copy.map((deck: Record<string, unknown>) => [
+                deck.name as string,
+                (deck.description as string | null) || "(none)"
+              ])
+            );
             return;
           }
 

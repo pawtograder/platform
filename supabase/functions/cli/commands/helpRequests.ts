@@ -1,0 +1,272 @@
+/**
+ * help_requests.* CLI commands — help_requests.list (cli:read),
+ * help_requests.close (cli:write).
+ */
+
+import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
+import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import { registerCommand } from "../router.ts";
+import { getAdminClient } from "../utils/supabase.ts";
+import { resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivateProfileId } from "../utils/auth.ts";
+import {
+  HELP_REQUEST_RESOLUTION_STATUSES,
+  TERMINAL_HELP_REQUEST_STATUSES,
+  parseStatusFilter
+} from "../utils/helpRequestStatus.ts";
+import { CLICommandError } from "../errors.ts";
+import type { CLIResponse } from "../types.ts";
+
+type HelpRequestStatus = Database["public"]["Enums"]["help_request_status"];
+type HelpRequestResolutionStatus = Database["public"]["Enums"]["help_request_resolution_status"];
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 1000;
+
+interface HelpRequestsListParams {
+  class?: string | number;
+  status?: string;
+  queue?: string | number;
+  limit?: number;
+}
+
+interface HelpRequestsCloseParams {
+  id?: number;
+  status?: string;
+  resolution_status?: string;
+  notes?: string;
+  force?: boolean;
+}
+
+/** Batched private-profile-id → display name lookup. */
+async function fetchProfileNames(
+  supabase: ReturnType<typeof getAdminClient>,
+  ids: Array<string | null>
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return names;
+
+  const BATCH = 500;
+  for (let i = 0; i < unique.length; i += BATCH) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, name")
+      .in("id", unique.slice(i, i + BATCH));
+    if (error) throw new CLICommandError(`Failed to resolve profile names: ${error.message}`, 500);
+    for (const row of data ?? []) {
+      if (row.name) names.set(row.id, row.name);
+    }
+  }
+  return names;
+}
+
+async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+  const p = params as unknown as HelpRequestsListParams;
+  if (!p.class) throw new CLICommandError("class is required");
+
+  const statusFilter = parseStatusFilter(p.status);
+  if ("error" in statusFilter) throw new CLICommandError(statusFilter.error, 400);
+  const statuses = statusFilter.statuses;
+
+  const limit = p.limit === undefined || p.limit === null ? DEFAULT_LIMIT : Math.floor(Number(p.limit));
+  if (!Number.isFinite(limit) || limit < 1) {
+    throw new CLICommandError("limit must be a positive integer", 400);
+  }
+
+  const supabase = getAdminClient();
+  const classData = await resolveClass(supabase, p.class);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+
+  let queueId: number | null = null;
+  if (p.queue !== undefined && p.queue !== null && String(p.queue).trim() !== "") {
+    const raw = String(p.queue).trim();
+    const { data: queues, error: queueError } = await supabase
+      .from("help_queues")
+      .select("id, name")
+      .eq("class_id", classData.id);
+    if (queueError) throw new CLICommandError(`Failed to list help queues: ${queueError.message}`, 500);
+
+    const match = /^\d+$/.test(raw)
+      ? (queues ?? []).find((q) => q.id === Number(raw))
+      : (queues ?? []).find((q) => q.name.toLowerCase() === raw.toLowerCase());
+    if (!match) {
+      const available = (queues ?? []).map((q) => `${q.id} (${q.name})`).join(", ") || "none";
+      throw new CLICommandError(`Help queue not found: ${raw}. Available: ${available}`, 404);
+    }
+    queueId = match.id;
+  }
+
+  let query = supabase
+    .from("help_requests")
+    .select(
+      "id, class_id, help_queue, created_by, assignee, request, status, is_private, is_video_live, " +
+        "location_type, referenced_submission_id, followup_to, resolution_status, resolution_notes, " +
+        "resolved_at, resolved_by, created_at, updated_at, help_queues!inner(name)"
+    )
+    .eq("class_id", classData.id)
+    .order("created_at", { ascending: false })
+    .limit(Math.min(limit, MAX_LIMIT));
+
+  if (statuses) query = query.in("status", statuses);
+  if (queueId !== null) query = query.eq("help_queue", queueId);
+
+  const { data, error } = await query;
+  if (error) throw new CLICommandError(`Failed to list help requests: ${error.message}`, 500);
+
+  const rows = (data ?? []) as unknown as Array<Record<string, unknown> & { help_queues?: { name: string } | null }>;
+
+  const names = await fetchProfileNames(supabase, [
+    ...rows.map((r) => (r.created_by as string | null) ?? null),
+    ...rows.map((r) => (r.assignee as string | null) ?? null),
+    ...rows.map((r) => (r.resolved_by as string | null) ?? null)
+  ]);
+
+  const requests = rows.map((r) => ({
+    id: r.id,
+    queue_id: r.help_queue,
+    queue_name: r.help_queues?.name ?? null,
+    status: r.status,
+    request: r.request,
+    is_private: r.is_private,
+    is_video_live: r.is_video_live,
+    location_type: r.location_type,
+    referenced_submission_id: r.referenced_submission_id,
+    followup_to: r.followup_to,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    created_by: r.created_by,
+    created_by_name: r.created_by ? (names.get(r.created_by as string) ?? null) : null,
+    assignee: r.assignee,
+    assignee_name: r.assignee ? (names.get(r.assignee as string) ?? null) : null,
+    resolved_at: r.resolved_at,
+    resolved_by: r.resolved_by,
+    resolved_by_name: r.resolved_by ? (names.get(r.resolved_by as string) ?? null) : null,
+    resolution_status: r.resolution_status,
+    resolution_notes: r.resolution_notes
+  }));
+
+  const byStatus: Record<string, number> = {};
+  for (const r of requests) {
+    const key = String(r.status);
+    byStatus[key] = (byStatus[key] ?? 0) + 1;
+  }
+
+  return {
+    success: true,
+    data: {
+      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      requests,
+      summary: {
+        total: requests.length,
+        by_status: byStatus,
+        truncated: requests.length >= Math.min(limit, MAX_LIMIT)
+      }
+    }
+  };
+}
+
+/**
+ * help_requests.close — moves a request to `closed` (or `resolved`) the same way
+ * the staff path in the office-hours UI does: a plain UPDATE setting the status
+ * and resolution columns.
+ *
+ * A direct UPDATE is the correct mechanism rather than a bespoke RPC, because
+ * every side effect is trigger-driven and fires for this write too: the realtime
+ * broadcasts and status-change notification (`broadcast_help_requests_change`,
+ * `help_request_updated_trigger`), the Discord notification
+ * (`trg_discord_help_request_notification`), closing open work sessions
+ * (`help_request_work_sessions_trigger`), and the resolution system message
+ * (`help_requests_resolution_message_tr`, which needs `resolution_status` and
+ * `resolved_by` to be set to produce its message).
+ *
+ * Not covered by any trigger: tearing down a live video call. `is_video_live`
+ * stays true and the Chime meeting stays up, so we report it back and let the
+ * CLI warn rather than silently leaving the operator with a live call.
+ */
+async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+  const p = params as unknown as HelpRequestsCloseParams;
+  const id = p.id === undefined || p.id === null ? NaN : Math.floor(Number(p.id));
+  if (!Number.isFinite(id) || id < 1) throw new CLICommandError("id is required and must be a positive integer", 400);
+
+  const targetStatus = (p.status ?? "closed") as HelpRequestStatus;
+  if (!TERMINAL_HELP_REQUEST_STATUSES.includes(targetStatus)) {
+    throw new CLICommandError(`status must be one of ${TERMINAL_HELP_REQUEST_STATUSES.join(", ")}`, 400);
+  }
+
+  let resolutionStatus: HelpRequestResolutionStatus | null = null;
+  if (p.resolution_status !== undefined && p.resolution_status !== null && p.resolution_status !== "") {
+    if (!(HELP_REQUEST_RESOLUTION_STATUSES as string[]).includes(p.resolution_status)) {
+      throw new CLICommandError(
+        `Invalid resolution status: ${p.resolution_status}. Must be one of ${HELP_REQUEST_RESOLUTION_STATUSES.join(", ")}`,
+        400
+      );
+    }
+    resolutionStatus = p.resolution_status as HelpRequestResolutionStatus;
+  }
+
+  const supabase = getAdminClient();
+
+  const { data: existing, error: fetchError } = await supabase
+    .from("help_requests")
+    .select("id, class_id, status, is_video_live, resolved_at")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchError) throw new CLICommandError(`Failed to load help request: ${fetchError.message}`, 500);
+  if (!existing) throw new CLICommandError(`Help request not found: ${id}`, 404);
+
+  // Authorization is keyed on the request's own class, so a token scoped to one
+  // class cannot close another class's requests.
+  await assertUserIsClassInstructor(supabase, ctx.userId, existing.class_id);
+
+  if (TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status) && p.force !== true) {
+    throw new CLICommandError(
+      `Help request ${id} is already ${existing.status}. Pass force to overwrite its resolution.`,
+      409
+    );
+  }
+
+  const resolvedBy = await getCallerPrivateProfileId(supabase, ctx.userId, existing.class_id);
+
+  const update: Database["public"]["Tables"]["help_requests"]["Update"] = {
+    status: targetStatus,
+    resolved_by: resolvedBy,
+    resolved_at: new Date().toISOString()
+  };
+  if (resolutionStatus) update.resolution_status = resolutionStatus;
+  if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;
+
+  const { data: updated, error: updateError } = await supabase
+    .from("help_requests")
+    .update(update)
+    .eq("id", id)
+    .select(
+      "id, class_id, help_queue, status, resolved_at, resolved_by, resolution_status, resolution_notes, is_video_live"
+    )
+    .single();
+
+  if (updateError) throw new CLICommandError(`Failed to close help request: ${updateError.message}`, 500);
+
+  return {
+    success: true,
+    data: {
+      request: updated,
+      previous_status: existing.status,
+      /** True when a Chime call is still up; no trigger tears it down. */
+      video_still_live: existing.is_video_live === true
+    }
+  };
+}
+
+registerCommand({
+  name: "help_requests.list",
+  requiredScope: "cli:read",
+  handler: handleHelpRequestsList
+});
+
+registerCommand({
+  name: "help_requests.close",
+  requiredScope: "cli:write",
+  handler: handleHelpRequestsClose
+});

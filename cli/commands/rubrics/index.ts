@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as YAML from "yaml";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson } from "@/cli/utils/output";
 
 export const command = "rubrics <action>";
 export const describe = "Import and export rubrics in YML format";
@@ -83,19 +84,21 @@ export const builder = (yargs: Argv) => {
       "list",
       "List rubrics for an assignment",
       (yargs) => {
-        return yargs
-          .option("assignment", {
-            alias: "a",
-            describe: "Assignment ID or slug",
-            type: "string",
-            demandOption: true
-          })
-          .option("class", {
-            alias: "c",
-            describe: "Class ID, slug, or name",
-            type: "string",
-            demandOption: true
-          });
+        return addJsonOption(
+          yargs
+            .option("assignment", {
+              alias: "a",
+              describe: "Assignment ID or slug",
+              type: "string",
+              demandOption: true
+            })
+            .option("class", {
+              alias: "c",
+              describe: "Class ID, slug, or name",
+              type: "string",
+              demandOption: true
+            })
+        );
       },
       async (args) => {
         try {
@@ -103,6 +106,8 @@ export const builder = (yargs: Argv) => {
             class: args.class as string,
             assignment: args.assignment as string
           });
+
+          if (emitJson(args, data)) return;
 
           logger.step(`Rubrics for assignment: ${data.assignment.title}`);
           logger.blank();

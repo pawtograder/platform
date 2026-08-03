@@ -5,7 +5,8 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
+import { resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { fetchRubricWithHierarchy, requireRubricTableDeleteOk } from "../utils/rubric.ts";
 import {
   indexAssignmentRubrics,
@@ -31,6 +32,7 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   const rubricTypes = [
@@ -170,19 +172,12 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
 
-  const validTypes = ["grading", "self_review", "meta"];
-  if (!validTypes.includes(rubricType)) {
-    throw new CLICommandError(`Invalid rubric type: ${rubricType}. Must be grading, self_review, or meta`);
-  }
-
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
-  let rubricId: number | null = null;
-  if (rubricType === "grading") rubricId = assignment.grading_rubric_id;
-  else if (rubricType === "self_review") rubricId = assignment.self_review_rubric_id;
-  else if (rubricType === "meta") rubricId = assignment.meta_grading_rubric_id;
+  const rubricId = resolveRubricIdForType(assignment, rubricType);
 
   if (!rubricId) {
     throw new CLICommandError(`No ${rubricType} rubric found for this assignment`);
@@ -255,13 +250,10 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
-  let targetRubricId: number | null = null;
-  if (rubricType === "grading") targetRubricId = assignment.grading_rubric_id;
-  else if (rubricType === "self_review") targetRubricId = assignment.self_review_rubric_id;
-  else if (rubricType === "meta") targetRubricId = assignment.meta_grading_rubric_id;
-  else throw new CLICommandError(`Invalid rubric type: ${rubricType}`);
+  const targetRubricId = resolveRubricIdForType(assignment, rubricType);
 
   if (!targetRubricId) {
     throw new CLICommandError(`No ${rubricType} rubric exists for this assignment. Create the rubric first.`);

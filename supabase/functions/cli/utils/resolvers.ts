@@ -71,6 +71,29 @@ export async function resolveAssignment(
   throw new CLICommandError(`Assignment not found: ${identifier} in class ${classId}`, 404);
 }
 
+/** The three rubric slots an assignment can carry. */
+export type RubricType = "grading" | "self_review" | "meta";
+
+export const RUBRIC_TYPES: RubricType[] = ["grading", "self_review", "meta"];
+
+/**
+ * Maps a rubric type onto the matching column on the assignment. Returns null
+ * when the assignment has no rubric in that slot, so callers can phrase their
+ * own error (create-the-rubric-first vs nothing-to-assign).
+ */
+export function resolveRubricIdForType(assignment: AssignmentRow, rubricType: string): number | null {
+  switch (rubricType) {
+    case "grading":
+      return assignment.grading_rubric_id;
+    case "self_review":
+      return assignment.self_review_rubric_id;
+    case "meta":
+      return assignment.meta_grading_rubric_id;
+    default:
+      throw new CLICommandError(`Invalid rubric type: ${rubricType}. Must be one of ${RUBRIC_TYPES.join(", ")}`, 400);
+  }
+}
+
 export async function resolveSurvey(
   supabase: SupabaseClient<Database>,
   classId: number,

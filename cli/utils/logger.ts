@@ -28,18 +28,11 @@ export const logger = {
   blank: () => console.log(),
 
   /** Raw output (no formatting) */
-  raw: (msg: string) => console.log(msg),
+  raw: (msg: string) => console.log(msg)
 
-  /** Table header */
-  tableHeader: (columns: string[]) => {
-    console.log(`\n   ${columns.join("\t")}`);
-    console.log(`   ${columns.map((c) => "-".repeat(c.length)).join("\t")}`);
-  },
-
-  /** Table row */
-  tableRow: (values: (string | number | null | undefined)[]) => {
-    console.log(`   ${values.map((v) => v ?? "-").join("\t")}`);
-  }
+  // Tables live in ./output.ts (`printTable`), which pads columns to their
+  // widest cell. The tab-joined helpers that used to be here only lined up when
+  // every cell was shorter than a tab stop.
 };
 
 /**

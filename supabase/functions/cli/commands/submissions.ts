@@ -15,6 +15,7 @@ import type {
 } from "../types.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
 import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
 import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
@@ -56,24 +57,6 @@ interface SubmissionsExportParams {
   files_batch_index?: number;
   /** Raw submission ids from a prior meta section — used only for section=files. */
   submission_ids?: number[];
-}
-
-async function assertUserCanAccessClass(userId: string, classId: number): Promise<void> {
-  const supabase = getAdminClient();
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("class_id", classId)
-    .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  if (!data) {
-    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
-  }
 }
 
 async function fetchAssigneesForRubricPart(
@@ -231,7 +214,7 @@ async function runCommentsImportOrSync(ctx: MCPAuthContext, params: Record<strin
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
 
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const dryRun = p.dry_run === true;
   const payload = p.payload;
@@ -352,7 +335,7 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   if (p.author_profile_id && p.rubric_part_id) {
     throw new CLICommandError("Specify only one of author_profile_id or rubric_part_id");
@@ -459,7 +442,7 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const dryRun = p.dry_run === true;
   const overwrite = p.overwrite === true;
@@ -620,7 +603,7 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, params.class);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const allSubmissions = params.all_submissions === true;
   const withBinary = params.with_binary === true;
@@ -736,6 +719,116 @@ function normalizePatternList(raw: string[] | undefined): string[] {
   if (!raw) return [];
   return raw.map((p) => p.trim()).filter((p) => p.length > 0);
 }
+
+const SUBMISSIONS_LIST_PAGE = 1000;
+const SUBMISSIONS_LIST_DEFAULT_LIMIT = 1000;
+
+interface SubmissionsListParams {
+  class?: string | number;
+  assignment?: string | number;
+  limit?: number;
+  /** Include enrolled students who have no submission (activesubmissionid is null). */
+  include_non_submitters?: boolean;
+}
+
+/**
+ * submissions.list — the roster-plus-grades view the instructor submissions
+ * page renders.
+ *
+ * Two properties of `submissions_with_grades_for_assignment_nice` shape this
+ * handler (see supabase/migrations/20260716000000_roster_placeholder_flag.sql):
+ *
+ *   - It emits one row per *enrolled student*, not per submission. `id` is the
+ *     `user_roles.id`, so the submission is `activesubmissionid`. Members of a
+ *     group therefore produce several rows sharing one `activesubmissionid`;
+ *     we keep them all (one line per student is what an operator wants) and
+ *     report the distinct submission count separately.
+ *   - A student with no submission still gets a row, with a null
+ *     `activesubmissionid`. Those are excluded unless asked for, so the
+ *     default output lists work that exists.
+ *
+ * `is_placeholder` marks a manually created submission (`submitted_via =
+ * 'manual'`), which is unrelated to whether the student submitted.
+ */
+async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+  const p = params as unknown as SubmissionsListParams;
+  if (!p.class) throw new CLICommandError("class is required");
+  if (!p.assignment) throw new CLICommandError("assignment is required");
+
+  const limit =
+    p.limit === undefined || p.limit === null ? SUBMISSIONS_LIST_DEFAULT_LIMIT : Math.floor(Number(p.limit));
+  if (!Number.isFinite(limit) || limit < 1) {
+    throw new CLICommandError("limit must be a positive integer", 400);
+  }
+
+  const supabase = getAdminClient();
+  const classData = await resolveClass(supabase, p.class);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
+
+  const rows: Array<Record<string, unknown>> = [];
+  for (let offset = 0; rows.length < limit; offset += SUBMISSIONS_LIST_PAGE) {
+    const page = Math.min(SUBMISSIONS_LIST_PAGE, limit - rows.length);
+    let query = supabase
+      .from("submissions_with_grades_for_assignment_nice")
+      .select(
+        "id, activesubmissionid, ordinal, name, sortable_name, groupname, student_private_profile_id, " +
+          "sha, repository, autograder_score, total_score, tweak, released, tokens_consumed, hours, " +
+          "due_date, late_due_date, gradername, assignedgradername, completed_at, checkername, " +
+          "class_section_name, lab_section_name, is_placeholder, created_at"
+      )
+      .eq("class_id", classData.id)
+      .eq("assignment_id", assignment.id);
+
+    if (!p.include_non_submitters) {
+      query = query.not("activesubmissionid", "is", null);
+    }
+
+    const { data, error } = await query
+      .order("sortable_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + page - 1);
+
+    if (error) {
+      throw new CLICommandError(`Failed to list submissions: ${error.message}`, 500);
+    }
+
+    const batch = (data ?? []) as unknown as Array<Record<string, unknown>>;
+    rows.push(...batch);
+    if (batch.length < page) break;
+  }
+
+  const distinctSubmissions = new Set(
+    rows.map((r) => r.activesubmissionid).filter((id): id is number => typeof id === "number")
+  );
+
+  return {
+    success: true,
+    data: {
+      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      assignment: {
+        id: assignment.id,
+        slug: assignment.slug,
+        title: assignment.title,
+        due_date: assignment.due_date,
+        total_points: assignment.total_points
+      },
+      submissions: rows,
+      summary: {
+        rows: rows.length,
+        distinct_submissions: distinctSubmissions.size,
+        non_submitters: rows.filter((r) => r.activesubmissionid == null).length,
+        truncated: rows.length >= limit
+      }
+    }
+  };
+}
+
+registerCommand({
+  name: "submissions.list",
+  requiredScope: "cli:read",
+  handler: handleSubmissionsList
+});
 
 registerCommand({
   name: "submissions.comments.import",

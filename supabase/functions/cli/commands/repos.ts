@@ -8,6 +8,7 @@ import { getFileFromRepo } from "../../_shared/GitHubWrapper.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -20,24 +21,6 @@ import type {
 
 const PAGE_SIZE = 1000;
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
-
-async function assertUserCanAccessClass(userId: string, classId: number): Promise<void> {
-  const supabase = getAdminClient();
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("class_id", classId)
-    .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  if (!data) {
-    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
-  }
-}
 
 async function fetchRepositoriesForAssignment(assignmentId: number): Promise<ReposListRepositoryRow[]> {
   const supabase = getAdminClient();
@@ -160,7 +143,7 @@ async function handleReposList(ctx: MCPAuthContext, params: Record<string, unkno
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
   const repositories = await fetchRepositoriesForAssignment(assignment.id);
@@ -191,7 +174,7 @@ async function handleSyncGradeWorkflowContext(
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
   const templateRepo = assignment.template_repo?.trim();
@@ -245,7 +228,7 @@ async function handleCrossAssignmentCopyContext(
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const source = await resolveAssignment(supabase, classData.id, source_assignment);
   const target = await resolveAssignment(supabase, classData.id, target_assignment);

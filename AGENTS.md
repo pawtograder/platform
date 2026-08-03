@@ -64,13 +64,47 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
 
-### Operator CLI (`repos` maintenance)
+### Operator CLI
 
-The Pawtograder CLI (`npm run cli`) can list student assignment repositories and run **local** git/rsync workflows after fetching authorized metadata from the `cli` Edge Function. Requires **`pawtograder login`** (MCP API token with `cli:read`). Student repo writes use **SSH git on your machine**, not the Edge Function.
+`npm run cli -- <command>` (entry `cli/index.ts`) drives course operations through the `cli` Edge Function. Every command POSTs `{ command, params }` to that one function, which dispatches through the registry in `supabase/functions/cli/router.ts`.
+
+The same source ships to npm as [`@pawtograder/cli`](https://www.npmjs.com/package/@pawtograder/cli), so instructors can run `npx @pawtograder/cli <command>` without a checkout. See [`packages/cli/`](./packages/cli/) for the packaging and release process; `npm run cli:build` builds and smoke-tests the published bundle locally.
+
+Requires **`pawtograder login`** with an API token from Settings → API Tokens: `cli:read` for the read commands, `cli:write` for the ones that mutate. Point `--url` at the deployment's **API gateway origin** (`https://api.<hostname>`), not the web host — the web host serves the app, not the function.
+
+Read commands:
+
+| Command                                                               | Purpose                                                         |
+| --------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `classes list` / `classes show <id>`                                  | Classes visible to the token.                                   |
+| `assignments list` / `assignments show <id>`                          | Assignments in a class.                                         |
+| `submissions list -c <class> -a <assignment>`                         | Roster with active submission, autograder and total scores.     |
+| `reviews list -c <class> -a <assignment>`                             | Review assignments, with rubric parts and completion state.     |
+| `discussions list -c <class>`                                         | Discussion topics with thread, question, and unanswered counts. |
+| `help-requests list -c <class> [--status active]`                     | Office-hours help queue.                                        |
+| `rubrics list` / `rubrics export`                                     | Rubrics, and YAML export.                                       |
+| `flashcards list`                                                     | Flashcard decks.                                                |
+| `repos list -c <class> -a <assignment>`                               | Student repos + assignment summary (metadata only).             |
+| `submissions export` / `assessment export` / `assessment deanonymize` | Bulk data dumps (streaming NDJSON; PII-gated).                  |
+
+Every `list` command accepts `--json` for machine-readable output.
+
+Write commands:
+
+| Command                                                              | Purpose                                                           |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `assignments copy` / `assignments delete`                            | Copy an assignment between classes; delete one.                   |
+| `reviews assign -c <class> -a <assignment> --due-date <date>`        | Create review assignments, balanced round-robin over class staff. |
+| `help-requests close --id <id>`                                      | Close or resolve a help request (instructor only).                |
+| `rubrics import` / `flashcards copy` / `surveys copy`                | Import a rubric; copy decks or surveys between classes.           |
+| `submissions comments import\|sync` / `submissions artifacts import` | Batch comment and artifact ingestion.                             |
+
+`reviews assign` allocates round-robin across active graders and instructors, honoring `grading_conflicts` and never assigning someone their own submission. Pass `--by-part` to fan out per rubric part, or `--file <manifest.json>` to supply explicit `{assignee_profile_id, submission_id, rubric_part_id}` triples. `--dry-run` shows the plan without writing.
+
+Local git commands run **SSH git on your machine**, not in the Edge Function, and need a writable `--workdir`:
 
 | Command                                                                                                                      | Purpose                                                                      |
 | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `npm run cli -- repos list --class <id> --assignment <id>`                                                                   | List repos + assignment summary (metadata only).                             |
 | `npm run cli -- repos sync-grade-workflow --class <id> --assignment <id> --workdir <path>`                                   | Fetch context + sync `grade.yml` from handout to student repos.              |
 | `npm run cli -- repos copy-after-source-due --class <id> --source-assignment <id> --target-assignment <id> --workdir <path>` | After source due date, copy files from source repo to target repo per group. |
 

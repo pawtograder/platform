@@ -9,10 +9,11 @@
  *     constructs its own tokenizer using the same salt, so tokens for the
  *     same raw id agree across calls and can be joined on the analyst side.
  *   - First call: assessment.export.preamble emits manifest, students, and
- *     sections (the thin slice this file currently implements).
- *   - Subsequent calls (future tasks): assessment.export.assignment streams
- *     per-assignment rubric, autograder, scores, tests, hints; and
- *     assessment.export.gradebook streams gradebook columns + private cells.
+ *     sections.
+ *   - Subsequent calls: assessment.export.assignment streams per-assignment
+ *     rubric, autograder, scores, tests, hints; assessment.export.gradebook
+ *     streams gradebook columns + private cells; assessment.export.roster
+ *     backs `assessment deanonymize`.
  *
  * Identity modes:
  *   - "raw"    — emit real ids/emails/names. Requires confirm_pii: true.

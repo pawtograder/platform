@@ -38,7 +38,8 @@
     "lint": "next lint && prettier --check .",
     "format": "prettier --write .",
     "cli": "npx tsx cli/index.ts",
-    "cli:repos": "npm run cli -- repos"
+    "cli:repos": "npm run cli -- repos",
+    "cli:build": "npm --prefix packages/cli ci && npm --prefix packages/cli run build && npm --prefix packages/cli run smoke-test"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
