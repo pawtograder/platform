@@ -3,3 +3,5 @@ dist/
 
 # Tarballs left behind by `npm pack` during release checks.
 *.tgz
+# Copied from the repo root by build.mjs so npm packs it; not a second source of truth.
+LICENSE

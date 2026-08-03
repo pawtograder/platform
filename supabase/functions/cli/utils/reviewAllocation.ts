@@ -274,3 +274,81 @@ export function summarizeLoad(drafts: DraftAssignment[]): Array<{ assignee_profi
     .map(([assignee_profile_id, count]) => ({ assignee_profile_id, count }))
     .sort((a, b) => b.count - a.count || a.assignee_profile_id.localeCompare(b.assignee_profile_id));
 }
+
+/** An existing review assignment, flattened onto the rubric part it covers. */
+export interface ExistingAssignmentRow {
+  /** `review_assignments.id`. Several flattened rows can share one, under by-part grading. */
+  rowId: number;
+  assignee: string;
+  /** The submission the row points at, which may have been superseded. */
+  rawSubmissionId: number;
+  /** The current active submission for that student or group. */
+  activeSubmissionId: number;
+  rubricPartId: number | null;
+  dueDate: string;
+}
+
+export interface StaleRetargetPlan {
+  /** Coverage as it will read after repair, for seeding the allocator. */
+  existing: DraftAssignment[];
+  /** Repairs to submit, naming the stale submission id the RPC will retarget. */
+  retargetDrafts: DraftAssignment[];
+  /** Original deadlines to restore after the RPC rewrites them, by row id. */
+  staleDueDates: Map<number, string>;
+  /** Stale rows left alone because repairing them would collide. */
+  contestedRowIds: number[];
+}
+
+/**
+ * Decides which stale review assignments can be repointed at the current submission.
+ *
+ * The decision is per `review_assignments` row, not per rubric part, because
+ * `bulk_assign_reviews` retargets a whole row including all of its part links. Deciding
+ * per part let a row covering parts 1 and 2 queue a repair for part 2 while part 1 was
+ * skipped as contested — and the repair dragged part 1 along anyway, either duplicating
+ * the existing part-1 assignment or tripping the
+ * (assignee_profile_id, submission_review_id) uniqueness constraint and aborting the RPC.
+ *
+ * A contested row is left alone rather than repaired: with the same assignee the retarget
+ * collides, and with a different assignee two reviewers end up holding the same work.
+ * Neither is fixable from here — the redundant stale row wants deleting, which is
+ * `reviews clear`'s job — so it is reported instead.
+ */
+export function planStaleRetargets(rows: ExistingAssignmentRow[]): StaleRetargetPlan {
+  /** How many rows land on each (active submission, part) slot. */
+  const slotOccupants = new Map<string, number>();
+  const slotKey = (submissionId: number, rubricPartId: number | null) => `${submissionId}:${rubricPartId ?? "all"}`;
+  for (const row of rows) {
+    const slot = slotKey(row.activeSubmissionId, row.rubricPartId);
+    slotOccupants.set(slot, (slotOccupants.get(slot) ?? 0) + 1);
+  }
+
+  const contested = new Set<number>();
+  for (const row of rows) {
+    if (row.activeSubmissionId === row.rawSubmissionId) continue;
+    if ((slotOccupants.get(slotKey(row.activeSubmissionId, row.rubricPartId)) ?? 0) > 1) contested.add(row.rowId);
+  }
+
+  const existing: DraftAssignment[] = [];
+  const retargetDrafts: DraftAssignment[] = [];
+  const staleDueDates = new Map<number, string>();
+  for (const row of rows) {
+    // Coverage is recorded against the active submission either way: a repaired row will
+    // point there, and a contested one is already covered there by whatever contests it.
+    existing.push({
+      assignee_profile_id: row.assignee,
+      submission_id: row.activeSubmissionId,
+      rubric_part_id: row.rubricPartId
+    });
+    if (row.activeSubmissionId === row.rawSubmissionId || contested.has(row.rowId)) continue;
+
+    retargetDrafts.push({
+      assignee_profile_id: row.assignee,
+      submission_id: row.rawSubmissionId,
+      rubric_part_id: row.rubricPartId
+    });
+    staleDueDates.set(row.rowId, row.dueDate);
+  }
+
+  return { existing, retargetDrafts, staleDueDates, contestedRowIds: [...contested] };
+}

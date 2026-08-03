@@ -114,7 +114,18 @@ describe("resolveDueDate — rejections", () => {
   });
 
   it("rejects unparseable input with an actionable message", () => {
-    expect(() => resolveDueDate("next tuesday", NY)).toThrow(/Could not parse due date/);
+    expect(() => resolveDueDate("next tuesday", NY)).toThrow(/Could not parse date/);
+  });
+
+  it("rejects an out-of-range wall clock instead of rolling it over", () => {
+    // Date.UTC turned 25:00 into the next day at 01:00, storing a deadline the
+    // caller never asked for.
+    expect(() => resolveDueDate("2026-09-15T25:00", NY)).toThrow(/Invalid time of day/);
+    expect(() => resolveDueDate("2026-09-15T12:60", NY)).toThrow(/Invalid time of day/);
+    expect(() => resolveDueDate("2026-09-15T12:00:60", NY)).toThrow(/Invalid time of day/);
+    expect(() => resolveReleaseDate("2026-09-15T99:99", NY)).toThrow(/Invalid time of day/);
+    // The boundaries themselves stay valid.
+    expect(resolveDueDate("2026-09-15T23:59:59.999", NY)).toBe("2026-09-16T03:59:59.999Z");
   });
 
   it("rejects offset-less formats rather than reading them in the runtime's zone", () => {

@@ -15,8 +15,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *
  * Without this, `--class "%"` matches every class and `cs_500` matches `cs-500`,
  * so a command could silently run against a class the operator did not name.
+ *
+ * `*` is rejected rather than escaped. PostgREST accepts it as an alias for `%` in
+ * `like`/`ilike` and performs that substitution on the raw value, so it is a wildcard
+ * here too — and there is no escape for it: `\*` becomes `\%`, which matches a literal
+ * percent sign, not a literal asterisk. Since a literal `*` cannot be expressed through
+ * this operator at all, saying so beats searching for something else.
  */
 export function escapeLikePattern(value: string): string {
+  if (value.includes("*")) {
+    throw new CLICommandError(
+      `"${value}" cannot be used as a name search: PostgREST reads * as a wildcard and it cannot be escaped. ` +
+        "Pass an id, or a slug or name without an asterisk.",
+      400
+    );
+  }
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 

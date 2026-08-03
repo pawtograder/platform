@@ -252,6 +252,32 @@ function optionalId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * Whether an `id` field is present but not a usable id — `id: "123"`, `id: 123.5`,
+ * `id: 0`, `id: null`.
+ *
+ * `optionalId` folds those into "absent", which is not harmless: import then treats the
+ * row as new and deletes the row whose id the operator was trying to preserve, taking
+ * its grading comments with it on an ungraded rubric and failing the whole import on a
+ * graded one. Validation rejects them instead, so a typo cannot silently change row
+ * identity.
+ */
+function isMalformedId(value: unknown): boolean {
+  if (value === undefined) return false;
+  return optionalId(value) === undefined;
+}
+
+/** Records an error when an `id` field is present but unusable. */
+function checkOptionalId(value: unknown, path: string, errors: YamlIssue[]): void {
+  if (!isMalformedId(value)) return;
+  errors.push({
+    path: `${path}.id`,
+    message:
+      `id must be a positive integer naming an existing row (got ${JSON.stringify(value)}). ` +
+      "Omit id entirely to create the row as new."
+  });
+}
+
 function byOrdinal<T extends { ordinal: number }>(rows: T[]): T[] {
   return [...rows].sort((a, b) => a.ordinal - b.ordinal);
 }
@@ -395,7 +421,13 @@ export function validateRubricYaml(input: unknown): ValidateResult {
     warnings.push({ path: "parts", message: "parts is empty; every existing part will be removed" });
   }
 
+  // Rubric-scoped, not per-parent. `update_rubric_full` keys rows by id, so the same
+  // criteria id under two parts (or the same check id under two criteria) is one
+  // database row updated and moved twice, ending up attached only to whichever parent
+  // was processed last while children from both YAML locations were applied to it.
   const seenPartIds = new Set<number>();
+  const seenCriteriaIds = new Set<number>();
+  const seenCheckIds = new Set<number>();
   input.parts.forEach((rawPart, partIdx) => {
     const partPath = `parts[${partIdx}]`;
     if (!isPlainObject(rawPart)) {
@@ -405,6 +437,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
     if (typeof rawPart.name !== "string" || rawPart.name.trim() === "") {
       errors.push({ path: `${partPath}.name`, message: "part name is required" });
     }
+    checkOptionalId(rawPart.id, partPath, errors);
     const partId = optionalId(rawPart.id);
     if (partId !== undefined) {
       if (seenPartIds.has(partId)) {
@@ -427,7 +460,6 @@ export function validateRubricYaml(input: unknown): ValidateResult {
       return;
     }
 
-    const seenCriteriaIds = new Set<number>();
     rawPart.criteria.forEach((rawCriteria, critIdx) => {
       const critPath = `${partPath}.criteria[${critIdx}]`;
       if (!isPlainObject(rawCriteria)) {
@@ -437,10 +469,14 @@ export function validateRubricYaml(input: unknown): ValidateResult {
       if (typeof rawCriteria.name !== "string" || rawCriteria.name.trim() === "") {
         errors.push({ path: `${critPath}.name`, message: "criteria name is required" });
       }
+      checkOptionalId(rawCriteria.id, critPath, errors);
       const critId = optionalId(rawCriteria.id);
       if (critId !== undefined) {
         if (seenCriteriaIds.has(critId)) {
-          errors.push({ path: `${critPath}.id`, message: `duplicate criteria id ${critId}` });
+          errors.push({
+            path: `${critPath}.id`,
+            message: `duplicate criteria id ${critId} in this document; remove the id from the copy so it is created as new`
+          });
         }
         seenCriteriaIds.add(critId);
       }
@@ -465,7 +501,6 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         return;
       }
 
-      const seenCheckIds = new Set<number>();
       rawCriteria.checks.forEach((rawCheck, checkIdx) => {
         const checkPath = `${critPath}.checks[${checkIdx}]`;
         if (!isPlainObject(rawCheck)) {
@@ -475,6 +510,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         if (typeof rawCheck.name !== "string" || rawCheck.name.trim() === "") {
           errors.push({ path: `${checkPath}.name`, message: "check name is required" });
         }
+        checkOptionalId(rawCheck.id, checkPath, errors);
         const checkId = optionalId(rawCheck.id);
         if (checkId !== undefined) {
           if (seenCheckIds.has(checkId)) {

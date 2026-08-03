@@ -349,6 +349,74 @@ describe("validateRubricYaml", () => {
     expect(validateRubricYaml(legacy).ok).toBe(true);
   });
 
+  it("rejects an id that is supplied but malformed, rather than treating it as absent", () => {
+    // Folding these into "absent" made import create the row as new and delete the row
+    // whose id the operator meant to keep.
+    for (const badId of ["123", 123.5, 0, -1, null, true] as unknown[]) {
+      const doc = {
+        name: "r",
+        parts: [{ name: "p", id: badId, criteria: [{ name: "c", checks: [{ name: "k" }] }] }]
+      };
+      const result = validateRubricYaml(doc);
+      expect(result.ok).toBe(false);
+      expect(result.ok ? [] : result.errors.map((e) => e.path)).toContain("parts[0].id");
+    }
+  });
+
+  it("rejects malformed ids at criteria and check level too", () => {
+    const doc = {
+      name: "r",
+      parts: [{ name: "p", criteria: [{ name: "c", id: "5", checks: [{ name: "k", id: 1.5 }] }] }]
+    };
+    const result = validateRubricYaml(doc);
+    expect(result.ok).toBe(false);
+    const paths = result.ok ? [] : result.errors.map((e) => e.path);
+    expect(paths).toContain("parts[0].criteria[0].id");
+    expect(paths).toContain("parts[0].criteria[0].checks[0].id");
+  });
+
+  it("treats an omitted id as new without complaint", () => {
+    expect(validateRubricYaml(ok).ok).toBe(true);
+    const explicitUndefined = {
+      name: "r",
+      parts: [{ name: "p", id: undefined, criteria: [{ name: "c", checks: [{ name: "k" }] }] }]
+    };
+    expect(validateRubricYaml(explicitUndefined).ok).toBe(true);
+  });
+
+  it("rejects a duplicate criteria id across different parts", () => {
+    // The RPC keys rows by id, so one row would be updated and moved twice, surviving
+    // only under whichever part came last.
+    const doc = {
+      name: "r",
+      parts: [
+        { name: "p1", criteria: [{ name: "c", id: 7, checks: [{ name: "k" }] }] },
+        { name: "p2", criteria: [{ name: "c copy", id: 7, checks: [{ name: "k" }] }] }
+      ]
+    };
+    const result = validateRubricYaml(doc);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.errors.map((e) => e.message).join(" ")).toMatch(/duplicate criteria id 7/);
+  });
+
+  it("rejects a duplicate check id across different criteria", () => {
+    const doc = {
+      name: "r",
+      parts: [
+        {
+          name: "p",
+          criteria: [
+            { name: "c1", checks: [{ name: "k", id: 9 }] },
+            { name: "c2", checks: [{ name: "k copy", id: 9 }] }
+          ]
+        }
+      ]
+    };
+    const result = validateRubricYaml(doc);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.errors.map((e) => e.message).join(" ")).toMatch(/duplicate check id 9/);
+  });
+
   it("rejects each bad enum by field path", () => {
     const bad = validateRubricYaml({
       name: "r",

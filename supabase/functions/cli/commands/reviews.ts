@@ -25,8 +25,10 @@ import {
   allocateRoundRobin,
   buildActiveSubmissionIndex,
   findCoverageConflicts,
+  planStaleRetargets,
   summarizeLoad,
-  type DraftAssignment
+  type DraftAssignment,
+  type ExistingAssignmentRow
 } from "../utils/reviewAllocation.ts";
 import { resolveDueDate } from "../utils/zonedDate.ts";
 import { pageAll, UUID_IN_BATCH_SIZE } from "../utils/paging.ts";
@@ -446,6 +448,38 @@ async function loadExistingCoverage(
  * `ctx.supabase` (the short-lived per-user client) rather than the service-role
  * admin client used for the read queries below.
  */
+/** Attempts a deadline restore this many times before giving up. */
+const DEADLINE_RESTORE_ATTEMPTS = 3;
+
+/**
+ * Restores `due_date` on a batch of review assignments, retrying transient failures.
+ * Returns the last error message, or null on success.
+ */
+async function updateWithRetry(
+  supabase: ReturnType<typeof getAdminClient>,
+  ids: number[],
+  dueDate: string
+): Promise<string | null> {
+  let lastError = "unknown error";
+  for (let attempt = 1; attempt <= DEADLINE_RESTORE_ATTEMPTS; attempt++) {
+    const { error } = await supabase.from("review_assignments").update({ due_date: dueDate }).in("id", ids);
+    if (!error) return null;
+    lastError = error.message;
+    if (attempt < DEADLINE_RESTORE_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+  }
+  return lastError;
+}
+
+/**
+ * The row-id-to-deadline mapping an operator needs to finish the restore by hand.
+ * Truncated, since the message goes into an error string.
+ */
+function describeDeadlineRestore(deadlines: ReadonlyMap<number, string>): string {
+  const entries = [...deadlines].map(([id, dueDate]) => `${id}=${dueDate}`);
+  const shown = entries.slice(0, 25).join(", ");
+  return entries.length > 25 ? `${shown}, and ${entries.length - 25} more` : shown;
+}
+
 async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as ReviewsAssignParams;
   if (!p.class) throw new CLICommandError("class is required");
@@ -524,14 +558,14 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     const submissionIds = [...new Set(drafts.map((d) => d.submission_id))];
     // Batched: an `.in()` of more than max_rows ids would come back truncated and
     // report perfectly good submissions as not belonging to the assignment.
-    const validSubmissions: Array<{ id: number }> = [];
+    const validSubmissions: Array<{ id: number; is_active: boolean }> = [];
     for (let i = 0; i < submissionIds.length; i += 500) {
       const batch = submissionIds.slice(i, i + 500);
-      const rows = await pageAll<{ id: number }>(
+      const rows = await pageAll<{ id: number; is_active: boolean }>(
         () =>
           supabase
             .from("submissions")
-            .select("id")
+            .select("id, is_active")
             .eq("assignment_id", assignment.id)
             .in("id", batch)
             .order("id", { ascending: true }),
@@ -545,6 +579,21 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     if (badSubmissions.length > 0) {
       throw new CLICommandError(
         `These submission ids do not belong to assignment ${assignment.id}: ${badSubmissions.join(", ")}`,
+        400
+      );
+    }
+
+    // Membership in the assignment is not enough. The round-robin path selects only
+    // active submissions, and so does the web assign modal, so accepting a superseded
+    // one here was the single way to hand a grader work on a submission the student has
+    // already replaced. Internally generated retarget repairs do deliberately name the
+    // stale id, but they are built on the other branch and never reach this check.
+    const supersededSubmissions = validSubmissions.filter((sub) => !sub.is_active).map((sub) => sub.id);
+    if (supersededSubmissions.length > 0) {
+      throw new CLICommandError(
+        `These submissions have been superseded by a newer active submission and cannot be assigned: ` +
+          `${supersededSubmissions.join(", ")}. Use the current submission id, or omit --file to let ` +
+          "the command pick active submissions and repair stale assignments.",
         400
       );
     }
@@ -734,71 +783,31 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     // captured here and restored after the write.
     const staleDueDates = new Map<number, string>();
 
-    // First pass: flatten every row onto the active submission, remembering which
-    // rows are stale and how many rows land on each active slot.
-    interface FlatRow {
-      rowId: number;
-      assignee: string;
-      rawSubmissionId: number;
-      activeSubmissionId: number;
-      rubricPartId: number | null;
-      dueDate: string;
-      isStale: boolean;
-    }
-    const flat: FlatRow[] = [];
-    const slotOccupants = new Map<string, number>();
+    // Flatten every existing assignment onto the rubric part it covers, then let
+    // planStaleRetargets decide which stale rows can be repointed. That decision is
+    // per row rather than per part; the reasoning lives with the function.
+    const flat: ExistingAssignmentRow[] = [];
     for (const row of existingRows) {
       const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
-      const rawSubmissionId = row.submission_id as number;
-      const activeSubmissionId = toActiveSubmissionId(row);
       const partIds: Array<number | null> = parts.length === 0 ? [null] : parts.map((part) => part.rubric_part_id);
       for (const rubricPartId of partIds) {
         flat.push({
           rowId: row.id as number,
           assignee: row.assignee_profile_id as string,
-          rawSubmissionId,
-          activeSubmissionId,
+          rawSubmissionId: row.submission_id as number,
+          activeSubmissionId: toActiveSubmissionId(row),
           rubricPartId,
-          dueDate: row.due_date as string,
-          isStale: activeSubmissionId !== rawSubmissionId
+          dueDate: row.due_date as string
         });
-        const slot = `${activeSubmissionId}:${rubricPartId ?? "all"}`;
-        slotOccupants.set(slot, (slotOccupants.get(slot) ?? 0) + 1);
       }
     }
 
-    // Second pass: build coverage, and queue a repair only where the stale row is
-    // the *sole* claim on its active slot.
-    //
-    // When an assignment for the replacement submission already exists, repairing
-    // is wrong in both directions: with the same assignee the retarget collides
-    // with that row on (assignee_profile_id, submission_review_id) and aborts the
-    // whole RPC, and with a different assignee it leaves two reviewers holding the
-    // same work. Neither is repairable from here — the redundant stale row wants
-    // deleting, which is `reviews clear`'s job — so it is reported instead.
-    let staleCollisions = 0;
-    for (const entry of flat) {
-      existing.push({
-        assignee_profile_id: entry.assignee,
-        submission_id: entry.activeSubmissionId,
-        rubric_part_id: entry.rubricPartId
-      });
-      if (!entry.isStale) continue;
-
-      const slot = `${entry.activeSubmissionId}:${entry.rubricPartId ?? "all"}`;
-      if ((slotOccupants.get(slot) ?? 0) > 1) {
-        staleCollisions++;
-        continue;
-      }
-
-      retargetDrafts.push({
-        assignee_profile_id: entry.assignee,
-        submission_id: entry.rawSubmissionId,
-        rubric_part_id: entry.rubricPartId
-      });
-      staleDueDates.set(entry.rowId, entry.dueDate);
-    }
-    staleCollisionCount = staleCollisions;
+    const plan = planStaleRetargets(flat);
+    existing.push(...plan.existing);
+    retargetDrafts.push(...plan.retargetDrafts);
+    for (const [rowId, dueDate] of plan.staleDueDates) staleDueDates.set(rowId, dueDate);
+    // Counted in rows, which is what the operator has to go and clear.
+    staleCollisionCount = plan.contestedRowIds.length;
 
     const excludedBySubmission = await buildConflictExclusions(supabase, classData.id, submissions);
 
@@ -842,6 +851,17 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
   }
 
   if (drafts.length === 0) {
+    // An empty plan has two very different causes, and reporting both as success made
+    // automation treat a grading round that assigned nobody as a completed one.
+    const blocked = allocation?.unassignable ?? [];
+    if (blocked.length > 0) {
+      throw new CLICommandError(
+        `No review assignments could be created: ${blocked.length} slot(s) had no eligible reviewer. ` +
+          "Grading conflicts or self-review exclusions ruled out every member of the pool. " +
+          "Widen --grader, or resolve the conflicts, and run again.",
+        409
+      );
+    }
     return {
       success: true,
       data: {
@@ -895,13 +915,18 @@ async function handleReviewsAssign(ctx: MCPAuthContext, params: Record<string, u
     }
     for (const [dueDate, ids] of idsByDueDate) {
       for (let i = 0; i < ids.length; i += 500) {
-        const { error: restoreError } = await supabase
-          .from("review_assignments")
-          .update({ due_date: dueDate })
-          .in("id", ids.slice(i, i + 500));
+        const batch = ids.slice(i, i + 500);
+        // Retried, because this write cannot be replayed by re-running the command:
+        // the RPC has already committed the retarget, so those rows no longer look
+        // stale and a second run will not revisit them. A transient error here is the
+        // one case where giving up loses data the operator cannot recover.
+        const restoreError = await updateWithRetry(supabase, batch, dueDate);
         if (restoreError) {
           throw new CLICommandError(
-            `Assignments were written, but restoring the original deadline on repaired rows failed: ${restoreError.message}`,
+            "Assignments were written, but restoring the original deadline on repaired rows failed after " +
+              `${DEADLINE_RESTORE_ATTEMPTS} attempts: ${restoreError}. Re-running will not retry them, ` +
+              "because the retarget is already committed and those rows are no longer stale. Restore by hand: " +
+              describeDeadlineRestore(deadlinesToRestore),
             500
           );
         }

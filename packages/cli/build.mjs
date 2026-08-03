@@ -17,7 +17,7 @@
  */
 
 import { build } from "esbuild";
-import { chmod, readFile } from "node:fs/promises";
+import { chmod, copyFile, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,5 +53,10 @@ await build({
 // npm sets the bin bit on install, but a locally built file should be runnable
 // directly too (and `npm pack` preserves the mode).
 await chmod(outfile, 0o755);
+
+// The package declares GPL-3.0-only, but npm packs only the package directory, so the
+// repo-root LICENSE was outside the tarball and every release shipped the licence terms
+// nowhere. Copied at build time rather than duplicated in git, so the two cannot drift.
+await copyFile(resolve(repoRoot, "LICENSE"), resolve(here, "LICENSE"));
 
 console.log(`built ${outfile} (v${pkg.version})`);

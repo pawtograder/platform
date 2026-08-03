@@ -11,6 +11,13 @@ import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse } from "../types.ts";
 
+/**
+ * Assignment ids per `.in()` batch. Numeric ids cost ~8 bytes in the query string, so
+ * this keeps the filter well inside the URL limit while staying under `max_rows` for
+ * the response — one id resolves to at most one row here.
+ */
+const ASSIGNMENT_ID_BATCH_SIZE = 500;
+
 const THREAD_PAGE = 1000;
 
 interface DiscussionsListParams {
@@ -109,18 +116,19 @@ async function handleDiscussionsList(ctx: MCPAuthContext, params: Record<string,
 
   const counts = await fetchTopicCounts(supabase, classData.id);
 
-  // Resolve linked assignment slugs in one query rather than per topic.
+  // Resolve linked assignment slugs in batches rather than per topic. One `.in()` over
+  // every collected id was capped two ways: the response silently truncates at
+  // `max_rows`, leaving later topics with a null slug, and a long enough id list
+  // overruns the URL limit and fails the whole command.
   const assignmentIds = [...new Set(topics.map((t) => t.assignment_id).filter((id): id is number => id != null))];
   const assignmentSlugs = new Map<number, string>();
-  if (assignmentIds.length > 0) {
-    const { data: assignments, error: assignmentError } = await supabase
-      .from("assignments")
-      .select("id, slug")
-      .in("id", assignmentIds);
-    if (assignmentError) {
-      throw new CLICommandError(`Failed to resolve linked assignments: ${assignmentError.message}`, 500);
-    }
-    for (const a of assignments ?? []) {
+  for (let i = 0; i < assignmentIds.length; i += ASSIGNMENT_ID_BATCH_SIZE) {
+    const batch = assignmentIds.slice(i, i + ASSIGNMENT_ID_BATCH_SIZE);
+    const assignments = await pageAll<{ id: number; slug: string | null }>(
+      () => supabase.from("assignments").select("id, slug").in("id", batch).order("id", { ascending: true }),
+      "Failed to resolve linked assignments"
+    );
+    for (const a of assignments) {
       if (a.slug) assignmentSlugs.set(a.id, a.slug);
     }
   }

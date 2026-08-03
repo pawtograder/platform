@@ -18,8 +18,10 @@ import {
   allocateRoundRobin,
   buildActiveSubmissionIndex,
   findCoverageConflicts,
+  planStaleRetargets,
   summarizeLoad,
-  type DraftAssignment
+  type DraftAssignment,
+  type ExistingAssignmentRow
 } from "../../supabase/functions/cli/utils/reviewAllocation";
 
 const GRADER_A = "aaaaaaaa-0000-0000-0000-000000000001";
@@ -394,5 +396,89 @@ describe("findCoverageConflicts", () => {
   it("reports each conflicting submission once, not once per row", () => {
     const conflicts = findCoverageConflicts([whole(GRADER_A, 1), part(GRADER_A, 1, 100), part(GRADER_A, 1, 200)], []);
     expect(conflicts).toHaveLength(1);
+  });
+});
+
+describe("planStaleRetargets", () => {
+  const row = (over: Partial<ExistingAssignmentRow>): ExistingAssignmentRow => ({
+    rowId: 1,
+    assignee: "ta-1",
+    rawSubmissionId: 100,
+    activeSubmissionId: 100,
+    rubricPartId: null,
+    dueDate: "2026-03-01T05:00:00Z",
+    ...over
+  });
+
+  it("repairs a stale row whose active slot nobody else claims", () => {
+    const plan = planStaleRetargets([row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200 })]);
+    // The draft names the *stale* id, which is what makes the RPC retarget that row.
+    expect(plan.retargetDrafts).toEqual([{ assignee_profile_id: "ta-1", submission_id: 100, rubric_part_id: null }]);
+    // Coverage is recorded against the active submission, so the allocator does not
+    // hand the same work out again.
+    expect(plan.existing).toEqual([{ assignee_profile_id: "ta-1", submission_id: 200, rubric_part_id: null }]);
+    expect(plan.staleDueDates.get(1)).toBe("2026-03-01T05:00:00Z");
+    expect(plan.contestedRowIds).toEqual([]);
+  });
+
+  it("leaves a row alone when the active submission is already assigned", () => {
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200 }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200 })
+    ]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds).toEqual([1]);
+    expect(plan.staleDueDates.size).toBe(0);
+  });
+
+  it("suppresses the whole row when only one of its parts is contested", () => {
+    // The bug this guards: deciding per part queued a repair for part 2 while
+    // skipping part 1, and the RPC retargets whole rows — so part 1 moved anyway and
+    // collided with row 2.
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 1 }),
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 2 }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: 1 })
+    ]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds).toEqual([1]);
+  });
+
+  it("repairs every part of a row when none of them is contested", () => {
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 1 }),
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 2 })
+    ]);
+    expect(plan.retargetDrafts).toHaveLength(2);
+    expect(plan.retargetDrafts.map((d) => d.rubric_part_id)).toEqual([1, 2]);
+    // One row, so one deadline to restore however many parts it covers.
+    expect(plan.staleDueDates.size).toBe(1);
+  });
+
+  it("suppresses both rows when two stale rows target the same active slot", () => {
+    // Repairing either would collide with the other.
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 300 }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 300 })
+    ]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds.sort()).toEqual([1, 2]);
+  });
+
+  it("counts contested rows once however many parts they cover", () => {
+    const plan = planStaleRetargets([
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 1 }),
+      row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 200, rubricPartId: 2 }),
+      row({ rowId: 2, assignee: "ta-2", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: 1 }),
+      row({ rowId: 3, assignee: "ta-3", rawSubmissionId: 200, activeSubmissionId: 200, rubricPartId: 2 })
+    ]);
+    expect(plan.contestedRowIds).toEqual([1]);
+  });
+
+  it("passes through rows that are not stale, without repairing anything", () => {
+    const plan = planStaleRetargets([row({ rowId: 1, rawSubmissionId: 100, activeSubmissionId: 100 })]);
+    expect(plan.retargetDrafts).toEqual([]);
+    expect(plan.contestedRowIds).toEqual([]);
+    expect(plan.existing).toEqual([{ assignee_profile_id: "ta-1", submission_id: 100, rubric_part_id: null }]);
   });
 });

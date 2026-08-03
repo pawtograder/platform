@@ -11,7 +11,7 @@ import * as fs from "fs";
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
-import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel, truncate } from "@/cli/utils/output";
+import { addJsonOption, emitJson, printTable, formatDateTime, formatZoneLabel, truncate } from "@/cli/utils/output";
 import { normalizeDate } from "@/cli/utils/schedule";
 
 export const command = "reviews <action>";
@@ -116,11 +116,14 @@ export const builder = (yargs: Argv) => {
               (r.assignee_name as string | null) ?? (r.assignee_profile_id as string),
               r.submission_id as number,
               truncate((r.rubric_part_names as string[]).join(", ") || "(whole rubric)", 32),
-              formatDate(r.due_date as string | null, tz),
+              // Date *and* time: --due-date takes a wall-clock time or an explicit
+              // offset, so a date alone made 09:00 and 17:00 deadlines identical in
+              // this table and sent the operator to --json to see what they had set.
+              formatDateTime(r.due_date as string | null, tz),
               // The composite rule: the assignment itself, or the linked review
               // completed by this assignee. Matching the web reviews table.
               r.review_completed_by_assignee
-                ? formatDate((r.completed_at as string | null) ?? (r.review_completed_at as string | null), tz)
+                ? formatDateTime((r.completed_at as string | null) ?? (r.review_completed_at as string | null), tz)
                 : "-",
               r.review_total_score as number | null
             ])

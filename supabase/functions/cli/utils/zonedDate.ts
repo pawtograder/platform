@@ -104,6 +104,20 @@ function assertRealCalendarDate(year: number, month: number, day: number, raw: s
 }
 
 /**
+ * Rejects an out-of-range wall clock such as `25:00` or `12:60`.
+ *
+ * The date-time pattern matches any two digits per field, and `Date.UTC` rolls a
+ * too-large field into the next hour or day rather than failing — so `2026-09-15T25:00`
+ * became the 16th at 01:00 and a deadline was stored that nobody asked for. Leap
+ * seconds are not accepted (`60` seconds), matching `Date`.
+ */
+function assertRealWallClock(hour: number, minute: number, second: number, ms: number, raw: string): void {
+  if (hour > 23 || minute > 59 || second > 59 || ms > 999) {
+    throw new ZonedDateError(`Invalid time of day in ${raw}. Hours are 00-23, minutes and seconds 00-59.`);
+  }
+}
+
+/**
  * Which end of the day a bare `YYYY-MM-DD` means.
  *
  * A deadline reads as "by the end of the 15th"; a release date reads as "from the
@@ -128,7 +142,7 @@ export function resolveZonedTimestamp(
   dateOnly: DateOnlyBoundary
 ): string {
   const raw = input.trim();
-  if (raw === "") throw new ZonedDateError("due date is empty");
+  if (raw === "") throw new ZonedDateError("date is empty");
 
   const zone = timeZone && timeZone.trim() !== "" ? timeZone : "UTC";
 
@@ -156,17 +170,11 @@ export function resolveZonedTimestamp(
   if (localDateTime) {
     const [, y, m, d, hh, mm, ss, frac] = localDateTime;
     assertRealCalendarDate(Number(y), Number(m), Number(d), raw);
-    const instant = utcFromWallClock(
-      Number(y),
-      Number(m),
-      Number(d),
-      Number(hh),
-      Number(mm),
-      ss === undefined ? 0 : Number(ss),
-      // "5" means 500ms, not 5ms — pad before parsing.
-      frac === undefined ? 0 : Number(frac.padEnd(3, "0")),
-      zone
-    );
+    const second = ss === undefined ? 0 : Number(ss);
+    // "5" means 500ms, not 5ms — pad before parsing.
+    const ms = frac === undefined ? 0 : Number(frac.padEnd(3, "0"));
+    assertRealWallClock(Number(hh), Number(mm), second, ms, raw);
+    const instant = utcFromWallClock(Number(y), Number(m), Number(d), Number(hh), Number(mm), second, ms, zone);
     if (Number.isNaN(instant.getTime())) throw new ZonedDateError(`Invalid date: ${raw}`);
     return instant.toISOString();
   }
@@ -179,7 +187,7 @@ export function resolveZonedTimestamp(
   // the wrong zone.
   if (!HAS_OFFSET_RE.test(raw)) {
     throw new ZonedDateError(
-      `Could not parse due date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
+      `Could not parse date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
         "or a timestamp with an explicit offset such as 2026-09-15T17:00:00-04:00."
     );
   }
@@ -196,7 +204,7 @@ export function resolveZonedTimestamp(
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     throw new ZonedDateError(
-      `Could not parse due date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
+      `Could not parse date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
         "or a timestamp with an explicit offset."
     );
   }

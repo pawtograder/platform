@@ -33,6 +33,17 @@ function check(name, condition, detail = "") {
 
 console.log(`smoke-testing ${bin}`);
 
+// The package declares GPL-3.0-only. npm packs only this directory, so the repo-root
+// LICENSE has to be copied in by the build; asserting on `npm pack` output rather than
+// on the file's presence is what actually catches a release that omits it.
+const packed = JSON.parse((await run("npm", ["pack", "--dry-run", "--json"], { cwd: here })).stdout);
+const packedFiles = (packed[0]?.files ?? []).map((f) => f.path);
+check("packs the LICENSE alongside the binary", packedFiles.includes("LICENSE"), packedFiles.join(", "));
+check(
+  "the packed LICENSE states the GPL terms",
+  (await readFile(resolve(here, "LICENSE"), "utf8")).includes("GNU General Public License")
+);
+
 const bundle = await readFile(bin, "utf8");
 check("starts with a node shebang", bundle.startsWith("#!/usr/bin/env node"));
 check(
