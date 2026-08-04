@@ -680,6 +680,26 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         checkBoolean(rawCheck.is_required, checkPath, "is_required", errors);
         checkInteger(rawCheck.max_annotations, checkPath, "max_annotations", errors, "it is stored as an integer");
 
+        // Guarded like `criteria` and `checks` are. The importer does
+        // `for (const ref of check.references ?? [])`, so `references: 5` skipped the
+        // length check and threw a TypeError — a 500 where the operator should have got
+        // this function's 400 list — and a string iterated per character, silently
+        // degrading to "reference dropped" warnings.
+        if (rawCheck.references !== undefined && rawCheck.references !== null) {
+          if (!Array.isArray(rawCheck.references)) {
+            errors.push({ path: `${checkPath}.references`, message: "references must be an array" });
+          } else {
+            rawCheck.references.forEach((rawRef, refIdx) => {
+              if (!isPlainObject(rawRef)) {
+                errors.push({
+                  path: `${checkPath}.references[${refIdx}]`,
+                  message: "reference must be an object with review_round/part/criterion/check, or id"
+                });
+              }
+            });
+          }
+        }
+
         if (rawCheck.points !== undefined && rawCheck.points !== null) {
           // Number.isFinite, not just !isNaN: YAML has literal forms for infinity
           // (`.inf`, and any overflowing literal such as `1e999`). JSON has no way to
@@ -883,6 +903,7 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
   const seenParts = new Set<number>();
   const seenCriteria = new Set<number>();
   const seenChecks = new Set<number>();
+  /** An existing criterion's total_points / is_additive / is_deduction_only changed. */
 
   for (const part of payload.parts) {
     if (part.id !== undefined && ownedParts.has(part.id)) {

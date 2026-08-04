@@ -381,11 +381,16 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
   if (existingCheckIds.length > 0) {
     for (let i = 0; i < existingCheckIds.length; i += 500) {
       const batch = existingCheckIds.slice(i, i + 500);
-      // Paged. One check can reference several others, so 500 checks can produce well
-      // over `max_rows` reference rows; an unpaged read came back truncated with no
-      // error, and this is the set that decides which stored references survive the
-      // import — a missing entry here makes the RPC delete a working reference.
-      const refRows = await pageAll<{ referencing_rubric_check_id: number; referenced_rubric_check_id: number }>(
+      // Paged within the batch. A check may own several references, so 500 checks can
+      // return well past `max_rows` rows — and this map is what preserves references
+      // whose YAML form failed to resolve. A truncated read would look like "that
+      // check has no saved references", and update_rubric_full treats the payload as
+      // the desired set, so an unrelated typo elsewhere in the file would delete
+      // dependencies that were never mentioned.
+      const refRows = await pageAll<{
+        referencing_rubric_check_id: number;
+        referenced_rubric_check_id: number;
+      }>(
         () =>
           supabase
             .from("rubric_check_references")
@@ -394,7 +399,7 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
             .order("id", { ascending: true }),
         "Failed to load existing references"
       );
-      for (const row of refRows ?? []) {
+      for (const row of refRows) {
         const list = persistedRefsByCheckId.get(row.referencing_rubric_check_id) ?? [];
         list.push(row.referenced_rubric_check_id);
         persistedRefsByCheckId.set(row.referencing_rubric_check_id, list);

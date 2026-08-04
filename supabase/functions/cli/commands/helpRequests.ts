@@ -359,36 +359,45 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   // vanish from per-student help histories and the analytics built on them.
   // Best-effort, matching the UI, which does not block resolution on it.
   //
+  // Logged only on a real transition out of a nonterminal state. `--force` exists to
+  // correct an already-closed request, and `student_help_activity` has no uniqueness
+  // constraint on (help_request_id, student_profile_id, activity_type) — so each forced
+  // correction appended another `request_resolved` row, inflating the very per-student
+  // histories this block exists to keep honest.
+  //
   // Best-effort, but not silent. Discarding the errors here meant a permissions change or
   // a transient fault reported `activity_logged: 0` under `success: true`, and the client
   // prints nothing when that is 0 — so the history rows stopped being written with no
   // signal anywhere, and the analytics built on them grew a hole nobody could attribute.
   // The reason is returned so the operator can see it and re-run the backfill.
+  const wasAlreadyTerminal = TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status);
   let activityLogged = 0;
   let activityError: string | null = null;
-  try {
-    const { data: participants, error: participantsError } = await supabase
-      .from("help_request_students")
-      .select("profile_id")
-      .eq("help_request_id", id);
-    if (participantsError) throw new Error(participantsError.message);
+  if (!wasAlreadyTerminal) {
+    try {
+      const { data: participants, error: participantsError } = await supabase
+        .from("help_request_students")
+        .select("profile_id")
+        .eq("help_request_id", id);
+      if (participantsError) throw new Error(participantsError.message);
 
-    const rows = (participants ?? []).map((participant) => ({
-      student_profile_id: participant.profile_id,
-      class_id: existing.class_id,
-      help_request_id: id,
-      activity_type: "request_resolved" as const,
-      activity_description: `Request ${targetStatus} by instructor via CLI`
-    }));
+      const rows = (participants ?? []).map((participant) => ({
+        student_profile_id: participant.profile_id,
+        class_id: existing.class_id,
+        help_request_id: id,
+        activity_type: "request_resolved" as const,
+        activity_description: `Request ${targetStatus} by instructor via CLI`
+      }));
 
-    if (rows.length > 0) {
-      const { error: insertError } = await supabase.from("student_help_activity").insert(rows);
-      if (insertError) throw new Error(insertError.message);
-      activityLogged = rows.length;
+      if (rows.length > 0) {
+        const { error: insertError } = await supabase.from("student_help_activity").insert(rows);
+        if (insertError) throw new Error(insertError.message);
+        activityLogged = rows.length;
+      }
+    } catch (err) {
+      // Activity logging is not worth failing an otherwise successful close over.
+      activityError = err instanceof Error ? err.message : String(err);
     }
-  } catch (err) {
-    // Activity logging is not worth failing an otherwise successful close over.
-    activityError = err instanceof Error ? err.message : String(err);
   }
 
   return {
@@ -399,6 +408,11 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
       activity_logged: activityLogged,
       /** Why no per-student help-history rows were written, when that failed. */
       activity_error: activityError,
+      /**
+       * True when the request was already closed/resolved, so no activity row was
+       * added. Distinguishes a deliberate skip from a logging failure.
+       */
+      activity_skipped_already_terminal: wasAlreadyTerminal,
       /**
        * True when a Chime call is still up; no trigger tears it down. Read from
        * the updated row, not the pre-update one: a call that ended between the

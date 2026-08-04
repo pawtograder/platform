@@ -242,10 +242,26 @@ async function fetchAssigneesForRubricPart(
  * and compare. Without this a corrupt manifest uploaded truncated artifact bytes
  * and reported success.
  */
+/** Base64 with at least one data character, optional trailing padding, nothing else. */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
 function decodeBase64Strict(input: string): Uint8Array | null {
   if (typeof input !== "string" || input.length === 0) return null;
   const normalized = input.replace(/\s+/g, "");
+
+  // The grammar is checked before decoding. Padding-only input ("=", "====", or
+  // whitespace around one) slipped through the re-encode comparison below, because
+  // Buffer decodes it to zero bytes and stripping padding reduces both operands to the
+  // empty string — so `--overwrite` replaced a real artifact with an empty object and
+  // reported success. Requiring a data character also rules out the empty payload,
+  // which the length guard above already rejected in its unpadded form.
+  if (!BASE64_RE.test(normalized)) return null;
+  // 4n+1 is not a reachable length for base64; the re-encode check catches it too, but
+  // failing here says why.
+  if (normalized.replace(/=+$/, "").length % 4 === 1) return null;
+
   const buf = Buffer.from(normalized, "base64");
+  if (buf.length === 0) return null;
   // Re-encoding is canonical, so compare against the canonicalized input: strip
   // padding from both sides rather than requiring the caller to pad exactly.
   const reencoded = buf.toString("base64").replace(/=+$/, "");
@@ -642,13 +658,17 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    const { data: existing, error: existingErr } = await findExistingArtifacts(supabase, art.submission_id, art.name);
+    const { data: priorArtifacts, error: existingErr } = await findExistingArtifacts(
+      supabase,
+      art.submission_id,
+      art.name
+    );
     if (existingErr) {
       errors.push({ submission_id: art.submission_id, artifact_name: art.name, reason: existingErr });
       continue;
     }
 
-    if (existing.length > 0 && !overwrite) {
+    if (priorArtifacts.length > 0 && !overwrite) {
       skipped++;
       continue;
     }
@@ -702,8 +722,10 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     // reported rather than discarded: a failure leaves a duplicate row behind, and
     // silently swallowing it is how `--overwrite` used to appear to work while
     // leaving the storage object orphaned.
-    if (existing.length > 0 && overwrite) {
-      // Ordered comments → row → storage object, and it stops at the first failure.
+    if (priorArtifacts.length > 0 && overwrite) {
+      // Ordered comments → row → storage object, stopping at the first failure for a
+      // given row, and repeated for *every* prior row so a run that follows a failed
+      // cleanup reconciles the duplicate rather than adding to it.
       //
       // Deleting the object first was wrong in a way that compounds: a failed comment
       // delete leaves comments whose foreign key then blocks the row delete, so the old
@@ -716,30 +738,31 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       // delete and there is no unique index on (submission_id, name), an interrupted run
       // can leave duplicates behind; overwriting only the first would make `--overwrite`
       // a permanent no-op that adds a row each time it is invoked.
-      let cleanupFailed = false;
-      for (const prior of existing) {
-        const failCleanup = (reason: string) => {
-          cleanupFailed = true;
-          errors.push({
-            submission_id: art.submission_id,
-            artifact_name: art.name,
-            reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${prior.id} failed: ${reason}`
-          });
-        };
+      const failCleanup = (priorId: number, reason: string) => {
+        errors.push({
+          submission_id: art.submission_id,
+          artifact_name: art.name,
+          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${priorId} failed: ${reason}`
+        });
+      };
 
+      let cleanupFailed = false;
+      for (const prior of priorArtifacts) {
         const { error: commentsErr } = await supabase
           .from("submission_artifact_comments")
           .delete()
           .eq("submission_artifact_id", prior.id);
         if (commentsErr) {
-          failCleanup(commentsErr.message);
-          break;
+          failCleanup(prior.id, commentsErr.message);
+          cleanupFailed = true;
+          continue;
         }
 
         const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", prior.id);
         if (rowErr) {
-          failCleanup(rowErr.message);
-          break;
+          failCleanup(prior.id, rowErr.message);
+          cleanupFailed = true;
+          continue;
         }
 
         const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${prior.id}`;
@@ -747,12 +770,13 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
         if (objectErr) {
           // The row is gone, so nothing references this blob any more. Reported so the
           // orphan can be swept, but the data model is consistent.
-          failCleanup(`its storage object was left behind: ${objectErr.message}`);
-          break;
+          failCleanup(prior.id, `its storage object was left behind: ${objectErr.message}`);
+          cleanupFailed = true;
         }
       }
 
-      if (!cleanupFailed) overwritten++;
+      if (cleanupFailed) continue;
+      overwritten++;
       continue;
     }
 

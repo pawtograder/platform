@@ -1005,6 +1005,14 @@ async function loadGroupMembers(
  * Two sources: `grading_conflicts`, which the bulk-assign UI treats as hard
  * exclusions, and the submitters themselves, so nobody is handed their own work
  * when a staff member is also enrolled.
+ *
+ * Self-review is excluded per *user*, not per profile. One user can hold several
+ * active role rows in a class carrying different `private_profile_id` values (see
+ * `getCallerPrivateProfileId`), so a TA enrolled as a student submits under their
+ * student profile while sitting in the reviewer pool under their staff profile.
+ * Excluding only the owning profile left exactly that person eligible to grade their
+ * own submission — and the same hop applies to grading conflicts, which may have been
+ * recorded against whichever of the user's profiles was to hand.
  */
 async function buildConflictExclusions(
   supabase: ReturnType<typeof getAdminClient>,
@@ -1027,6 +1035,33 @@ async function buildConflictExclusions(
     submitters.set(s.id, owners);
   }
 
+  // Every private profile in the class, grouped by the user holding it, so an owner can
+  // be expanded to all of that user's profiles.
+  const roleRows = await pageAll<{ user_id: string; private_profile_id: string }>(
+    () =>
+      supabase
+        .from("user_roles")
+        .select("user_id, private_profile_id")
+        .eq("class_id", classId)
+        .order("id", { ascending: true }),
+    "Failed to load class roles"
+  );
+  const userByProfile = new Map<string, string>();
+  const profilesByUser = new Map<string, string[]>();
+  for (const row of roleRows) {
+    if (!row.private_profile_id || !row.user_id) continue;
+    userByProfile.set(row.private_profile_id, row.user_id);
+    const list = profilesByUser.get(row.user_id) ?? [];
+    list.push(row.private_profile_id);
+    profilesByUser.set(row.user_id, list);
+  }
+  /** Every private profile belonging to the same user as `profileId`, itself included. */
+  const siblingProfiles = (profileId: string): string[] => {
+    const userId = userByProfile.get(profileId);
+    if (!userId) return [profileId];
+    return profilesByUser.get(userId) ?? [profileId];
+  };
+
   const conflicts = await pageAll<{ grader_profile_id: string; student_profile_id: string }>(
     () =>
       supabase
@@ -1048,9 +1083,12 @@ async function buildConflictExclusions(
   for (const [submissionId, owners] of submitters) {
     const set = new Set<string>();
     for (const owner of owners) {
-      // A staff member who is also a submitter must not review their own work.
-      set.add(owner);
-      for (const grader of conflictsByStudent.get(owner) ?? []) set.add(grader);
+      // Every profile of the owning user, so the staff identity of a student submitter
+      // is barred too, not just the profile the submission is filed under.
+      for (const profile of siblingProfiles(owner)) {
+        set.add(profile);
+        for (const grader of conflictsByStudent.get(profile) ?? []) set.add(grader);
+      }
     }
     if (set.size > 0) excluded.set(submissionId, set);
   }

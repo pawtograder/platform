@@ -182,11 +182,13 @@ export async function copyRubricStructure(
         description: part.description,
         ordinal: part.ordinal,
         data: part.data,
-        // Carry over every column that changes behavior rather than appearance:
-        // the per-part grading mode (assign-to-student / individual), the `data`
-        // blobs, `kpi_category`, and `hide_unless_assigned`. Omitting any of them
-        // silently downgrades the copy — per-part grading in particular collapses
-        // every group member's grade to the shared total.
+        // Carry over every *part* column that changes behavior rather than
+        // appearance: the per-part grading mode (assign-to-student / individual) and
+        // the `data` blob. Omitting either silently downgrades the copy — per-part
+        // grading in particular collapses every group member's grade to the shared
+        // total. The check-level `kpi_category` and the rubric-level
+        // `hide_unless_assigned` matter for the same reason but belong to their own
+        // inserts, below and above.
         is_individual_grading: part.is_individual_grading,
         is_assign_to_student: part.is_assign_to_student
       })
