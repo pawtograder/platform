@@ -5,9 +5,9 @@
  * final grading review scores, autograder test results, hint feedback, and
  * gradebook columns — for downstream analysis.
  *
- * Currently implements the "preamble" thin slice: manifest + students +
- * sections only. Per-assignment fact streams (rubric/scores/tests/hints) and
- * gradebook are added in subsequent phases.
+ * Usage:
+ *   pawtograder assessment export -c <class> [--identity opaque|hash|raw] [-o <dir>]
+ *   pawtograder assessment deanonymize -c <class> --salt <salt> --i-understand-pii
  */
 
 import type { Argv } from "yargs";

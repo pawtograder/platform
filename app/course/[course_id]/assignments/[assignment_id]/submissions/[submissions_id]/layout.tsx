@@ -38,7 +38,7 @@ import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/Submis
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   useAssignmentController,
@@ -1184,7 +1184,6 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
           }
         }}
       >
-        <Toaster />
         <Table.Root>
           <Table.Header>
             <Table.Row>
@@ -1479,7 +1478,7 @@ function TestResults() {
   if (!hasRealAutograderOutput) {
     return (
       <Box>
-        <Heading size="md" mt={2}>
+        <Heading as="h2" size="md" mt={2}>
           Automated Check Results
         </Heading>
         <Text fontSize="sm" color="text.muted" mt={2}>
@@ -1507,7 +1506,7 @@ function TestResults() {
     const uniqueMatches = getAllMatches();
     return (
       <Box>
-        <Heading size="md" mt={2} color="fg.error">
+        <Heading as="h2" size="md" mt={2} color="fg.error">
           Build Failed
         </Heading>
         <Box mt={2} p={2} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
@@ -1546,7 +1545,7 @@ function TestResults() {
 
   return (
     <Box>
-      <Heading size="md" mt={2}>
+      <Heading as="h2" size="md" mt={2}>
         Automated Check Results ({totalScore}/{totalMaxScore})
       </Heading>
       {testResults?.map((test) => {
@@ -1568,11 +1567,15 @@ function TestResults() {
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
-            <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
-              <Heading size="sm">
+            {/* display=inline keeps the check name on the icon's line. The heading now wraps the
+                link (rather than the reverse) for correct semantics, but an h3 is block-level, so
+                without this it starts a new line — Chakra's Link is inline-flex, which is why the
+                old link-wrapping-heading markup sat inline. */}
+            <Heading as="h3" size="sm" display="inline">
+              <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
-              </Heading>
-            </Link>
+              </Link>
+            </Heading>
             {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
           </Box>
         );
@@ -1822,7 +1825,6 @@ function ReviewActions() {
   }
   return (
     <VStack>
-      <Toaster />
       <ReviewStats />
       {showCompletionActions && !review.completed_at && (
         <VStack>
@@ -2154,7 +2156,7 @@ function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
         {reviewAssignment === undefined && activeReviewAssignmentId && <Skeleton height="100px" />}
         {activeReviewAssignmentId && reviewAssignment && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
-            <Heading size="md">
+            <Heading as="h2" size="md">
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
@@ -2326,7 +2328,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
           <VStack align="flex-start">
-            <HStack gap={1}>
+            {/* Semantic page title (WCAG 1.3.1/2.4.6): the submission header is the page's h1 so
+                screen-reader users can orient with heading navigation. Font styles pinned to the
+                surrounding text so the visual layout is unchanged. */}
+            <HStack gap={1} as="h1" fontSize="md" fontWeight="normal" m={0}>
               {submission.is_active && <ActiveSubmissionIcon />}
               {assignmentGroupWithMembers ? (
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
@@ -2418,7 +2423,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             textAlign="center"
             m={0}
           >
-            <Heading size="md">Viewing a not-for-grading submission.</Heading>
+            <Heading as="h2" size="md">
+              Viewing a not-for-grading submission.
+            </Heading>
             <Text fontSize="xs">
               This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
               not be graded. You can still see autograder feedback.
@@ -2436,14 +2443,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             textAlign="center"
             m={0}
           >
-            <Heading size="md">Viewing a previous submission.</Heading>
+            <Heading as="h2" size="md">
+              Viewing a previous submission.
+            </Heading>
             <Text fontSize="xs">
               Use the submission history to view or change the active submission. The active submission is the one that
               will be graded.
             </Text>
           </Box>
         )}
-        <HStack>
+        {/* Wraps so submission actions reflow at narrow/zoomed widths (WCAG 1.4.10). */}
+        <HStack flexWrap="wrap">
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
           {assignment.repo_mode === "none" && (
@@ -2478,6 +2488,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       <Box
         as="nav"
         aria-label="Submission tabs"
+        id="submission-tabs"
         p={0}
         m={0}
         borderBottomColor="border.emphasized"
@@ -2486,47 +2497,59 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
-        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
-          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+        {/* Button asChild renders ONE styled <a>: a <button> nested inside a link
+            is invalid (nested-interactive) and gives keyboard users two tab stops
+            per tab (WCAG 2.4.3 / 4.1.2). */}
+        <Button asChild variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "grade", searchParams)}
+            aria-current={activeSubPage === "grade" ? "page" : undefined}
+          >
             <Icon as={FaCheckCircle} />
             Grade
-          </Button>
-        </NextLink>
-        <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
-          <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
+          </NextLink>
+        </Button>
+        <Button asChild variant={activeSubPage === "results" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "results", searchParams)}
+            aria-current={activeSubPage === "results" ? "page" : undefined}
+          >
             <Icon as={FaRobot} />
             Autograder Detail
-          </Button>
-        </NextLink>
-        <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
-          <Button variant={activeSubPage === "files" ? "solid" : "ghost"}>
+          </NextLink>
+        </Button>
+        <Button asChild variant={activeSubPage === "files" ? "solid" : "ghost"}>
+          <NextLink
+            href={linkToSubPage(pathname, "files", searchParams)}
+            aria-current={activeSubPage === "files" ? "page" : undefined}
+          >
             <Icon as={FaFile} />
             Files
-          </Button>
-        </NextLink>
+          </NextLink>
+        </Button>
         {isPrSubmission && (
           <>
-            <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
-              <Button variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+            <Button asChild variant={pathname.includes("/checks") ? "solid" : "ghost"}>
+              <NextLink href={linkToSubPage(pathname, "checks", searchParams)}>
                 <Icon as={FaTasks} />
                 Checks
-              </Button>
-            </NextLink>
-            <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
-              <Button variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+              </NextLink>
+            </Button>
+            <Button asChild variant={pathname.includes("/deployments") ? "solid" : "ghost"}>
+              <NextLink href={linkToSubPage(pathname, "deployments", searchParams)}>
                 <Icon as={FaRocket} />
                 Deployments
-              </Button>
-            </NextLink>
+              </NextLink>
+            </Button>
           </>
         )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
-          <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
-            <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+          <Button asChild variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+            <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
               <Icon as={FaGithub} />
               Repo Analytics
-            </Button>
-          </NextLink>
+            </NextLink>
+          </Button>
         )}
       </Box>
       {useGradingShell ? (

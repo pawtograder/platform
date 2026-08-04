@@ -9,6 +9,7 @@ import "@uiw/react-md-editor/markdown-editor.css";
 import { ColorModeWatcher } from "@/components/ui/color-mode";
 import { LiveAnnouncer } from "@/components/ui/live-announcer";
 import SkipNav from "@/components/ui/skip-nav";
+import RouteFocusReset from "@/components/ui/route-focus-reset";
 import StaleBundleRecovery from "@/components/StaleBundleRecovery";
 import CorruptSessionRecovery from "@/components/CorruptSessionRecovery";
 import { Toaster } from "@/components/ui/toaster";
@@ -55,6 +56,7 @@ export default async function RootLayout({
                 <ColorModeWatcher />
                 <StaleBundleRecovery />
                 <CorruptSessionRecovery />
+                <RouteFocusReset />
               </ClientOnly>
               <LiveAnnouncer>{children}</LiveAnnouncer>
             </Theme>

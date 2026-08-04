@@ -6,28 +6,44 @@
  *
  * Authentication: Requires valid API token with cli:read or cli:write scopes.
  *
- * Commands:
+ * Commands (the registry in router.ts is the source of truth; keep this list in
+ * step with it):
+ *
+ *   PUBLIC (no scope check):
+ *     - token.info
+ *
  *   READ (cli:read):
  *     - classes.list
  *     - classes.show
  *     - assignments.list
  *     - assignments.show
- *     - rubrics.list
- *     - rubrics.export
+ *     - discussions.list
  *     - flashcards.list
+ *     - help_requests.list
  *     - repos.list
  *     - repos.sync_grade_workflow.context
  *     - repos.cross_assignment_copy.context
+ *     - reviews.list
+ *     - rubrics.list
+ *     - rubrics.export
+ *     - submissions.list
+ *     - submissions.export (streaming)
+ *     - assessment.export.preamble (streaming)
+ *     - assessment.export.assignment (streaming)
+ *     - assessment.export.gradebook (streaming)
+ *     - assessment.export.roster (streaming)
  *
  *   WRITE (cli:write):
- *     - surveys.copy
  *     - assignments.copy
  *     - assignments.delete
- *     - rubrics.import
  *     - flashcards.copy
+ *     - help_requests.close
+ *     - reviews.assign
+ *     - rubrics.import
  *     - submissions.comments.import
  *     - submissions.comments.sync
  *     - submissions.artifacts.import
+ *     - surveys.copy
  */
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -50,6 +66,9 @@ import "./commands/surveys.ts";
 import "./commands/submissions.ts";
 import "./commands/repos.ts";
 import "./commands/assessment.ts";
+import "./commands/discussions.ts";
+import "./commands/helpRequests.ts";
+import "./commands/reviews.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
@@ -99,27 +118,26 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (error) {
-    Sentry.captureException(error, {
-      tags: { endpoint: "cli" }
-    });
-
+    // Only report what we could act on. An expired token, a missing scope, or a
+    // typo'd command name is expected traffic for a public endpoint; reporting
+    // every one of them buries real failures. Server faults (5xx) and anything
+    // unrecognized still go to Sentry.
     if (error instanceof MCPAuthError) {
-      const status =
-        error.message === "Missing Authorization header" || error.message === "Invalid Authorization header format"
-          ? 401
-          : error.message.includes("Missing required scope")
-            ? 403
-            : error.message.includes("revoked")
-              ? 401
-              : 403;
+      if (error.shouldReport) {
+        Sentry.captureException(error, { tags: { endpoint: "cli" } });
+      }
 
       return new Response(JSON.stringify({ error: error.message }), {
-        status,
+        status: error.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
     if (error instanceof CLICommandError) {
+      if (error.status >= 500) {
+        Sentry.captureException(error, { tags: { endpoint: "cli" } });
+      }
+
       return new Response(JSON.stringify({ error: error.message }), {
         status: error.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -138,6 +156,8 @@ Deno.serve(async (req) => {
         }
       );
     }
+
+    Sentry.captureException(error, { tags: { endpoint: "cli" } });
 
     return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,

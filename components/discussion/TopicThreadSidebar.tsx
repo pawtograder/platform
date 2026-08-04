@@ -81,7 +81,8 @@ export function TopicThreadSidebar({
         position={{ base: "relative", lg: "sticky" }}
         top="0"
         alignSelf="flex-start"
-        width={{ base: "52px", lg: "52px" }}
+        // Full-width disclosure bar when stacked (narrow/zoomed layouts); slim rail on desktop.
+        width={{ base: "100%", lg: "52px" }}
       >
         <Box px="2" py="2">
           <Tooltip content="Show topic threads">

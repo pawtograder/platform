@@ -2104,11 +2104,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
       });
     } catch (error) {
-      Sentry.captureException(error, {
-        tags: { component: "mcp_server", method: "GET" }
-      });
+      // Expired tokens and missing scopes are expected traffic on a public
+      // endpoint; only server faults are worth reporting.
+      if (!(error instanceof MCPAuthError) || error.shouldReport) {
+        Sentry.captureException(error, {
+          tags: { component: "mcp_server", method: "GET" }
+        });
+      }
 
-      const status = error instanceof MCPAuthError ? 401 : 500;
+      const status = error instanceof MCPAuthError ? error.status : 500;
       const message = error instanceof Error ? error.message : "Internal server error";
 
       return new Response(JSON.stringify({ error: message }), {
@@ -2214,11 +2218,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (error) {
-    Sentry.captureException(error, {
-      tags: { component: "mcp_server" }
-    });
+    if (!(error instanceof MCPAuthError) || error.shouldReport) {
+      Sentry.captureException(error, {
+        tags: { component: "mcp_server" }
+      });
+    }
 
-    const status = error instanceof MCPAuthError ? 401 : 500;
+    const status = error instanceof MCPAuthError ? error.status : 500;
     const message = error instanceof Error ? error.message : "Internal server error";
 
     return new Response(

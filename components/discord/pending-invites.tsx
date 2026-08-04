@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Button, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Heading, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsDiscord, BsExclamationCircle } from "react-icons/bs";
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
@@ -155,19 +155,12 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
                     )}
                   </HStack>
                   <HStack gap={2}>
-                    <Link
-                      href={invite.invite_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      _hover={{ textDecoration: "none" }}
-                    >
-                      <Button colorPalette="blue" size="sm">
-                        <HStack gap={2}>
-                          <Icon as={BsDiscord} />
-                          <Text>Join Discord Server</Text>
-                        </HStack>
-                      </Button>
-                    </Link>
+                    <Button asChild colorPalette="blue" size="sm">
+                      <a href={invite.invite_url} target="_blank" rel="noopener noreferrer">
+                        <Icon as={BsDiscord} />
+                        <Text>Join Discord Server</Text>
+                      </a>
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"

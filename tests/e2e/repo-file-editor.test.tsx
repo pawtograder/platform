@@ -192,20 +192,24 @@ test.describe("Repo file editor", () => {
     await setEditorValue(page, modeline("tags/v4") + VALID_PAWTOGRADER, "pawtograder.yml");
     await expect(region.getByTestId("repo-file-editor-errors")).toHaveCount(0, { timeout: 20_000 });
     await expect(region.getByTestId("repo-file-editor-schema-warning")).toHaveCount(0);
+    await expect(region.getByTestId("repo-file-editor-schema-advisories")).toHaveCount(0);
     await expect(region.getByTestId("repo-file-editor-save")).toBeEnabled();
 
     // And the schema really is in force: v4 sets additionalProperties: false, so an unknown
-    // top-level key is flagged (the structural guard alone would not catch this).
+    // top-level key is flagged (the structural guard alone would not catch this). The language
+    // server reports schema violations at Warning severity, which is advisory only — the bundled
+    // schema is one pinned version of an evolving format, so it must not veto a commit.
     await setEditorValue(
       page,
       modeline("tags/v4") + VALID_PAWTOGRADER + "totallyUnknownKey: true\n",
       "pawtograder.yml"
     );
-    const errors = region.getByTestId("repo-file-editor-errors");
-    await expect(errors).toBeVisible({ timeout: 20_000 });
-    await expect(errors).toContainText("totallyUnknownKey");
-    await expect(errors).not.toContainText("No schema request service available");
-    await expect(region.getByTestId("repo-file-editor-save")).toBeDisabled();
+    const advisories = region.getByTestId("repo-file-editor-schema-advisories");
+    await expect(advisories).toBeVisible({ timeout: 20_000 });
+    await expect(advisories).toContainText("totallyUnknownKey");
+    await expect(advisories).not.toContainText("No schema request service available");
+    await expect(region.getByTestId("repo-file-editor-errors")).toHaveCount(0);
+    await expect(region.getByTestId("repo-file-editor-save")).toBeEnabled();
   });
 
   // A modeline pinning a version the bundled schema does not describe (v3 predates the `grader`
@@ -269,9 +273,39 @@ test.describe("Repo file editor", () => {
       )
       .toBe(true);
 
-    // An unknown top-level key violates the workflow schema (additionalProperties: false);
-    // the yaml language server flags it, the editor surfaces it, and save is blocked.
+    // An unknown top-level key violates the workflow schema (additionalProperties: false); the
+    // yaml language server flags it at Warning severity and the editor surfaces it as an advisory
+    // without blocking the commit.
     await setEditorValue(page, "totallyUnknownKey: true\non: push\njobs: {}\n", "workflows");
+    const advisories = region.getByTestId("repo-file-editor-schema-advisories");
+    await expect(advisories).toBeVisible({ timeout: 20_000 });
+    await expect(advisories).toContainText("totallyUnknownKey");
+    await expect(region.getByTestId("repo-file-editor-save")).toBeEnabled();
+  });
+
+  // Malformed YAML is a parse error (Error severity), not a schema warning — that still blocks.
+  test("workflow file: unparseable YAML blocks the save", async ({ page }) => {
+    await page.route("**/functions/v1/repository-get-file", async (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 200, headers: CORS });
+      const body = JSON.parse(route.request().postData() || "{}");
+      const content = String(body.path).includes("workflows") ? VALID_WORKFLOW : VALID_PAWTOGRADER;
+      return route.fulfill({
+        status: 200,
+        headers: { ...CORS, "content-type": "application/json" },
+        body: JSON.stringify({ content, sha: "sha-abc" })
+      });
+    });
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/autograder`);
+
+    const region = await openConfigEditor(page);
+    await region.getByLabel("Select file to edit").selectOption(".github/workflows/grade.yml");
+    await expect(region.getByRole("textbox", { name: "Commit message" })).toHaveValue(/grade\.yml/, {
+      timeout: 15_000
+    });
+
+    await setEditorValue(page, "on: push\njobs:\n  - [unclosed\n", "workflows");
     await expect(region.getByTestId("repo-file-editor-errors")).toBeVisible({ timeout: 20_000 });
     await expect(region.getByTestId("repo-file-editor-save")).toBeDisabled();
   });

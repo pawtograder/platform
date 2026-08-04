@@ -11,6 +11,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson, printTable, formatDate, formatZoneLabel } from "@/cli/utils/output";
 import { copyAssignmentsHandler } from "./copy";
 import { deleteAssignmentHandler } from "./delete";
 
@@ -23,17 +24,23 @@ export const builder = (yargs: Argv) => {
       "list",
       "List assignments for a class",
       (yargs) => {
-        return yargs.option("class", {
-          alias: "c",
-          describe: "Class ID, slug, or name",
-          type: "string",
-          demandOption: true
-        });
+        return addJsonOption(
+          yargs.option("class", {
+            alias: "c",
+            describe: "Class ID, slug, or name",
+            type: "string",
+            demandOption: true
+          })
+        );
       },
       async (args) => {
         try {
           const data = await apiCall("assignments.list", { class: args.class as string });
-          logger.step(`Assignments for ${data.class.name}`);
+
+          if (emitJson(args, data)) return;
+
+          const tz = data.class.time_zone as string | null;
+          logger.step(`Assignments for ${data.class.name}${formatZoneLabel(tz)}`);
 
           const assignments = data.assignments;
 
@@ -42,11 +49,15 @@ export const builder = (yargs: Argv) => {
             return;
           }
 
-          logger.tableHeader(["ID", "Slug", "Title", "Due Date"]);
-          for (const a of assignments) {
-            const dueDate = a.due_date ? new Date(a.due_date).toLocaleDateString() : "-";
-            logger.tableRow([a.id, a.slug, a.title, dueDate]);
-          }
+          printTable(
+            ["ID", "Slug", "Title", "Due Date"],
+            assignments.map((a: Record<string, unknown>) => [
+              a.id as number,
+              a.slug as string,
+              a.title as string,
+              formatDate(a.due_date as string | null, tz)
+            ])
+          );
           logger.blank();
           logger.info(`Total: ${assignments.length} assignments`);
         } catch (error) {

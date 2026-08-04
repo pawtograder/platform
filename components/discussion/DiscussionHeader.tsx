@@ -62,7 +62,8 @@ export function DiscussionHeader({
       py={{ base: 3, md: 4 }}
     >
       <Flex align="center" justify="space-between" gap={4} wrap="wrap">
-        <HStack gap={4} flexShrink={0} align="center">
+        {/* Wraps so the crumb trail reflows instead of forcing horizontal scroll (WCAG 1.4.10). */}
+        <HStack gap={4} align="center" flexWrap="wrap" minW={0}>
           <HStack gap={4}>
             <NavLink href={discussionBaseHref} selected={!showPostCrumb && mode === "feed"}>
               My Feed
@@ -72,7 +73,7 @@ export function DiscussionHeader({
             </NavLink>
           </HStack>
           {currentThread && (
-            <HStack gap={2} color="fg.muted">
+            <HStack gap={2} color="fg.muted" flexWrap="wrap" minW={0}>
               <FiChevronRight />
               {currentThread.topic && (
                 <>

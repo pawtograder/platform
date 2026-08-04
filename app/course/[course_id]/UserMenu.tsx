@@ -9,7 +9,7 @@ import { GlobalSearchTrigger } from "@/components/ui/global-search-trigger";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -34,6 +34,7 @@ import {
   Menu,
   Portal,
   Text,
+  VisuallyHidden,
   VStack
 } from "@chakra-ui/react";
 import { FiClock, FiCommand } from "react-icons/fi";
@@ -271,7 +272,6 @@ const DropBoxAvatar = ({
         accept="image/jpeg,image/png"
         onChange={handleFileChange}
       />
-      <Toaster />
       <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
         <Box position="relative" width="100px" height="100px">
           <Menu.Root positioning={{ placement: "bottom" }}>
@@ -478,7 +478,6 @@ const ProfileChangesMenu = () => {
 
   return (
     <>
-      <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
           <Button
@@ -830,6 +829,39 @@ function ObfuscatedGradesModePicker() {
 function ConnectionStatusIndicator() {
   const status = useAutomaticRealtimeConnectionStatus();
 
+  const statusText = (() => {
+    switch (status?.overall) {
+      case "connected":
+        return "All realtime connections active";
+      case "partial":
+        return "Some realtime connections failed";
+      case "disconnected":
+        return "No realtime connections active";
+      case "connecting":
+        return "Connecting to realtime channels...";
+      case undefined:
+        return "";
+      default:
+        return "Unknown status";
+    }
+  })();
+
+  // Debounce the announced copy: `overall` transits through connecting/partial while
+  // channels join one-by-one (page load, navigation, tab refocus), and a role=status
+  // region announces every text change. Only states that persist get announced, so
+  // transient join cycles never reach screen readers (WCAG 4.1.3 without the spam).
+  const [announcedText, setAnnouncedText] = useState("");
+  useEffect(() => {
+    if (!statusText) {
+      // Status gone (controller teardown) — clear immediately so a remount
+      // never resurrects a stale "connections active" message.
+      setAnnouncedText("");
+      return;
+    }
+    const timer = setTimeout(() => setAnnouncedText(statusText), 3000);
+    return () => clearTimeout(timer);
+  }, [statusText]);
+
   if (!status) {
     return null;
   }
@@ -846,21 +878,6 @@ function ConnectionStatusIndicator() {
         return "yellow.solid";
       default:
         return "gray.muted";
-    }
-  };
-
-  const getStatusText = () => {
-    switch (status.overall) {
-      case "connected":
-        return "All realtime connections active";
-      case "partial":
-        return "Some realtime connections failed";
-      case "disconnected":
-        return "No realtime connections active";
-      case "connecting":
-        return "Connecting to realtime channels...";
-      default:
-        return "Unknown status";
     }
   };
 
@@ -907,7 +924,7 @@ function ConnectionStatusIndicator() {
 
   const tooltipContent = (
     <VStack alignItems="flex-start" gap={1} fontSize="sm">
-      <Text fontWeight="bold">{getStatusText()}</Text>
+      <Text fontWeight="bold">{statusText}</Text>
       <Text fontSize="xs" color="gray.300">
         {status.channels.length} channel{status.channels.length !== 1 ? "s" : ""}
       </Text>
@@ -925,18 +942,30 @@ function ConnectionStatusIndicator() {
   );
 
   return (
-    <Tooltip content={tooltipContent} showArrow>
-      <Box
-        width={3}
-        height={3}
-        borderRadius="full"
-        bg={getStatusColor()}
-        aria-label={`Realtime connection status: ${getStatusText()}`}
-        role="note"
-        cursor="help"
-        flexShrink={0}
-      />
-    </Tooltip>
+    <>
+      <Tooltip content={tooltipContent} showArrow>
+        {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13). Its
+            accessible name is the UNdebounced status: a user who tabs here wants the current
+            state, and gating the name on the debounce would leave the control named
+            "Realtime connection status:" with no value for the first 3s and for as long as
+            channels keep flapping. */}
+        <Box
+          width={3}
+          height={3}
+          borderRadius="full"
+          bg={getStatusColor()}
+          role="img"
+          aria-label={`Realtime connection status: ${statusText}`}
+          tabIndex={0}
+          cursor="help"
+          flexShrink={0}
+          _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+        />
+      </Tooltip>
+      {/* Separate polite live region (4.1.3) carrying the debounced copy, so transient
+          join cycles are not announced while the control above stays correctly named. */}
+      <VisuallyHidden role="status">Realtime connection status: {announcedText}</VisuallyHidden>
+    </>
   );
 }
 

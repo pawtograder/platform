@@ -3,7 +3,7 @@
 import { Button } from "@chakra-ui/react";
 import { autograderCreateReposForStudent, autograderSyncAllPermissionsForStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useState } from "react";
 import { useInvalidate } from "@refinedev/core";
 export default function CreateStudentReposButton({
@@ -20,7 +20,6 @@ export default function CreateStudentReposButton({
   const invalidate = useInvalidate();
   return (
     <>
-      <Toaster />
       <Button
         onClick={async () => {
           try {

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useAllStudentProfiles, useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useModalManager from "@/hooks/useModalManager";
@@ -368,7 +368,6 @@ export default function DueDateExceptionsTable() {
 
       <AddExceptionModal isOpen={addOpen.isOpen} onClose={addOpen.closeModal} defaults={addOpen.modalData || {}} />
       <GiftTokenModal isOpen={giftOpen.isOpen} onClose={giftOpen.closeModal} defaults={giftOpen.modalData || {}} />
-      <Toaster />
     </VStack>
   );
 }

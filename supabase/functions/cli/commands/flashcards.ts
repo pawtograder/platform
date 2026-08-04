@@ -5,7 +5,9 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse, FlashcardsListParams, FlashcardsCopyParams } from "../types.ts";
 
@@ -15,6 +17,7 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const { data: decks, error } = await supabase
     .from("flashcard_decks")
@@ -23,17 +26,21 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
-  if (error) throw new CLICommandError(`Failed to fetch flashcard decks: ${error.message}`);
+  if (error) throw new CLICommandError(`Failed to fetch flashcard decks: ${error.message}`, 500);
 
-  const { data: cardCounts, error: countError } = await supabase
-    .from("flashcards")
-    .select("deck_id")
-    .eq("class_id", classData.id)
-    .is("deleted_at", null);
-
-  if (countError) {
-    throw new CLICommandError(`Error fetching flashcard counts: ${countError.message}`);
-  }
+  // Paged: this reads every card in the class purely to tally per-deck counts, so
+  // a class with more than max_rows cards reported zero or an undercount for the
+  // decks that fell past the cap.
+  const cardCounts = await pageAll<{ deck_id: number }>(
+    () =>
+      supabase
+        .from("flashcards")
+        .select("deck_id")
+        .eq("class_id", classData.id)
+        .is("deleted_at", null)
+        .order("id", { ascending: true }),
+    "Error fetching flashcard counts"
+  );
 
   const countMap = new Map<number, number>();
   if (cardCounts) {
@@ -45,7 +52,7 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       decks: (decks ?? []).map((d) => ({
         id: d.id,
         name: d.name,
@@ -72,6 +79,10 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
+  // Both sides: reading the source and writing the target each need access, or a
+  // grader in one class could copy content into a class they do not belong to.
+  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");
@@ -80,16 +91,24 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   let decksQuery = supabase.from("flashcard_decks").select("*").eq("class_id", sourceClass.id).is("deleted_at", null);
 
   if (deckIdentifier) {
-    const deckId = parseInt(deckIdentifier, 10);
-    if (!isNaN(deckId)) {
-      decksQuery = decksQuery.eq("id", deckId);
+    // Strictly all-digits, not parseInt: parseInt("3 Recursion") is 3, so a deck
+    // whose name begins with a number was silently swapped for whichever deck
+    // holds that id — and copied, with all its cards, into the target class.
+    if (/^\d+$/.test(deckIdentifier.trim())) {
+      decksQuery = decksQuery.eq("id", Number(deckIdentifier.trim()));
     } else {
       decksQuery = decksQuery.eq("name", deckIdentifier);
     }
   }
 
   const { data: sourceDecks, error: decksError } = await decksQuery;
-  if (decksError) throw new CLICommandError(`Failed to fetch source decks: ${decksError.message}`);
+  if (decksError) throw new CLICommandError(`Failed to fetch source decks: ${decksError.message}`, 500);
+  if (deckIdentifier && (sourceDecks?.length ?? 0) > 1) {
+    throw new CLICommandError(
+      `Ambiguous deck "${deckIdentifier}": ${(sourceDecks ?? []).map((d) => d.id).join(", ")}. Pass a deck id.`,
+      400
+    );
+  }
   if (!sourceDecks || sourceDecks.length === 0) {
     throw new CLICommandError("No flashcard decks found to copy");
   }
@@ -133,15 +152,28 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
         continue;
       }
 
-      const { data: sourceCards } = await supabase
-        .from("flashcards")
-        .select("*")
-        .eq("deck_id", sourceDeck.id)
-        .is("deleted_at", null)
-        .order("order", { ascending: true, nullsFirst: false });
+      // Paged, and the error is no longer discarded: unpaged, a deck of more than
+      // max_rows cards copied only the first 1000 and still reported success,
+      // and a failed read created the target deck empty with cards_copied: 0.
+      const sourceCards = await pageAll<{
+        title: string;
+        prompt: string;
+        answer: string;
+        order: number | null;
+      }>(
+        () =>
+          supabase
+            .from("flashcards")
+            .select("*")
+            .eq("deck_id", sourceDeck.id)
+            .is("deleted_at", null)
+            .order("order", { ascending: true, nullsFirst: false })
+            .order("id", { ascending: true }),
+        `Failed to read cards for deck ${sourceDeck.id}`
+      );
 
       let cardCount = 0;
-      if (sourceCards && sourceCards.length > 0) {
+      if (sourceCards.length > 0) {
         const newCards = sourceCards.map((card) => ({
           deck_id: newDeck.id,
           class_id: targetClass.id,

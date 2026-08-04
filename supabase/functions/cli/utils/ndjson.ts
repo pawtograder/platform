@@ -11,6 +11,8 @@
  * discriminator in each record.
  */
 
+import * as Sentry from "npm:@sentry/deno";
+import { CLICommandError } from "../errors.ts";
 import { corsHeaders } from "./supabase.ts";
 
 export interface NdjsonWriter {
@@ -70,6 +72,15 @@ export function streamNdjson(handler: (writer: NdjsonWriter) => Promise<void>): 
       await handler(writer);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // The Response left before the handler ran, so cli/index.ts's catch can
+      // never see this: without reporting here, every server fault inside a
+      // streaming export (statement timeouts on large courses, storage errors)
+      // is an HTTP 200 with an error line in the body and nothing in Sentry.
+      // Client errors thrown before the stream opened are still handled by the
+      // dispatcher; anything reaching here is mid-stream and ours.
+      if (!(err instanceof CLICommandError) || err.status >= 500) {
+        Sentry.captureException(err, { tags: { endpoint: "cli", phase: "ndjson_stream" } });
+      }
       await writer.abort(message).catch(() => {});
       return;
     }

@@ -20,7 +20,7 @@ import {
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
 import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
@@ -1041,7 +1041,6 @@ export default function AssignmentForm({
 
   return (
     <div>
-      <Toaster />
       <form ref={formRef} onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
         <Fieldset.Root>
           <VStack align="stretch" gap={6} w="100%">

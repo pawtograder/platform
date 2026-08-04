@@ -119,6 +119,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
   const [dirty, setDirty] = useState(false);
   const [markerErrors, setMarkerErrors] = useState<string[]>([]);
   const [schemaWarnings, setSchemaWarnings] = useState<string[]>([]);
+  const [schemaAdvisories, setSchemaAdvisories] = useState<string[]>([]);
   const [commitMessage, setCommitMessage] = useState<string>("");
   const [loaderReady, setLoaderReady] = useState(false);
 
@@ -258,21 +259,26 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     if (!model) {
       setMarkerErrors([]);
       setSchemaWarnings([]);
+      setSchemaAdvisories([]);
       return;
     }
-    // Block on errors AND warnings: the yaml language server reports JSON-Schema
-    // violations (unknown/missing keys, wrong types) at Warning severity, and those should
-    // prevent committing an invalid config file.
+    // Block on Error severity only. The yaml language server reports JSON-Schema violations
+    // (unknown/missing keys, wrong types) at Warning severity, and the bundled schema is one
+    // pinned version of a config format that keeps evolving — so a warning can mean the file is
+    // wrong, or just that it targets a different assignment-action major than the copy in
+    // lib/schemas. Blocking on those makes an unrelated one-line edit unsavable on a file the
+    // grader itself accepts. Surface them prominently instead, and let validatePawtograderConfig
+    // (structuralError, below) be the authority on what must not be committed.
     const markers = monaco.editor.getModelMarkers({ resource: model.uri });
-    const messages = markers
-      .filter((m) => m.severity >= monaco.MarkerSeverity.Warning)
-      .map((m) => `Line ${m.startLineNumber}: ${m.message}`);
+    const format = (m: import("monaco-editor").editor.IMarker) => `Line ${m.startLineNumber}: ${m.message}`;
+    setMarkerErrors(markers.filter((m) => m.severity >= monaco.MarkerSeverity.Error).map(format));
+    const warnings = markers.filter((m) => m.severity === monaco.MarkerSeverity.Warning).map(format);
     // "…No schema request service available" means the file's $schema modeline points somewhere
     // we can't resolve offline (an unrecognized host or filename — recognized ones are aliased to
-    // the bundled schema in applySchema). The file itself may be perfectly valid, so surface this
-    // as a notice and keep saving available; the structural guard still runs on pawtograder.yml.
-    setSchemaWarnings(messages.filter((m) => SCHEMA_REQUEST_UNAVAILABLE_RE.test(m)));
-    setMarkerErrors(messages.filter((m) => !SCHEMA_REQUEST_UNAVAILABLE_RE.test(m)));
+    // the bundled schema in applySchema), so no schema validation ran at all. That warrants
+    // different copy than a genuine schema complaint.
+    setSchemaWarnings(warnings.filter((m) => SCHEMA_REQUEST_UNAVAILABLE_RE.test(m)));
+    setSchemaAdvisories(warnings.filter((m) => !SCHEMA_REQUEST_UNAVAILABLE_RE.test(m)));
   }, []);
 
   const handleMount = useCallback(
@@ -478,6 +484,24 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
               </List.Item>
             ))}
           </List.Root>
+        </Alert>
+      )}
+
+      {schemaAdvisories.length > 0 && (
+        <Alert status="warning" title="Schema warnings" data-testid="repo-file-editor-schema-advisories">
+          <VStack align="stretch" gap={1}>
+            <Text fontSize="sm">
+              These do not block saving. The bundled schema describes one version of the config format, so a warning may
+              mean this file targets a different version of the grader rather than that it is invalid.
+            </Text>
+            <List.Root>
+              {schemaAdvisories.map((e, i) => (
+                <List.Item key={i} fontSize="sm">
+                  {e}
+                </List.Item>
+              ))}
+            </List.Root>
+          </VStack>
         </Alert>
       )}
 

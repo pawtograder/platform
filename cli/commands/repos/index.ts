@@ -9,6 +9,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson, printTable } from "@/cli/utils/output";
 import { runSyncGradeWorkflow, runCrossAssignmentCopy } from "@/cli/lib/repos";
 
 export const command = "repos <action>";
@@ -20,19 +21,21 @@ export const builder = (yargs: Argv) => {
       "list",
       "List repositories for an assignment",
       (y) => {
-        return y
-          .option("class", {
-            alias: "c",
-            describe: "Class ID, slug, or name",
-            type: "string",
-            demandOption: true
-          })
-          .option("assignment", {
-            alias: "a",
-            describe: "Assignment ID or slug",
-            type: "string",
-            demandOption: true
-          });
+        return addJsonOption(
+          y
+            .option("class", {
+              alias: "c",
+              describe: "Class ID, slug, or name",
+              type: "string",
+              demandOption: true
+            })
+            .option("assignment", {
+              alias: "a",
+              describe: "Assignment ID or slug",
+              type: "string",
+              demandOption: true
+            })
+        );
       },
       async (args) => {
         try {
@@ -40,6 +43,9 @@ export const builder = (yargs: Argv) => {
             class: args.class as string,
             assignment: args.assignment as string
           });
+
+          if (emitJson(args, data)) return;
+
           logger.step(`Repositories — ${data.assignment.title}`);
           logger.info(
             `Assignment ID: ${data.assignment.id} | template_repo: ${data.assignment.template_repo ?? "(none)"}`
@@ -51,10 +57,10 @@ export const builder = (yargs: Argv) => {
             logger.info("No repositories.");
             return;
           }
-          logger.tableHeader(["ID", "Repository"]);
-          for (const r of repos) {
-            logger.tableRow([r.id, r.repository]);
-          }
+          printTable(
+            ["ID", "Repository"],
+            repos.map((r) => [r.id, r.repository])
+          );
           logger.blank();
           logger.info(`Total: ${repos.length}`);
         } catch (error) {
