@@ -47,10 +47,21 @@ metadata:
   namespace: {{ $ctx.Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
+  {{- if $ctx.Values.edgeFunctions.reloader.enabled }}
+  annotations:
+    # Stakater Reloader: roll this Deployment when a referenced Secret changes.
+    # The edge-functions env (incl. GITHUB_PRIVATE_KEY_STRING) comes from a
+    # SealedSecret applied OUTSIDE helm, so a rotation does NOT change the pod
+    # template — without this annotation the pods keep the stale value until a
+    # manual `kubectl rollout restart`. Requires the Reloader controller to be
+    # installed cluster-wide; harmless (ignored) if it is not.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
 spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}
   {{- end }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.edgeFunctions) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -61,10 +72,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $ctx.Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.edgeFunctions) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ $ctx.Values.edgeFunctions.service.port }}
@@ -79,6 +95,15 @@ spec:
             - "{{ $ctx.Values.edgeFunctions.service.port }}"
             - --policy
             - {{ $ctx.Values.edgeFunctions.policy | quote }}
+            {{- with $ctx.Values.edgeFunctions.gracefulExitTimeoutSeconds }}
+            # On SIGTERM (scale-down / rolling deploy / node drain) edge-runtime
+            # stops new intake and lets in-flight handlers finish for up to this
+            # many seconds before forcibly terminating, then exits (immediately if
+            # idle). Sized >= worker.timeoutMs so the longest request can complete;
+            # terminationGracePeriodSeconds is the SIGKILL backstop above it.
+            - --graceful-exit-timeout
+            - {{ . | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.maxParallelism }}
             # Cap on simultaneous isolates; under per_request this bounds max
             # concurrent requests/pod (excess queue via --request-wait-timeout).
@@ -139,11 +164,34 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
               value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+            # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
+            # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
+            # mints short-lived per-user RLS JWTs for MCP and the CLI — with
+            # ES256, so it needs the EC *private JWK* (a JSON object), not the
+            # base64 random string GoTrue/PostgREST/Realtime/Kong share. Feeding
+            # it the shared secret is why MCP and the CLI have never worked on
+            # any self-hosted install: MCPAuth rejects it at
+            # `secret.startsWith("{")`.
+            #
+            # JWT_SIGNING_JWK holds the `pawtograder-session-v1` EC entry from
+            # JWT_PRIVATE_JWKS alone. Its public half is already in
+            # JWT_PUBLIC_JWKS, which PostgREST verifies against (rest.yaml), so
+            # tokens minted with it validate without any further wiring.
+            #
+            # optional: true is deliberate. Externally-managed Secrets
+            # (ESO/OpenBao/SealedSecrets) need this key added by hand, and a
+            # missing *required* secretKeyRef crash-loops the entire edge tier.
+            # Optional degrades to exactly the pre-existing behaviour instead:
+            # every function keeps working and only MCP/CLI fail, with
+            # MCPAuth's "JWT_SECRET must be set" pointing at the cause.
+            # Nothing else in this container reads JWT_SECRET and
+            # edgeFunctions.verifyJwt is false, so repointing it is safe.
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ $ctx.Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: JWT_SIGNING_JWK
+                  optional: true
             {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
@@ -183,6 +231,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
           resources:
             {{- toYaml $ctx.Values.edgeFunctions.resources | nindent 12 }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
@@ -193,4 +247,5 @@ spec:
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions "name" $component) | nindent 6 }}
 {{- end -}}

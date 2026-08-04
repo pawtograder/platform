@@ -1,5 +1,5 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { bottleneckRedisOptions } from "./Redis.ts";
+import { bottleneckRedisOptions, getBottleneckConnection } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -28,6 +28,43 @@ export class PrimaryRateLimitError extends Error {
     this.name = "PrimaryRateLimitError";
     this.retryAfter = retryAfter;
     this.scopeKey = scopeKey;
+  }
+}
+
+/**
+ * A deterministic failure that retrying cannot fix. The async worker treats these specially: it
+ * records the reason, sends the job straight to the DLQ, and deliberately does NOT trip the shared
+ * circuit breaker (which is reserved for systemic failures like rate limits and outages). Without
+ * that distinction one bad row burns all 6 retries and re-opens the method circuit each time,
+ * slowing every other job for the same org — most visibly during a class import, when the whole
+ * roster is enqueued at once.
+ */
+export class NonRetryableGitHubError extends Error {}
+
+/**
+ * Deterministic, non-retryable repo-creation failure — e.g. the template/source repo is empty or
+ * missing, so no amount of retrying will produce a populated student repo. The worker also records
+ * the reason on the repository row.
+ */
+export class NonRetryableRepoError extends NonRetryableGitHubError {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableRepoError";
+  }
+}
+
+/**
+ * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
+ * from the numeric account id we stored when they linked their account (see
+ * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
+ * theirs — a typo at enrollment. Someone has to correct the username; retrying won't.
+ */
+export class NonRetryableUserError extends NonRetryableGitHubError {
+  readonly githubUsername: string;
+  constructor(message: string, githubUsername: string) {
+    super(message);
+    this.name = "NonRetryableUserError";
+    this.githubUsername = githubUsername;
   }
 }
 
@@ -351,37 +388,13 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
     level: "info"
   });
   if (installations.length === 0) {
-    let connection: Bottleneck.IORedisConnection | undefined;
-    // Back the GitHub API throttle with the shared Redis whenever ANY backend is
-    // configured (REDIS_URL first, then Upstash), via the same env-based factory
-    // the rest of the app uses. Previously this only built a connection when
-    // UPSTASH_* was set; on a REDIS_URL-only deployment `connection` stayed
-    // undefined, so @octokit/plugin-throttling fell back to a LOCAL per-isolate
-    // limiter — the GitHub rate limit was NOT coordinated across the (12-20)
-    // edge replicas, and no `b_pawtograder-production_*` state landed in the
-    // shared Redis for the metrics function to read. (The old UPSTASH_* branch
-    // also referenced an unimported `Redis` identifier, so it would have thrown
-    // a ReferenceError if ever taken.)
-    const throttleRedisOpts = bottleneckRedisOptions();
-    if (throttleRedisOpts) {
-      connection = new Bottleneck.IORedisConnection({
-        clientOptions: throttleRedisOpts.clientOptions,
-        Redis: throttleRedisOpts.Redis
-      });
-      try {
-        // Log connection lifecycle for verification
-        connection.ready
-          .then(() => {
-            console.log("IORedisConnection ready for GitHub throttling");
-          })
-          .catch((e: unknown) => {
-            console.error("IORedisConnection failed to initialize", e);
-          });
-        connection.on("error", (err: Error) => console.error(err));
-      } catch (e) {
-        console.error("Failed to attach IORedisConnection logging", e);
-      }
-    }
+    // Back the GitHub API throttle with the SAME shared Redis connection every
+    // limiter uses (getBottleneckConnection), so the throttle coordinates the
+    // GitHub rate limit across the 12-20 edge replicas and lands
+    // `b_pawtograder-production_*` state in Redis for the metrics function —
+    // without opening yet another connection pair. Undefined when no backend is
+    // configured (@octokit/plugin-throttling then falls back to a local limiter).
+    const connection: Bottleneck.IORedisConnection | undefined = getBottleneckConnection() ?? undefined;
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
       const orgLogin = i.account?.login || "";
@@ -516,6 +529,19 @@ export function toPublicSupabaseUrl(url: string): string {
   const internalBase = Deno.env.get("SUPABASE_URL");
   if (!publicBase || !internalBase || !url.startsWith(internalBase)) return url;
   return publicBase.replace(/\/+$/, "") + url.slice(internalBase.length);
+}
+
+/**
+ * The Supabase origin to hand to a consumer OUTSIDE the cluster — a base URL to
+ * build a client from, rather than an already-signed URL to rebase.
+ *
+ * Same split as toPublicSupabaseUrl: SUPABASE_URL is the in-cluster Kong service
+ * and is unresolvable off-cluster, so anything we send out must use
+ * SUPABASE_PUBLIC_URL. Falls back to SUPABASE_URL when unset (supabase.com
+ * hosting, where SUPABASE_URL is already the public origin).
+ */
+export function publicSupabaseUrl(): string {
+  return Deno.env.get("SUPABASE_PUBLIC_URL") || Deno.env.get("SUPABASE_URL") || "";
 }
 
 export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sentry.Scope) {
@@ -1006,6 +1032,203 @@ function stubFakeSha(prefix: string, keyForHash: string): string {
   return `${prefix}${safe}`;
 }
 
+/**
+ * True when a repo has no commits on its default branch (genuinely empty). GitHub returns 409
+ * "Git Repository is empty" (or 404 on the ref) for a repo with no commits; anything else means it
+ * has content. Callers use this only for repos already known to exist.
+ */
+export async function isRepoEmpty(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  const meta = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const defaultBranch = meta.data.default_branch || "main";
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${defaultBranch}`
+    });
+    return false;
+  } catch (e) {
+    if (e instanceof RequestError && (e.status === 409 || e.status === 404)) {
+      return true;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Throws NonRetryableRepoError when the source template/fork repo has nothing to copy (missing or
+ * empty). This turns the true root cause of a blank student repo into a precise, non-retryable
+ * error instead of an endless delete/regenerate loop.
+ */
+export async function assertSourceNotEmpty(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sourceFullName: string
+): Promise<void> {
+  let empty: boolean;
+  try {
+    empty = await isRepoEmpty(octokit, owner, repo);
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      throw new NonRetryableRepoError(`Source repository ${sourceFullName} was not found`);
+    }
+    throw e;
+  }
+  if (empty) {
+    throw new NonRetryableRepoError(
+      `Source repository ${sourceFullName} is empty (no commits on its default branch); cannot create a student repo from it`
+    );
+  }
+}
+
+/**
+ * True when a repo create/generate/fork request failed because the target name is already taken.
+ * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
+ * top-level message OR inside response.data.errors[], so check both rather than a single brittle
+ * substring against message alone.
+ */
+function isRepoNameAlreadyExistsError(e: unknown): boolean {
+  if (!(e instanceof RequestError)) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string; field?: string };
+        haystacks.push(eo.message ?? "", eo.field ?? "");
+      }
+    }
+  }
+  const joined = haystacks.join(" ").toLowerCase();
+  return joined.includes("name already exists") || joined.includes("already exists on this account");
+}
+
+/**
+ * True when a `POST /orgs/{org}/teams` failed because a team with that name already exists.
+ * GitHub returns 422 with `errors: [{ resource: "Team", code: "already_exists", field: "name" }]`;
+ * the human message varies ("already exists", "Name must be unique for this org"), so check the
+ * structured `code` first and fall back to the message. This lets team creation be idempotent under
+ * concurrent syncs (two workers both 404 on GET, both POST, one 422s) and when a same-named team was
+ * created out-of-band.
+ */
+export function isTeamAlreadyExistsError(e: unknown): boolean {
+  if (!(e instanceof RequestError) || e.status !== 422) return false;
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (err && typeof err === "object" && (err as { code?: string }).code === "already_exists") {
+        return true;
+      }
+    }
+  }
+  const msg = (e.message ?? "").toLowerCase();
+  return msg.includes("already exists") || msg.includes("name must be unique");
+}
+
+/**
+ * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
+ * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
+ * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
+ */
+async function finalizeRepo(
+  octokit: Octokit,
+  org: string,
+  repoName: string,
+  opts: { is_template_repo?: boolean; branch_protection?: BranchProtectionConfig },
+  scope?: Sentry.Scope
+): Promise<string> {
+  const { is_template_repo, branch_protection = DEFAULT_BRANCH_PROTECTION } = opts;
+  // Enable squash merging; set template flag when applicable. These are non-essential settings on an
+  // otherwise-usable repo, and this finalize runs on idempotent re-runs against already-existing
+  // (adopted) repos too — so log-and-continue on failure rather than failing the whole creation,
+  // matching the enable-Actions and ruleset steps below.
+  scope?.setTag("github_operation", "patch_repo_settings");
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("PATCH /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName,
+          allow_squash_merge: true,
+          is_template: is_template_repo ? true : false
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+  } catch (patchErr) {
+    console.error("Error patching repo settings (squash merge / template flag)", patchErr);
+    scope?.setTag("patch_repo_settings_failed", "true");
+    Sentry.captureException(patchErr, scope);
+  }
+  // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+  scope?.setTag("github_operation", "enable_actions");
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+          owner: org,
+          repo: repoName,
+          enabled: true,
+          allowed_actions: "all"
+        }),
+      3,
+      1000,
+      scope
+    );
+  } catch (actionsErr) {
+    console.error("Error enabling GitHub Actions", actionsErr);
+    scope?.setTag("enable_actions_failed", "true");
+    Sentry.captureException(actionsErr, scope);
+  }
+  // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
+  // UPSTREAM's default branch (which may be `master`), and a template-generated repo inherits the
+  // template's. Hardcoding `heads/main` would 404 the ref lookup for any such repo.
+  scope?.setTag("github_operation", "get_default_branch");
+  const repoMeta = await retryWithBackoff(
+    () =>
+      octokit.request("GET /repos/{owner}/{repo}", {
+        owner: org,
+        repo: repoName
+      }),
+    3, // maxRetries
+    1000, // baseDelayMs
+    scope
+  );
+  const defaultBranch = repoMeta.data.default_branch || "main";
+  scope?.setTag("default_branch", defaultBranch);
+  scope?.setTag("github_operation", "get_head_sha");
+  scope?.setTag("ref", `heads/${defaultBranch}`);
+  const heads = await retryWithBackoff(
+    () =>
+      octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+        owner: org,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`
+      }),
+    5, // maxRetries
+    3000, // baseDelayMs
+    scope
+  );
+  scope?.setTag("head_sha", heads.data.object.sha);
+
+  // Apply branch protection ruleset per the assignment's configuration.
+  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  try {
+    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
+  } catch (rulesetError) {
+    // Log but don't fail repo creation if ruleset creation fails
+    console.error("Error applying branch protection ruleset", rulesetError);
+    scope?.setTag("ruleset_creation_failed", "true");
+    Sentry.captureException(rulesetError, scope);
+  }
+
+  return heads.data.object.sha as string;
+}
+
 export async function createRepo(
   org: string,
   repoName: string,
@@ -1048,13 +1271,12 @@ export async function createRepo(
   const owner = template_repo.split("/")[0];
   const repo = template_repo.split("/")[1];
 
-  try {
-    scope?.setTag("github_operation", "create_repo_request");
-    scope?.setTag("template_repo", template_repo);
-    scope?.setTag("template_owner", owner);
-    scope?.setTag("repo_name", repoName);
-    scope?.setTag("org", org);
-    console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
+  // Runs the create step (generate or fork) then blocks until GitHub finishes populating the repo.
+  // Both APIs mirror content asynchronously, so we must wait for size>0 before reading the head SHA
+  // (previously only the fork path waited — the generate path could read an empty ref and fail, or
+  // return before content landed). Shared by the fresh-create path and the delete+regenerate repair
+  // path so the two never drift.
+  const createAndWaitReady = async (): Promise<void> => {
     if (creation_method === "fork") {
       // Fork the upstream into our org with the chosen name. Forks are
       // asynchronous on GitHub's side, so we poll for size > 0 below.
@@ -1071,7 +1293,6 @@ export async function createRepo(
         5000, // baseDelayMs
         scope
       );
-      await waitForRepoReady(octokit, org, repoName, scope);
     } else {
       const resp = await retryWithBackoff(
         () =>
@@ -1088,181 +1309,77 @@ export async function createRepo(
       );
       console.log(JSON.stringify(resp.headers, null, 2));
     }
-    scope?.setTag("github_operation", "create_repo_request_done");
-    // Enable squash merging; set template flag when applicable
-    scope?.setTag("github_operation", "patch_repo_settings");
-    await retryWithBackoff(
-      () =>
-        octokit.request("PATCH /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName,
-          allow_squash_merge: true,
-          is_template: is_template_repo ? true : false
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
-    );
-    // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
-    scope?.setTag("github_operation", "enable_actions");
-    try {
-      await retryWithBackoff(
-        () =>
-          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-            owner: org,
-            repo: repoName,
-            enabled: true,
-            allowed_actions: "all"
-          }),
-        3,
-        1000,
-        scope
-      );
-    } catch (actionsErr) {
-      console.error("Error enabling GitHub Actions", actionsErr);
-      scope?.setTag("enable_actions_failed", "true");
-      Sentry.captureException(actionsErr, scope);
-    }
-    //Get the head SHA. Resolve the repo's actual default branch rather than
-    // assuming `main`: a FORK inherits the UPSTREAM's default branch (which may be
-    // `master`), and a template-generated repo inherits the template's. Hardcoding
-    // `heads/main` 404s the ref lookup for any such repo, so retryWithBackoff
-    // exhausts its 5 retries and throws, failing the whole student's repo creation
-    // even though the repo itself was created fine. Mirrors mergeForkUpstream's
-    // `repoMeta.data.default_branch` resolution.
-    scope?.setTag("github_operation", "get_default_branch");
-    const repoMeta = await retryWithBackoff(
-      () =>
-        octokit.request("GET /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
-    );
-    const defaultBranch = repoMeta.data.default_branch || "main";
-    scope?.setTag("default_branch", defaultBranch);
-    scope?.setTag("github_operation", "get_head_sha");
-    scope?.setTag("ref", `heads/${defaultBranch}`);
-    const heads = await retryWithBackoff(
-      () =>
-        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          owner: org,
-          repo: repoName,
-          ref: `heads/${defaultBranch}`
-        }),
-      5, // maxRetries
-      3000, // baseDelayMs
-      scope
-    );
-    scope?.setTag("head_sha", heads.data.object.sha);
+    await waitForRepoReady(octokit, org, repoName, scope);
+  };
 
-    // Apply branch protection ruleset per the assignment's configuration.
-    scope?.setTag("github_operation", "create_branch_protection_ruleset");
-    try {
-      await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
-    } catch (rulesetError) {
-      // Log but don't fail repo creation if ruleset creation fails
-      console.error("Error applying branch protection ruleset", rulesetError);
-      scope?.setTag("ruleset_creation_failed", "true");
-      Sentry.captureException(rulesetError, scope);
-    }
+  scope?.setTag("github_operation", "create_repo_request");
+  scope?.setTag("template_repo", template_repo);
+  scope?.setTag("template_owner", owner);
+  scope?.setTag("repo_name", repoName);
+  scope?.setTag("org", org);
+  console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
 
-    return heads.data.object.sha as string;
-  } catch (e) {
-    console.error("Error creating repo", e);
-    if (e instanceof RequestError) {
-      if (e.message.includes("Name already exists on this account")) {
-        // Repo already exists, get the head SHA. Resolve its default branch (may be
-        // `master`, not `main`) for the same reason as the fresh-create path above.
-        scope?.setTag("repo_already_exists", "true");
-        scope?.setTag("github_operation", "get_existing_repo_default_branch");
-        const existingMeta = await retryWithBackoff(
-          () =>
-            octokit.request("GET /repos/{owner}/{repo}", {
-              owner: org,
-              repo: repoName
-            }),
-          3, // maxRetries
-          1000, // baseDelayMs
-          scope
-        );
-        const existingDefaultBranch = existingMeta.data.default_branch || "main";
-        scope?.setTag("default_branch", existingDefaultBranch);
-        scope?.setTag("github_operation", "get_existing_repo_head_sha");
-        scope?.setTag("ref", `heads/${existingDefaultBranch}`);
-        const heads = await retryWithBackoff(
-          () =>
-            octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-              owner: org,
-              repo: repoName,
-              ref: `heads/${existingDefaultBranch}`
-            }),
-          3, // maxRetries
-          1000, // baseDelayMs
-          scope
-        );
-        scope?.setTag("head_sha", heads.data.object.sha);
-        // Match settings we apply on fresh creates (e.g. squash merge).
-        try {
-          await retryWithBackoff(
-            () =>
-              octokit.request("PATCH /repos/{owner}/{repo}", {
-                owner: org,
-                repo: repoName,
-                allow_squash_merge: true,
-                is_template: is_template_repo ? true : false
-              }),
-            3,
-            1000,
-            scope
-          );
-        } catch (patchErr) {
-          console.error("Error patching repo settings for pre-existing repo", patchErr);
-          scope?.setTag("patch_existing_repo_settings_failed", "true");
-          Sentry.captureException(patchErr, scope);
+  try {
+    await createAndWaitReady();
+  } catch (createErr) {
+    if (isRepoNameAlreadyExistsError(createErr)) {
+      // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If
+      // it is EMPTY, a previous attempt left it half-created — REPAIR it by deleting and
+      // regenerating rather than adopting a blank repo forever (the old, broken behavior).
+      scope?.setTag("repo_already_exists", "true");
+      const empty = await isRepoEmpty(octokit, org, repoName);
+      scope?.setTag("existing_repo_empty", empty.toString());
+      if (empty) {
+        // Diagnose the source first: a genuinely-broken template must yield a precise,
+        // non-retryable error instead of an endless delete/regenerate loop.
+        await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+        // Safety invariant: only ever delete a VERIFIED-EMPTY repo, and never the template/source.
+        if (org === owner && repoName === repo) {
+          throw new NonRetryableRepoError(`Refusing to delete ${org}/${repoName}: it is the template/source repo`);
         }
-        // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
-        scope?.setTag("github_operation", "enable_actions");
+        scope?.setTag("github_operation", "delete_empty_repo_for_repair");
         try {
-          await retryWithBackoff(
-            () =>
-              octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-                owner: org,
-                repo: repoName,
-                enabled: true,
-                allowed_actions: "all"
-              }),
-            3,
-            1000,
-            scope
-          );
-        } catch (actionsErr) {
-          console.error("Error enabling GitHub Actions for pre-existing repo", actionsErr);
-          scope?.setTag("enable_actions_failed", "true");
-          Sentry.captureException(actionsErr, scope);
+          await octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName });
+        } catch (delErr) {
+          if (!(delErr instanceof RequestError) || delErr.status !== 404) throw delErr;
         }
-        // Apply branch protection on the pre-existing repo too — the fresh-create
-        // branch does this just before returning (line ~973). Without this call,
-        // re-running repo creation against an already-existing repo would leave
-        // its ruleset stale relative to the assignment config.
-        scope?.setTag("github_operation", "create_branch_protection_ruleset_existing");
+        // GitHub frees the name shortly after deletion; give it a moment before regenerating.
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         try {
-          await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
-        } catch (rulesetError) {
-          console.error("Error applying branch protection ruleset on existing repo", rulesetError);
-          scope?.setTag("ruleset_creation_failed", "true");
-          Sentry.captureException(rulesetError, scope);
+          await createAndWaitReady();
+        } catch (repairErr) {
+          // If the regenerated repo still never receives content, diagnose the source. A genuinely
+          // empty/missing template makes assertSourceNotEmpty throw a terminal NonRetryableRepoError.
+          // If the source is HEALTHY, the repo has simply not finished mirroring yet — a transient
+          // condition, so let the original readiness error propagate as retryable rather than
+          // dead-lettering a slow-but-fine repo on the first attempt.
+          if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
+            console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
+            await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+          }
+          throw repairErr;
         }
-        return heads.data.object.sha as string;
-      } else {
-        throw e;
       }
+      // else: existing non-empty repo — fall through to the shared finalize block to adopt it.
+    } else if (createErr instanceof UserVisibleError && createErr.message.includes("did not become ready")) {
+      // The create call succeeded but the repo has not received content yet. Diagnose the source: a
+      // genuinely empty/missing template makes assertSourceNotEmpty throw a terminal
+      // NonRetryableRepoError. If the source is HEALTHY, GitHub has simply not finished mirroring — a
+      // transient condition, so re-throw the original readiness error as retryable rather than
+      // dead-lettering a slow-but-fine repo on the first attempt.
+      console.error("Repo did not become ready after create", createErr);
+      await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+      throw createErr;
     } else {
-      throw e;
+      console.error("Error creating repo", createErr);
+      throw createErr;
     }
   }
+
+  scope?.setTag("github_operation", "create_repo_request_done");
+  // Shared finalize (settings, Actions, head SHA, branch protection) for fresh, repaired, and
+  // adopted-pre-existing repos alike.
+  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope);
 }
 
 /**
@@ -1498,8 +1615,27 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
         owner: org,
         repo: repoName
       });
+      // `size` is only refreshed by a lagging GitHub background job — on a freshly generated/forked
+      // repo it can stay 0 for minutes even after the content has landed, so it is NOT a reliable
+      // readiness signal on its own (a fully-populated repo would time out here). Keep it as a fast
+      // positive, but the authoritative signal is the default-branch ref existing: it appears as
+      // soon as the initial commit is mirrored, which is exactly "content is ready to read".
       if (data && (data as { size?: number }).size && (data as { size?: number }).size! > 0) {
         return;
+      }
+      const defaultBranch = (data as { default_branch?: string }).default_branch || "main";
+      try {
+        await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: org,
+          repo: repoName,
+          ref: `heads/${defaultBranch}`
+        });
+        return; // default branch ref exists → the initial commit has landed
+      } catch (refErr) {
+        // 404/409 → branch not created yet; anything else is a real error.
+        if (!(refErr instanceof RequestError) || (refErr.status !== 404 && refErr.status !== 409)) {
+          throw refErr;
+        }
       }
     } catch (e) {
       if (!(e instanceof RequestError) || e.status !== 404) {
@@ -1508,7 +1644,7 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new UserVisibleError(`Fork ${org}/${repoName} did not become ready in time`);
+  throw new UserVisibleError(`Repo ${org}/${repoName} did not become ready in time`);
 }
 async function listFilesInRepoDirectory(
   octokit: Octokit,
@@ -1698,38 +1834,25 @@ export async function syncTeam(
     console.warn("No octokit found for organization " + org);
     return;
   }
-  let team_id: number;
-  try {
-    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
-      org,
-      team_slug
-    });
-    team_id = team.data.id;
-    console.log(`Found team ${team_slug} with id ${team_id}`);
-  } catch (e) {
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
-      // Team doesn't exist, create it
-      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
-        org,
-        name: team_slug
-      });
-      team_id = newTeam.data.id;
-      console.log(`Created team ${team_slug} with id ${team_id}`);
-    } else {
-      throw e;
-    }
-  }
+  const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
+  // Use the team's ACTUAL slug for every subsequent team endpoint: if the team was resolved
+  // out-of-band, GitHub's normalized slug can differ from the requested name, and the member
+  // endpoints would 404 on the requested slug.
+  const resolvedSlug = team.data.slug ?? team_slug;
+  console.log(`Using team ${resolvedSlug} with id ${team.data.id}`);
   let members: Endpoints["GET /orgs/{org}/teams/{team_slug}/members"]["response"]["data"][] = [];
   try {
     const data = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       per_page: 100
     });
     members = data;
   } catch (e) {
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
-      console.log(`Team ${team_slug} not found`);
+    // Match on the 404 status, not the message text (GitHub rewords "Not Found"), consistent with
+    // getTeamAndCreateIfNeeded's status-based checks.
+    if (e instanceof RequestError && e.status === 404) {
+      console.log(`Team ${resolvedSlug} not found`);
       console.log(e);
       //This seems to happen when there are no members in the team?
       members = [];
@@ -1741,15 +1864,15 @@ export async function syncTeam(
   const existingMembers = members.map((m) => m.login.toLowerCase());
   const newMembers = githubUsernames.filter((u) => u && !existingMembers.includes(u));
   const removeMembers = existingMembers.filter((u) => u && !githubUsernames.includes(u));
-  console.log(`Class team: ${team_slug} intended members: ${githubUsernames.join(", ")}`);
-  console.log(`Existing members in team ${team_slug}: ${members.map((m) => m.login).join(", ")}`);
+  console.log(`Class team: ${resolvedSlug} intended members: ${githubUsernames.join(", ")}`);
+  console.log(`Existing members in team ${resolvedSlug}: ${members.map((m) => m.login).join(", ")}`);
   console.log(`New members to add: ${newMembers.join(", ")}`);
   console.log(`Members to remove: ${removeMembers.join(", ")}`);
   for (const username of newMembers) {
     try {
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
-        team_slug,
+        team_slug: resolvedSlug,
         username,
         role: "member"
       });
@@ -1763,38 +1886,133 @@ export async function syncTeam(
     }
   }
   for (const username of removeMembers) {
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing member from team ${team_slug}`, newScope);
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       username
     });
   }
 }
-async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit: Octokit) {
+/**
+ * Idempotently resolve a team by slug, creating it if it doesn't exist yet. Tolerates the race /
+ * pre-existing cases where `GET` 404s but `POST` then 422s ("already_exists"): on that 422 we
+ * re-fetch by slug, and if the existing team's slug differs from the requested name we locate it in
+ * the org's team list. Callers use `.data.id` / `.data.slug`.
+ */
+export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, octokit: Octokit) {
+  // Fast path: the team already exists under this slug.
   try {
-    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
-      org,
-      team_slug
-    });
-    return team;
+    return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
   } catch (e) {
-    console.log(`Team ${team_slug} not found, creating it`);
-    if (e instanceof RequestError && e.message.includes("Not Found")) {
-      // Team doesn't exist, create it
-      const newTeam = await octokit.request("POST /orgs/{org}/teams", {
-        org,
-        name: team_slug
-      });
-      return newTeam;
+    if (!(e instanceof RequestError && e.status === 404)) {
+      throw e;
     }
-    throw e;
+  }
+
+  // Not found by slug — create it.
+  console.log(`Team ${team_slug} not found, creating it`);
+  try {
+    return await octokit.request("POST /orgs/{org}/teams", { org, name: team_slug });
+  } catch (e) {
+    if (!isTeamAlreadyExistsError(e)) {
+      throw e;
+    }
+    // A team with this name already exists (concurrent create won, or created out-of-band).
+    // Re-fetch by slug; the created slug usually matches the requested name.
+    console.log(`Team ${team_slug} already exists, resolving existing team`);
+    try {
+      return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+    } catch (refetchErr) {
+      // Only treat a 404 as a slug-normalization mismatch worth a full team scan. A transient
+      // error (5xx, rate limit, network) must propagate rather than be masked by the fallback.
+      if (!(refetchErr instanceof RequestError && refetchErr.status === 404)) {
+        throw refetchErr;
+      }
+      // GitHub may have normalized the slug differently from the name — find it by name/slug.
+      const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
+      const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
+      if (!match) {
+        throw e;
+      }
+      return await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: match.slug });
+    }
   }
 }
 
-export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
+const teamSlugCache = new Map<string, Promise<string>>();
+
+/**
+ * Resolve a team's actual GitHub slug, tolerating the case where GitHub normalized the team's slug
+ * differently from the `${courseSlug}-…` name we derive (e.g. a team created out-of-band). GET by the
+ * requested slug; on 404, scan the org's teams for one whose slug or name matches. Falls back to the
+ * requested slug when the team can't be found, so callers behave exactly as before in the common case
+ * (course slugs are already GitHub-normalized). Unlike getTeamAndCreateIfNeeded this never creates a
+ * team, so it's safe on read/permission paths that must not materialize an unwanted team.
+ *
+ * Only a *genuine* resolution (the team was found) is cached, keyed per (org, requestedSlug) so
+ * repeated per-repo permission syncs don't refetch. A no-match fallback is NOT cached: the team may
+ * simply not exist yet, and a later team-sync could create it within the same warm isolate — caching
+ * the miss would keep every retry hitting the wrong slug until cold start.
+ */
+export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
+  // JSON tuple, not `org + "-" + team_slug`: string concat is ambiguous (org "a-b"/slug "c" would
+  // collide with org "a"/slug "b-c") and could reuse one course's resolved slug for another.
+  const cacheKey = JSON.stringify([org, team_slug]);
+  const cached = teamSlugCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const pending = (async () => {
+    let slug = team_slug;
+    let resolved = false;
+    try {
+      const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+      slug = team.data.slug ?? team_slug;
+      resolved = true;
+    } catch (e) {
+      if (!(e instanceof RequestError && e.status === 404)) {
+        throw e;
+      }
+      const teams = await octokit.paginate("GET /orgs/{org}/teams", { org, per_page: 100 });
+      const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
+      if (match?.slug) {
+        slug = match.slug;
+        resolved = true;
+      }
+    }
+    // Don't retain a no-match fallback so a retry re-checks once the team exists.
+    if (!resolved) {
+      teamSlugCache.delete(cacheKey);
+    }
+    return slug;
+  })().catch((err) => {
+    teamSlugCache.delete(cacheKey);
+    throw err;
+  });
+  teamSlugCache.set(cacheKey, pending);
+  return pending;
+}
+
+export async function reinviteToOrgTeam(
+  org: string,
+  team_slug: string,
+  githubUsername: string,
+  scope?: Sentry.Scope,
+  options: {
+    /**
+     * Set on the one recursive retry after a username was re-resolved, so a login that 404s again
+     * fails instead of looping.
+     */
+    skipUsernameReresolve?: boolean;
+    /**
+     * The Pawtograder user this login belongs to. Optional, but pass it when you have it: it's the
+     * only stable handle on the user if their GitHub login has to be re-resolved. Looking them up by
+     * the login instead is racy — a concurrent (or, in `github-user-sync`, merely earlier) invitation
+     * for the same person may already have replaced it.
+     */
+    userId?: string;
+  } = {}
+) {
   scope?.setTag("github_operation", "reinvite_to_team");
   scope?.setTag("org", org);
   scope?.setTag("team_slug", team_slug);
@@ -1810,53 +2028,92 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     throw new Error("No octokit found for organization " + org);
   }
   const team = await getTeamAndCreateIfNeeded(org, team_slug, octokit);
-  const user = await octokit.request("GET /users/{username}", {
-    username: githubUsername
-  });
+  // Use the team's ACTUAL slug for GitHub team endpoints (see syncTeam). Keep the requested
+  // team_slug for markUserRoleOrgConfirmedForTeam, which derives the class slug from our naming
+  // convention (`{classSlug}-staff|-students`), not GitHub's normalization.
+  const resolvedSlug = team.data.slug ?? team_slug;
+  const user = await getGitHubUserIfExists(octokit, githubUsername);
+  if (!user) {
+    // The login we have on file doesn't exist on GitHub. Usually that means the student renamed
+    // their account, so recover the current login from the account id we stored at link time and
+    // start over with it — every membership check and write below has to use the same username,
+    // and recursing is how they all get the new one. `reresolveMissingGitHubLogin` throws
+    // NonRetryableUserError when there's nothing to recover, which keeps a single bad username out
+    // of the retry/circuit-breaker machinery.
+    if (options.skipUsernameReresolve) {
+      throw new NonRetryableUserError(
+        `GitHub user ${githubUsername} does not exist, even after re-resolving from the stored GitHub account id`,
+        githubUsername
+      );
+    }
+    const currentUsername = await reresolveMissingGitHubLogin(octokit, githubUsername, scope, options.userId);
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Login ${githubUsername} no longer exists; re-resolved to ${currentUsername} from the stored account id, retrying invitation`,
+      level: "info"
+    });
+    return await reinviteToOrgTeam(org, team_slug, currentUsername, scope, {
+      skipUsernameReresolve: true,
+      userId: options.userId
+    });
+  }
   const userID = user.data.id;
   const teamID = team.data.id;
   scope?.addBreadcrumb({
     category: "github",
-    message: `Team ${team_slug} has id ${teamID}`,
+    message: `Team ${resolvedSlug} has id ${teamID}`,
     level: "info"
   });
 
-  // Check if user is already in the team
+  // Check if user is already in the team. Keep ONLY the membership *check* inside this try, so a
+  // failure to read team members degrades to "proceed with invitation" — but the confirmation write
+  // below is deliberately outside it (see next block).
+  let isUserInTeam = false;
   try {
     scope?.addBreadcrumb({
       category: "github",
-      message: `Checking if user ${githubUsername} is already in team ${team_slug}...`,
+      message: `Checking if user ${githubUsername} is already in team ${resolvedSlug}...`,
       level: "info"
     });
     const teamMembers = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       per_page: 100 // Optimize for large teams
     });
     scope?.addBreadcrumb({
       category: "github",
-      message: `Found ${teamMembers.length} members in team ${team_slug}`,
+      message: `Found ${teamMembers.length} members in team ${resolvedSlug}`,
       level: "info"
     });
-
-    const isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
-    if (isUserInTeam) {
-      scope?.addBreadcrumb({
-        category: "github",
-        message: `User ${githubUsername} is already in team ${team_slug}`,
-        level: "info"
-      });
-      return false;
-    }
-    scope?.addBreadcrumb({
-      category: "github",
-      message: `User ${githubUsername} is not in team ${team_slug}, proceeding with invitation`,
-      level: "info"
-    });
+    // GitHub logins are case-insensitive; compare lowercased (as syncTeam does) so a casing
+    // difference between the members endpoint and githubUsername doesn't miss an existing member.
+    isUserInTeam = teamMembers.some((member) => member.login.toLowerCase() === githubUsername.toLowerCase());
   } catch (error) {
     console.log(`Error checking team membership: ${error}`);
     // Continue with invitation if we can't check membership
   }
+
+  if (isUserInTeam) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} is already in team ${resolvedSlug}; marking org-confirmed`,
+      level: "info"
+    });
+    // Guarantee our side reflects reality regardless of the caller: a user already in the team must
+    // have github_org_confirmed set, or the "accept your invitation" banner never clears. Let a
+    // failure here PROPAGATE rather than returning false: reporting a successful reconciliation when
+    // the confirmation write didn't stick would let the async team sync (whose intended-member query
+    // filters on github_org_confirmed = true) drop this already-present user from the team. Because
+    // this runs outside the membership-check try above, the throw isn't misattributed as a
+    // membership-check failure and doesn't fall through to the (redundant) invite flow.
+    await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+    return false;
+  }
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `User ${githubUsername} is not in team ${resolvedSlug}, proceeding with invitation`,
+    level: "info"
+  });
 
   // Proactively check whether the user is already an active member of the org.
   // GitHub's POST /orgs/{org}/invitations endpoint only works for non-members; for users that are
@@ -1899,12 +2156,12 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   if (isAlreadyActiveOrgMember) {
     scope?.addBreadcrumb({
       category: "github",
-      message: `User ${githubUsername} is already in org ${org}; adding directly to team ${team_slug}`,
+      message: `User ${githubUsername} is already in org ${org}; adding directly to team ${resolvedSlug}`,
       level: "info"
     });
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
-      team_slug,
+      team_slug: resolvedSlug,
       username: githubUsername,
       role: "member"
     });
@@ -1970,13 +2227,13 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     if (structurallyAlreadyMember || textuallyAlreadyMember) {
       scope?.addBreadcrumb({
         category: "github",
-        message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`,
+        message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${resolvedSlug}`,
         level: "info"
       });
-      //Add them to the team directly...
+      //Add them to the team directly (use the team's actual slug, not the requested class slug)...
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
-        team_slug,
+        team_slug: resolvedSlug,
         username: githubUsername,
         role: "member"
       });
@@ -2018,18 +2275,136 @@ async function getOrgMembers(
   });
   return members;
 }
+/**
+ * `GET /users/{login}`, returning null when GitHub says the login doesn't exist instead of throwing.
+ * A missing login is a data problem about one person, not a GitHub failure, so callers get to decide
+ * what to do about it (see `reresolveMissingGitHubLogin`).
+ */
+export async function getGitHubUserIfExists(octokit: Octokit, username: string) {
+  try {
+    return await octokit.request("GET /users/{username}", { username });
+  } catch (e) {
+    if ((e as { status?: number })?.status === 404) {
+      return null;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Recover the current GitHub login for a user whose stored login has stopped resolving.
+ *
+ * GitHub logins are mutable but account ids are not, so `users.github_user_id` — captured when the
+ * user linked their account — still points at the right account after a rename. Look the account up
+ * by id, write the new login back to `users`, and return it.
+ *
+ * Throws NonRetryableUserError ONLY for a verdict about the account itself: a user row with no
+ * account id on file (the username was typed by hand and never linked), or an id GitHub 404s on
+ * (deleted account). Everything else — a 5xx or rate limit from GitHub, a failed Postgres read or
+ * write, a user row we couldn't locate — propagates as itself, because the worker turns a
+ * NonRetryableUserError into an immediate DLQ. Writing a student's invitation off permanently
+ * because GitHub was briefly unavailable is exactly the outcome the retry machinery exists to
+ * prevent, so this deliberately does not use `updateGitHubUsernameForUser`, which swallows
+ * operational failures to keep bulk syncs going.
+ */
+async function reresolveMissingGitHubLogin(
+  octokit: Octokit,
+  username: string,
+  scope?: Sentry.Scope,
+  userId?: string
+): Promise<string> {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+  // Prefer the caller's stable user id. Finding the row by login is inherently racy here: the login
+  // we were handed is one GitHub says doesn't exist, and another invitation for the same person —
+  // concurrently in a worker batch, or an earlier iteration of github-user-sync's per-class loop —
+  // may already have replaced it with the current one.
+  const userQuery = adminSupabase.from("users").select("user_id, github_user_id");
+  const { data: userData, error: userError } = await (
+    userId ? userQuery.eq("user_id", userId) : userQuery.ilike("github_username", username)
+  ).maybeSingle();
+  if (userError) {
+    throw new Error(`Error looking up stored GitHub account id for ${username}: ${userError.message}`);
+  }
+  if (!userData) {
+    // Retryable on purpose. A missing row is not evidence about the account: most likely someone
+    // else just renamed this user out from under us, in which case the next attempt re-reads the
+    // current login upstream and never gets here at all.
+    throw new Error(
+      `GitHub user ${username} does not exist and no user row matches that login (it may have just been re-resolved by a concurrent invitation)`
+    );
+  }
+  if (!userData.github_user_id) {
+    throw new NonRetryableUserError(
+      `GitHub user ${username} does not exist and we have no GitHub account id on file to re-resolve them from (the username was never linked to an account)`,
+      username
+    );
+  }
+
+  let account;
+  try {
+    account = await octokit.request("GET /user/{account_id}", {
+      account_id: Number(userData.github_user_id),
+      headers: { "X-GitHub-Api-Version": "2022-11-28" }
+    });
+  } catch (e) {
+    if ((e as { status?: number })?.status === 404) {
+      throw new NonRetryableUserError(
+        `GitHub user ${username} does not exist and neither does GitHub account id ${userData.github_user_id} on file for them (account deleted)`,
+        username
+      );
+    }
+    throw e;
+  }
+
+  const currentLogin = account.data.login?.toLowerCase();
+  if (!currentLogin) {
+    throw new NonRetryableUserError(
+      `GitHub returned no login for account id ${userData.github_user_id} (stored for ${username})`,
+      username
+    );
+  }
+  if (currentLogin === username.toLowerCase()) {
+    // GitHub says this login doesn't exist, yet the account id we hold still resolves to it. Not a
+    // rename, and not something a retry changes.
+    throw new NonRetryableUserError(
+      `GitHub user ${username} does not exist, but account id ${userData.github_user_id} still resolves to that same login`,
+      username
+    );
+  }
+
+  const { error: updateError } = await adminSupabase
+    .from("users")
+    .update({ github_username: currentLogin, last_github_user_sync: new Date().toISOString() })
+    .eq("user_id", userData.user_id);
+  if (updateError) {
+    // Retryable on purpose: we know the new login, but proceeding without recording it would leave
+    // every later job re-discovering the rename.
+    throw new Error(
+      `Failed to record re-resolved GitHub username ${currentLogin} for ${username}: ${updateError.message}`
+    );
+  }
+  scope?.setTag("github_username_reresolved", currentLogin);
+  return currentLogin;
+}
+
 async function updateGitHubUsernameForUser(
   oldUsername: string,
   octokit: Octokit,
   adminSupabase: ReturnType<typeof createClient<Database>>,
   scope?: Sentry.Scope
 ): Promise<{ oldUsername: string; newUsername: string | null }> {
-  // Find the github user id from the public.users table for the given github username
+  // Find the github user id from the public.users table for the given github username.
+  // Match case-insensitively (as the rest of this file does): callers pass logins lowercased from
+  // GitHub's API while the stored value can be mixed case, and an exact match would miss the row and
+  // silently skip the rename. `maybeSingle` so a missing row is a null, not a thrown error.
   const { data: userData, error: userError } = await adminSupabase
     .from("users")
     .select("github_user_id, user_id")
-    .eq("github_username", oldUsername)
-    .single();
+    .ilike("github_username", oldUsername)
+    .maybeSingle();
 
   if (userError || !userData?.github_user_id) {
     // User not found or no github_user_id, skip
@@ -2130,7 +2505,10 @@ export async function syncRepoPermissions(
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
-  const team_slug = `${courseSlug}-staff`;
+  // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
+  // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
+  // members/repo-access endpoints below, silently leaving repos without staff access.
+  const team_slug = await resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit);
   if (!staffTeamCache.has(org + "-" + courseSlug)) {
     staffTeamCache.set(
       org + "-" + courseSlug,
@@ -2187,8 +2565,9 @@ export async function syncRepoPermissions(
       permission: "maintain"
     });
   }
-  // Optionally grant the students team read access (mode 2 handout repos).
-  const studentsTeamSlug = `${courseSlug}-students`;
+  // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
+  // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
+  const studentsTeamSlug = await resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit);
   if (options.studentTeamPermission) {
     const hasStudentsTeam = teamsWithAccess.some(
       (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
@@ -2346,9 +2725,6 @@ export async function syncRepoPermissions(
     });
 
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
-    const newScope = scope?.clone();
-    newScope?.setTag("username", username);
-    Sentry.captureMessage(`Removing collaborator in ${org}`, newScope);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
@@ -2375,10 +2751,11 @@ async function markUserRoleOrgConfirmedForTeam({
   team_slug: string;
 }) {
   let courseSlug: string | undefined;
-  let allowedRoles: ("instructor" | "grader" | "student")[] = [];
+  let allowedRoles: ("admin" | "instructor" | "grader" | "student")[] = [];
   if (team_slug.endsWith("-staff")) {
     courseSlug = team_slug.slice(0, -"-staff".length);
-    allowedRoles = ["instructor", "grader"];
+    // "staff" is every non-student role — admins belong on the staff team too.
+    allowedRoles = ["admin", "instructor", "grader"];
   } else if (team_slug.endsWith("-students")) {
     courseSlug = team_slug.slice(0, -"-students".length);
     allowedRoles = ["student"];

@@ -6,9 +6,12 @@ that the per-dashboard ConfigMap size stays well under the 1 MiB k8s
 limit. Each carries the kube-prometheus-stack Grafana sidecar's
 discovery label `grafana_dashboard: "1"`.
 
-The sidecar uses the configured Prometheus datasource UID. We
-parameterise on ${DS_PROMETHEUS} in the JSON so the sidecar substitutes
-in the cluster's actual UID at mount time.
+Each dashboard exposes a `datasource` template variable (type
+datasource, query "prometheus"), so panels bind to whatever
+Prometheus-compatible datasource the target Grafana has (e.g. Mimir) —
+selectable at the top of the dashboard, defaulting to the default
+prometheus datasource. No hardcoded datasource UID, so the dashboards
+are portable across Grafana instances (import prompts for the DS).
 */ -}}
 {{- $ctx := . -}}
 {{- range $name, $enabled := .Values.monitoring.dashboards }}

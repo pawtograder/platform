@@ -151,8 +151,13 @@ test.describe("Admin Create Class workflow", () => {
   });
 
   test("admin creates a class with a selected org and pre-filled + new instructors", async ({ page }) => {
-    const className = `E2E Admin Created ${Date.now()}`;
-    const newInstructorEmail = `admin-create-class-new-instructor-${Date.now()}@pawtograder.net`;
+    // One token per run, used for both the class name and its template prefix. Parallel workers can
+    // land in the same millisecond, so Date.now() is not unique enough for either: a repeated prefix
+    // now violates the (github_org, slug) constraint, and a repeated name makes the maybeSingle()
+    // lookup below ambiguous.
+    const runToken = crypto.randomUUID().slice(0, 8);
+    const className = `E2E Admin Created ${runToken}`;
+    const newInstructorEmail = `admin-create-class-new-instructor-${runToken}@pawtograder.net`;
     const newInstructorName = "Brand New Instructor";
 
     // Stub the org-list edge function (incl. CORS preflight).
@@ -197,8 +202,12 @@ test.describe("Admin Create Class workflow", () => {
 
     await page.locator("#name").fill(className);
     // Template prefix (slug) is required: staff enrollment triggers a GitHub team
-    // sync that needs both org and slug on the class.
-    await page.locator("#github_template_prefix").fill("hw");
+    // sync that needs both org and slug on the class. It has to be unique within the org --
+    // (github_org, slug) is unique, since the slug names the class's GitHub teams and repos --
+    // so a fixed value here would fail on the second run. The e2e-ignore- prefix additionally
+    // makes the async worker skip the real GitHub call for the resulting team sync.
+    const templatePrefix = `e2e-ignore-admin-created-${runToken}`;
+    await page.locator("#github_template_prefix").fill(templatePrefix);
 
     // The org dropdown is required and populated from the stubbed edge function.
     await expect(page.locator("#github_org_name")).toBeVisible();

@@ -989,7 +989,10 @@ async function handlePushToTemplateRepo(
       Sentry.captureException(assignmentUpdateError, scope);
       throw assignmentUpdateError;
     }
-    //Store the commit for the template repo
+    //Store the commit for the template repo. A constraint violation here can never be fixed by
+    //redelivering the same push, so failing the webhook on one just loops forever (and blocks the
+    //handout file hashes below, which empty-submission detection depends on). Transient failures
+    //still throw so GitHub retries and the history isn't silently lost.
     const { error } = await adminSupabase.from("assignment_handout_commits").upsert(
       payload.commits.map((commit: GitHubCommit) => ({
         assignment_id: assignment.id,
@@ -1003,8 +1006,14 @@ async function handlePushToTemplateRepo(
     if (error) {
       scope.setTag("error_source", "assignment_handout_commits_insert_failed");
       scope.setTag("error_context", "Failed to store assignment handout commit");
+      console.error(`Failed to store handout commits for assignment ${assignment.id}`, error);
       Sentry.captureException(error, scope);
-      throw error;
+      // SQLSTATE class 23 = integrity constraint violation (duplicate key, foreign key, not
+      // null): the same payload will fail identically on every redelivery, so record it and move
+      // on. Anything else may be transient — rethrow and let GitHub redeliver.
+      if (!error.code?.startsWith("23")) {
+        throw error;
+      }
     }
   }
 
@@ -1396,10 +1405,12 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
       return;
     }
 
-    // Check if the team type matches the user's role
+    // Check if the team type matches the user's role. "staff" covers every non-student role
+    // (admin/instructor/grader); admins belong on the staff team just like instructors and graders,
+    // so confirm them too rather than logging a spurious mismatch.
     const userRole = userRoleData.role;
     const isCorrectTeam =
-      (teamType === "staff" && (userRole === "instructor" || userRole === "grader")) ||
+      (teamType === "staff" && (userRole === "admin" || userRole === "instructor" || userRole === "grader")) ||
       (teamType === "student" && userRole === "student");
 
     if (isCorrectTeam) {

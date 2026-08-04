@@ -725,6 +725,12 @@ verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
 
+[functions.github-repo-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/github-repo-reconciler/deno.json"
+entrypoint = "./functions/github-repo-reconciler/index.ts"
+
 [functions.gradebook-column-inserted]
 enabled = true
 verify_jwt = false

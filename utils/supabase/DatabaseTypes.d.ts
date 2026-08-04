@@ -59,6 +59,14 @@ export type ActiveSubmissionsWithGradesForAssignment =
     id: number;
     /** Present on `submissions_with_grades_for_assignment_nice` when group mentors exist. */
     assignment_group_mentor_name?: string | null;
+    /**
+     * Present on `submissions_with_grades_for_assignment_nice`. The group id for a grouped
+     * student, else null. Used to target a stub submission when the student/group has no
+     * active submission (`activesubmissionid` is null).
+     */
+    assignment_group_id?: number | null;
+    /** Present on `submissions_with_grades_for_assignment_nice`: instructor-created placeholder stub. */
+    is_placeholder?: boolean | null;
   };
 export type ActiveSubmissionsWithRegressionTestResults =
   Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {

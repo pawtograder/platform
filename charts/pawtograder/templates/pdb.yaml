@@ -61,9 +61,13 @@ spec:
 {{- end }}
 {{- if and .Values.postgres.enabled .Values.postgres.pdb.enabled }}
 ---
-# Blocks voluntary eviction of the single postgres pod entirely: drains hang
-# at this pod until an operator deletes it deliberately. That is the point —
-# a speed bump in front of an otherwise-silent database outage.
+# maxUnavailable:1 (NOT minAvailable:1): over a single replica, minAvailable:1
+# yields 0 allowed disruptions, so the eviction API refuses forever and
+# `kubectl drain` hangs on this pod until an operator deletes it by hand.
+# maxUnavailable:1 allows exactly one voluntary disruption, so a node drain
+# evicts the primary and it reschedules elsewhere — paired with the postgres
+# preStop fast-shutdown, that is a prompt, clean bounce rather than a wedge.
+# (Trade-off: a drain now bounces the primary instead of stopping to wait.)
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -72,7 +76,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}

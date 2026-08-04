@@ -1,102 +1,497 @@
 {
+  "$ref": "#/definitions/PawtograderConfig",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://pawtograder.com/schemas/pawtograder.yml.json",
-  "$comment": "Derived from the PawtograderConfig type in utils/PawtograderYml.d.ts. Used for live validation/autocomplete in the in-app config editor; a structural save-time guard (validatePawtograderConfig) runs in addition.",
-  "title": "Pawtograder autograder configuration",
-  "type": "object",
-  "required": ["gradedParts", "submissionFiles"],
-  "additionalProperties": true,
-  "properties": {
-    "build": {
-      "type": "object",
-      "description": "Build configuration for the autograder.",
-      "required": ["preset", "cmd", "artifacts", "linter"],
+  "definitions": {
+    "BreakPoint": {
+      "additionalProperties": false,
       "properties": {
-        "preset": { "type": "string", "enum": ["java-gradle"] },
-        "cmd": { "type": "string", "description": "Build command to run." },
-        "artifacts": { "type": "array", "items": { "type": "string" } },
-        "linter": {
-          "type": "object",
-          "required": ["preset", "policy"],
-          "properties": {
-            "preset": { "type": "string", "enum": ["checkstyle"] },
-            "policy": { "type": "string", "enum": ["fail", "warn", "ignore"] }
-          }
+        "minimumMutantsDetected": {
+          "type": "number"
+        },
+        "pointsToAward": {
+          "type": "number"
         }
-      }
+      },
+      "required": ["minimumMutantsDetected", "pointsToAward"],
+      "type": "object"
     },
-    "gradedParts": {
-      "type": "array",
-      "description": "The graded parts of the assignment.",
-      "items": {
-        "type": "object",
-        "required": ["name", "gradedUnits"],
-        "properties": {
-          "name": { "type": "string" },
-          "gradedUnits": {
-            "type": "array",
-            "items": {
+    "BuildConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/definitions/GraderArtifact"
+          },
+          "type": "array"
+        },
+        "cmd": {
+          "type": "string"
+        },
+        "linter": {
+          "additionalProperties": false,
+          "properties": {
+            "policy": {
+              "enum": ["fail", "ignore"],
+              "type": "string"
+            },
+            "preset": {
+              "const": "checkstyle",
+              "type": "string"
+            }
+          },
+          "required": ["preset", "policy"],
+          "type": "object"
+        },
+        "preset": {
+          "enum": ["java-gradle", "python-script", "none"],
+          "type": "string"
+        },
+        "script_info": {
+          "$ref": "#/definitions/ScriptInfo"
+        },
+        "student_tests": {
+          "additionalProperties": false,
+          "properties": {
+            "instructor_impl": {
+              "additionalProperties": false,
+              "properties": {
+                "report_mutation_coverage": {
+                  "type": "boolean"
+                },
+                "run_mutation": {
+                  "type": "boolean"
+                },
+                "run_tests": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "student_impl": {
+              "additionalProperties": false,
+              "properties": {
+                "report_branch_coverage": {
+                  "type": "boolean"
+                },
+                "report_mutation_coverage": {
+                  "type": "boolean"
+                },
+                "run_mutation": {
+                  "type": "boolean"
+                },
+                "run_tests": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "timeouts_seconds": {
+          "additionalProperties": false,
+          "properties": {
+            "build": {
+              "type": "number"
+            },
+            "instructor_tests": {
+              "type": "number"
+            },
+            "mutants": {
+              "type": "number"
+            },
+            "student_tests": {
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "venv": {
+          "$ref": "#/definitions/VenvInfo"
+        }
+      },
+      "required": ["preset"],
+      "type": "object"
+    },
+    "Dependency": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/PartDependencyRef"
+        },
+        {
+          "$ref": "#/definitions/UnitDependencyRef"
+        }
+      ]
+    },
+    "FeedBotConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Response strategy: built-in `chain_of_thought` (default when omitted), built-in `checklist`, or any other string treated as custom strategy instructions (same slot as the built-ins; role, rules, and embedded assignment spec are unchanged).",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/definitions/LLMProvider"
+        },
+        "rate_limit": {
+          "$ref": "#/definitions/FeedBotRateLimit"
+        },
+        "spec_url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FeedBotRateLimit": {
+      "additionalProperties": false,
+      "description": "Optional caps passed through to autograder extra_data for FeedBot / LLM usage.",
+      "properties": {
+        "assignment_total": {
+          "type": "number"
+        },
+        "class_total": {
+          "type": "number"
+        },
+        "cooldown": {
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "GradedPart": {
+      "additionalProperties": false,
+      "properties": {
+        "dependencies": {
+          "items": {
+            "$ref": "#/definitions/Dependency"
+          },
+          "type": "array"
+        },
+        "gradedUnits": {
+          "items": {
+            "$ref": "#/definitions/GradedUnit"
+          },
+          "type": "array"
+        },
+        "hideFeedbot": {
+          "type": "boolean"
+        },
+        "hide_until_released": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "gradedUnits"],
+      "type": "object"
+    },
+    "GradedUnit": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "breakPoints": {
+              "items": {
+                "$ref": "#/definitions/BreakPoint"
+              },
+              "type": "array"
+            },
+            "dependencies": {
+              "items": {
+                "$ref": "#/definitions/Dependency"
+              },
+              "type": "array"
+            },
+            "hideFeedbot": {
+              "type": "boolean"
+            },
+            "linearScoring": {
+              "additionalProperties": false,
+              "properties": {
+                "points": {
+                  "type": "number"
+                },
+                "total_faults": {
+                  "type": "number"
+                }
+              },
+              "required": ["total_faults", "points"],
+              "type": "object"
+            },
+            "locations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["locations", "name"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allow_partial_credit": {
+              "type": "boolean"
+            },
+            "dependencies": {
+              "items": {
+                "$ref": "#/definitions/Dependency"
+              },
+              "type": "array"
+            },
+            "hideFeedbot": {
+              "type": "boolean"
+            },
+            "hide_output": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "points": {
+              "type": "number"
+            },
+            "testCount": {
+              "type": "number"
+            },
+            "tests": {
               "anyOf": [
                 {
-                  "type": "object",
-                  "title": "Mutation test unit",
-                  "required": ["name", "locations"],
-                  "properties": {
-                    "name": { "type": "string" },
-                    "locations": {
-                      "type": "array",
-                      "minItems": 1,
-                      "items": { "type": "string", "description": "Format: \"file:line-line\"" }
-                    },
-                    "breakPoints": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "required": ["minimumMutantsDetected", "pointsToAward"],
-                        "properties": {
-                          "minimumMutantsDetected": { "type": "number" },
-                          "pointsToAward": { "type": "number" }
-                        }
-                      }
-                    },
-                    "linearScoring": {
-                      "type": "object",
-                      "required": ["points", "total_faults"],
-                      "properties": {
-                        "points": { "type": "number" },
-                        "total_faults": { "type": "number" }
-                      }
-                    }
-                  }
+                  "type": "string"
                 },
                 {
-                  "type": "object",
-                  "title": "Regular test unit",
-                  "required": ["name", "tests", "points"],
-                  "properties": {
-                    "name": { "type": "string" },
-                    "tests": {
-                      "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }],
-                      "description": "Test selector(s), format \"[T#.#]\"."
-                    },
-                    "points": { "type": "number" },
-                    "testCount": { "type": "number" }
-                  }
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               ]
             }
-          }
+          },
+          "required": ["name", "points", "testCount", "tests"],
+          "type": "object"
         }
-      }
+      ]
     },
-    "submissionFiles": {
-      "type": "object",
-      "description": "Files that students submit and the test files they are graded against.",
-      "required": ["files", "testFiles"],
+    "GraderArtifact": {
+      "additionalProperties": false,
       "properties": {
-        "files": { "type": "array", "items": { "type": "string" } },
-        "testFiles": { "type": "array", "items": { "type": "string" } }
-      }
+        "data": {
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "path"],
+      "type": "object"
+    },
+    "LLMConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "max_tokens": {
+          "type": "number"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/definitions/LLMProvider"
+        },
+        "rate_limit": {
+          "type": "object"
+        },
+        "temperature": {
+          "type": "number"
+        }
+      },
+      "required": ["model", "provider"],
+      "type": "object"
+    },
+    "LLMProvider": {
+      "enum": ["openai", "azure", "anthropic", "openrouter"],
+      "type": "string"
+    },
+    "MutantAdvice": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "sourceClass": {
+          "type": "string"
+        },
+        "targetClass": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "prompt", "sourceClass", "targetClass"],
+      "type": "object"
+    },
+    "OverlayPawtograderConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "build": {
+          "$ref": "#/definitions/BuildConfig"
+        },
+        "fallbackFiles": {
+          "type": "string"
+        },
+        "feedbot": {
+          "$ref": "#/definitions/FeedBotConfig"
+        },
+        "gradedParts": {
+          "items": {
+            "$ref": "#/definitions/GradedPart"
+          },
+          "type": "array"
+        },
+        "grader": {
+          "const": "overlay",
+          "type": "string"
+        },
+        "llm": {
+          "$ref": "#/definitions/LLMConfig"
+        },
+        "maxImplementationHints": {
+          "type": "number"
+        },
+        "maxMutantHints": {
+          "type": "number"
+        },
+        "mutantAdvice": {
+          "items": {
+            "$ref": "#/definitions/MutantAdvice"
+          },
+          "type": "array"
+        },
+        "submissionFiles": {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "testFiles": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["files", "testFiles"],
+          "type": "object"
+        }
+      },
+      "required": ["grader", "build", "submissionFiles"],
+      "type": "object"
+    },
+    "PartDependencyRef": {
+      "additionalProperties": false,
+      "properties": {
+        "minScore": {
+          "type": "number"
+        },
+        "part": {
+          "type": "string"
+        }
+      },
+      "required": ["part"],
+      "type": "object"
+    },
+    "PawtograderConfig": {
+      "$ref": "#/definitions/OverlayPawtograderConfig"
+    },
+    "ScriptInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "activate_venv": {
+          "type": "string"
+        },
+        "html_coverage_reports": {
+          "type": "string"
+        },
+        "install_deps": {
+          "type": "string"
+        },
+        "linting_report": {
+          "type": "string"
+        },
+        "mutation_test_runner": {
+          "type": "string"
+        },
+        "setup_venv": {
+          "type": "string"
+        },
+        "test_runner": {
+          "type": "string"
+        },
+        "textual_coverage_reports": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "setup_venv",
+        "activate_venv",
+        "linting_report",
+        "html_coverage_reports",
+        "textual_coverage_reports",
+        "test_runner",
+        "mutation_test_runner",
+        "install_deps"
+      ],
+      "type": "object"
+    },
+    "UnitDependencyRef": {
+      "additionalProperties": false,
+      "properties": {
+        "minScore": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": ["unit"],
+      "type": "object"
+    },
+    "VenvInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_key": {
+          "type": "string"
+        },
+        "dir_name": {
+          "type": "string"
+        }
+      },
+      "required": ["cache_key", "dir_name"],
+      "type": "object"
     }
   }
 }

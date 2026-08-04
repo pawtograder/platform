@@ -104,11 +104,14 @@ function ConfirmButton({
  */
 export default function GradingStatusPanel({
   rows,
+  notSubmittedCount = 0,
   assignmentId,
   supabase,
   onChanged
 }: {
   rows: readonly GradingStatusRow[];
+  /** Count of enrolled students/groups with no active submission (not gradeable yet). */
+  notSubmittedCount?: number;
   assignmentId: number;
   supabase: ReturnType<typeof createClient>;
   onChanged?: () => void | Promise<void>;
@@ -168,6 +171,16 @@ export default function GradingStatusPanel({
                 {counts.released}/{counts.total}
               </Text>
             </Text>
+            {notSubmittedCount > 0 && (
+              <Text fontSize="sm">
+                <Text as="span" color="fg.muted">
+                  Not submitted
+                </Text>{" "}
+                <Text as="span" fontWeight="semibold">
+                  {notSubmittedCount}
+                </Text>
+              </Text>
+            )}
           </HStack>
           <HStack gap={2} wrap="wrap">
             <FinalizeGradingButton

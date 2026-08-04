@@ -6552,6 +6552,7 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at: string;
+          creation_error: string | null;
           desired_handout_sha: string | null;
           id: number;
           is_github_ready: boolean;
@@ -6568,6 +6569,7 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at?: string;
+          creation_error?: string | null;
           desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
@@ -6584,6 +6586,7 @@ export type Database = {
           assignment_id?: number;
           class_id?: number;
           created_at?: string;
+          creation_error?: string | null;
           desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
@@ -11394,6 +11397,7 @@ export type Database = {
           activesubmissionid: number | null;
           assignedgradername: string | null;
           assignedmetagradername: string | null;
+          assignment_group_id: number | null;
           assignment_group_mentor_name: string | null;
           assignment_id: number | null;
           assignment_slug: string | null;
@@ -11416,6 +11420,7 @@ export type Database = {
           hours: number | null;
           id: number | null;
           individual_scores: Json | null;
+          is_placeholder: boolean | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
@@ -12368,6 +12373,14 @@ export type Database = {
         };
         Returns: number;
       };
+      create_manual_submissions_for_non_submitters: {
+        Args: {
+          p_assignment_group_ids?: number[];
+          p_assignment_id: number;
+          p_profile_ids?: string[];
+        };
+        Returns: number[];
+      };
       create_no_repo_submission: {
         Args: { p_assignment_id: number; p_files: Json };
         Returns: number;
@@ -12504,6 +12517,10 @@ export type Database = {
           p_submission_ids: number[];
         };
         Returns: Json;
+      };
+      enqueue_create_repo_for_repository: {
+        Args: { p_repository_id: number };
+        Returns: number;
       };
       enqueue_discord_batch_role_sync: { Args: never; Returns: undefined };
       enqueue_discord_channel_creation: {
@@ -13229,6 +13246,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_github_repo_reconciler_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_gradebook_recalculation_background_task: {
         Args: never;
         Returns: undefined;
@@ -13433,6 +13454,10 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      reconcile_stuck_repo_creations: {
+        Args: { p_stale_minutes?: number };
+        Returns: number;
+      };
       record_github_async_error: {
         Args: { p_error_data: Json; p_method: string; p_org: string };
         Returns: undefined;
@@ -13489,6 +13514,10 @@ export type Database = {
           handout_template_repo: string;
           solution_template_repo: string;
         }[];
+      };
+      retry_repository_creation: {
+        Args: { p_repository_id: number };
+        Returns: number;
       };
       safe_broadcast: {
         Args: {

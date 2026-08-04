@@ -12,7 +12,22 @@ if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
     ui_host: process.env.NEXT_PUBLIC_POSTHOG_UI_HOST,
-    defaults: "2025-05-24"
+    defaults: "2025-05-24",
+    // Keep PostHog state out of cookies entirely. Its default persistence is
+    // "localStorage+cookie", and the cookie's domain is chosen by a probe that
+    // walks up the hostname keeping the BROADEST domain the browser accepts —
+    // for pawtograder.khoury.northeastern.edu that resolves to
+    // ".northeastern.edu". So the cookie was sent to every Pawtograder host,
+    // including the api host, which never reads cookies at all.
+    //
+    // That matters because the API host has hard request-header limits: an
+    // oversized Cookie header 400s the Realtime WebSocket handshake at the
+    // ingress before it reaches Kong. localStorage costs us nothing here —
+    // there is no cross-subdomain identity requirement it cannot serve.
+    persistence: "localStorage",
+    // Belt and braces: if persistence ever goes back to a cookie mode, keep it
+    // scoped to this host rather than letting the probe pick .northeastern.edu.
+    cross_subdomain_cookie: false
   });
 } else {
   console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
@@ -135,6 +150,15 @@ Sentry.init({
           exception.value?.includes("failed")
         ) {
           return null; // Discard chunk load errors
+        }
+        // The worker-side sibling of ChunkLoadError: a web worker importScripts() a Next
+        // chunk that it can't fetch — the tab dropped offline (these arrive interleaved with
+        // realtime channel_error/reconnect breadcrumbs) or a deploy landed mid-session and the
+        // old chunk is gone. Reported both as a plain onerror Error and, when the worker's
+        // ErrorEvent itself is captured, as an `ErrorEvent` whose value wraps the same text,
+        // so match on the message rather than the type.
+        if (exception.value?.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'")) {
+          return null;
         }
         // Discard the stale-bundle sibling of ChunkLoadError: a deploy lands
         // mid-session, the chunk file loads (200) but the loaded webpack runtime

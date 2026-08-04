@@ -77,6 +77,7 @@ GRANT ALL ON TABLE public.lti_context_section_map TO service_role;
 -- Instructors may CRUD map rows for contexts bound to a class they instruct. The
 -- class is resolved through the parent context link, so an instructor cannot forge
 -- a row against a context that isn't theirs.
+DROP POLICY IF EXISTS "Instructors manage section map" ON public.lti_context_section_map;
 CREATE POLICY "Instructors manage section map" ON public.lti_context_section_map
   FOR ALL USING (
     EXISTS (
@@ -91,8 +92,10 @@ CREATE POLICY "Instructors manage section map" ON public.lti_context_section_map
         AND public.authorizeforclassinstructor(l.class_id)
     )
   );
+DROP POLICY IF EXISTS "Admins manage section map" ON public.lti_context_section_map;
 CREATE POLICY "Admins manage section map" ON public.lti_context_section_map
   FOR ALL USING (public.authorize_for_admin()) WITH CHECK (public.authorize_for_admin());
+DROP POLICY IF EXISTS "Service role manages section map" ON public.lti_context_section_map;
 CREATE POLICY "Service role manages section map" ON public.lti_context_section_map
   FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 

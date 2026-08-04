@@ -54,7 +54,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const intendedTeam = classData.slug + "-" + (targetEnrollment.role === "student" ? "students" : "staff");
   console.log(`Inviting ${githubUsername.github_username} to ${intendedTeam}`);
-  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!, scope);
+  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!, scope, {
+    userId: user_id
+  });
   if (!resp) {
     await supabase
       .from("user_roles")

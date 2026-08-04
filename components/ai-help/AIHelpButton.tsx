@@ -5,6 +5,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { mcpTokensList } from "@/lib/edgeFunctions";
+import { edgeFunctionUrl } from "@/lib/functionsUrl";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Dialog, HStack, Icon, IconButton, Input, Link, List, Portal, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -226,8 +227,7 @@ Before sending, the staff member should verify:
  * Setup dialog shown when user has no MCP tokens configured
  */
 function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const mcpServerUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/functions/v1/mcp-server` : "/functions/v1/mcp-server";
+  const mcpServerUrl = edgeFunctionUrl("mcp-server");
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(e) => !e.open && onClose()}>

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken, MCPScope } from "@/lib/edgeFunctions";
+import { edgeFunctionUrl } from "@/lib/functionsUrl";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Dialog, Flex, HStack, IconButton, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
@@ -351,7 +352,7 @@ export default function MCPTokensMenu() {
                       {`{
   "mcpServers": {
     "pawtograder": {
-      "url": "${typeof window !== "undefined" ? window.location.origin : ""}/functions/v1/mcp-server",
+      "url": "${edgeFunctionUrl("mcp-server")}",
       "headers": {
         "Authorization": "Bearer mcp_YOUR_TOKEN_HERE"
       }
@@ -372,7 +373,7 @@ export default function MCPTokensMenu() {
                       whiteSpace="pre-wrap"
                       overflowX="auto"
                     >
-                      {`curl -X POST ${typeof window !== "undefined" ? window.location.origin : ""}/functions/v1/cli \\
+                      {`curl -X POST ${edgeFunctionUrl("cli")} \\
   -H "Authorization: Bearer mcp_YOUR_TOKEN_HERE" \\
   -H "Content-Type: application/json" \\
   -d '{"command": "classes.list", "params": {}}'`}

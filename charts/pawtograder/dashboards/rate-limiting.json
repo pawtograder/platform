@@ -7,7 +7,20 @@
   "version": 1,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": ""
+      }
+    ]
+  },
   "annotations": { "list": [] },
   "editable": true,
   "graphTooltip": 1,
@@ -23,7 +36,7 @@
       "type": "stat",
       "title": "Open circuit breakers",
       "description": "Number of GitHub-org circuit breakers currently open. >0 means GitHub API access for that org is paused due to rate limiting or repeated errors. Deduped across edge pods (metrics are global).",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
       "fieldConfig": {
         "defaults": {
@@ -44,7 +57,7 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(max by (scope, key) (pawtograder_circuit_breaker_open))",
           "legendFormat": "open"
         }
@@ -54,7 +67,7 @@
       "type": "timeseries",
       "title": "Bottleneck queued jobs by limiter (rate-limit backpressure)",
       "description": "Jobs waiting in each Bottleneck limiter's Redis queue. The primary GitHub-API-rate-limit pressure signal: sustained growth means callers are being throttled and work is backing up. limiter_id identifies the limited resource (e.g. per-installation GitHub API).",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 18, "x": 6, "y": 1 },
       "fieldConfig": {
         "defaults": {
@@ -70,7 +83,7 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "max by (limiter_id) (pawtograder_bottleneck_queued)",
           "legendFormat": "{{limiter_id}}"
         }
@@ -80,7 +93,7 @@
       "type": "table",
       "title": "Circuit breaker state",
       "description": "Current state of every GitHub circuit breaker (scope/key). open=1 pauses GitHub calls for that scope.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 7 },
       "fieldConfig": {
         "defaults": {
@@ -105,7 +118,7 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "max by (scope, key, state) (pawtograder_circuit_breaker_open)",
           "format": "table",
           "instant": true
@@ -116,7 +129,7 @@
       "type": "timeseries",
       "title": "Bottleneck running weight by limiter",
       "description": "Total running job weight per Bottleneck limiter (Redis 'running'). How much GitHub-API work is in flight across all edge isolates sharing the limiter.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 9, "x": 6, "y": 9 },
       "fieldConfig": {
         "defaults": {
@@ -132,7 +145,7 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "max by (limiter_id) (pawtograder_bottleneck_running)",
           "legendFormat": "{{limiter_id}}"
         }
@@ -142,7 +155,7 @@
       "type": "timeseries",
       "title": "Bottleneck concurrent clients by limiter",
       "description": "Number of distinct Bottleneck clients (edge isolates) with active work per limiter — the cross-replica concurrency the Redis-backed limiter is coordinating.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 9, "x": 15, "y": 9 },
       "fieldConfig": {
         "defaults": {
@@ -158,7 +171,7 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "max by (limiter_id) (pawtograder_bottleneck_concurrent_clients)",
           "legendFormat": "{{limiter_id}}"
         }
@@ -175,7 +188,7 @@
       "type": "timeseries",
       "title": "Queue depths",
       "description": "Backlog in the pgmq-backed async worker queues. Sustained growth indicates downstream processing can't keep up with inbound webhook/grading volume.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 18, "x": 0, "y": 18 },
       "fieldConfig": {
         "defaults": {
@@ -189,17 +202,17 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_queue_size)", "legendFormat": "github async" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_low_priority_queue_size)", "legendFormat": "github async (low priority)" },
-        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_discord_queue_size)", "legendFormat": "discord async" },
-        { "refId": "D", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_gradebook_row_recalculate_queue_size)", "legendFormat": "gradebook recalculate" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_async_queue_size)", "legendFormat": "github async" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_async_low_priority_queue_size)", "legendFormat": "github async (low priority)" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_discord_queue_size)", "legendFormat": "discord async" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_gradebook_row_recalculate_queue_size)", "legendFormat": "gradebook recalculate" }
       ]
     },
     {
       "type": "stat",
       "title": "Dead-letter queues",
       "description": "Messages parked in dead-letter queues (github async + discord). Any non-zero value is a failed-processing signal worth investigating.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 18 },
       "fieldConfig": {
         "defaults": {
@@ -219,8 +232,8 @@
         "orientation": "vertical"
       },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_async_dlq_size)", "legendFormat": "github DLQ" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(pawtograder_discord_dlq_size)", "legendFormat": "discord DLQ" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_async_dlq_size)", "legendFormat": "github DLQ" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(pawtograder_discord_dlq_size)", "legendFormat": "discord DLQ" }
       ]
     }
   ]

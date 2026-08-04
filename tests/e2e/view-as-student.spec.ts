@@ -15,6 +15,8 @@ let course: Course;
 let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 
+let unreleasedAssignmentId: number;
+
 const STUDENT_NAME = "View As Target Student";
 const ASSIGNMENT_TITLE = "View As Target Assignment";
 
@@ -46,6 +48,16 @@ test.beforeAll(async ({}, testInfo) => {
     name: ASSIGNMENT_TITLE,
     due_date: addDays(new Date(), 7).toUTCString()
   });
+  // An assignment students cannot reach yet, to check where the release-date gate sends
+  // an instructor who is masquerading as one of them.
+  unreleasedAssignmentId = (
+    await insertAssignment({
+      class_id: course.id,
+      name: "View As Unreleased Assignment",
+      due_date: addDays(new Date(), 14).toUTCString(),
+      release_date: addDays(new Date(), 7).toUTCString()
+    })
+  ).id;
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
@@ -185,6 +197,21 @@ test.describe("Instructor view-as-student (read-only)", () => {
 
     await page.goto(`/course/${course.id}/manage/course/enrollments`);
 
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}(/)?$`));
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+  });
+
+  test("an unreleased assignment sends view-as back to the course, not the dashboard", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await page
+      .context()
+      .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);
+
+    await page.goto(`/course/${course.id}/assignments/${unreleasedAssignmentId}`);
+
+    // The student cannot see this assignment yet, so the instructor previewing as them is
+    // turned away — but within the course, where the banner's exit button is still in reach.
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}(/)?$`));
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
   });

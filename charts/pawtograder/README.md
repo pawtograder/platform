@@ -160,7 +160,7 @@ time you want a clean slate — it's idempotent on a missing release.
 | Secret name (default)        | Required keys                                                                                                                                                                                                                                                |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
-| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
+| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `JWT_SIGNING_JWK` (MCP/CLI only), `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
 | `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`)                                                                                                                                                          |
 | `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
 | `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
@@ -185,6 +185,49 @@ The full set of keys consumed from `pawtograder-jwt`:
   PostgREST / storage-api verification.
 - `JWT_REALTIME_JWKS` — EC-only JWK Set (Joken can't accept `oct` JWK maps);
   Realtime falls back to `JWT_SECRET` for HS256 verification.
+- `JWT_SIGNING_JWK` — **required for MCP and the CLI**, optional otherwise. The
+  single EC private JWK (a bare JWK object, *not* a set) that
+  `_shared/MCPAuth.ts` signs short-lived per-user RLS JWTs with, using ES256. It
+  must be the **same EC entry that appears in `JWT_PRIVATE_JWKS`** — its public
+  half has to be in `JWT_PUBLIC_JWKS` or PostgREST rejects every token minted
+  with it.
+
+  The edge-functions container receives it as `JWT_SECRET`, which is confusing
+  but deliberate: that is the env var MCPAuth reads, and it is the *only*
+  consumer of `JWT_SECRET` inside the edge runtime. It is **not** the HS256
+  shared secret the rest of the stack uses — pointing it there is why MCP and
+  the CLI did not work on self-hosted installs before this key existed.
+
+  Where it comes from, by install type:
+
+  - **`secrets.autogenerate=true`** — handled for you, including on upgrade, where
+    the bootstrap Job extracts the key from the `JWT_PRIVATE_JWKS` already in the
+    namespace rather than generating a new one.
+  - **`secrets.create=true`** — set `secrets.values.jwt.signingJwk`.
+    `GenerateJwtKeys.ts --helm-values` emits it.
+  - **ESO / OpenBao** — `GenerateJwtKeys.ts` emits `JWT_SIGNING_JWK` into the JWT
+    bundle, and `examples/externalsecrets/pawtograder-jwt.yaml` maps it. A bundle
+    provisioned *before* this key existed does not have it: add it to the OpenBao
+    path with the extraction below, then force an ESO sync.
+  - **SealedSecrets / hand-made Secrets** — add it yourself with the extraction
+    below (`kubeseal --merge-into` adds one key without re-sealing the rest).
+
+  Because the `secretKeyRef` is `optional: true`, until the key is present the
+  edge tier runs normally and only MCP/CLI fail. Extract it from the JWKS you
+  already have:
+
+  ```bash
+  kubectl -n <ns> get secret pawtograder-jwt \
+    -o jsonpath='{.data.JWT_PRIVATE_JWKS}' | base64 -d \
+    | jq -c '(if type=="array" then . else .keys end)
+             | map(select(.kty=="EC" and .crv=="P-256" and .d)) | .[0]'
+  ```
+
+  Then add that JSON as `JWT_SIGNING_JWK` on the same Secret and restart the
+  functions Deployment. Users authenticate the CLI against
+  `https://api.<hostname>/functions/v1/cli` (with `apiOnSeparateHost`, the
+  default) — the app shows the exact URL for your deployment in the **user menu →
+  API Tokens**, alongside the MCP server URL for Claude Desktop.
 - `REALTIME_ENC_KEY` — AES-128 (exactly 16 bytes) for realtime tenant
   secret encryption.
 - `PG_META_CRYPTO_KEY` — AES-256 (base64) shared between postgres-meta and
@@ -201,18 +244,26 @@ the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
 realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
 in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
-### Edge-function credentials via OpenBao + ESO
+### Integration credentials via OpenBao + ESO
 
-`pawtograder-edge-functions` carries every external-integration secret the
-edge runtime consumes — GitHub App, AWS Chime, Discord, Canvas, SIS,
-SMTP, MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways
-to provision it:
+`pawtograder-web` carries Next.js / GoTrue runtime secrets (OAuth client
+credentials, LTI, Discord webhook public keys, web-only LLM config).
+`pawtograder-edge-functions` carries every external-integration secret the edge
+runtime consumes — GitHub App, AWS Chime, Discord bot, Canvas, SIS, SMTP,
+MCP/LLM, Upstash Redis, Sentry, and a `misc` catch-all. Two ways to provision
+them:
 
 1. **OpenBao + External Secrets Operator** (recommended for staging/prod).
    One operator step per integration ("bundle") per environment:
 
    ```sh
-   # github-app bundle
+   # Web-app bundle (GoTrue OAuth, LTI, Discord public keys, etc.)
+   scripts/setup-openbao-edge-functions.sh \
+     --env production \
+     --bundle web \
+     --from-file .secrets/web-production.env
+
+   # github-app bundle for edge functions
    scripts/setup-openbao-edge-functions.sh \
      --env preview \
      --bundle github-app \
@@ -246,26 +297,29 @@ to provision it:
    secrets:
      externalSecret:
        enabled: true
-       env: preview
-       bundles:
+       env: production
+       webBundles:
+         - web
+       edgeFunctionsBundles:
          - github-app
          - aws-chime
    ```
 
-   The chart renders one `ExternalSecret` with a `dataFrom: extract`
-   entry per bundle. ESO syncs them all into
-   `pawtograder-edge-functions` with `creationPolicy: Owner`. Adding a
-   new env var to an existing bundle is "edit the script's
-   `BUNDLE_KEYS`, rerun the script" — no chart change.
+   The chart renders one `ExternalSecret` per target Secret. Each has a
+   `dataFrom: extract` entry per bundle. ESO syncs web bundles into
+   `pawtograder-web` and edge bundles into `pawtograder-edge-functions` with
+   `creationPolicy: Owner`. Adding a new env var to an existing bundle is
+   "edit the script's `BUNDLE_KEYS`, rerun the script" — no chart change.
 
    When `externalSecret.enabled=true` the chart's stub-generation path
    (for E2E previews) is automatically suppressed so ESO is the
    unambiguous owner.
 
-2. **Hand-provisioned Secret** (sealed-secrets, `kubectl create`, etc.).
-   Just make sure `pawtograder-edge-functions` exists in the release
-   namespace with whichever env vars your deploy uses; the edge runtime
-   checks every integration before use, so missing keys are tolerated.
+2. **Hand-provisioned Secrets** (sealed-secrets, `kubectl create`, etc.).
+   Just make sure `pawtograder-web` and/or `pawtograder-edge-functions` exist in
+   the release namespace with whichever env vars your deploy uses. The web and
+   edge pods mount those Secrets by name; optional integrations tolerate missing
+   keys until their feature path is used.
 
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }
@@ -413,21 +467,53 @@ Register that exact URL in the provider's OAuth app (override per provider with
 worked example (Google + Microsoft + GitHub) is in
 [`examples/values-tartangrader.yaml`](./examples/values-tartangrader.yaml).
 
+### Custom email templates
+
+GoTrue's transactional emails (invite / confirmation / recovery / magic-link /
+email-change) can be branded per deployment. Enable it with:
+
+```yaml
+auth:
+  mailer:
+    templates:
+      enabled: true
+```
+
+This runs a tiny `mail-templates` sidecar in the auth pod that serves the
+template HTML on `127.0.0.1`, and points GoTrue's `GOTRUE_MAILER_TEMPLATES_*`
+at it. A sidecar is required because GoTrue's mailer fetches templates over
+**http(s) only — there is no `file://` support**, so a bare ConfigMap mount
+does not work. If a fetch ever fails, GoTrue falls back to its built-in
+default template, so email delivery degrades gracefully.
+
+Defaults are the chart-bundled files under
+[`email-templates/`](./email-templates); their links route through the web
+app's own `/auth/*` pages via `token_hash` (e.g.
+`{{ .SiteURL }}/auth/reset-password?token_hash={{ .TokenHash }}&type=email`).
+Override any body with raw HTML via `auth.mailer.templates.files.<name>`
+(`invite`, `confirmation`, `recovery`, `magicLink`, `emailChange`), and set
+custom subject lines via `auth.mailer.templates.subjects.<name>` (empty →
+GoTrue's default subject). Bodies are Go `html/template` with GoTrue's
+variables (`{{ .ConfirmationURL }}`, `{{ .TokenHash }}`, `{{ .SiteURL }}`,
+`{{ .Email }}`, `{{ .NewEmail }}`, …).
+
 ## Deploying production
 
 Start from `examples/values-prod.yaml` — it is a documented template, not a
 deployable file: copy it into your deployment repo and fill in the hostname,
-storage classes, S3 endpoints, and pinned image tags. The full gap analysis
-that drove the production hardening (and the items still deferred — postgres
-HA, WAL archiving/PITR) lives in [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
+storage classes, S3 endpoints, alert labels, and pinned image tags. The full
+gap analysis that drove the production hardening (and the items still
+deferred — automatic postgres failover, per-service metrics auth) lives in
+[PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**
   (`templates/validations.yaml`): the chart refuses to render with e2e
   bypasses, `secrets.create`/`autogenerate`, `seed.enabled`,
-  `migrations.resetOnDrift`, floating `-latest` image tags, or a Studio
-  ingress without basic-auth. Staging arms a smaller subset.
+  `migrations.resetOnDrift`, floating or unpinned image tags, an empty
+  `postgres.persistence.storageClass`, unset/blank PrometheusRule labels, or
+  a Studio ingress without basic-auth. Staging arms a smaller subset.
 - **NetworkPolicies** (`networkPolicy.enabled=true`): default-deny ingress
   to every release pod, with allows for intra-release traffic, the ingress
   controller's namespace (→ web/kong/studio), and the monitoring namespace.
@@ -454,11 +540,13 @@ box (3 pods × ~1 GiB each). Raise `realtime.replicas` to scale further; pods
 discover each other through the headless Service for fan-out across the
 cluster.
 
-## Postgres replica (planned)
+## Postgres standby
 
-The current release ships a single-primary postgres. A read replica will be
-added in a future minor release; for now, scale realtime/rest horizontally
-and rely on supavisor to absorb connection bursts.
+The chart can run an optional streaming standby (`postgres.replica`) backed by
+WAL-G archiving (`postgres.walg`). It is a warm manual failover target and
+read-only service, not automatic HA: promotion is operator-driven to avoid
+split-brain against the shared WAL archive. See
+[`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md).
 
 ## Required postgres extensions
 
@@ -550,7 +638,7 @@ these metric names directly.
 
 ### Dashboards
 
-Five dashboards land in the Grafana **Pawtograder** folder when
+Seven dashboards land in the Grafana **Pawtograder** folder when
 `monitoring.enabled=true`:
 
 | UID                              | Title              | Covers                                    |
@@ -560,10 +648,12 @@ Five dashboards land in the Grafana **Pawtograder** folder when
 | `pawtograder-realtime`           | Realtime Fanout    | connection churn, broadcast rate, Erlang VM load |
 | `pawtograder-edge-functions`     | Edge Functions     | per-function RPS / p95 / errors           |
 | `pawtograder-app-business`       | App Business       | submissions/min, grading actions, queue depth, per-class views |
+| `pawtograder-rate-limiting`      | Rate Limiting & Queues | GitHub Bottleneck backpressure, circuit-breaker state, async worker + dead-letter queue depths |
+| `pawtograder-edge-soak`          | Edge Soak / Resilience | edge HPA scaling, per-pod memory / OOMKills, worker cancel/kill events, function errors + throughput |
 
 Toggle individual dashboards via `monitoring.dashboards.{stackOverview,
-postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness}: false` if your
-platform team owns them out-of-band.
+postgresDeepDive, realtimeFanout, edgeFunctions, appBusiness, rateLimiting,
+edgeSoak}: false` if your platform team owns them out-of-band.
 
 ### Logs
 
