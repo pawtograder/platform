@@ -82,14 +82,18 @@ BEGIN
         END IF;
 
         -- Reactivate the dropped invitation in place, reusing its profile pair.
+        -- Preserve existing section assignments when the caller omits them (the args arrive as SQL
+        -- default NULL — e.g. a manual re-invite via invitation-create passes `|| undefined`), matching
+        -- the COALESCE-on-omission behavior of email/name/invited_by. A caller that actually wants to
+        -- move the student supplies a non-null section.
         UPDATE public.invitations
         SET status = 'pending',
             role = p_role,
             email = COALESCE(p_email, email),
             name = COALESCE(p_name, name),
             invited_by = COALESCE(p_invited_by, invited_by),
-            class_section_id = p_class_section_id,
-            lab_section_id = p_lab_section_id,
+            class_section_id = COALESCE(p_class_section_id, class_section_id),
+            lab_section_id = COALESCE(p_lab_section_id, lab_section_id),
             sis_managed = p_sis_managed,
             accepted_at = NULL,
             updated_at = NOW()
