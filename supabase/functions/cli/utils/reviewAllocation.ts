@@ -190,6 +190,54 @@ export function activeSubmissionFor(
   return fallbackId;
 }
 
+export interface ExistingCoverageRow {
+  assignee: string;
+  /** The submission the row points at, which may have been superseded. */
+  rawSubmissionId: number;
+  /** The row's submission as embedded by the query, or null when it did not load. */
+  submission: { is_active: boolean; profile_id: string | null; assignment_group_id: number | null } | null;
+  /** Empty for a whole-rubric assignment. */
+  rubricPartIds: number[];
+}
+
+/**
+ * Existing review assignments flattened to coverage, in *active* submission ids.
+ *
+ * The remap is the point. An existing assignment can name a submission that a
+ * resubmission has superseded, while a `--file` manifest names the active one — so
+ * comparing raw ids reported no overlap and let the manifest add a second reviewer for
+ * work already assigned. `bulk_assign_reviews` retargets only the rows its own drafts
+ * touch, so the stale row survives and the submission is graded twice.
+ *
+ * A row whose submission is already active maps to itself. A row with no embedded
+ * submission, or whose owner has no active submission at all, keeps its raw id: the
+ * conservative choice, since coverage is still reported, just not merged with anything.
+ */
+export function flattenExistingCoverage(
+  rows: ExistingCoverageRow[],
+  activeByOwner: Map<string, number>
+): DraftAssignment[] {
+  const out: DraftAssignment[] = [];
+  for (const row of rows) {
+    const submissionId =
+      row.submission && row.submission.is_active === false
+        ? activeSubmissionFor(
+            { groupId: row.submission.assignment_group_id, profileId: row.submission.profile_id },
+            row.rawSubmissionId,
+            activeByOwner
+          )
+        : row.rawSubmissionId;
+    if (row.rubricPartIds.length === 0) {
+      out.push({ assignee_profile_id: row.assignee, submission_id: submissionId, rubric_part_id: null });
+    } else {
+      for (const partId of row.rubricPartIds) {
+        out.push({ assignee_profile_id: row.assignee, submission_id: submissionId, rubric_part_id: partId });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Coverage conflicts in an explicit set of drafts.
  *

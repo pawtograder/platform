@@ -18,6 +18,7 @@ import {
   allocateRoundRobin,
   buildActiveSubmissionIndex,
   findCoverageConflicts,
+  flattenExistingCoverage,
   planStaleRetargets,
   summarizeLoad,
   type DraftAssignment,
@@ -396,6 +397,101 @@ describe("findCoverageConflicts", () => {
   it("reports each conflicting submission once, not once per row", () => {
     const conflicts = findCoverageConflicts([whole(GRADER_A, 1), part(GRADER_A, 1, 100), part(GRADER_A, 1, 200)], []);
     expect(conflicts).toHaveLength(1);
+  });
+});
+
+/**
+ * Existing coverage is compared in *active* submission ids. A stale review assignment
+ * plus a manifest naming the replacement submission used to look like disjoint work, so
+ * `--file` could put a second reviewer on a slot that was already assigned — and
+ * `bulk_assign_reviews` retargets only the rows its own drafts touch, so the stale row
+ * survived alongside the new one.
+ */
+describe("flattenExistingCoverage", () => {
+  const STUDENT = "11111111-0000-0000-0000-000000000001";
+  /** Submission 7 was superseded by 9; both belong to STUDENT. */
+  const activeByOwner = buildActiveSubmissionIndex([{ id: 9, profile_id: STUDENT, assignment_group_id: null }]);
+  const stale = { is_active: false, profile_id: STUDENT, assignment_group_id: null };
+  const active = { is_active: true, profile_id: STUDENT, assignment_group_id: null };
+
+  it("remaps a stale row onto the owner's active submission", () => {
+    expect(
+      flattenExistingCoverage(
+        [{ assignee: GRADER_A, rawSubmissionId: 7, submission: stale, rubricPartIds: [] }],
+        activeByOwner
+      )
+    ).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 9, rubric_part_id: null }]);
+  });
+
+  it("leaves an already-active row alone", () => {
+    expect(
+      flattenExistingCoverage(
+        [{ assignee: GRADER_A, rawSubmissionId: 9, submission: active, rubricPartIds: [] }],
+        activeByOwner
+      )
+    ).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 9, rubric_part_id: null }]);
+  });
+
+  it("makes the stale assignment collide with a manifest naming the active submission", () => {
+    // The regression: raw ids 7 vs 9 looked disjoint, so this returned [].
+    const existing = flattenExistingCoverage(
+      [{ assignee: GRADER_A, rawSubmissionId: 7, submission: stale, rubricPartIds: [] }],
+      activeByOwner
+    );
+    const conflicts = findCoverageConflicts(
+      [{ assignee_profile_id: GRADER_B, submission_id: 9, rubric_part_id: null }],
+      existing
+    );
+    expect(conflicts.some((c) => /more than one reviewer/.test(c))).toBe(true);
+  });
+
+  it("fans a by-part row out to one coverage entry per part", () => {
+    expect(
+      flattenExistingCoverage(
+        [{ assignee: GRADER_A, rawSubmissionId: 7, submission: stale, rubricPartIds: [100, 200] }],
+        activeByOwner
+      )
+    ).toEqual([
+      { assignee_profile_id: GRADER_A, submission_id: 9, rubric_part_id: 100 },
+      { assignee_profile_id: GRADER_A, submission_id: 9, rubric_part_id: 200 }
+    ]);
+  });
+
+  it("keeps the raw id when the owner has no active submission, or none was embedded", () => {
+    // Conservative: coverage is still reported, just not merged with anything.
+    const orphan = { is_active: false, profile_id: "22222222-0000-0000-0000-000000000002", assignment_group_id: null };
+    expect(
+      flattenExistingCoverage(
+        [{ assignee: GRADER_A, rawSubmissionId: 7, submission: orphan, rubricPartIds: [] }],
+        activeByOwner
+      )
+    ).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 7, rubric_part_id: null }]);
+    expect(
+      flattenExistingCoverage(
+        [{ assignee: GRADER_A, rawSubmissionId: 7, submission: null, rubricPartIds: [] }],
+        activeByOwner
+      )
+    ).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 7, rubric_part_id: null }]);
+  });
+
+  it("prefers group ownership over the individual profile", () => {
+    const groupIndex = buildActiveSubmissionIndex([
+      { id: 12, profile_id: STUDENT, assignment_group_id: 5 },
+      { id: 9, profile_id: STUDENT, assignment_group_id: null }
+    ]);
+    expect(
+      flattenExistingCoverage(
+        [
+          {
+            assignee: GRADER_A,
+            rawSubmissionId: 7,
+            submission: { is_active: false, profile_id: STUDENT, assignment_group_id: 5 },
+            rubricPartIds: []
+          }
+        ],
+        groupIndex
+      )
+    ).toEqual([{ assignee_profile_id: GRADER_A, submission_id: 12, rubric_part_id: null }]);
   });
 });
 

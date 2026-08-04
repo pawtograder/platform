@@ -23,8 +23,17 @@ const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
  */
 const LOCAL_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?$/;
 
-/** Ends in `Z` or `±HH:MM` / `±HHMM`. */
-const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+/**
+ * `YYYY-MM-DDTHH:MM(:SS(.mmm)?)?` followed by `Z` or `±HH:MM` / `±HHMM`, and nothing else.
+ *
+ * The whole string is matched, not just the suffix. Testing only that the input *ended*
+ * in an offset left everything before it to `new Date`, whose legacy parser is happy to
+ * reinterpret junk: `2026-09-15junkZ` passed a suffix test and a leading-`YYYY-MM-DD`
+ * calendar check, then parsed as June 9 — an assignment due in September silently
+ * scheduled three months early.
+ */
+const OFFSET_DATE_TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))$/i;
 
 /**
  * Milliseconds to add to a "wall clock read as UTC" value to get the real UTC
@@ -205,36 +214,45 @@ export function resolveZonedTimestamp(
     return instant.toISOString();
   }
 
-  // Only trust Date for input that states its own offset. ECMAScript reads an
+  // Only input that states its own offset gets this far. ECMAScript reads an
   // offset-less date-time as *local* time, and the Edge runtime's local zone is
-  // UTC — so anything that reached here without an offset would be silently
-  // shifted out of the class's zone, which is the failure this module exists to
-  // prevent. Rejecting also keeps formats like `09/15/2026` from being read in
-  // the wrong zone.
-  if (!HAS_OFFSET_RE.test(raw)) {
+  // UTC — so anything without an offset would be silently shifted out of the
+  // class's zone, which is the failure this module exists to prevent. Rejecting
+  // also keeps formats like `09/15/2026` from being read in the wrong zone.
+  const offsetDateTime = raw.match(OFFSET_DATE_TIME_RE);
+  if (!offsetDateTime) {
     throw new ZonedDateError(
       `Could not parse date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
         "or a timestamp with an explicit offset such as 2026-09-15T17:00:00-04:00."
     );
   }
 
-  // Validate the calendar date before handing it to Date. V8 normalizes an
-  // impossible date rather than rejecting it, so `2026-02-30T17:00:00-05:00`
-  // silently becomes March 2 — the bare and offset-less forms are checked by
-  // assertRealCalendarDate, and this branch has to be too.
-  const offsetDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (offsetDate) {
-    assertRealCalendarDate(Number(offsetDate[1]), Number(offsetDate[2]), Number(offsetDate[3]), raw);
+  const [, y, m, d, hh, mm, ss, frac, zulu, sign, offHH, offMM] = offsetDateTime;
+  // Same checks as the offset-less branches: V8 normalizes an impossible date rather
+  // than rejecting it, so `2026-02-30T17:00:00-05:00` silently becomes March 2.
+  assertRealCalendarDate(Number(y), Number(m), Number(d), raw);
+  const second = ss === undefined ? 0 : Number(ss);
+  const ms = frac === undefined ? 0 : Number(frac.padEnd(3, "0"));
+  assertRealWallClock(Number(hh), Number(mm), second, ms, raw);
+
+  // The offset is applied here rather than by `new Date(raw)`, so the result does not
+  // depend on how permissively the engine reads the string — and an out-of-range
+  // offset is rejected instead of being normalized into a plausible-looking instant.
+  let offsetMinutes = 0;
+  if (zulu === undefined) {
+    const offsetHours = Number(offHH);
+    const offsetMins = Number(offMM);
+    if (offsetHours > 23 || offsetMins > 59) {
+      throw new ZonedDateError(`Invalid UTC offset in ${raw}: offsets run from -23:59 to +23:59.`);
+    }
+    offsetMinutes = (sign === "-" ? -1 : 1) * (offsetHours * 60 + offsetMins);
   }
 
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new ZonedDateError(
-      `Could not parse date: ${raw}. Use YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS[.mmm]], ` +
-        "or a timestamp with an explicit offset."
-    );
-  }
-  return parsed.toISOString();
+  const instant = new Date(
+    Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), second, ms) - offsetMinutes * 60_000
+  );
+  if (Number.isNaN(instant.getTime())) throw new ZonedDateError(`Invalid date: ${raw}`);
+  return instant.toISOString();
 }
 
 /**

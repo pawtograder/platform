@@ -16,7 +16,8 @@ import {
   HELP_REQUEST_STATUSES,
   HELP_REQUEST_STATUS_FILTERS,
   TERMINAL_HELP_REQUEST_STATUSES,
-  HELP_REQUEST_RESOLUTION_STATUSES
+  HELP_REQUEST_RESOLUTION_STATUSES,
+  resolvedAtForClose
 } from "../../supabase/functions/cli/utils/helpRequestStatus";
 
 describe("parseStatusFilter", () => {
@@ -76,5 +77,31 @@ describe("help request status constants", () => {
       "no_time",
       "other"
     ]);
+  });
+});
+
+/**
+ * `--force` corrects resolution metadata on an already-closed request. It must not
+ * rewrite when the request was completed: the office-hours history sorts terminal
+ * requests by `resolved_at`, so restamping made an old request surface as newly
+ * resolved and lost the real completion time.
+ */
+describe("resolvedAtForClose", () => {
+  const NOW = "2026-08-04T02:00:00.000Z";
+  const ORIGINAL = "2026-07-28T14:12:00.000Z";
+
+  it("stamps now on a genuine transition out of a nonterminal state", () => {
+    expect(resolvedAtForClose(false, null, NOW)).toBe(NOW);
+    // Even if a stray value is present, a real resolution sets the current time.
+    expect(resolvedAtForClose(false, ORIGINAL, NOW)).toBe(NOW);
+  });
+
+  it("preserves the original time on a forced correction", () => {
+    expect(resolvedAtForClose(true, ORIGINAL, NOW)).toBe(ORIGINAL);
+  });
+
+  it("falls back to now when a terminal row has no resolved_at to preserve", () => {
+    expect(resolvedAtForClose(true, null, NOW)).toBe(NOW);
+    expect(resolvedAtForClose(true, undefined, NOW)).toBe(NOW);
   });
 });

@@ -56,3 +56,21 @@ export function parseStatusFilter(filter: string | undefined | null): StatusFilt
     error: `Invalid status: ${filter}. Must be one of ${HELP_REQUEST_STATUS_FILTERS.join(", ")}`
   };
 }
+
+/**
+ * The `resolved_at` to write when closing a help request.
+ *
+ * `resolved_at` records when the request was actually completed, and the office-hours
+ * history sorts terminal requests by it. `--force` exists to correct resolution
+ * metadata on an already-closed request, so stamping the current time made a week-old
+ * request appear newly resolved and destroyed the real completion time. The original is
+ * preserved on a forced correction — unless the row reached a terminal status without
+ * one, in which case there is nothing to preserve and `now` is the best available answer.
+ */
+export function resolvedAtForClose(
+  wasAlreadyTerminal: boolean,
+  existingResolvedAt: string | null | undefined,
+  now: string
+): string {
+  return wasAlreadyTerminal && existingResolvedAt ? existingResolvedAt : now;
+}

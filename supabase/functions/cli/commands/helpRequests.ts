@@ -13,7 +13,8 @@ import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivate
 import {
   HELP_REQUEST_RESOLUTION_STATUSES,
   TERMINAL_HELP_REQUEST_STATUSES,
-  parseStatusFilter
+  parseStatusFilter,
+  resolvedAtForClose
 } from "../utils/helpRequestStatus.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse } from "../types.ts";
@@ -296,7 +297,8 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
     );
   }
 
-  if (TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status) && p.force !== true) {
+  const wasAlreadyTerminal = TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status);
+  if (wasAlreadyTerminal && p.force !== true) {
     throw new CLICommandError(
       `Help request ${id} is already ${existing.status}. Pass force to overwrite its resolution.`,
       409
@@ -308,7 +310,7 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   const update: Database["public"]["Tables"]["help_requests"]["Update"] = {
     status: targetStatus,
     resolved_by: resolvedBy,
-    resolved_at: new Date().toISOString()
+    resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, new Date().toISOString())
   };
   if (resolutionStatus) update.resolution_status = resolutionStatus;
   if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;
@@ -370,7 +372,6 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   // prints nothing when that is 0 — so the history rows stopped being written with no
   // signal anywhere, and the analytics built on them grew a hole nobody could attribute.
   // The reason is returned so the operator can see it and re-run the backfill.
-  const wasAlreadyTerminal = TERMINAL_HELP_REQUEST_STATUSES.includes(existing.status);
   let activityLogged = 0;
   let activityError: string | null = null;
   if (!wasAlreadyTerminal) {

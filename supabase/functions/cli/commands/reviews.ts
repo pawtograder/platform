@@ -25,6 +25,7 @@ import {
   allocateRoundRobin,
   buildActiveSubmissionIndex,
   findCoverageConflicts,
+  flattenExistingCoverage,
   planStaleRetargets,
   summarizeLoad,
   type DraftAssignment,
@@ -405,10 +406,17 @@ function parseDraftManifest(raw: unknown): DraftAssignment[] {
 }
 
 /**
- * Existing assignments flattened to (assignee, submission, part) coverage, using
- * raw submission ids. The allocation path additionally remaps stale ids onto the
- * active submission; the manifest path only needs to know what is already
- * covered.
+ * Existing assignments flattened to (assignee, submission, part) coverage, with stale
+ * submission ids remapped onto their owner's active submission.
+ *
+ * The remap is what makes the coverage comparison mean anything. An existing
+ * assignment can point at a submission a resubmission has since superseded, and a
+ * `--file` manifest names the *active* one (the branch above rejects anything else) —
+ * so comparing raw ids found no overlap and approved the manifest. `bulk_assign_reviews`
+ * only retargets rows its own drafts touch, so the stale row survived alongside the new
+ * one and two reviewers ended up covering the same student and rubric slot. The
+ * allocation path already reasons in active ids for exactly this reason; this is the
+ * same mapping, applied to the manifest path.
  */
 async function loadExistingCoverage(
   supabase: ReturnType<typeof getAdminClient>,
@@ -416,24 +424,45 @@ async function loadExistingCoverage(
   rubricId: number
 ): Promise<DraftAssignment[]> {
   const rows = await fetchReviewAssignments(supabase, assignmentId, FETCH_ALL, { rubricId });
-  const out: DraftAssignment[] = [];
-  for (const row of rows) {
-    const parts = (row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>;
-    const assignee = row.assignee_profile_id as string;
-    const submissionId = row.submission_id as number;
-    if (parts.length === 0) {
-      out.push({ assignee_profile_id: assignee, submission_id: submissionId, rubric_part_id: null });
-    } else {
-      for (const part of parts) {
-        out.push({
-          assignee_profile_id: assignee,
-          submission_id: submissionId,
-          rubric_part_id: part.rubric_part_id
-        });
-      }
-    }
+
+  // Only pay for the index when something is actually stale. `fetchReviewAssignments`
+  // already embeds each row's submission, so the common all-active case needs no
+  // further query.
+  const embeddedSubmission = (row: Record<string, unknown>) =>
+    row.submissions as {
+      id: number;
+      is_active: boolean;
+      profile_id: string | null;
+      assignment_group_id: number | null;
+    } | null;
+  const hasStale = rows.some((row) => embeddedSubmission(row)?.is_active === false);
+
+  let activeByOwner = new Map<string, number>();
+  if (hasStale) {
+    const active = await pageAll<{ id: number; profile_id: string | null; assignment_group_id: number | null }>(
+      () =>
+        supabase
+          .from("submissions")
+          .select("id, profile_id, assignment_group_id")
+          .eq("assignment_id", assignmentId)
+          .eq("is_active", true)
+          .order("id", { ascending: true }),
+      "Failed to load active submissions"
+    );
+    activeByOwner = buildActiveSubmissionIndex(active);
   }
-  return out;
+
+  return flattenExistingCoverage(
+    rows.map((row) => ({
+      assignee: row.assignee_profile_id as string,
+      rawSubmissionId: row.submission_id as number,
+      submission: embeddedSubmission(row),
+      rubricPartIds: ((row.review_assignment_rubric_parts ?? []) as Array<{ rubric_part_id: number }>).map(
+        (part) => part.rubric_part_id
+      )
+    })),
+    activeByOwner
+  );
 }
 
 /**

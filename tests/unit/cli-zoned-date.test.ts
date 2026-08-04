@@ -219,3 +219,45 @@ describe("a DST transition at midnight", () => {
     expect(resolveDueDate("2026-11-01T01:30", NY)).toBe("2026-11-01T05:30:00.000Z");
   });
 });
+
+/**
+ * An offset-bearing timestamp is matched in full, not just checked for an offset
+ * suffix. Delegating the rest of the string to `new Date` let V8's legacy parser
+ * reinterpret junk into a plausible-looking instant, so a due date could land months
+ * from where the operator wrote it with no error anywhere.
+ */
+describe("resolveDueDate — offset-bearing input", () => {
+  it("rejects a timestamp that only ends in an offset", () => {
+    // The bug: this parsed as 2026-06-09T00:00:00.000Z — three months early.
+    expect(() => resolveDueDate("2026-09-15junkZ", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("2026-09-15T17:00:00 and then some+05:00", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("garbage 2026-09-15T17:00:00Z", NY)).toThrow(ZonedDateError);
+  });
+
+  it.each([
+    ["2026-09-15T17:00:00Z", "2026-09-15T17:00:00.000Z"],
+    ["2026-09-15T17:00Z", "2026-09-15T17:00:00.000Z"],
+    ["2026-09-15T17:00:00.5Z", "2026-09-15T17:00:00.500Z"],
+    ["2026-09-15T17:00:00-04:00", "2026-09-15T21:00:00.000Z"],
+    // Offset without the colon, and a half-hour offset east of UTC.
+    ["2026-09-15T17:00:00-0400", "2026-09-15T21:00:00.000Z"],
+    ["2026-09-15T17:00:00+05:30", "2026-09-15T11:30:00.000Z"]
+  ])("honors the stated offset in %s", (input, expected) => {
+    expect(resolveDueDate(input, NY)).toBe(expected);
+  });
+
+  it("applies the stated offset rather than the class zone", () => {
+    // Same instant regardless of which class reads it — the offset wins.
+    expect(resolveDueDate("2026-09-15T17:00:00-04:00", TOKYO)).toBe("2026-09-15T21:00:00.000Z");
+  });
+
+  it("rejects an impossible calendar date even with an offset", () => {
+    expect(() => resolveDueDate("2026-02-30T17:00:00-05:00", NY)).toThrow(ZonedDateError);
+  });
+
+  it("rejects an out-of-range wall clock or offset", () => {
+    expect(() => resolveDueDate("2026-09-15T25:00:00Z", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("2026-09-15T17:60:00Z", NY)).toThrow(ZonedDateError);
+    expect(() => resolveDueDate("2026-09-15T17:00:00+99:99", NY)).toThrow(ZonedDateError);
+  });
+});
