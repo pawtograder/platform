@@ -331,15 +331,39 @@ export default function MCPTokensMenu() {
                       How to Use
                     </Text>
                     <Text fontSize="sm" color="fg.muted" mb={3}>
-                      MCP tokens are used with AI assistants (Claude Desktop, etc). CLI tokens are used with the
-                      Pawtograder CLI API.
+                      CLI tokens are used with the Pawtograder command-line tool. MCP tokens are used with AI assistants
+                      (Claude Desktop, etc). Both kinds of token start with <code>mcp_</code>.
+                    </Text>
+                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
+                      Command-Line Tool:
+                    </Text>
+                    <Box
+                      mt={1}
+                      p={2}
+                      bg="bg.emphasized"
+                      borderRadius="sm"
+                      fontFamily="mono"
+                      fontSize="xs"
+                      whiteSpace="pre-wrap"
+                      overflowX="auto"
+                    >
+                      {`npm install -g @pawtograder/cli
+
+pawtograder login --url ${edgeFunctionUrl("cli")}
+
+pawtograder classes list`}
+                    </Box>
+                    <Text fontSize="sm" color="fg.muted" mt={2} mb={3}>
+                      {/* Prompting keeps the token out of shell history, so it is the form shown first. */}
+                      <code>login</code> prompts for the token and stores it in{" "}
+                      <code>~/.pawtograder/credentials.json</code>. For scripts and CI, pass it directly with{" "}
+                      <code>--token</code>. Run <code>pawtograder --help</code> for the full command list.
                     </Text>
                     <Text fontSize="sm" fontWeight="semibold" mb={1}>
                       MCP Client Configuration (Claude Desktop):
                     </Text>
                     <Box
                       mt={1}
-                      mb={3}
                       p={2}
                       bg="bg.emphasized"
                       borderRadius="sm"
@@ -358,24 +382,6 @@ export default function MCPTokensMenu() {
     }
   }
 }`}
-                    </Box>
-                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
-                      CLI API Usage:
-                    </Text>
-                    <Box
-                      mt={1}
-                      p={2}
-                      bg="bg.emphasized"
-                      borderRadius="sm"
-                      fontFamily="mono"
-                      fontSize="xs"
-                      whiteSpace="pre-wrap"
-                      overflowX="auto"
-                    >
-                      {`curl -X POST ${edgeFunctionUrl("cli")} \\
-  -H "Authorization: Bearer mcp_YOUR_TOKEN_HERE" \\
-  -H "Content-Type: application/json" \\
-  -d '{"command": "classes.list", "params": {}}'`}
                     </Box>
                   </Box>
                 </VStack>
