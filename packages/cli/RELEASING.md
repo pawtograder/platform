@@ -54,14 +54,26 @@ git tag cli-v0.1.1
 git push origin HEAD --tags
 ```
 
-The workflow refuses to publish if the tag version and `package.json` version disagree, then builds, smoke-tests, and runs `npm publish --access public`.
+The workflow refuses to publish if the tag version and `package.json` version disagree, then builds, smoke-tests, and runs `npm publish --access public --provenance`. It upgrades npm to `^11.5.1` first: trusted publishing needs that version or later, and Node 22 ships npm 10, which does not attempt the OIDC exchange at all — it falls back to looking for a token and fails as a confusing auth error rather than as "your npm is too old".
 
-`workflow_dispatch` runs the same build and smoke test with `dry_run` enabled by default, which is a safe way to check the pipeline without releasing.
+`workflow_dispatch` builds, smoke-tests, and packs without publishing, which is a safe way to check the pipeline without releasing. It cannot publish: publishing is gated on the ref being a `cli-v*` tag.
 
 ### One-time setup
 
 - An npm organization named `pawtograder` (the package is scoped `@pawtograder/cli`). If that scope is unavailable, change `name` in `package.json`; nothing else depends on it.
-- An `NPM_TOKEN` repository secret holding an npm **automation** token with publish rights on the scope. Automation tokens bypass 2FA prompts, which interactive tokens do not.
+- A **trusted publisher** configured on npm, which is what authenticates the workflow. There is no `NPM_TOKEN` and there should not be one: npm warns against automation tokens for CI because they are long-lived bearer credentials, so anyone who can read the secret can publish as us until it is noticed and rotated. Trusted publishing exchanges the workflow's short-lived OIDC identity for a single-use credential instead, and lets npm verify which workflow in which repository is publishing.
+
+  On npmjs.com, under **@pawtograder/cli → Settings → Publishing access → Add trusted publisher → GitHub Actions**:
+
+  | Field                | Value             |
+  | -------------------- | ----------------- |
+  | Organization or user | `pawtograder`     |
+  | Repository           | `platform`        |
+  | Workflow filename    | `publish-cli.yml` |
+  | Environment          | leave blank       |
+
+  Leave Environment blank unless you also add `environment:` to the job in the workflow; npm rejects the exchange when the two disagree. A trusted publisher can only be added to a package that already exists, so a brand-new package needs one manual publish first — `@pawtograder/cli` cleared that at 0.1.0.
+
 - `publishConfig.access` is already `public`. Without it, npm defaults scoped packages to restricted and the publish fails.
 
-To publish by hand instead, from `packages/cli`: `npm ci && npm publish --access public` (`prepublishOnly` rebuilds and smoke-tests first).
+To publish by hand instead, from `packages/cli`: `npm ci && npm publish --access public` (`prepublishOnly` rebuilds and smoke-tests first). A manual publish cannot carry provenance — that needs the workflow's OIDC identity — so the tag route is preferable for anything users will install.

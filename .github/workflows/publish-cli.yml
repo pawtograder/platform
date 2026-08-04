@@ -9,8 +9,31 @@ name: Publish CLI to npm
 #   git commit -am "chore(cli): release 0.1.1"
 #   git tag cli-v0.1.1 && git push origin cli-v0.1.1
 #
-# Requires an `NPM_TOKEN` repository secret: an npm automation token with
-# publish rights on the @pawtograder scope.
+# Authentication is npm Trusted Publishing (OIDC) — there is no NPM_TOKEN. npm warns
+# against automation tokens for CI precisely because they are long-lived bearer
+# credentials: anyone who reads the secret can publish as us, from anywhere, until
+# someone notices and rotates it. Trusted publishing instead exchanges the workflow's
+# short-lived OIDC identity for a scoped, single-use credential, so there is no standing
+# secret to leak and npm can verify *which workflow in which repo* is publishing.
+#
+# One-time setup on npmjs.com (nothing to configure in this repo):
+#
+#   npmjs.com -> @pawtograder/cli -> Settings -> Publishing access
+#     -> Add trusted publisher -> GitHub Actions
+#          Organization or user: pawtograder
+#          Repository:           platform
+#          Workflow filename:    publish-cli.yml
+#          Environment:          (leave blank)
+#
+# Leave Environment blank unless you also add `environment:` to the job below. The two
+# must agree: npm rejects the exchange if the workflow's environment does not match what
+# the trusted publisher expects. Naming one buys a second gate — a GitHub environment can
+# require manual approval before the job runs, so a pushed tag would wait for a human
+# rather than publishing immediately. Worth doing if tag pushes ever become routine.
+#
+# The package must already exist on npm to add a trusted publisher; a brand-new package
+# needs one manual `npm publish` first. @pawtograder/cli was published by hand at 0.1.0,
+# so that step is already behind us.
 
 on:
   push:
@@ -22,8 +45,9 @@ on:
 
 permissions:
   contents: read
-  # Required for `npm publish --provenance`, which attests which workflow, repo, and
-  # commit produced the tarball. Without it npm silently publishes unattested.
+  # Does double duty: it is how npm authenticates us at all under trusted publishing,
+  # and how `--provenance` attests which workflow, repo, and commit produced the tarball.
+  # Without it the publish cannot authenticate, and provenance would be skipped silently.
   id-token: write
 
 jobs:
@@ -39,6 +63,15 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing needs npm >= 11.5.1, and Node 22 ships 10.9.2 — which fails
+      # by *ignoring* OIDC and falling back to looking for a token, so the error surfaces
+      # as a confusing auth failure rather than "your npm is too old". Pinned to a major
+      # so a future npm release cannot change publish behaviour underneath us.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
 
       - name: Install
         run: npm ci
@@ -74,8 +107,11 @@ jobs:
       # being a tag — so a manual run from a feature branch published unreviewed code to
       # the `latest` dist-tag with nothing tying the tarball to a commit. Manual runs now
       # build, smoke-test, and pack, which is what they were useful for.
+      #
+      # No NODE_AUTH_TOKEN: npm picks up the Actions OIDC token via `id-token: write`
+      # and exchanges it for a short-lived publish credential. `--provenance` is implied
+      # by trusted publishing, but stays explicit because the failure mode of losing it
+      # is silent — an unattested tarball publishes successfully and looks identical.
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/cli-v')
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
