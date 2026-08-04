@@ -27,7 +27,7 @@ import * as assessmentCommand from "./commands/assessment";
 import { DEFAULT_API_URL } from "./utils/api";
 import { startLoginFlow, logout, getCurrentUser } from "./utils/auth";
 import { getCredentialsPath } from "./utils/credentials";
-import { logger, handleError } from "./utils/logger";
+import { logger, handleError, setLoggerQuiet } from "./utils/logger";
 
 /**
  * Replaced at build time with the published package's version
@@ -46,6 +46,12 @@ export function run(argv: string[] = hideBin(process.argv)): void {
   yargs(argv)
     .scriptName("pawtograder")
     .usage("$0 <command> [options]")
+    // Silences progress logging under --json for every command, including the ones
+    // that log before the request whose response is printed. Without it a consumer
+    // piping stdout to a parser got progress text ahead of the JSON.
+    .middleware((args) => {
+      if (args.json === true) setLoggerQuiet(true);
+    })
     .command(
       "login",
       "Authenticate with a Pawtograder API token",

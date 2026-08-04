@@ -8,6 +8,7 @@ import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
+import { pageAll } from "../utils/paging.ts";
 import {
   indexAssignmentRubrics,
   resolveYamlReference,
@@ -371,13 +372,26 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
   }
   if (existingCheckIds.length > 0) {
     for (let i = 0; i < existingCheckIds.length; i += 500) {
-      const { data: refRows, error: refErr } = await supabase
-        .from("rubric_check_references")
-        .select("referencing_rubric_check_id, referenced_rubric_check_id")
-        .in("referencing_rubric_check_id", existingCheckIds.slice(i, i + 500))
-        .order("id", { ascending: true });
-      if (refErr) throw new CLICommandError(`Failed to load existing references: ${refErr.message}`, 500);
-      for (const row of refRows ?? []) {
+      const batch = existingCheckIds.slice(i, i + 500);
+      // Paged within the batch. A check may own several references, so 500 checks can
+      // return well past `max_rows` rows — and this map is what preserves references
+      // whose YAML form failed to resolve. A truncated read would look like "that
+      // check has no saved references", and update_rubric_full treats the payload as
+      // the desired set, so an unrelated typo elsewhere in the file would delete
+      // dependencies that were never mentioned.
+      const refRows = await pageAll<{
+        referencing_rubric_check_id: number;
+        referenced_rubric_check_id: number;
+      }>(
+        () =>
+          supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .in("referencing_rubric_check_id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load existing references"
+      );
+      for (const row of refRows) {
         const list = persistedRefsByCheckId.get(row.referencing_rubric_check_id) ?? [];
         list.push(row.referenced_rubric_check_id);
         persistedRefsByCheckId.set(row.referencing_rubric_check_id, list);

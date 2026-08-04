@@ -1,7 +1,7 @@
--- update_rubric_full: store check points as numeric, and give the function a
--- statement timeout.
+-- update_rubric_full: store check points as numeric, give the function a statement
+-- timeout, and pin assignment_id to the rubric being written.
 --
--- Two defects, both pre-existing and both reachable from the web rubric editor as
+-- Three defects, all pre-existing and all reachable from the web rubric editor as
 -- well as from `pawtograder rubrics import`:
 --
 -- 1. rubric_checks.points has been `numeric` since
@@ -18,6 +18,15 @@
 --    recomputes in a single statement for a full-tree import on a large roster.
 --    3min matches what 20251124233922_extend-more-rpc-timeouts.sql set on the other
 --    heavy RPCs.
+--
+-- 3. On the update path the function pinned class_id but never checked
+--    assignment_id against the rubric it was about to modify, while writing that
+--    assignment_id into every child row it inserted. A payload naming a rubric on one
+--    assignment and carrying another's id produced rubric_parts/criteria/checks whose
+--    assignment_id disagreed with their own rubric, which the export path (filtering
+--    rubric_check_references by assignment_id) then read back inconsistently. Only an
+--    instructor in the class could reach it, and both existing callers derive the two
+--    ids from the same resolved rubric, so nothing legitimate is rejected.
 --
 -- The body is otherwise byte-identical to 20260522180000.
 
@@ -44,6 +53,7 @@ DECLARE
   v_old_is_private boolean;
   v_old_cap boolean;
   v_old_hide_unless_assigned boolean;
+  v_old_assignment_id bigint;
 
   v_new_name text;
   v_new_description text;
@@ -141,14 +151,27 @@ BEGIN
     v_is_new_rubric := true;
     v_broad_change := true;
   ELSE
-    SELECT name, description, is_private, cap_score_to_assignment_points, hide_unless_assigned
-    INTO v_old_name, v_old_description, v_old_is_private, v_old_cap, v_old_hide_unless_assigned
+    SELECT name, description, is_private, cap_score_to_assignment_points, hide_unless_assigned,
+           assignment_id
+    INTO v_old_name, v_old_description, v_old_is_private, v_old_cap, v_old_hide_unless_assigned,
+         v_old_assignment_id
     FROM public.rubrics
     WHERE id = v_rubric_id AND class_id = v_class_id
     FOR UPDATE;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Rubric % not found in class %', v_rubric_id, v_class_id;
+    END IF;
+
+    -- The class is pinned above, but assignment_id was not checked against the rubric,
+    -- and the part/criteria/check inserts below write v_assignment_id straight into the
+    -- child rows. A payload naming a rubric on assignment A while carrying assignment
+    -- B's id therefore produced children whose assignment_id disagreed with their
+    -- rubric's, and the export path filters rubric_check_references by assignment_id,
+    -- so those rows read back inconsistently.
+    IF v_assignment_id IS DISTINCT FROM v_old_assignment_id THEN
+      RAISE EXCEPTION 'assignment_id % does not match rubric %''s assignment %',
+        v_assignment_id, v_rubric_id, v_old_assignment_id;
     END IF;
 
     IF v_old_name IS DISTINCT FROM v_new_name

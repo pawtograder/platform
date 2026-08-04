@@ -155,10 +155,26 @@ async function fetchAssigneesForRubricPart(
  * and compare. Without this a corrupt manifest uploaded truncated artifact bytes
  * and reported success.
  */
+/** Base64 with at least one data character, optional trailing padding, nothing else. */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
 function decodeBase64Strict(input: string): Uint8Array | null {
   if (typeof input !== "string" || input.length === 0) return null;
   const normalized = input.replace(/\s+/g, "");
+
+  // The grammar is checked before decoding. Padding-only input ("=", "====", or
+  // whitespace around one) slipped through the re-encode comparison below, because
+  // Buffer decodes it to zero bytes and stripping padding reduces both operands to the
+  // empty string — so `--overwrite` replaced a real artifact with an empty object and
+  // reported success. Requiring a data character also rules out the empty payload,
+  // which the length guard above already rejected in its unpadded form.
+  if (!BASE64_RE.test(normalized)) return null;
+  // 4n+1 is not a reachable length for base64; the re-encode check catches it too, but
+  // failing here says why.
+  if (normalized.replace(/=+$/, "").length % 4 === 1) return null;
+
   const buf = Buffer.from(normalized, "base64");
+  if (buf.length === 0) return null;
   // Re-encoding is canonical, so compare against the canonicalized input: strip
   // padding from both sides rather than requiring the caller to pad exactly.
   const reencoded = buf.toString("base64").replace(/=+$/, "");
@@ -547,14 +563,31 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    const { data: existing } = await supabase
+    // Every match, not `.maybeSingle()`, and the error is not discarded.
+    //
+    // `submission_artifacts` has no unique constraint on (submission_id, name), and the
+    // insert-before-delete ordering below deliberately allows two rows to coexist for a
+    // moment — so a failed cleanup leaves a genuine duplicate. `.maybeSingle()` reports
+    // multiple matches as an *error with null data*, which the discarded error hid: the
+    // retry saw `existing = null`, inserted a third row, and never entered cleanup. The
+    // state was unrecoverable by the very command meant to fix it.
+    const { data: existingRows, error: existingErr } = await supabase
       .from("submission_artifacts")
       .select("id")
       .eq("submission_id", art.submission_id)
       .eq("name", art.name)
-      .maybeSingle();
+      .order("id", { ascending: true });
+    if (existingErr) {
+      errors.push({
+        submission_id: art.submission_id,
+        artifact_name: art.name,
+        reason: `could not check for an existing artifact: ${existingErr.message}`
+      });
+      continue;
+    }
+    const priorArtifacts = existingRows ?? [];
 
-    if (existing && !overwrite) {
+    if (priorArtifacts.length > 0 && !overwrite) {
       skipped++;
       continue;
     }
@@ -608,8 +641,10 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     // reported rather than discarded: a failure leaves a duplicate row behind, and
     // silently swallowing it is how `--overwrite` used to appear to work while
     // leaving the storage object orphaned.
-    if (existing && overwrite) {
-      // Ordered comments → row → storage object, and it stops at the first failure.
+    if (priorArtifacts.length > 0 && overwrite) {
+      // Ordered comments → row → storage object, stopping at the first failure, and
+      // repeated for *every* prior row so a run that follows a failed cleanup
+      // reconciles the duplicate rather than adding to it.
       //
       // Deleting the object first was wrong in a way that compounds: a failed comment
       // delete leaves comments whose foreign key then blocks the row delete, so the old
@@ -617,38 +652,44 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       // comments attached to it point at nothing. Removing the object last means every
       // failure leaves a *complete* old artifact — redundant, but coherent, and the
       // operator can retry.
-      const failCleanup = (reason: string) => {
+      const failCleanup = (priorId: number, reason: string) => {
         errors.push({
           submission_id: art.submission_id,
           artifact_name: art.name,
-          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${existing.id} failed: ${reason}`
+          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${priorId} failed: ${reason}`
         });
       };
 
-      const { error: commentsErr } = await supabase
-        .from("submission_artifact_comments")
-        .delete()
-        .eq("submission_artifact_id", existing.id);
-      if (commentsErr) {
-        failCleanup(commentsErr.message);
-        continue;
+      let cleanupFailed = false;
+      for (const prior of priorArtifacts) {
+        const { error: commentsErr } = await supabase
+          .from("submission_artifact_comments")
+          .delete()
+          .eq("submission_artifact_id", prior.id);
+        if (commentsErr) {
+          failCleanup(prior.id, commentsErr.message);
+          cleanupFailed = true;
+          continue;
+        }
+
+        const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", prior.id);
+        if (rowErr) {
+          failCleanup(prior.id, rowErr.message);
+          cleanupFailed = true;
+          continue;
+        }
+
+        const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${prior.id}`;
+        const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
+        if (objectErr) {
+          // The row is gone, so nothing references this blob any more. Reported so the
+          // orphan can be swept, but the data model is consistent.
+          failCleanup(prior.id, `its storage object was left behind: ${objectErr.message}`);
+          cleanupFailed = true;
+        }
       }
 
-      const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", existing.id);
-      if (rowErr) {
-        failCleanup(rowErr.message);
-        continue;
-      }
-
-      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
-      const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
-      if (objectErr) {
-        // The row is gone, so nothing references this blob any more. Reported so the
-        // orphan can be swept, but the data model is consistent.
-        failCleanup(`its storage object was left behind: ${objectErr.message}`);
-        continue;
-      }
-
+      if (cleanupFailed) continue;
       overwritten++;
       continue;
     }
