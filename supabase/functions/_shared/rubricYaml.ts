@@ -885,6 +885,16 @@ export interface RubricImportPlan {
   criteria_scoring_changed: Array<{ id: number; name: string }>;
   /** Checks kept by id but moved under a different criterion, which rescores them. */
   checks_reparented: Array<{ id: number; name: string }>;
+  /**
+   * Parts whose grading mode (`is_individual_grading`, `is_assign_to_student`) changed.
+   * `_submission_review_recompute_scores` reads those flags through its
+   * rubric_criteria -> rubric_parts join to decide whether a criterion's points land in
+   * the shared total, one student's individual total, or a per-student assigned total —
+   * so flipping either reclassifies every criterion under the part.
+   */
+  parts_grading_mode_changed: Array<{ id: number; name: string }>;
+  /** Criteria kept by id but moved under a different part, which can reclassify them. */
+  criteria_reparented: Array<{ id: number; name: string }>;
   /** Ids in the YAML that this rubric does not own — the copy/paste-YAML case. */
   foreign_ids: Array<{ level: "part" | "criterion" | "check"; id: number; name: string }>;
   broad_change: boolean;
@@ -906,6 +916,8 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     checks: { insert: [], update: [], remove: [], points_changed: [] },
     criteria_scoring_changed: [],
     checks_reparented: [],
+    parts_grading_mode_changed: [],
+    criteria_reparented: [],
     foreign_ids: [],
     broad_change: false
   };
@@ -915,10 +927,13 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
   const ownedChecks = new Map<number, RubricCheckRowLike>();
   /** Which criterion each existing check currently hangs off, to detect a move. */
   const ownedCheckParent = new Map<number, number>();
+  /** Which part each existing criterion currently sits under, to detect a move. */
+  const ownedCriteriaParent = new Map<number, number>();
   for (const part of current.rubric_parts ?? []) {
     ownedParts.set(part.id, part);
     for (const criteria of part.rubric_criteria ?? []) {
       ownedCriteria.set(criteria.id, criteria);
+      ownedCriteriaParent.set(criteria.id, part.id);
       for (const check of criteria.rubric_checks ?? []) {
         ownedChecks.set(check.id, check);
         ownedCheckParent.set(check.id, criteria.id);
@@ -929,12 +944,22 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
   const seenParts = new Set<number>();
   const seenCriteria = new Set<number>();
   const seenChecks = new Set<number>();
-  /** An existing criterion's total_points / is_additive / is_deduction_only changed. */
 
   for (const part of payload.parts) {
     if (part.id !== undefined && ownedParts.has(part.id)) {
       plan.parts.update.push(part.id);
       seenParts.add(part.id);
+      // The part-level counterpart of criteria_scoring_changed: the RPC widens to a full
+      // recompute here too, because the flags decide how every criterion beneath this
+      // part is scored. Without it, flipping one checkbox in the YAML reported "no
+      // structural changes" and then rewrote every affected student's totals.
+      const beforePart = ownedParts.get(part.id)!;
+      if (
+        beforePart.is_individual_grading !== part.is_individual_grading ||
+        beforePart.is_assign_to_student !== part.is_assign_to_student
+      ) {
+        plan.parts_grading_mode_changed.push({ id: part.id, name: part.name });
+      }
     } else {
       plan.parts.insert.push(part.name);
       if (part.id !== undefined) plan.foreign_ids.push({ level: "part", id: part.id, name: part.name });
@@ -948,6 +973,12 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
         // lines 332-336). Omitting them let a one-line `total_points` or `is_additive`
         // edit report "No structural changes" and then recompute every submission_review
         // on the rubric — the most expensive and most grade-visible thing an import does.
+        // A criterion can keep its id and change parents. If the new part has a
+        // different grading mode, recompute_scores classifies its points differently,
+        // so the move is as broad as editing the flags themselves.
+        if (part.id !== undefined && ownedCriteriaParent.get(criteria.id) !== part.id) {
+          plan.criteria_reparented.push({ id: criteria.id, name: criteria.name });
+        }
         const beforeCriteria = ownedCriteria.get(criteria.id)!;
         if (
           beforeCriteria.total_points !== criteria.total_points ||
@@ -1018,6 +1049,8 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     plan.checks.points_changed.length > 0 ||
     plan.criteria_scoring_changed.length > 0 ||
     plan.checks_reparented.length > 0 ||
+    plan.parts_grading_mode_changed.length > 0 ||
+    plan.criteria_reparented.length > 0 ||
     current.cap_score_to_assignment_points !== payload.cap_score_to_assignment_points;
 
   return plan;

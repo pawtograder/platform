@@ -623,6 +623,58 @@ describe("planRubricImport", () => {
     expect(plan.broad_change).toBe(false);
   });
 
+  it("flags a part's grading mode change as broad", () => {
+    // recompute_scores reads these flags through its criteria -> parts join to decide
+    // whether a criterion's points land in the shared total, one student's total, or a
+    // per-student assigned total. Flipping either rewrites every affected student's
+    // totals, so a dry run that called it "no structural changes" was lying.
+    const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
+    yaml.parts[0].is_individual_grading = !yaml.parts[0].is_individual_grading;
+    const plan = planRubricImport(tree, payloadFor(yaml));
+    expect(plan.parts_grading_mode_changed).toEqual([{ id: 100, name: "part-a" }]);
+    expect(plan.broad_change).toBe(true);
+  });
+
+  it("flags an assign-to-student change as broad too", () => {
+    const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
+    yaml.parts[0].is_assign_to_student = !yaml.parts[0].is_assign_to_student;
+    const plan = planRubricImport(tree, payloadFor(yaml));
+    expect(plan.parts_grading_mode_changed.map((p) => p.id)).toEqual([100]);
+    expect(plan.broad_change).toBe(true);
+  });
+
+  it("flags a criterion kept by id but moved under a different part", () => {
+    const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
+    // Move part-a's criterion, ids intact, under part-b.
+    const moved = yaml.parts[0].criteria[0];
+    yaml.parts[0].criteria = [];
+    yaml.parts[1].criteria = [...(yaml.parts[1].criteria ?? []), moved];
+    const plan = planRubricImport(tree, payloadFor(yaml));
+    expect(plan.criteria_reparented.map((c) => c.id)).toEqual([moved.id]);
+    // Still an update, not an insert-and-remove: the id is preserved.
+    expect(plan.criteria.update).toContain(moved.id);
+    expect(plan.criteria.remove).toEqual([]);
+    // Nothing else is firing, so broad_change here is attributable to the move alone.
+    expect(plan.criteria.insert).toEqual([]);
+    expect(plan.parts.insert).toEqual([]);
+    expect(plan.parts.remove).toEqual([]);
+    expect(plan.checks.insert).toEqual([]);
+    expect(plan.checks.remove).toEqual([]);
+    expect(plan.checks.points_changed).toEqual([]);
+    expect(plan.criteria_scoring_changed).toEqual([]);
+    expect(plan.checks_reparented).toEqual([]);
+    expect(plan.parts_grading_mode_changed).toEqual([]);
+    expect(plan.broad_change).toBe(true);
+  });
+
+  it("does not flag a grading mode or parent that stayed the same", () => {
+    const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
+    const plan = planRubricImport(tree, payloadFor(yaml));
+    expect(plan.parts_grading_mode_changed).toEqual([]);
+    expect(plan.criteria_reparented).toEqual([]);
+    expect(plan.broad_change).toBe(false);
+  });
+
   it("reports a removed check, and that it is a broad change", () => {
     const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
     yaml.parts[0].criteria[0].checks = [];

@@ -1,7 +1,7 @@
 -- Store rubric and comment points as numeric, give update_rubric_full a statement
 -- timeout, and pin assignment_id to the rubric being written.
 --
--- Three defects in update_rubric_full, all pre-existing and all reachable from the
+-- Five defects in update_rubric_full, all pre-existing and all reachable from the
 -- web rubric editor as well as from `pawtograder rubrics import`; then the matching
 -- numeric fix in cli_import_submission_comments_batch at the bottom of this file.
 --
@@ -28,6 +28,20 @@
 --    rubric_check_references by assignment_id) then read back inconsistently. Only an
 --    instructor in the class could reach it, and both existing callers derive the two
 --    ids from the same resolved rubric, so nothing legitimate is rejected.
+--
+-- 4. Updating an existing part rewrote is_individual_grading/is_assign_to_student
+--    without setting v_broad_change. _submission_review_recompute_scores branches on
+--    those flags (via rubric_criteria -> rubric_parts) to split a criterion's points
+--    between the shared total, a single student's total, and per-student assigned
+--    totals -- so flipping either reclassified every criterion under the part while
+--    the tail recompute loop skipped the affected reviews. individual_scores and
+--    per_student_grading_totals stayed on the old mode and the gradebook showed them
+--    as current.
+--
+-- 5. Updating an existing criterion rewrote rubric_part_id -- YAML may keep a
+--    criterion's id while moving it under another part -- but the preceding snapshot
+--    read only its scoring fields, so a move onto a part with a different grading mode
+--    went undetected and left the same stale totals as (4).
 --
 -- The body is otherwise byte-identical to 20260522180000.
 
@@ -106,6 +120,9 @@ DECLARE
   v_removed_check_ids bigint[] := ARRAY[]::bigint[];
   v_affected_review_ids bigint[] := ARRAY[]::bigint[];
 
+  v_old_is_individual_grading boolean;
+  v_old_is_assign_to_student boolean;
+  v_old_rubric_part_id bigint;
   v_old_total_points int;
   v_old_is_additive boolean;
   v_old_is_deduction_only boolean;
@@ -281,6 +298,22 @@ BEGIN
        ) THEN
       v_part_map_key := v_input_part_id::text;
 
+      -- _submission_review_recompute_scores joins rubric_criteria to rubric_parts and
+      -- branches on these two flags to decide whether a criterion's points land in the
+      -- shared total, one student's individual total, or a per-student assigned total.
+      -- Flipping either therefore reclassifies every criterion under the part, so the
+      -- existing reviews have to be recomputed -- and this branch never said so, leaving
+      -- individual_scores and per_student_grading_totals computed under the old mode
+      -- while the gradebook displayed them as current.
+      SELECT is_individual_grading, is_assign_to_student
+      INTO v_old_is_individual_grading, v_old_is_assign_to_student
+      FROM public.rubric_parts WHERE id = v_input_part_id;
+
+      IF v_old_is_individual_grading IS DISTINCT FROM COALESCE((v_part->>'is_individual_grading')::boolean, false)
+         OR v_old_is_assign_to_student IS DISTINCT FROM COALESCE((v_part->>'is_assign_to_student')::boolean, false) THEN
+        v_broad_change := true;
+      END IF;
+
       UPDATE public.rubric_parts
       SET name = v_part->>'name',
           description = v_part->>'description',
@@ -350,13 +383,19 @@ BEGIN
          ) THEN
         v_criteria_map_key := v_input_criteria_id::text;
 
-        SELECT total_points, is_additive, is_deduction_only
-        INTO v_old_total_points, v_old_is_additive, v_old_is_deduction_only
+        -- rubric_part_id is in the snapshot because the UPDATE below rewrites it: YAML
+        -- can keep a criterion's id while moving it under a different part. If the new
+        -- parent has a different grading mode, recompute_scores classifies the
+        -- criterion's points differently through its rubric_parts join, so the move is
+        -- as broad a change as editing the part's own flags.
+        SELECT total_points, is_additive, is_deduction_only, rubric_part_id
+        INTO v_old_total_points, v_old_is_additive, v_old_is_deduction_only, v_old_rubric_part_id
         FROM public.rubric_criteria WHERE id = v_input_criteria_id;
 
         IF v_old_total_points IS DISTINCT FROM COALESCE((v_criterion->>'total_points')::int, 0)
            OR v_old_is_additive IS DISTINCT FROM COALESCE((v_criterion->>'is_additive')::boolean, false)
-           OR v_old_is_deduction_only IS DISTINCT FROM COALESCE((v_criterion->>'is_deduction_only')::boolean, false) THEN
+           OR v_old_is_deduction_only IS DISTINCT FROM COALESCE((v_criterion->>'is_deduction_only')::boolean, false)
+           OR v_old_rubric_part_id IS DISTINCT FROM v_part_id THEN
           v_broad_change := true;
         END IF;
 

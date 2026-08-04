@@ -397,6 +397,10 @@ function printImportPlan(plan: {
   criteria_scoring_changed?: Array<{ id: number; name: string }>;
   /** Optional: absent from a server that predates the check-reparenting diff. */
   checks_reparented?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the part grading-mode diff. */
+  parts_grading_mode_changed?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the criterion-reparenting diff. */
+  criteria_reparented?: Array<{ id: number; name: string }>;
   foreign_ids: Array<{ level: string; id: number; name: string }>;
   broad_change: boolean;
 }): void {
@@ -436,6 +440,28 @@ function printImportPlan(plan: {
     }
   }
 
+  const gradingModeChanged = plan.parts_grading_mode_changed ?? [];
+  if (gradingModeChanged.length > 0) {
+    logger.warning(
+      `Changing the grading mode on ${gradingModeChanged.length} part(s) ` +
+        "(individual / assign-to-student — recomputes every student total under them):"
+    );
+    for (const c of gradingModeChanged) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
+  const criteriaReparented = plan.criteria_reparented ?? [];
+  if (criteriaReparented.length > 0) {
+    logger.warning(
+      `Moving ${criteriaReparented.length} criteri${criteriaReparented.length === 1 ? "on" : "a"} ` +
+        "under a different part (can change how their points are split):"
+    );
+    for (const c of criteriaReparented) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
   const inserts = plan.parts.insert.length + plan.criteria.insert.length + plan.checks.insert.length;
   const updates = plan.parts.update.length + plan.criteria.update.length + plan.checks.update.length;
   logger.info(`Creating: ${inserts} row(s)`);
@@ -445,7 +471,9 @@ function printImportPlan(plan: {
     inserts === 0 &&
     plan.checks.points_changed.length === 0 &&
     scoringChanged.length === 0 &&
-    reparented.length === 0
+    reparented.length === 0 &&
+    gradingModeChanged.length === 0 &&
+    criteriaReparented.length === 0
   ) {
     logger.info("No structural changes.");
   }
