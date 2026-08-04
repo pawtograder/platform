@@ -55,7 +55,7 @@ await build({
 await chmod(outfile, 0o755);
 
 // The package declares GPL-3.0-only, but npm packs only the package directory, so the
-// repo-root LICENSE was outside the tarball and every release shipped the licence terms
+// repo-root LICENSE was outside the tarball and every release shipped the license terms
 // nowhere. Copied at build time rather than duplicated in git, so the two cannot drift.
 await copyFile(resolve(repoRoot, "LICENSE"), resolve(here, "LICENSE"));
 

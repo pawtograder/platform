@@ -197,7 +197,7 @@ export async function resolveSurvey(
       .is("deleted_at", null);
 
     if (error) {
-      throw new CLICommandError(`Failed to resolve survey: ${error.message}`);
+      throw new CLICommandError(`Failed to resolve survey: ${error.message}`, 500);
     }
     const latest = dedupeSurveysToLatestVersion((rows ?? []) as SurveyRow[]);
     if (latest.length === 0) {

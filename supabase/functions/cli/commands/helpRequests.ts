@@ -144,7 +144,11 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
     // skipped entirely while paging.
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .range(offset, offset + limit - 1);
+    // One extra row, used only to answer "is there more?" and then dropped. `.range()`
+    // can never return more than `limit`, so testing `rows.length >= limit` reported an
+    // exactly-full final page as truncated and sent the operator to an `--offset` that
+    // returns nothing.
+    .range(offset, offset + limit);
 
   if (statuses) query = query.in("status", statuses);
   if (queueId !== null) query = query.eq("help_queue", queueId);
@@ -152,7 +156,9 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
   const { data, error } = await query;
   if (error) throw new CLICommandError(`Failed to list help requests: ${error.message}`, 500);
 
-  const rows = (data ?? []) as unknown as Array<Record<string, unknown> & { help_queues?: { name: string } | null }>;
+  const fetched = (data ?? []) as unknown as Array<Record<string, unknown> & { help_queues?: { name: string } | null }>;
+  const truncated = fetched.length > limit;
+  const rows = truncated ? fetched.slice(0, limit) : fetched;
 
   const names = await fetchProfileNames(supabase, [
     ...rows.map((r) => (r.created_by as string | null) ?? null),
@@ -199,9 +205,9 @@ async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string
         total: requests.length,
         by_status: byStatus,
         offset,
-        truncated: requests.length >= limit,
+        truncated,
         /** Pass as --offset to continue past a truncated page. */
-        next_offset: requests.length >= limit ? offset + requests.length : null
+        next_offset: truncated ? offset + requests.length : null
       }
     }
   };
@@ -352,12 +358,20 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
   // resolving, and no trigger does it. Without this, CLI-resolved requests
   // vanish from per-student help histories and the analytics built on them.
   // Best-effort, matching the UI, which does not block resolution on it.
+  //
+  // Best-effort, but not silent. Discarding the errors here meant a permissions change or
+  // a transient fault reported `activity_logged: 0` under `success: true`, and the client
+  // prints nothing when that is 0 — so the history rows stopped being written with no
+  // signal anywhere, and the analytics built on them grew a hole nobody could attribute.
+  // The reason is returned so the operator can see it and re-run the backfill.
   let activityLogged = 0;
+  let activityError: string | null = null;
   try {
-    const { data: participants } = await supabase
+    const { data: participants, error: participantsError } = await supabase
       .from("help_request_students")
       .select("profile_id")
       .eq("help_request_id", id);
+    if (participantsError) throw new Error(participantsError.message);
 
     const rows = (participants ?? []).map((participant) => ({
       student_profile_id: participant.profile_id,
@@ -368,11 +382,13 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
     }));
 
     if (rows.length > 0) {
-      const { error: activityError } = await supabase.from("student_help_activity").insert(rows);
-      if (!activityError) activityLogged = rows.length;
+      const { error: insertError } = await supabase.from("student_help_activity").insert(rows);
+      if (insertError) throw new Error(insertError.message);
+      activityLogged = rows.length;
     }
-  } catch {
+  } catch (err) {
     // Activity logging is not worth failing an otherwise successful close over.
+    activityError = err instanceof Error ? err.message : String(err);
   }
 
   return {
@@ -381,6 +397,8 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
       request: updated,
       previous_status: existing.status,
       activity_logged: activityLogged,
+      /** Why no per-student help-history rows were written, when that failed. */
+      activity_error: activityError,
       /**
        * True when a Chime call is still up; no trigger tears it down. Read from
        * the updated row, not the pre-update one: a call that ended between the

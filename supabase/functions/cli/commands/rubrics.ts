@@ -8,6 +8,7 @@ import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
+import { pageAll } from "../utils/paging.ts";
 import {
   indexAssignmentRubrics,
   resolveYamlReference,
@@ -112,7 +113,7 @@ async function loadAssignmentRubricIndex(
     .eq("assignment_id", assignmentId);
 
   if (error) {
-    throw new CLICommandError(`Failed to load rubrics for assignment ${assignmentId}: ${error.message}`);
+    throw new CLICommandError(`Failed to load rubrics for assignment ${assignmentId}: ${error.message}`, 500);
   }
   const rubrics = (data ?? []) as RubricWithHierarchy[];
   return { rubrics, indexed: indexAssignmentRubrics(rubrics) };
@@ -156,21 +157,29 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
 
   const referencesByCheckId = new Map<number, YamlReference[]>();
   if (referencingCheckIds.length > 0) {
-    const { data: refRows, error: refErr } = await supabase
-      .from("rubric_check_references")
-      .select("referencing_rubric_check_id, referenced_rubric_check_id")
-      .eq("assignment_id", assignment.id)
-      .in("referencing_rubric_check_id", referencingCheckIds);
-    if (refErr) {
-      throw new CLICommandError(
-        `Failed to load rubric_check_references for assignment ${assignment.id}: ${refErr.message}`
-      );
-    }
+    // Batched and paged. A check can reference several others, so the row count is a
+    // multiple of the check count and is not bounded by it: an unpaged read silently
+    // stopped at `max_rows`, and the export then omitted those references — which
+    // `rubrics import` reads as "delete them", so an export/import round-trip destroyed
+    // exactly the references that fell past the cap.
     const grouped = new Map<number, Array<{ referenced_rubric_check_id: number }>>();
-    for (const row of refRows ?? []) {
-      const arr = grouped.get(row.referencing_rubric_check_id) ?? [];
-      arr.push({ referenced_rubric_check_id: row.referenced_rubric_check_id });
-      grouped.set(row.referencing_rubric_check_id, arr);
+    for (let i = 0; i < referencingCheckIds.length; i += 500) {
+      const batch = referencingCheckIds.slice(i, i + 500);
+      const refRows = await pageAll<{ referencing_rubric_check_id: number; referenced_rubric_check_id: number }>(
+        () =>
+          supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .eq("assignment_id", assignment.id)
+            .in("referencing_rubric_check_id", batch)
+            .order("id", { ascending: true }),
+        `Failed to load rubric_check_references for assignment ${assignment.id}`
+      );
+      for (const row of refRows) {
+        const arr = grouped.get(row.referencing_rubric_check_id) ?? [];
+        arr.push({ referenced_rubric_check_id: row.referenced_rubric_check_id });
+        grouped.set(row.referencing_rubric_check_id, arr);
+      }
     }
     for (const [checkId, refs] of grouped) {
       referencesByCheckId.set(checkId, serializeReferencesForExport(refs, indexed));
@@ -371,12 +380,20 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
   }
   if (existingCheckIds.length > 0) {
     for (let i = 0; i < existingCheckIds.length; i += 500) {
-      const { data: refRows, error: refErr } = await supabase
-        .from("rubric_check_references")
-        .select("referencing_rubric_check_id, referenced_rubric_check_id")
-        .in("referencing_rubric_check_id", existingCheckIds.slice(i, i + 500))
-        .order("id", { ascending: true });
-      if (refErr) throw new CLICommandError(`Failed to load existing references: ${refErr.message}`, 500);
+      const batch = existingCheckIds.slice(i, i + 500);
+      // Paged. One check can reference several others, so 500 checks can produce well
+      // over `max_rows` reference rows; an unpaged read came back truncated with no
+      // error, and this is the set that decides which stored references survive the
+      // import — a missing entry here makes the RPC delete a working reference.
+      const refRows = await pageAll<{ referencing_rubric_check_id: number; referenced_rubric_check_id: number }>(
+        () =>
+          supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .in("referencing_rubric_check_id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load existing references"
+      );
       for (const row of refRows ?? []) {
         const list = persistedRefsByCheckId.get(row.referencing_rubric_check_id) ?? [];
         list.push(row.referenced_rubric_check_id);
@@ -406,13 +423,18 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
         if (failures.length > 0) {
           const persisted = typeof check.id === "number" ? persistedRefsByCheckId.get(check.id) : undefined;
           if (persisted && persisted.length > 0) {
-            // Keeping the persisted set: the RPC removes any reference row absent
-            // from the payload, so dropping an unresolvable one would actively
-            // delete a working reference rather than merely skip it.
+            // Union, not replacement: the RPC removes any reference row absent from the
+            // payload, so dropping an unresolvable one would actively delete a working
+            // reference rather than merely skip it — but substituting the persisted set
+            // wholesale threw away the references that *did* resolve, so adding one valid
+            // reference alongside one typo silently discarded the valid one while
+            // reporting that nothing was lost.
+            const merged = [...resolved];
+            for (const id of persisted) if (!merged.includes(id)) merged.push(id);
             referenceWarnings.push(
               `check '${check.name}': ${failures.join("; ")} — kept the ${persisted.length} reference(s) already stored`
             );
-            resolvedRefsByPath.set(key, persisted);
+            resolvedRefsByPath.set(key, merged);
             return;
           }
           referenceWarnings.push(`check '${check.name}': ${failures.join("; ")} — dropped`);

@@ -31,6 +31,10 @@ export async function pageAll<T>(
     if (error) throw new CLICommandError(`${label}: ${error.message}`, 500);
     const rows = data ?? [];
     out.push(...rows);
+    // Correct only while `PAGE_SIZE <= max_rows`: a server cap below `PAGE_SIZE` is
+    // indistinguishable from the end of the data here, and every caller would stop after
+    // one page and report success. `PAGE_SIZE` is pinned to the documented cap for that
+    // reason — see the warning on it in `pagingLimits.ts` before changing either number.
     if (rows.length < PAGE_SIZE) break;
   }
   return out;

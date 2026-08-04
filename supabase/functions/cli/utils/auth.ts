@@ -38,15 +38,21 @@ export async function listAccessibleClassIds(supabase: SupabaseClient<Database>,
   // Paged: a long-lived instructor account can hold roles in more than max_rows
   // classes, and a truncated set would permanently hide the remainder from
   // classes.list while still reporting success.
-  const rows = await pageAll<{ class_id: number }>(
+  const rows = await pageAll<{ id: number; class_id: number }>(
     () =>
       supabase
         .from("user_roles")
-        .select("class_id")
+        .select("id, class_id")
         .eq("user_id", userId)
         .eq("disabled", false)
         .in("role", CLI_CLASS_ROLES)
-        .order("class_id", { ascending: true }),
+        // `id` breaks the tie. A user can hold several active role rows in the same class
+        // (see getCallerPrivateProfileId below), so `class_id` alone is not a total order,
+        // and `pageAll` issues each page as an independent statement — tied rows straddling
+        // a page boundary could be returned in neither, silently hiding a class from
+        // `classes.list` under a reported success.
+        .order("class_id", { ascending: true })
+        .order("id", { ascending: true }),
     "Failed to verify class access"
   );
   return [...new Set(rows.map((row) => row.class_id))];

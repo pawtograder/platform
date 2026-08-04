@@ -26,7 +26,7 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
-  if (error) throw new CLICommandError(`Failed to fetch flashcard decks: ${error.message}`);
+  if (error) throw new CLICommandError(`Failed to fetch flashcard decks: ${error.message}`, 500);
 
   // Paged: this reads every card in the class purely to tally per-deck counts, so
   // a class with more than max_rows cards reported zero or an undercount for the

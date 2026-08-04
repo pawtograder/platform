@@ -243,7 +243,7 @@ describe("buildUpdateRubricFullPayload defaults", () => {
   });
 
   it("defaults is_additive to false, matching the web and the RPC", () => {
-    // The old import defaulted this to true, silently changing criteria behaviour.
+    // The old import defaulted this to true, silently changing criteria behavior.
     const payload = buildUpdateRubricFullPayload({
       ...base,
       yaml: { name: "r", parts: [{ name: "p", criteria: [{ name: "c", checks: [{ name: "k" }] }] }] },

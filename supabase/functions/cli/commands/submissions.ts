@@ -61,7 +61,92 @@ interface SubmissionsExportParams {
   submission_ids?: number[];
 }
 
+/**
+ * Every `submission_artifacts` row already stored under this (submission_id, name).
+ *
+ * A list read rather than `.maybeSingle()`, and the error is returned rather than
+ * discarded. `submission_artifacts` has no unique index on (submission_id, name) — only
+ * its primary key — and the overwrite path inserts before it deletes, so an interrupted
+ * run leaves two rows. `.maybeSingle()` answers PGRST116 with `data: null` for exactly
+ * that state, so swallowing the error made the handler conclude nothing was stored:
+ * `--overwrite` became a permanent no-op that added one more row per invocation, and the
+ * grading comments stayed attached to the artifact the operator meant to replace.
+ */
+async function findExistingArtifacts(
+  supabase: ReturnType<typeof getAdminClient>,
+  submissionId: number,
+  name: string
+): Promise<{ data: Array<{ id: number }>; error: string | null }> {
+  const { data, error } = await supabase
+    .from("submission_artifacts")
+    .select("id")
+    .eq("submission_id", submissionId)
+    .eq("name", name)
+    .order("id", { ascending: true });
+  if (error) return { data: [], error: `failed to look up existing artifact: ${error.message}` };
+  return { data: data ?? [], error: null };
+}
+
+/**
+ * Rejects caller-supplied submission ids that are not part of the resolved assignment.
+ *
+ * Every handler runs on the service-role client, so an id from the request body is
+ * otherwise used verbatim: `.in("submission_id", ids)` on a table that carries no
+ * class predicate reaches the whole deployment, and submission ids are sequential, so
+ * enumeration is trivial. `assertUserCanAccessClass` authorizes the *class*, not the
+ * ids, so this is the step that ties the two together and it has to run on every path
+ * that accepts ids — reads and writes alike.
+ */
+async function assertSubmissionsBelongToAssignment(
+  supabase: ReturnType<typeof getAdminClient>,
+  classId: number,
+  assignmentId: number,
+  requestedIds: number[],
+  label: string
+): Promise<number[]> {
+  const unique = [...new Set(requestedIds)];
+  if (unique.length === 0) return [];
+
+  const ownedIds: number[] = [];
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    const rows = await pageAll<{ id: number }>(
+      () =>
+        supabase
+          .from("submissions")
+          .select("id")
+          .eq("class_id", classId)
+          .eq("assignment_id", assignmentId)
+          .in("id", batch)
+          .order("id", { ascending: true }),
+      `Failed to validate ${label}`
+    );
+    ownedIds.push(...rows.map((r) => r.id));
+  }
+
+  const ownedSet = new Set(ownedIds);
+  const foreignIds = unique.filter((id) => !ownedSet.has(id));
+  if (foreignIds.length > 0) {
+    throw new CLICommandError(
+      `${label}: these submission ids do not belong to assignment ${assignmentId} in class ${classId}: ` +
+        foreignIds.slice(0, 20).join(", ") +
+        (foreignIds.length > 20 ? ` (and ${foreignIds.length - 20} more)` : ""),
+      400
+    );
+  }
+  return ownedIds;
+}
+
+/**
+ * `classId`/`assignmentId` scope the lookup. The submission ids come from the caller's
+ * payload and are only validated row by row inside the RPC, so an unscoped
+ * `.in("submission_id", ids)` on the service-role client answered for other classes:
+ * the returned `skipped_without_review_assignee` set then discloses, by its complement,
+ * which of another class's submissions are assigned for a rubric part.
+ */
 async function fetchAssigneesForRubricPart(
+  classId: number,
+  assignmentId: number,
   submissionIds: number[],
   rubricPartId: number
 ): Promise<Map<number, string>> {
@@ -82,6 +167,8 @@ async function fetchAssigneesForRubricPart(
       const { data: rows, error } = await supabase
         .from("review_assignments")
         .select("id, submission_id, assignee_profile_id")
+        .eq("class_id", classId)
+        .eq("assignment_id", assignmentId)
         .in("submission_id", batch)
         // Ordered: unordered .range() paging can skip or duplicate rows, and the
         // first match below becomes the recorded comment author — so without a
@@ -246,6 +333,15 @@ async function runCommentsImportOrSync(ctx: MCPAuthContext, params: Record<strin
   const payload = p.payload;
   const syncIds = payload.sync_submission_ids ?? [];
 
+  // `sync_submission_ids` is the sole predicate of the RPC's three soft-delete
+  // UPDATEs (`submission_id = ANY (v_sync_ids)` — see
+  // 20260319120000_cli_import_submission_comments_batch.sql), which carry no class or
+  // assignment filter of their own. Passing the caller's ids through unchecked let a
+  // grader in one class soft-delete another class's grading comments and still get
+  // `success: true`; the insert path is protected only because the RPC rejects
+  // out-of-class rows individually, which the deletes do not do.
+  await assertSubmissionsBelongToAssignment(supabase, classData.id, assignment.id, syncIds, "sync_submission_ids");
+
   const queue = buildWorkQueue(payload);
 
   const rpcArgsBase = {
@@ -406,7 +502,7 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
     }
   } else if (p.rubric_part_id != null) {
     const ids = Array.from(submissionIds);
-    const assignees = await fetchAssigneesForRubricPart(ids, p.rubric_part_id);
+    const assignees = await fetchAssigneesForRubricPart(classData.id, assignment.id, ids, p.rubric_part_id);
 
     for (const sid of ids) {
       if (!assignees.has(sid)) skippedNoReviewAssignee.add(sid);
@@ -521,14 +617,13 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     }
 
     if (dryRun) {
-      const { data: existing } = await supabase
-        .from("submission_artifacts")
-        .select("id")
-        .eq("submission_id", art.submission_id)
-        .eq("name", art.name)
-        .maybeSingle();
-      if (existing && !overwrite) skipped++;
-      else if (existing && overwrite) overwritten++;
+      const { data: existing, error: existingErr } = await findExistingArtifacts(supabase, art.submission_id, art.name);
+      if (existingErr) {
+        errors.push({ submission_id: art.submission_id, artifact_name: art.name, reason: existingErr });
+        continue;
+      }
+      if (existing.length > 0 && !overwrite) skipped++;
+      else if (existing.length > 0 && overwrite) overwritten++;
       else uploaded++;
       continue;
     }
@@ -547,14 +642,13 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    const { data: existing } = await supabase
-      .from("submission_artifacts")
-      .select("id")
-      .eq("submission_id", art.submission_id)
-      .eq("name", art.name)
-      .maybeSingle();
+    const { data: existing, error: existingErr } = await findExistingArtifacts(supabase, art.submission_id, art.name);
+    if (existingErr) {
+      errors.push({ submission_id: art.submission_id, artifact_name: art.name, reason: existingErr });
+      continue;
+    }
 
-    if (existing && !overwrite) {
+    if (existing.length > 0 && !overwrite) {
       skipped++;
       continue;
     }
@@ -608,7 +702,7 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     // reported rather than discarded: a failure leaves a duplicate row behind, and
     // silently swallowing it is how `--overwrite` used to appear to work while
     // leaving the storage object orphaned.
-    if (existing && overwrite) {
+    if (existing.length > 0 && overwrite) {
       // Ordered comments → row → storage object, and it stops at the first failure.
       //
       // Deleting the object first was wrong in a way that compounds: a failed comment
@@ -617,39 +711,48 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       // comments attached to it point at nothing. Removing the object last means every
       // failure leaves a *complete* old artifact — redundant, but coherent, and the
       // operator can retry.
-      const failCleanup = (reason: string) => {
-        errors.push({
-          submission_id: art.submission_id,
-          artifact_name: art.name,
-          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${existing.id} failed: ${reason}`
-        });
-      };
+      //
+      // Every prior row is cleaned up, not just one. Because the insert now precedes the
+      // delete and there is no unique index on (submission_id, name), an interrupted run
+      // can leave duplicates behind; overwriting only the first would make `--overwrite`
+      // a permanent no-op that adds a row each time it is invoked.
+      let cleanupFailed = false;
+      for (const prior of existing) {
+        const failCleanup = (reason: string) => {
+          cleanupFailed = true;
+          errors.push({
+            submission_id: art.submission_id,
+            artifact_name: art.name,
+            reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${prior.id} failed: ${reason}`
+          });
+        };
 
-      const { error: commentsErr } = await supabase
-        .from("submission_artifact_comments")
-        .delete()
-        .eq("submission_artifact_id", existing.id);
-      if (commentsErr) {
-        failCleanup(commentsErr.message);
-        continue;
+        const { error: commentsErr } = await supabase
+          .from("submission_artifact_comments")
+          .delete()
+          .eq("submission_artifact_id", prior.id);
+        if (commentsErr) {
+          failCleanup(commentsErr.message);
+          break;
+        }
+
+        const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", prior.id);
+        if (rowErr) {
+          failCleanup(rowErr.message);
+          break;
+        }
+
+        const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${prior.id}`;
+        const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
+        if (objectErr) {
+          // The row is gone, so nothing references this blob any more. Reported so the
+          // orphan can be swept, but the data model is consistent.
+          failCleanup(`its storage object was left behind: ${objectErr.message}`);
+          break;
+        }
       }
 
-      const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", existing.id);
-      if (rowErr) {
-        failCleanup(rowErr.message);
-        continue;
-      }
-
-      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
-      const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
-      if (objectErr) {
-        // The row is gone, so nothing references this blob any more. Reported so the
-        // orphan can be swept, but the data model is consistent.
-        failCleanup(`its storage object was left behind: ${objectErr.message}`);
-        continue;
-      }
-
-      overwritten++;
+      if (!cleanupFailed) overwritten++;
       continue;
     }
 
@@ -897,9 +1000,13 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
 
+  // One row past `limit`, used only to answer "is there more?" and then dropped.
+  // `.range()` can never return more than it asks for, so testing `rows.length >= limit`
+  // reported an exactly-full final page as truncated.
+  const probeLimit = limit + 1;
   const rows: Array<Record<string, unknown>> = [];
-  for (let offset = 0; rows.length < limit; offset += SUBMISSIONS_LIST_PAGE) {
-    const page = Math.min(SUBMISSIONS_LIST_PAGE, limit - rows.length);
+  for (let offset = 0; rows.length < probeLimit; offset += SUBMISSIONS_LIST_PAGE) {
+    const page = Math.min(SUBMISSIONS_LIST_PAGE, probeLimit - rows.length);
     let query = supabase
       .from("submissions_with_grades_for_assignment_nice")
       .select(
@@ -929,6 +1036,9 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
     rows.push(...batch);
     if (batch.length < page) break;
   }
+
+  const truncated = rows.length > limit;
+  if (truncated) rows.length = limit;
 
   // `total_score` on this view is the review's shared total. For rubrics with
   // individually graded or per-student-assigned parts, the authoritative figure
@@ -991,7 +1101,7 @@ async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string,
         non_submitters: nonSubmitterCount ?? 0,
         /** Non-submitters present in `submissions`; zero unless --include-non-submitters. */
         non_submitters_listed: rows.filter((r) => r.activesubmissionid == null).length,
-        truncated: rows.length >= limit
+        truncated
       }
     }
   };

@@ -503,6 +503,27 @@ function checkInteger(value: unknown, path: string, field: string, errors: YamlI
 }
 
 /**
+ * Rejects a non-boolean where a boolean belongs.
+ *
+ * The parser follows YAML 1.2, where only `true`/`false` (any capitalization) are
+ * booleans — the YAML 1.1 spellings `yes`, `no`, `on`, `off` parse as *strings*. Nothing
+ * else checked these, so `is_individual_grading: yes` sailed past the `=== true`
+ * exclusivity guard below, was forwarded verbatim, and Postgres then cast `'yes'` to
+ * true for both mutually exclusive columns — surfacing as a raw check-constraint
+ * violation under HTTP 500 rather than the validation message this function exists to
+ * produce. `is_annotation: maybe` was worse: an outright 22P02 cast error.
+ */
+function checkBoolean(value: unknown, path: string, field: string, errors: YamlIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "boolean") {
+    errors.push({
+      path: `${path}.${field}`,
+      message: `${String(value)} is not a boolean; write true or false (YAML 1.1 spellings like yes/no/on/off are read as text)`
+    });
+  }
+}
+
+/**
  * Validates a parsed YAML document, collecting **every** problem rather than
  * throwing on the first.
  *
@@ -525,6 +546,10 @@ export function validateRubricYaml(input: unknown): ValidateResult {
   if (typeof name !== "string" || name.trim() === "") {
     errors.push({ path: "name", message: "rubric name is required" });
   }
+
+  checkBoolean(input.is_private, "rubric", "is_private", errors);
+  checkBoolean(input.cap_score_to_assignment_points, "rubric", "cap_score_to_assignment_points", errors);
+  checkBoolean(input.hide_unless_assigned, "rubric", "hide_unless_assigned", errors);
 
   if (input.review_round !== undefined && input.review_round !== null) {
     if (!(REVIEW_ROUNDS as readonly string[]).includes(String(input.review_round))) {
@@ -562,6 +587,8 @@ export function validateRubricYaml(input: unknown): ValidateResult {
       errors.push({ path: `${partPath}.name`, message: "part name is required" });
     }
     checkNoUnknownKeys(rawPart, PART_KEYS, partPath, errors);
+    checkBoolean(rawPart.is_individual_grading, partPath, "is_individual_grading", errors);
+    checkBoolean(rawPart.is_assign_to_student, partPath, "is_assign_to_student", errors);
     checkOptionalId(rawPart.id, partPath, errors);
     const partId = optionalId(rawPart.id);
     if (partId !== undefined) {
@@ -606,6 +633,8 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         }
         seenCriteriaIds.add(critId);
       }
+      checkBoolean(rawCriteria.is_additive, critPath, "is_additive", errors);
+      checkBoolean(rawCriteria.is_deduction_only, critPath, "is_deduction_only", errors);
       checkInteger(rawCriteria.total_points, critPath, "total_points", errors, "total_points is stored as an integer");
       checkInteger(
         rawCriteria.min_checks_per_submission,
@@ -646,6 +675,9 @@ export function validateRubricYaml(input: unknown): ValidateResult {
           seenCheckIds.add(checkId);
         }
 
+        checkBoolean(rawCheck.is_annotation, checkPath, "is_annotation", errors);
+        checkBoolean(rawCheck.is_comment_required, checkPath, "is_comment_required", errors);
+        checkBoolean(rawCheck.is_required, checkPath, "is_required", errors);
         checkInteger(rawCheck.max_annotations, checkPath, "max_annotations", errors, "it is stored as an integer");
 
         if (rawCheck.points !== undefined && rawCheck.points !== null) {
@@ -654,7 +686,7 @@ export function validateRubricYaml(input: unknown): ValidateResult {
           // carry Infinity, so it serializes to null on the way here, and an absent
           // points value defaults to 0 — which update_rubric_full then cascades into
           // existing grading comments. The CLI rejects these before serializing; this
-          // is the second line of defence for any other caller.
+          // is the second line of defense for any other caller.
           if (typeof rawCheck.points !== "number" || !Number.isFinite(rawCheck.points)) {
             errors.push({
               path: `${checkPath}.points`,
@@ -807,6 +839,12 @@ export interface RubricImportPlan {
     remove: Array<{ id: number; name: string }>;
     points_changed: Array<{ id: number; name: string; from: number; to: number }>;
   };
+  /**
+   * Criteria whose scoring changed (`total_points`, `is_additive`, `is_deduction_only`).
+   * Tracked separately from `criteria.update` because the RPC treats exactly these three
+   * columns as a broad change, and nothing else about a criterion update does.
+   */
+  criteria_scoring_changed: Array<{ id: number; name: string }>;
   /** Ids in the YAML that this rubric does not own — the copy/paste-YAML case. */
   foreign_ids: Array<{ level: "part" | "criterion" | "check"; id: number; name: string }>;
   broad_change: boolean;
@@ -826,6 +864,7 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     parts: { insert: [], update: [], remove: [] },
     criteria: { insert: [], update: [], remove: [] },
     checks: { insert: [], update: [], remove: [], points_changed: [] },
+    criteria_scoring_changed: [],
     foreign_ids: [],
     broad_change: false
   };
@@ -858,6 +897,18 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
       if (criteria.id !== undefined && ownedCriteria.has(criteria.id)) {
         plan.criteria.update.push(criteria.id);
         seenCriteria.add(criteria.id);
+        // These three are the RPC's criterion-level broad-change triggers (migration
+        // lines 332-336). Omitting them let a one-line `total_points` or `is_additive`
+        // edit report "No structural changes" and then recompute every submission_review
+        // on the rubric — the most expensive and most grade-visible thing an import does.
+        const beforeCriteria = ownedCriteria.get(criteria.id)!;
+        if (
+          beforeCriteria.total_points !== criteria.total_points ||
+          beforeCriteria.is_additive !== criteria.is_additive ||
+          beforeCriteria.is_deduction_only !== criteria.is_deduction_only
+        ) {
+          plan.criteria_scoring_changed.push({ id: criteria.id, name: criteria.name });
+        }
       } else {
         plan.criteria.insert.push(criteria.name);
         if (criteria.id !== undefined) {
@@ -906,6 +957,7 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     plan.checks.insert.length > 0 ||
     plan.checks.remove.length > 0 ||
     plan.checks.points_changed.length > 0 ||
+    plan.criteria_scoring_changed.length > 0 ||
     current.cap_score_to_assignment_points !== payload.cap_score_to_assignment_points;
 
   return plan;

@@ -312,15 +312,21 @@ export const builder = (yargs: Argv) => {
             }
           }
 
-          logger.step(`Importing rubric for assignment: ${args.assignment}`);
-          logger.info(`Parsed rubric: ${rubricYml.name}`);
-          logger.info(`  Parts: ${partCount}`);
-          logger.info(`  Criteria: ${criteriaCount}`);
-          logger.info(`  Checks: ${checkCount}`);
+          // Suppressed under --json: `emitJson` requires that nothing else reaches
+          // stdout, and these lines land there (logger.info is console.log), so
+          // `rubrics import --json | jq` failed on the leading "📋 Importing rubric…".
+          const jsonMode = args.json === true;
+          if (!jsonMode) {
+            logger.step(`Importing rubric for assignment: ${args.assignment}`);
+            logger.info(`Parsed rubric: ${rubricYml.name}`);
+            logger.info(`  Parts: ${partCount}`);
+            logger.info(`  Criteria: ${criteriaCount}`);
+            logger.info(`  Checks: ${checkCount}`);
 
-          if (args.verbose) {
-            logger.blank();
-            printRubricTree(rubricYml);
+            if (args.verbose) {
+              logger.blank();
+              printRubricTree(rubricYml);
+            }
           }
 
           // The dry run goes to the server. It used to return here after printing the
@@ -387,6 +393,8 @@ function printImportPlan(plan: {
     remove: Array<{ id: number; name: string }>;
     points_changed: Array<{ id: number; name: string; from: number; to: number }>;
   };
+  /** Optional: absent from a server that predates the criterion-scoring diff. */
+  criteria_scoring_changed?: Array<{ id: number; name: string }>;
   foreign_ids: Array<{ level: string; id: number; name: string }>;
   broad_change: boolean;
 }): void {
@@ -410,11 +418,24 @@ function printImportPlan(plan: {
     }
   }
 
+  const scoringChanged = plan.criteria_scoring_changed ?? [];
+  if (scoringChanged.length > 0) {
+    logger.warning(`Changing scoring on ${scoringChanged.length} criteria (total_points/additive/deduction-only):`);
+    for (const c of scoringChanged) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
   const inserts = plan.parts.insert.length + plan.criteria.insert.length + plan.checks.insert.length;
   const updates = plan.parts.update.length + plan.criteria.update.length + plan.checks.update.length;
   logger.info(`Creating: ${inserts} row(s)`);
   logger.info(`Updating: ${updates} row(s)`);
-  if (removals.length === 0 && inserts === 0 && plan.checks.points_changed.length === 0) {
+  if (
+    removals.length === 0 &&
+    inserts === 0 &&
+    plan.checks.points_changed.length === 0 &&
+    scoringChanged.length === 0
+  ) {
     logger.info("No structural changes.");
   }
   if (plan.broad_change) {

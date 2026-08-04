@@ -8,7 +8,7 @@
  * This is deliberately simpler than the web UI's bulk-assign page, which runs a
  * min-cost-flow solver over per-TA capacities and historical workload
  * (`app/course/[course_id]/manage/assignments/[assignment_id]/reviews/assignmentCalculator.tsx`).
- * The CLI aims for an even, reproducible split; anything more nuanced goes
+ * The CLI aims for an even, reproducible split; anything more finely weighted goes
  * through `--file` with an explicit manifest.
  */
 
@@ -113,6 +113,9 @@ export function allocateRoundRobin(input: AllocateRoundRobinInput): AllocateRoun
 
   for (const submissionId of submissionIds) {
     const excluded = input.excludedBySubmission?.get(submissionId);
+    // Hoisted: exclusions are per submission and do not vary across its rubric parts, so
+    // filtering inside the inner loop rebuilt the same array once per part.
+    const eligible = excluded ? assignees.filter((id) => !excluded.has(id)) : assignees;
 
     for (const rubricPartId of parts) {
       if (isCovered(submissionId, rubricPartId)) {
@@ -120,7 +123,6 @@ export function allocateRoundRobin(input: AllocateRoundRobinInput): AllocateRoun
         continue;
       }
 
-      const eligible = excluded ? assignees.filter((id) => !excluded.has(id)) : assignees;
       if (eligible.length === 0) {
         unassignable.push({ submission_id: submissionId, rubric_part_id: rubricPartId });
         continue;
@@ -208,7 +210,9 @@ export function findCoverageConflicts(drafts: DraftAssignment[], existing: Draft
 
   const wholeRubric = new Map<number, Set<string>>();
   const byPart = new Map<string, Set<string>>();
-  const record = (map: Map<string, Set<string>>, key: string, assignee: string) => {
+  /** Part ids claimed per submission, so the whole-rubric overlap check is a lookup. */
+  const partsBySubmission = new Map<number, Set<number>>();
+  const record = <K>(map: Map<K, Set<string>>, key: K, assignee: string) => {
     const set = map.get(key) ?? new Set<string>();
     set.add(assignee);
     map.set(key, set);
@@ -216,11 +220,12 @@ export function findCoverageConflicts(drafts: DraftAssignment[], existing: Draft
 
   for (const entry of [...existing, ...drafts]) {
     if (entry.rubric_part_id === null) {
-      const set = wholeRubric.get(entry.submission_id) ?? new Set<string>();
-      set.add(entry.assignee_profile_id);
-      wholeRubric.set(entry.submission_id, set);
+      record(wholeRubric, entry.submission_id, entry.assignee_profile_id);
     } else {
       record(byPart, `${entry.submission_id}:${entry.rubric_part_id}`, entry.assignee_profile_id);
+      const claimed = partsBySubmission.get(entry.submission_id) ?? new Set<number>();
+      claimed.add(entry.rubric_part_id);
+      partsBySubmission.set(entry.submission_id, claimed);
     }
   }
 
@@ -229,12 +234,14 @@ export function findCoverageConflicts(drafts: DraftAssignment[], existing: Draft
     const submissionId = draft.submission_id;
 
     if (draft.rubric_part_id === null) {
-      const parts = [...byPart.keys()].filter((k) => k.startsWith(`${submissionId}:`));
+      // A lookup, not a scan. Spreading and prefix-matching every part key once per
+      // whole-rubric draft was quadratic: a 5,000-entry manifest against an assignment
+      // with 5,500 part claims did ~27M string comparisons to answer an O(1) question.
+      const parts = [...(partsBySubmission.get(submissionId) ?? [])].sort((a, b) => a - b);
       if (parts.length > 0 && !seen.has(`whole:${submissionId}`)) {
         seen.add(`whole:${submissionId}`);
         conflicts.push(
-          `submission ${submissionId}: a whole-rubric assignment overlaps part assignment(s) ` +
-            parts.map((k) => k.split(":")[1]).join(", ")
+          `submission ${submissionId}: a whole-rubric assignment overlaps part assignment(s) ` + parts.join(", ")
         );
       }
       const holders = wholeRubric.get(submissionId);

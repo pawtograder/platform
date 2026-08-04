@@ -159,6 +159,15 @@ export const builder = (yargs: Argv) => {
             logger.info(`Logged help activity for ${data.activity_logged} participant(s)`);
           }
 
+          // Surfaced, because the request itself was closed either way: the operator needs
+          // to know the per-student help history is missing these rows rather than
+          // discover it later as a gap in the analytics.
+          if (data.activity_error) {
+            logger.warning(
+              `The request was closed, but recording per-student help activity failed: ${data.activity_error}`
+            );
+          }
+
           if (data.video_still_live) {
             logger.blank();
             logger.warning(

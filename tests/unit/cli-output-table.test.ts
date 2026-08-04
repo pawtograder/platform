@@ -11,7 +11,16 @@
  * real rosters and repository URLs are not.
  */
 
-import { addJsonOption, emitJson, printTable, truncate, formatDate, formatDateTime } from "../../cli/utils/output";
+import {
+  addJsonOption,
+  emitJson,
+  printTable,
+  truncate,
+  formatDate,
+  formatDateTime,
+  formatZoneLabel,
+  isUsableTimeZone
+} from "../../cli/utils/output";
 
 function captureStdout(fn: () => void): string[] {
   const lines: string[] = [];
@@ -192,5 +201,41 @@ describe("date formatting", () => {
   it("formats a real ISO timestamp", () => {
     expect(formatDate("2026-09-01T12:00:00Z")).not.toBe("-");
     expect(formatDateTime("2026-09-01T12:00:00Z")).not.toBe("-");
+  });
+
+  /**
+   * The whole reason the `timeZone` argument exists: 00:30 UTC on the 2nd is still the
+   * evening of the 1st in Boston, so a deadline rendered without the class zone lands on
+   * the wrong day. Asserting the day, not merely that the result is non-empty.
+   */
+  it("renders a timestamp in the class time zone, not the operator's", () => {
+    const iso = "2026-09-02T00:30:00Z";
+    expect(formatDate(iso, "America/New_York")).toContain("9/1/2026");
+    expect(formatDate(iso, "UTC")).toContain("9/2/2026");
+    expect(formatDate(iso, "Asia/Tokyo")).toContain("9/2/2026");
+  });
+
+  it("honours a half-hour zone offset", () => {
+    // 18:45 UTC is 00:15 the next day in Kolkata (+05:30).
+    expect(formatDate("2026-09-01T18:45:00Z", "Asia/Kolkata")).toContain("9/2/2026");
+  });
+
+  /**
+   * `classes.time_zone` is free text with no CHECK constraint, and `Intl` throws
+   * `RangeError` on a value like `Eastern`. Unguarded that killed every list command
+   * rendering a date and printed no rows at all.
+   */
+  it("falls back rather than throwing on a time zone Intl rejects", () => {
+    expect(() => formatDate("2026-09-01T12:00:00Z", "Eastern")).not.toThrow();
+    expect(formatDate("2026-09-01T12:00:00Z", "Eastern")).not.toBe("-");
+    expect(() => formatDateTime("2026-09-01T12:00:00Z", "posixrules")).not.toThrow();
+  });
+
+  it("only claims a zone it could actually apply", () => {
+    expect(formatZoneLabel("America/New_York")).toBe(" (times in America/New_York)");
+    expect(formatZoneLabel("Eastern")).toBe("");
+    expect(formatZoneLabel(null)).toBe("");
+    expect(isUsableTimeZone("UTC")).toBe(true);
+    expect(isUsableTimeZone("Eastern")).toBe(false);
   });
 });

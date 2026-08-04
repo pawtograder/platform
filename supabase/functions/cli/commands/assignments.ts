@@ -103,7 +103,7 @@ async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string,
     .eq("class_id", classData.id)
     .order("release_date", { ascending: true });
 
-  if (error) throw new CLICommandError(`Failed to fetch assignments: ${error.message}`);
+  if (error) throw new CLICommandError(`Failed to fetch assignments: ${error.message}`, 500);
 
   return {
     success: true,
@@ -275,8 +275,14 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const targetClass = await resolveClass(supabase, targetClassId);
   // Both sides: reading the source and writing the target each need access, or a
   // grader in one class could copy content into a class they do not belong to.
+  //
+  // The target side requires instructor, matching `assignments.delete` below and the RLS
+  // policy the web path runs under (`authorizeforclassinstructor` on `assignments`).
+  // Copying creates assignments, self-review settings, rubrics, and GitHub handout repos;
+  // accepting a grader here let a TA create course structure they had no way to remove,
+  // since `assignments.delete` does check for instructor.
   await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
-  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
+  await assertUserIsClassInstructor(supabase, ctx.userId, targetClass.id);
 
   if (copyDebug) {
     const { log } = createAssignmentCopyDebugLog({
@@ -484,7 +490,7 @@ async function getOrCreateDefaultSelfReviewSetting(
     .limit(1)
     .maybeSingle();
   if (error) {
-    throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`);
+    throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`, 500);
   }
   if (existing?.id) return existing.id;
   const { data: created, error: insertError } = await supabase
@@ -555,7 +561,8 @@ async function copySingleAssignment(
       .maybeSingle();
     if (error) {
       throw new CLICommandError(
-        `Failed to look up existing assignment (target_class_id=${targetClass.id}, source_slug=${sourceAssignment.slug}): ${error.message}`
+        `Failed to look up existing assignment (target_class_id=${targetClass.id}, source_slug=${sourceAssignment.slug}): ${error.message}`,
+        500
       );
     }
     existingAssignment = data as AssignmentWithAutograder | null;
@@ -696,7 +703,8 @@ async function copySingleAssignment(
               .filter(Boolean)
               .join("; ") || undefined;
           throw new CLICommandError(
-            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): ${error.message}${detail ? ` (${detail})` : ""}`
+            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): ${error.message}${detail ? ` (${detail})` : ""}`,
+            500
           );
         }
         if (httpStatus < 200 || httpStatus >= 300) {

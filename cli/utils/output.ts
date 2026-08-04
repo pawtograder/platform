@@ -91,11 +91,69 @@ export function truncate(value: string | null | undefined, max: number): string 
  * next morning from Europe. `formatZoneLabel` names the zone in the surrounding output
  * so the dates are not merely correct but legible as such.
  */
+/**
+ * One `Intl.DateTimeFormat` per (kind, zone) instead of one per cell.
+ *
+ * V8 only serves its internal Intl cache for the no-options form, so passing an options
+ * bag builds a fresh ICU formatter on every call — around 10,000 of them for a
+ * `reviews list --limit 5000` with two date columns.
+ *
+ * `classes.time_zone` is free text (NOT NULL, DEFAULT 'America/New_York', no CHECK
+ * constraint), and `Intl` throws `RangeError: Invalid time zone specified` on a value
+ * like `Eastern`. Unguarded, that killed every list command that renders a date and
+ * printed no rows at all, for a reason unrelated to what was asked. The write path
+ * already rejects an unknown zone explicitly (`zonedDate.ts`); here we fall back to the
+ * operator's local zone so the rows still render, and `formatZoneLabel` stops claiming a
+ * zone we could not honor.
+ */
+const dateFormatters = new Map<string, Intl.DateTimeFormat | null>();
+
+function formatterFor(kind: "date" | "datetime", timeZone?: string | null): Intl.DateTimeFormat | null {
+  const key = `${kind}|${timeZone ?? ""}`;
+  const cached = dateFormatters.get(key);
+  if (cached !== undefined) return cached;
+
+  // Spelled out to match what `toLocaleDateString()`/`toLocaleString()` produce with no
+  // options, so memoizing does not quietly change the rendered format (`dateStyle:
+  // "short"` would, to a two-digit year).
+  const options: Intl.DateTimeFormatOptions =
+    kind === "date"
+      ? { year: "numeric", month: "numeric", day: "numeric" }
+      : {
+          year: "numeric",
+          month: "numeric",
+          day: "numeric",
+          hour: "numeric",
+          minute: "numeric",
+          second: "numeric"
+        };
+  let formatter: Intl.DateTimeFormat | null;
+  try {
+    formatter = new Intl.DateTimeFormat(undefined, timeZone ? { ...options, timeZone } : options);
+  } catch {
+    formatter = timeZone ? new Intl.DateTimeFormat(undefined, options) : null;
+  }
+  dateFormatters.set(key, formatter);
+  return formatter;
+}
+
+/** Whether `timeZone` is one `Intl` will accept, so callers do not label a zone we ignored. */
+export function isUsableTimeZone(timeZone?: string | null): boolean {
+  if (!timeZone) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function formatDate(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "-";
-  return timeZone ? d.toLocaleDateString(undefined, { timeZone }) : d.toLocaleDateString();
+  const formatter = formatterFor("date", timeZone);
+  return formatter ? formatter.format(d) : d.toLocaleDateString();
 }
 
 /** Formats an ISO timestamp as a date and time, or `-` when unset. See {@link formatDate}. */
@@ -103,13 +161,15 @@ export function formatDateTime(iso: string | null | undefined, timeZone?: string
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "-";
-  return timeZone ? d.toLocaleString(undefined, { timeZone }) : d.toLocaleString();
+  const formatter = formatterFor("datetime", timeZone);
+  return formatter ? formatter.format(d) : d.toLocaleString();
 }
 
 /**
  * A parenthesised note naming the zone dates are shown in, or empty when unknown.
- * Empty rather than guessing: claiming a zone we were not told is worse than silence.
+ * Empty rather than guessing: claiming a zone we were not told — or one `Intl` rejected,
+ * and so did not actually apply — is worse than silence.
  */
 export function formatZoneLabel(timeZone?: string | null): string {
-  return timeZone ? ` (times in ${timeZone})` : "";
+  return isUsableTimeZone(timeZone) ? ` (times in ${timeZone})` : "";
 }

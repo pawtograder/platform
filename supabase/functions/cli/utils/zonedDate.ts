@@ -69,10 +69,20 @@ function zoneOffsetMs(instant: Date, timeZone: string): number {
  * The UTC instant at which the given wall-clock time occurs in `timeZone`.
  *
  * Two passes: the offset depends on the instant, and the instant depends on the
- * offset. The first pass gets within an hour, the second lands exactly except on
- * a wall-clock time that does not exist (the spring-forward gap), where it
- * settles on a stable adjacent instant rather than throwing — a grading deadline
- * does not warrant failing the command over an hour that the calendar skipped.
+ * offset. The first pass gets within an hour, the second lands exactly — except on
+ * a wall-clock time that does not exist, the spring-forward gap.
+ *
+ * There the second pass lands *before* the gap, because it subtracts the
+ * post-transition offset from a target that only exists pre-transition. For a
+ * midday deadline that is merely an hour off, but zones whose jump is at midnight
+ * (`America/Havana` 2026-03-08, `America/Santiago` 2026-09-06) put 00:00 inside the
+ * gap, so a `start-of-day` release date landed at 23:00 on the *previous day* — an
+ * assignment named for the 8th became visible on the 7th, which is exactly the
+ * off-by-one-day this module exists to prevent.
+ *
+ * So we detect the gap by round-tripping and, when the requested wall clock does
+ * not exist, shift forward past it instead of back. That matches `Temporal`'s
+ * `disambiguation: "compatible"`, `java.time`, and the `TZDate` the web flow uses.
  */
 function utcFromWallClock(
   year: number,
@@ -85,9 +95,25 @@ function utcFromWallClock(
   timeZone: string
 ): Date {
   const target = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
-  let instant = new Date(target - zoneOffsetMs(new Date(target), timeZone));
-  instant = new Date(target - zoneOffsetMs(instant, timeZone));
-  return instant;
+  const firstCandidate = target - zoneOffsetMs(new Date(target), timeZone);
+  const secondCandidate = target - zoneOffsetMs(new Date(firstCandidate), timeZone);
+  const instant = new Date(secondCandidate);
+
+  // Round-trip check. `zoneOffsetMs` is defined so that `instant + offset(instant)`
+  // is the wall clock `instant` actually reads as, so when that is not the requested
+  // `target` the wall clock does not exist in this zone.
+  if (instant.getTime() + zoneOffsetMs(instant, timeZone) === target) return instant;
+
+  // In the gap. Both candidates sit on opposite sides of it; the later one is the
+  // first instant *after* the jump, which is what `Temporal`'s `compatible`
+  // disambiguation, `java.time`, and the web flow's `TZDate` all pick. Taking the
+  // second candidate unconditionally moved the deadline to the wrong side, and in a
+  // zone whose jump is at midnight (`America/Havana` 2026-03-08, `America/Santiago`
+  // 2026-09-06) "the wrong side" is the previous calendar day — so a `start-of-day`
+  // release date named for the 8th went live on the 7th. Comparing instants rather
+  // than offsets keeps this right in zones east of UTC, where the offsets are
+  // positive and the arithmetic runs the other way (`Africa/Cairo` 2026-04-24).
+  return new Date(Math.max(firstCandidate, secondCandidate));
 }
 
 export class ZonedDateError extends Error {}

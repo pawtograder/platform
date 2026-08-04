@@ -177,3 +177,45 @@ describe("resolveReleaseDate", () => {
     expect(resolveReleaseDate("2026-06-15", NY)).toBe("2026-06-15T04:00:00.000Z");
   });
 });
+
+/**
+ * Zones whose DST jump lands at 00:00 put the start of the day inside the gap, so
+ * resolving to the wrong side of it moves a release date to the *previous calendar day* —
+ * an assignment named for the 8th going live on the 7th. `America/New_York` cannot catch
+ * this because its gap is 02:00-03:00, well away from either boundary.
+ */
+describe("a DST transition at midnight", () => {
+  const localDay = (iso: string, timeZone: string) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+      new Date(iso)
+    );
+
+  // Havana and Santiago jump forward at 00:00; Cairo and Beirut do too, but sit east of
+  // UTC, so the offset arithmetic runs the other way.
+  const midnightJumps: Array<[string, string]> = [
+    ["America/Havana", "2026-03-08"],
+    ["America/Santiago", "2026-09-06"],
+    ["Africa/Cairo", "2026-04-24"],
+    ["Asia/Beirut", "2026-03-29"]
+  ];
+
+  it.each(midnightJumps)("keeps a start-of-day release date on the named day in %s", (zone, day) => {
+    expect(localDay(resolveReleaseDate(day, zone), zone)).toBe(day);
+  });
+
+  it.each(midnightJumps)("keeps an end-of-day due date on the named day in %s", (zone, day) => {
+    expect(localDay(resolveDueDate(day, zone), zone)).toBe(day);
+  });
+
+  it("resolves a nonexistent wall clock forward past the gap, not back before it", () => {
+    // 02:00-03:00 does not exist in New York on 2026-03-08; 02:30 means 03:30 EDT.
+    expect(resolveDueDate("2026-03-08T02:30", NY)).toBe("2026-03-08T07:30:00.000Z");
+    // Half-hour jump: Lord Howe goes 02:00 -> 02:30, so 02:15 means 02:45.
+    expect(resolveDueDate("2026-10-04T02:15", "Australia/Lord_Howe")).toBe("2026-10-03T15:45:00.000Z");
+  });
+
+  it("still picks the first occurrence of an ambiguous fall-back hour", () => {
+    // 01:30 happens twice in New York on 2026-11-01; the earlier (EDT) one is chosen.
+    expect(resolveDueDate("2026-11-01T01:30", NY)).toBe("2026-11-01T05:30:00.000Z");
+  });
+});

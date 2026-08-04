@@ -28,7 +28,7 @@ import { registerCommand } from "../router.ts";
 import { CLICommandError } from "../errors.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveClass } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
 import { streamNdjson } from "../utils/ndjson.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
@@ -930,12 +930,26 @@ async function resolveOneAssignment(
       .maybeSingle();
     if (data) return data;
   }
-  const { data } = await supabase
+  // `.limit(2)` rather than `.maybeSingle()`: `assignments.slug` carries no unique
+  // constraint, and `.maybeSingle()` answers PGRST116 with `data: null` on a second match
+  // — so a duplicated or archived slug reported "assignment not found" for an assignment
+  // that plainly exists. `resolveAssignment` was fixed the same way.
+  const { data: matches, error } = await supabase
     .from("assignments")
     .select("id, slug, title, grading_rubric_id, group_config")
     .eq("class_id", classId)
     .eq("slug", idStr)
-    .maybeSingle();
+    .order("id", { ascending: false })
+    .limit(2);
+  if (error) throw new CLICommandError(`Failed to resolve assignment: ${error.message}`, 500);
+  const rows = matches ?? [];
+  if (rows.length > 1) {
+    throw new CLICommandError(
+      `Ambiguous assignment slug "${idStr}" in class ${classId}: ${rows.map((r) => r.id).join(", ")}. Pass an assignment id.`,
+      400
+    );
+  }
+  const data = rows[0];
   if (!data) throw new CLICommandError(`assignment not found in class ${classId}: ${identifier}`, 404);
   return data;
 }
@@ -2219,7 +2233,12 @@ async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unkno
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
-  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  // Instructor-only, unlike the rest of assessment.export. This section is the one that
+  // re-attaches real names, emails, and SIS ids to the pseudonymous tokens, and
+  // `assertUserCanAccessClass` admits graders — typically undergraduate TAs. The
+  // `confirm_pii` flag above is the caller acknowledging what they are asking for, not
+  // authorization to ask for it.
+  await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
 
   const tokenizer = await createExportTokenizer(supabase, params.salt);
 

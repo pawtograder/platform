@@ -93,6 +93,24 @@ export function requireCredentials(): Credentials {
 }
 
 /**
+ * The configured request timeout in milliseconds, or 0 for none.
+ *
+ * Rejected rather than coerced: `Number("30s")` is `NaN`, `NaN > 0` is false, so a
+ * mistyped value silently disabled the timeout altogether while the operator believed
+ * one was in force — and the abort-specific guidance below then became unreachable.
+ */
+export function resolveHttpTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 0;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new CLIError(
+      `Invalid PAWTOGRADER_HTTP_TIMEOUT_MS: ${raw}. Give a whole number of milliseconds, e.g. 600000, or unset it for no timeout.`
+    );
+  }
+  return value;
+}
+
+/**
  * Send a command to the CLI edge function
  */
 export async function apiCall(command: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -104,7 +122,7 @@ export async function apiCall(command: string, params: Record<string, unknown> =
   }
 
   const start = Date.now();
-  const timeoutMs = Number(process.env.PAWTOGRADER_HTTP_TIMEOUT_MS ?? "0");
+  const timeoutMs = resolveHttpTimeoutMs(process.env.PAWTOGRADER_HTTP_TIMEOUT_MS);
   const controller = timeoutMs > 0 ? new AbortController() : undefined;
   const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
 
