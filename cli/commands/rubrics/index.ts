@@ -395,6 +395,8 @@ function printImportPlan(plan: {
   };
   /** Optional: absent from a server that predates the criterion-scoring diff. */
   criteria_scoring_changed?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the check-reparenting diff. */
+  checks_reparented?: Array<{ id: number; name: string }>;
   foreign_ids: Array<{ level: string; id: number; name: string }>;
   broad_change: boolean;
 }): void {
@@ -426,6 +428,14 @@ function printImportPlan(plan: {
     }
   }
 
+  const reparented = plan.checks_reparented ?? [];
+  if (reparented.length > 0) {
+    logger.warning(`Moving ${reparented.length} check(s) under a different criterion (rescores them):`);
+    for (const c of reparented) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
   const inserts = plan.parts.insert.length + plan.criteria.insert.length + plan.checks.insert.length;
   const updates = plan.parts.update.length + plan.criteria.update.length + plan.checks.update.length;
   logger.info(`Creating: ${inserts} row(s)`);
@@ -434,7 +444,8 @@ function printImportPlan(plan: {
     removals.length === 0 &&
     inserts === 0 &&
     plan.checks.points_changed.length === 0 &&
-    scoringChanged.length === 0
+    scoringChanged.length === 0 &&
+    reparented.length === 0
   ) {
     logger.info("No structural changes.");
   }

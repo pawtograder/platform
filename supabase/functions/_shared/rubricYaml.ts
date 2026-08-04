@@ -651,6 +651,24 @@ export function validateRubricYaml(input: unknown): ValidateResult {
         "it is stored as an integer"
       );
 
+      // Checked as a pair, not just individually. `update_rubric_full` persists both as
+      // given, and no number of applied checks can satisfy min > max — so graders simply
+      // cannot complete a review using that criterion, with nothing saying why. The web
+      // editor rejects the combination (components/rubric-editor/validation.ts), and this
+      // validator exists so the CLI enforces the same invariants before writing.
+      if (
+        typeof rawCriteria.min_checks_per_submission === "number" &&
+        typeof rawCriteria.max_checks_per_submission === "number" &&
+        rawCriteria.min_checks_per_submission > rawCriteria.max_checks_per_submission
+      ) {
+        errors.push({
+          path: `${critPath}.min_checks_per_submission`,
+          message:
+            `min_checks_per_submission (${rawCriteria.min_checks_per_submission}) cannot exceed ` +
+            `max_checks_per_submission (${rawCriteria.max_checks_per_submission}); no review could satisfy both.`
+        });
+      }
+
       if (!Array.isArray(rawCriteria.checks)) {
         errors.push({ path: `${critPath}.checks`, message: "checks must be an array" });
         return;
@@ -865,6 +883,8 @@ export interface RubricImportPlan {
    * columns as a broad change, and nothing else about a criterion update does.
    */
   criteria_scoring_changed: Array<{ id: number; name: string }>;
+  /** Checks kept by id but moved under a different criterion, which rescores them. */
+  checks_reparented: Array<{ id: number; name: string }>;
   /** Ids in the YAML that this rubric does not own — the copy/paste-YAML case. */
   foreign_ids: Array<{ level: "part" | "criterion" | "check"; id: number; name: string }>;
   broad_change: boolean;
@@ -885,6 +905,7 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     criteria: { insert: [], update: [], remove: [] },
     checks: { insert: [], update: [], remove: [], points_changed: [] },
     criteria_scoring_changed: [],
+    checks_reparented: [],
     foreign_ids: [],
     broad_change: false
   };
@@ -892,11 +913,16 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
   const ownedParts = new Map<number, RubricPartRowLike>();
   const ownedCriteria = new Map<number, RubricCriteriaRowLike>();
   const ownedChecks = new Map<number, RubricCheckRowLike>();
+  /** Which criterion each existing check currently hangs off, to detect a move. */
+  const ownedCheckParent = new Map<number, number>();
   for (const part of current.rubric_parts ?? []) {
     ownedParts.set(part.id, part);
     for (const criteria of part.rubric_criteria ?? []) {
       ownedCriteria.set(criteria.id, criteria);
-      for (const check of criteria.rubric_checks ?? []) ownedChecks.set(check.id, check);
+      for (const check of criteria.rubric_checks ?? []) {
+        ownedChecks.set(check.id, check);
+        ownedCheckParent.set(check.id, criteria.id);
+      }
     }
   }
 
@@ -950,6 +976,18 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
               to: check.points
             });
           }
+          // Moving a check under a different criterion rescores it even if its points do
+          // not change: the recompute groups applied comments by the check's *current*
+          // criterion and applies that criterion's additive/deduction/cap settings. Only
+          // checked against an existing target criterion — a move onto a new one is
+          // already a criteria.insert, which widens the plan by itself.
+          if (
+            criteria.id !== undefined &&
+            ownedCriteria.has(criteria.id) &&
+            ownedCheckParent.get(check.id) !== criteria.id
+          ) {
+            plan.checks_reparented.push({ id: check.id, name: check.name });
+          }
         } else {
           plan.checks.insert.push(check.name);
           if (check.id !== undefined) {
@@ -979,6 +1017,7 @@ export function planRubricImport(current: RubricTreeLike, payload: UpdateRubricF
     plan.checks.remove.length > 0 ||
     plan.checks.points_changed.length > 0 ||
     plan.criteria_scoring_changed.length > 0 ||
+    plan.checks_reparented.length > 0 ||
     current.cap_score_to_assignment_points !== payload.cap_score_to_assignment_points;
 
   return plan;

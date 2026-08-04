@@ -161,10 +161,12 @@ export const builder = (yargs: Argv) => {
 
           // Surfaced, because the request itself was closed either way: the operator needs
           // to know the per-student help history is missing these rows rather than
-          // discover it later as a gap in the analytics.
+          // discover it later as a gap in the analytics. Re-running the close with --force
+          // retries only the missing rows, so the instruction is actionable.
           if (data.activity_error) {
             logger.warning(
-              `The request was closed, but recording per-student help activity failed: ${data.activity_error}`
+              `The request was closed, but recording per-student help activity failed: ${data.activity_error}. ` +
+                "Re-run this command with --force to retry; participants already recorded are not duplicated."
             );
           }
 

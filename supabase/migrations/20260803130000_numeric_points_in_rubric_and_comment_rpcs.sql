@@ -110,6 +110,7 @@ DECLARE
   v_old_is_additive boolean;
   v_old_is_deduction_only boolean;
   v_old_points numeric;
+  v_old_criteria_id bigint;
 
   v_changes text[] := ARRAY[]::text[];
   v_summary text;
@@ -452,11 +453,22 @@ BEGIN
            ) THEN
           v_check_map_key := v_input_check_id::text;
 
-          SELECT points INTO v_old_points
+          SELECT points, rubric_criteria_id INTO v_old_points, v_old_criteria_id
           FROM public.rubric_checks WHERE id = v_input_check_id;
 
           IF v_old_points IS DISTINCT FROM COALESCE((v_check->>'points')::numeric, 0) THEN
             v_points_changed_check_ids := array_append(v_points_changed_check_ids, v_input_check_id);
+          END IF;
+
+          -- Reparenting a check is a scoring change even when its points do not move.
+          -- _submission_review_recompute_scores joins rubric_checks to rubric_criteria on
+          -- rubric_criteria_id and groups by the criterion, applying *that* criterion's
+          -- is_additive / is_deduction_only / total_points. So a check moved under a
+          -- different criterion is scored by different rules, and recording only point
+          -- changes left every affected submission_reviews.total_score computed against
+          -- the old parent until some unrelated edit happened to trigger a recompute.
+          IF v_old_criteria_id IS DISTINCT FROM v_criteria_id THEN
+            v_broad_change := true;
           END IF;
 
           UPDATE public.rubric_checks

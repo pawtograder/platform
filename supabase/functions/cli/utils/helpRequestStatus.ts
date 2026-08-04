@@ -74,3 +74,31 @@ export function resolvedAtForClose(
 ): string {
   return wasAlreadyTerminal && existingResolvedAt ? existingResolvedAt : now;
 }
+
+/**
+ * Participants that still need a `request_resolved` activity row, in a stable order.
+ *
+ * `student_help_activity` has no uniqueness constraint on
+ * (help_request_id, student_profile_id, activity_type), so the caller has to decide what
+ * is missing rather than relying on an upsert. Doing it as a set difference — instead of
+ * skipping the write whenever the request is already terminal — is what makes a failed
+ * write retryable: a rerun fills in only the gaps, so `--force` neither duplicates rows
+ * nor leaves a permanent hole in the per-student history.
+ *
+ * Duplicates within `participants` collapse, so one call cannot write two rows for the
+ * same student.
+ */
+export function participantsNeedingActivity(
+  participants: Array<string | null | undefined>,
+  alreadyLogged: Array<string | null | undefined>
+): string[] {
+  const logged = new Set(alreadyLogged.filter((id): id is string => !!id));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of participants) {
+    if (!id || logged.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}

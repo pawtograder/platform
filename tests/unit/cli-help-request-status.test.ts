@@ -17,6 +17,7 @@ import {
   HELP_REQUEST_STATUS_FILTERS,
   TERMINAL_HELP_REQUEST_STATUSES,
   HELP_REQUEST_RESOLUTION_STATUSES,
+  participantsNeedingActivity,
   resolvedAtForClose
 } from "../../supabase/functions/cli/utils/helpRequestStatus";
 
@@ -103,5 +104,43 @@ describe("resolvedAtForClose", () => {
   it("falls back to now when a terminal row has no resolved_at to preserve", () => {
     expect(resolvedAtForClose(true, null, NOW)).toBe(NOW);
     expect(resolvedAtForClose(true, undefined, NOW)).toBe(NOW);
+  });
+});
+
+/**
+ * The activity write is deduplicated by reading what is already there, not by refusing to
+ * run on a terminal request. Gating on the status stopped `--force` duplicating rows but
+ * also made a *failed* write unrepairable — the retry saw a terminal request and skipped
+ * logging, so the per-student history kept its hole for good.
+ */
+describe("participantsNeedingActivity", () => {
+  const A = "aaaaaaaa-0000-0000-0000-00000000000a";
+  const B = "bbbbbbbb-0000-0000-0000-00000000000b";
+  const C = "cccccccc-0000-0000-0000-00000000000c";
+
+  it("returns every participant when nothing is logged yet", () => {
+    expect(participantsNeedingActivity([A, B], [])).toEqual([A, B]);
+  });
+
+  it("returns nothing when all participants are already logged", () => {
+    // The idempotent rerun: --force on a fully logged request adds no duplicates.
+    expect(participantsNeedingActivity([A, B], [B, A])).toEqual([]);
+  });
+
+  it("fills only the gap left by a partly failed write", () => {
+    // The retry case: A landed, B and C did not, and the request is now terminal.
+    expect(participantsNeedingActivity([A, B, C], [A])).toEqual([B, C]);
+  });
+
+  it("collapses duplicate participants so one call cannot write two rows", () => {
+    expect(participantsNeedingActivity([A, A, B], [])).toEqual([A, B]);
+  });
+
+  it("ignores null and undefined ids on either side", () => {
+    expect(participantsNeedingActivity([A, null, undefined, B], [null, B])).toEqual([A]);
+  });
+
+  it("preserves participant order", () => {
+    expect(participantsNeedingActivity([C, A, B], [A])).toEqual([C, B]);
   });
 });

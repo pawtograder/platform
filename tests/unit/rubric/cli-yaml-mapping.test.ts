@@ -316,6 +316,41 @@ describe("buildUpdateRubricFullPayload defaults", () => {
 describe("validateRubricYaml", () => {
   const ok = { name: "r", parts: [{ name: "p", criteria: [{ name: "c", checks: [{ name: "k" }] }] }] };
 
+  it("rejects min_checks_per_submission greater than max_checks_per_submission", () => {
+    // No number of applied checks satisfies both, so graders cannot complete a review
+    // using the criterion and nothing says why. The web editor already refuses this.
+    const result = validateRubricYaml({
+      name: "r",
+      parts: [
+        {
+          name: "p",
+          criteria: [{ name: "c", min_checks_per_submission: 3, max_checks_per_submission: 2, checks: [{ name: "k" }] }]
+        }
+      ]
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a validation failure");
+    expect(result.errors.some((e) => /min_checks_per_submission/.test(e.path))).toBe(true);
+    expect(result.errors.some((e) => /cannot exceed/.test(e.message))).toBe(true);
+  });
+
+  it("accepts equal bounds, and a bound paired with null or absent", () => {
+    const bounds = (min: number | null, max: number | null) => ({
+      name: "r",
+      parts: [
+        {
+          name: "p",
+          criteria: [
+            { name: "c", min_checks_per_submission: min, max_checks_per_submission: max, checks: [{ name: "k" }] }
+          ]
+        }
+      ]
+    });
+    expect(validateRubricYaml(bounds(2, 2)).ok).toBe(true);
+    expect(validateRubricYaml(bounds(5, null)).ok).toBe(true);
+    expect(validateRubricYaml(bounds(null, 1)).ok).toBe(true);
+  });
+
   it("accepts a minimal document and an already-exported one", () => {
     expect(validateRubricYaml(ok).ok).toBe(true);
     // Back-compat: the pre-existing field set, with no ids and none of the new fields.
@@ -623,6 +658,56 @@ describe("planRubricImport", () => {
     expect(plan.foreign_ids).toEqual([]);
     expect(plan.parts.insert).toEqual(["part-a", "part-b"]);
     expect(plan.checks.remove).toEqual([{ id: 500, name: "check-a" }]);
+  });
+
+  it("reports a check moved to another criterion as a broad change", () => {
+    // The recompute groups applied comments by the check's *current* criterion and uses
+    // that criterion's additive/deduction/cap settings, so a move rescores the check even
+    // with its points untouched. Reporting only point changes left total_score stale.
+    const twoCriteria = fullTree();
+    twoCriteria.rubric_parts![1].rubric_criteria = [
+      {
+        id: 301,
+        name: "criteria-b",
+        description: null,
+        ordinal: 0,
+        total_points: 4,
+        is_additive: false,
+        is_deduction_only: false,
+        min_checks_per_submission: null,
+        max_checks_per_submission: null,
+        data: null,
+        rubric_checks: []
+      }
+    ];
+    const yaml = rubricTreeToYaml(twoCriteria, new Map(), SOURCE);
+    // Move check 500 from criteria-a (300) to criteria-b (301), points unchanged.
+    const moved = yaml.parts[0].criteria[0].checks.splice(0, 1);
+    yaml.parts[1].criteria[0].checks.push(...moved);
+
+    const plan = planRubricImport(
+      twoCriteria,
+      buildUpdateRubricFullPayload({
+        yaml,
+        rubricId: 3,
+        classId: 1,
+        assignmentId: 2,
+        reviewRound: "grading-review",
+        existing: twoCriteria,
+        resolvedRefsByPath: new Map()
+      })
+    );
+    expect(plan.checks_reparented).toEqual([{ id: 500, name: "check-a" }]);
+    expect(plan.checks.points_changed).toEqual([]);
+    expect(plan.checks.remove).toEqual([]);
+    expect(plan.broad_change).toBe(true);
+  });
+
+  it("does not report a move when the check stays put", () => {
+    const yaml = rubricTreeToYaml(tree, new Map(), SOURCE);
+    const plan = planRubricImport(tree, payloadFor(yaml));
+    expect(plan.checks_reparented).toEqual([]);
+    expect(plan.broad_change).toBe(false);
   });
 
   it("reports a points change with both values", () => {
