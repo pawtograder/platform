@@ -8,6 +8,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { printTable } from "@/cli/utils/output";
 
 export const command = "surveys <action>";
 export const describe = "Manage surveys";
@@ -85,10 +86,14 @@ export const builder = (yargs: Argv) => {
               logger.info(`Target assignment: ${data.target_assignment.slug ?? data.target_assignment.id}`);
             }
             logger.blank();
-            logger.tableHeader(["Title", "Logical ID", "Linked assignment"]);
-            for (const s of data.surveys_to_copy) {
-              logger.tableRow([s.title, s.survey_id, s.assignment_id != null ? String(s.assignment_id) : "-"]);
-            }
+            printTable(
+              ["Title", "Logical ID", "Linked assignment"],
+              data.surveys_to_copy.map((s: Record<string, unknown>) => [
+                s.title as string,
+                s.survey_id as string,
+                s.assignment_id as number | null
+              ])
+            );
             logger.blank();
             return;
           }

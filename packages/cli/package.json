@@ -1,0 +1,50 @@
+{
+  "name": "@pawtograder/cli",
+  "version": "0.1.0",
+  "description": "Command-line tool for Pawtograder course operations — assignments, rubrics, submissions, reviews, and student repositories",
+  "keywords": [
+    "pawtograder",
+    "cli",
+    "grading",
+    "autograder",
+    "education",
+    "courseops"
+  ],
+  "homepage": "https://pawtograder.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pawtograder/platform.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/pawtograder/platform/issues"
+  },
+  "license": "GPL-3.0-only",
+  "bin": {
+    "pawtograder": "dist/pawtograder.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepublishOnly": "npm run build && node smoke-test.mjs",
+    "smoke-test": "node smoke-test.mjs"
+  },
+  "dependencies": {
+    "csv-parse": "^5.6.0",
+    "yaml": "^2.7.1",
+    "yargs": "^17.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.7"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

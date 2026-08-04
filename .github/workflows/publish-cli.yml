@@ -1,0 +1,81 @@
+name: Publish CLI to npm
+
+# Publishes packages/cli as @pawtograder/cli.
+#
+# Trigger by pushing a tag shaped `cli-v<version>`, which must match the version
+# in packages/cli/package.json:
+#
+#   npm --prefix packages/cli version patch    # or minor / major
+#   git commit -am "chore(cli): release 0.1.1"
+#   git tag cli-v0.1.1 && git push origin cli-v0.1.1
+#
+# Requires an `NPM_TOKEN` repository secret: an npm automation token with
+# publish rights on the @pawtograder scope.
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  # Build, smoke-test, and pack only. Publishing requires a `cli-v*` tag; see the
+  # Publish step below.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for `npm publish --provenance`, which attests which workflow, repo, and
+  # commit produced the tarball. Without it npm silently publishes unattested.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install
+        run: npm ci
+
+      # A tag that disagrees with the manifest would publish a version nobody
+      # can correlate back to a commit, so stop before building.
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          manifest_version="$(node -p "require('./package.json').version")"
+          tag_version="${GITHUB_REF_NAME#cli-v}"
+          if [ "$manifest_version" != "$tag_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME implies version $tag_version but packages/cli/package.json says $manifest_version"
+            exit 1
+          fi
+          echo "Publishing version $manifest_version"
+
+      - name: Build
+        run: npm run build
+
+      # Runs the built binary: catches an unresolved path alias, a missing
+      # shebang, or a dependency that was externalized but not declared — none
+      # of which a type check would surface.
+      - name: Smoke test
+        run: npm run smoke-test
+
+      - name: Pack (dry run)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm pack --dry-run
+
+      # Tags only. `workflow_dispatch` used to be able to publish from any ref with
+      # `dry_run` unchecked, and the version/tag agreement check above is gated on the ref
+      # being a tag — so a manual run from a feature branch published unreviewed code to
+      # the `latest` dist-tag with nothing tying the tarball to a commit. Manual runs now
+      # build, smoke-test, and pack, which is what they were useful for.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/cli-v')
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
