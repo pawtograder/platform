@@ -490,6 +490,25 @@ async function createPushDirectSubmission(
     return;
   }
 
+  // The handout's recorded hashes cover only the configured submissionFiles, so
+  // build the same matcher to compare like with like. Absent config means we
+  // cannot narrow, and the emptiness comparison stays unreliable — see the
+  // fail-closed handling below.
+  const { data: graderConfigRow } = await adminSupabase
+    .from("autograder")
+    .select("config")
+    .eq("id", studentRepo.assignment_id)
+    .maybeSingle();
+  const submissionFilesConfig = (graderConfigRow?.config as unknown as PawtograderConfig | null)?.submissionFiles;
+  const expectedFilePatterns = submissionFilesConfig
+    ? [...(submissionFilesConfig.files ?? []), ...(submissionFilesConfig.testFiles ?? [])]
+    : [];
+  const emptyHashFilter =
+    expectedFilePatterns.length > 0
+      ? (relativePath: string) => expectedFilePatterns.some((pattern) => micromatch.isMatch(relativePath, pattern))
+      : null;
+  scope.setTag("empty_hash_filter_patterns", String(expectedFilePatterns.length));
+
   // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
   // The insert above and this ingest are NOT in one transaction, so if ingest
   // fails we must clean up the just-created row — otherwise the idempotency
@@ -509,6 +528,11 @@ async function createPushDirectSubmission(
       // untouched starter-template push would become the newest active
       // submission on an assignment that prohibits empty submissions.
       detectEmptyForAssignmentId: studentRepo.assignment_id,
+      // Store the WHOLE tree (hand-grading wants the full repo) but compare only
+      // the configured submissionFiles, because that is the set the handout hashes
+      // cover. Without narrowing, the two hashes are computed over different file
+      // sets and can never match, so emptiness would always read "not empty".
+      emptyHashFilter: emptyHashFilter ?? undefined,
       scope
     });
 

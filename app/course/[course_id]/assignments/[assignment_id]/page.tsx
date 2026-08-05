@@ -33,6 +33,46 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 
+/**
+ * Autograder-score label for one row of the submission history.
+ *
+ * Decided per submission rather than from the assignment's current
+ * `has_autograder`, because that flag is mutable while submissions are
+ * historical. Keying only off the flag mislabels history in both directions:
+ * turning the autograder off would hide real scores from earlier Actions-backed
+ * submissions as "N/A", and turning it back on would leave earlier push-direct
+ * submissions stuck at "In Progress" forever.
+ *
+ * Order matters: real results always win, then channels that never run the
+ * autograder, and only then the assignment-level fallback.
+ */
+function autograderScoreLabel(
+  submission: {
+    grader_results?: { score?: number | null; max_score?: number | null; errors?: unknown } | null;
+    submitted_via?: string | null;
+    run_number?: number | null;
+  },
+  assignmentHasNoAutograder: boolean
+): string {
+  const results = submission.grader_results;
+  if (results) {
+    return results.errors ? "Error" : `${results.score}/${results.max_score}`;
+  }
+  // Channels that never produce grader results: an upload, a manual entry, a PR
+  // submission, or a push-direct submission (run_number 0 — no Actions run backs
+  // it). These are "N/A" no matter what the assignment flag currently says.
+  const via = submission.submitted_via;
+  if (via === "upload" || via === "manual" || via === "pr") {
+    return "N/A";
+  }
+  if (via === "git" && (submission.run_number ?? 0) === 0) {
+    return "N/A";
+  }
+  // An Actions-backed submission with no results yet is either still running or
+  // belongs to an assignment with no autograder at all.
+  return assignmentHasNoAutograder ? "N/A" : "In Progress";
+}
+
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { private_profile_id, isReadOnly } = useClassProfiles();
@@ -295,13 +335,7 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {noAutograder
-                        ? "N/A"
-                        : !submission.grader_results
-                          ? "In Progress"
-                          : submission.grader_results && submission.grader_results.errors
-                            ? "Error"
-                            : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                      {autograderScoreLabel(submission, noAutograder)}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>

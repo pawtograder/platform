@@ -312,3 +312,89 @@ Deno.test(
     assertEquals(result.isEmpty, false);
   }
 );
+
+// emptyHashFilter (#895): the push-direct path stores the WHOLE repo so an
+// instructor can hand-grade it, but `assignment_handout_file_hashes` records only
+// the configured submissionFiles. Without narrowing the comparison, the two hashes
+// cover different file sets and an untouched starter push never reads as empty.
+Deno.test("ingestSubmissionFilesFromZip: emptyHashFilter narrows the empty-check hash to matching files", async () => {
+  // Whole tree = the graded file plus noise the handout hashes do not cover.
+  const zipBuffer = await buildZip({
+    "Main.java": TEXT_CONTENTS,
+    "README.md": "# instructions\n",
+    ".github/workflows/grade.yml.disabled": "on: workflow_dispatch\n"
+  });
+
+  // Handout hash covers ONLY Main.java, mirroring submissionFiles: ["**/*.java"].
+  const handoutHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+  const { client, insertedFiles } = makeFakeSupabase({
+    handoutHashesByAssignment: new Map([[123, new Set([handoutHash])]])
+  });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123,
+    emptyHashFilter: (name) => name.endsWith(".java")
+  });
+
+  // Every file is still stored — the filter affects only the comparison.
+  assertEquals(insertedFiles.length, 3);
+  // combinedHash still reflects the whole tree, so it differs from the handout's.
+  assert(result.combinedHash !== handoutHash, "whole-tree hash should differ from the handout subset hash");
+  // ...but the narrowed comparison matches, so the push is correctly seen as empty.
+  assertEquals(result.isEmpty, true);
+});
+
+Deno.test(
+  "ingestSubmissionFilesFromZip: emptyHashFilter still reports non-empty when a graded file changed",
+  async () => {
+    const zipBuffer = await buildZip({
+      "Main.java": TEXT_CONTENTS + "\n// my work\n",
+      "README.md": "# instructions\n"
+    });
+
+    const handoutHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+    const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[123, new Set([handoutHash])]]) });
+
+    const result = await ingestSubmissionFilesFromZip({
+      // deno-lint-ignore no-explicit-any
+      adminSupabase: client as any,
+      zipBuffer,
+      submissionId: 1,
+      classId: 1,
+      profileId: "p",
+      groupId: null,
+      detectEmptyForAssignmentId: 123,
+      emptyHashFilter: (name) => name.endsWith(".java")
+    });
+
+    assertEquals(result.isEmpty, false);
+  }
+);
+
+Deno.test("ingestSubmissionFilesFromZip: without emptyHashFilter the whole-tree hash is used (unchanged)", async () => {
+  const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS, "README.md": "# instructions\n" });
+  // Recording only the Main.java subset must NOT match when nothing narrows the
+  // comparison — this is the pre-existing behavior the filter exists to fix.
+  const subsetHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+  const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[123, new Set([subsetHash])]]) });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123
+  });
+
+  assertEquals(result.isEmpty, false);
+});

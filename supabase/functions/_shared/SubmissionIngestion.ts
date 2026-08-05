@@ -30,6 +30,10 @@
  * that match its `submissionFiles` glob set; PR/push-direct callers pass none
  * (ingest the whole head tree). `detectEmptyForAssignmentId` (optional) enables
  * the handout-hash empty-submission check and returns `isEmpty`.
+ *
+ * `emptyHashFilter` (optional) narrows only the EMPTY-CHECK hash, for callers that
+ * ingest the whole tree but must still compare against handout hashes computed
+ * over `submissionFiles` alone.
  */
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -256,6 +260,21 @@ export type IngestScope = {
    * `isEmpty` is null.
    */
   detectEmptyForAssignmentId?: number;
+  /**
+   * Restricts which files feed the EMPTY-CHECK hash, without affecting which files
+   * are ingested and stored.
+   *
+   * `assignment_handout_file_hashes.combined_hash` is computed over the handout's
+   * configured `submissionFiles` only. A caller that ingests the whole tree (push
+   * direct, PR) therefore produces a hash over a different file set, which can
+   * never match the handout's — so emptiness would always read "not empty". Pass
+   * the same glob matcher the handout hashes use to make the two comparable while
+   * still storing every file for hand-grading.
+   *
+   * When omitted, the empty-check hash covers everything ingested (the autograder's
+   * case, where `fileFilter` has already narrowed ingestion to the same set).
+   */
+  emptyHashFilter?: (relativePath: string) => boolean;
   scope?: Sentry.Scope;
 };
 
@@ -343,6 +362,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
     groupId,
     fileFilter,
     detectEmptyForAssignmentId,
+    emptyHashFilter,
     scope
   } = params;
 
@@ -479,6 +499,15 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
 
   const combinedHash = combinedHashFromPerFileHexHashes(file_hashes);
 
+  // Hash used for the handout comparison. Narrowed to `emptyHashFilter` when the
+  // caller ingested more than the handout hashes cover, so the two are computed
+  // over the same file set (see the field's doc comment).
+  const emptyCheckHash = emptyHashFilter
+    ? combinedHashFromPerFileHexHashes(
+        Object.fromEntries(Object.entries(file_hashes).filter(([name]) => emptyHashFilter(name)))
+      )
+    : combinedHash;
+
   let isEmpty: boolean | null = null;
   if (detectEmptyForAssignmentId !== undefined) {
     // Empty submission detection: if the submitted files match ANY recorded
@@ -495,7 +524,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
         .from("assignment_handout_file_hashes")
         .select("id")
         .eq("assignment_id", detectEmptyForAssignmentId)
-        .eq("combined_hash", combinedHash)
+        .eq("combined_hash", emptyCheckHash)
         .limit(1)
         .maybeSingle();
       if (!matchError) {
