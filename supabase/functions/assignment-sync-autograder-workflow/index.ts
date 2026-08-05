@@ -142,29 +142,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // GitHub only runs workflows matching `.github/workflows/*.yml`, so the
     // `.disabled` suffix stops every Action while keeping the content readable and
     // self-explanatory in the repo (and harmless if copied into student repos).
-    let parked = false;
+    // Nothing to park (no grade.yml) is the normal case for a handout created
+    // repo-only; that's a 404 and we just proceed. Any OTHER failure must abort
+    // BEFORE the delete below — parking exists precisely so the delete is safe,
+    // so deleting anyway would destroy the customized workflow this is meant to
+    // protect. Better to fail the toggle and let the instructor retry.
+    let liveWorkflow: { content: string; sha?: string } | null = null;
     try {
-      const current = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
-      await writeFileToRepo(
-        templateRepo,
-        DISABLED_GRADE_WORKFLOW_PATH,
-        current.content,
-        "Park autograder workflow: this assignment has no autograder",
-        // Overwrite an older parked copy if one is already there.
-        (await getFileShaIfExists(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope)) ?? undefined,
-        scope
-      );
-      parked = true;
+      liveWorkflow = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
     } catch (e) {
-      // Nothing to park (no grade.yml) is the normal case for a handout created
-      // without one. Anything else is worth knowing about, but must not block
-      // turning the autograder off.
-      if (!(e instanceof RequestError && e.status === 404)) {
+      if (!(e instanceof RequestError && e.status === 404)) throw e;
+    }
+
+    if (liveWorkflow) {
+      try {
+        await writeFileToRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          liveWorkflow.content,
+          "Park autograder workflow: this assignment has no autograder",
+          // Overwrite an older parked copy if one is already there.
+          (await getFileShaIfExists(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope)) ?? undefined,
+          scope
+        );
+      } catch (e) {
         scope.setTag("park_workflow_failed", "true");
         Sentry.captureException(e, scope);
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new UserVisibleError(
+          `Could not preserve a copy of ${GRADE_WORKFLOW_PATH} from ${templateRepo}, so the autograder was left ` +
+            `enabled rather than risk losing a customized workflow. Please try again: ${msg}`,
+          502
+        );
       }
     }
-    scope.setTag("parked_workflow", String(parked));
+    scope.setTag("parked_workflow", String(!!liveWorkflow));
 
     const { deleted } = await deleteFileFromRepo(
       templateRepo,
@@ -237,17 +249,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     undefined,
     scope
   );
-  // Clear the parked copy now that the live workflow is back, so a later toggle
-  // parks the then-current content rather than resurrecting a stale version.
-  if (parkedSha) {
-    await deleteFileFromRepo(
-      templateRepo,
-      DISABLED_GRADE_WORKFLOW_PATH,
-      "Remove parked autograder workflow: the live workflow has been restored",
-      scope
-    );
+
+  // From here the handout has a RUNNABLE workflow. If anything below fails we
+  // throw, and callers roll has_autograder back to false — which would leave a
+  // live grade.yml on a no-autograder assignment: Actions would fire on pushes
+  // while the webhook also created direct submissions. So undo the restore before
+  // rethrowing, keeping the repo consistent with the flag the caller restores.
+  try {
+    await updateAutograderWorkflowHash(templateRepo);
+    // Clear the parked copy only after the hash is in place, so a failure above
+    // still leaves the preserved content available for the next attempt.
+    if (parkedSha) {
+      await deleteFileFromRepo(
+        templateRepo,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        "Remove parked autograder workflow: the live workflow has been restored",
+        scope
+      );
+    }
+  } catch (e) {
+    scope.setTag("restore_rollback", "true");
+    try {
+      await deleteFileFromRepo(
+        templateRepo,
+        GRADE_WORKFLOW_PATH,
+        "Roll back autograder workflow restore: enabling the autograder failed",
+        scope
+      );
+    } catch (rollbackError) {
+      // Report the failed rollback too — the repo is now genuinely inconsistent
+      // and an instructor needs to know which state it is in.
+      scope.setTag("restore_rollback_failed", "true");
+      Sentry.captureException(rollbackError, scope);
+    }
+    throw e;
   }
-  await updateAutograderWorkflowHash(templateRepo);
 
   return { action: "added" as const, has_autograder: true, template_repo: templateRepo };
 }

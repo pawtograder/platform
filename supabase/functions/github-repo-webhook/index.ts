@@ -355,9 +355,9 @@ async function createPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   payload: PushEvent,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
-  opts: { allowNotGradedSubmissions: boolean; scope: Sentry.Scope }
+  opts: { allowNotGradedSubmissions: boolean; permitEmptySubmissions: boolean; scope: Sentry.Scope }
 ): Promise<void> {
-  const { allowNotGradedSubmissions, scope } = opts;
+  const { allowNotGradedSubmissions, permitEmptySubmissions, scope } = opts;
   const headCommit = payload.head_commit;
   if (!headCommit) return; // guarded by caller, narrows the type
   const repoName = payload.repository.full_name;
@@ -496,7 +496,7 @@ async function createPushDirectSubmission(
   // pre-check would return early on re-delivery and leave a permanent fileless
   // submission. Mirrors the autograder's reject-and-cleanup behavior.
   try {
-    await ingestSubmissionFilesFromRepo({
+    const ingestResult = await ingestSubmissionFilesFromRepo({
       adminSupabase,
       submissionId,
       classId: studentRepo.class_id,
@@ -504,8 +504,35 @@ async function createPushDirectSubmission(
       groupId: studentRepo.assignment_group_id,
       repo: repoName,
       sha,
+      // Compare the pushed tree against the assignment's recorded handout
+      // versions, exactly as the Actions-backed path does. Without this, an
+      // untouched starter-template push would become the newest active
+      // submission on an assignment that prohibits empty submissions.
+      detectEmptyForAssignmentId: studentRepo.assignment_id,
       scope
     });
+
+    // isEmpty is null when the handout-hash lookup failed (unknown). Fail CLOSED
+    // on null when empty submissions are prohibited, mirroring the autograder
+    // path: treating an unverifiable submission as non-empty would disable the
+    // policy exactly when the check is unavailable.
+    const { error: emptyFlagError } = await adminSupabase
+      .from("submissions")
+      .update({ is_empty_submission: ingestResult.isEmpty ?? false })
+      .eq("id", submissionId);
+    if (emptyFlagError) {
+      Sentry.captureException(emptyFlagError, scope);
+    }
+    if (!permitEmptySubmissions && ingestResult.isEmpty !== false) {
+      scope.setTag("push_direct_submission_rejected", ingestResult.isEmpty === null ? "empty_unknown" : "empty");
+      console.log(
+        `Rejecting push-direct submission for ${repoName}@${sha}: ` +
+          `${ingestResult.isEmpty === null ? "emptiness could not be determined" : "matches the handout"} and ` +
+          `this assignment does not permit empty submissions`
+      );
+      await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+      return;
+    }
   } catch (ingestErr) {
     await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
     if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
@@ -567,9 +594,12 @@ async function handlePushToStudentRepo(
   // Also load has_autograder + due-date inputs for the push-mode zero-runner
   // path below (a push-mode assignment with no autograder creates the
   // submission directly here instead of dispatching grade.yml).
+  // `*` rather than an explicit column list: once the list grows past a certain
+  // length postgrest-js's select-string type parser gives up and collapses the row
+  // to GenericStringError, making every field access below an unchecked type error.
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
-    .select("submission_mode, has_autograder, allow_not_graded_submissions, latest_template_sha, repo_mode")
+    .select("*")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -653,6 +683,7 @@ async function handlePushToStudentRepo(
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
+      permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       scope
     });
     return;

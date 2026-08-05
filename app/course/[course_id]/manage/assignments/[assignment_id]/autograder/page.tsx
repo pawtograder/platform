@@ -21,7 +21,7 @@ import {
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Controller, FieldValues } from "react-hook-form";
 
 export default function AutograderPage() {
@@ -51,9 +51,20 @@ export default function AutograderPage() {
     }
   });
 
+  // Last value of has_autograder known to be persisted, used as the rollback
+  // target when the workflow sync fails. It cannot come straight from `query`:
+  // saving writes the `assignments` resource while this form reads the nested
+  // `autograder` query, so `query` still holds the value from page load. On a
+  // second toggle in the same visit that stale baseline would either skip the
+  // rollback or restore the wrong value.
+  const savedHasAutograder = useRef<boolean | undefined>(undefined);
+
   useEffect(() => {
     if (query?.data?.data) {
       reset(query.data.data);
+      if (savedHasAutograder.current === undefined) {
+        savedHasAutograder.current = query.data.data.assignments?.has_autograder;
+      }
     }
   }, [query?.data?.data, reset]);
 
@@ -74,7 +85,7 @@ export default function AutograderPage() {
       // the edit) with the flag already persisted, which would leave the webhook
       // treating the assignment as no-autograder while repos still carry the
       // workflow. Roll the flag back on failure so the two never disagree.
-      const priorHasAutograder = query?.data?.data?.assignments?.has_autograder;
+      const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
       await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
       try {
@@ -85,6 +96,8 @@ export default function AutograderPage() {
           },
           supabase
         );
+        // Only now is the flag durably matched by the handout's workflow state.
+        savedHasAutograder.current = nextHasAutograder;
       } catch (syncError) {
         if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
           await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
@@ -100,7 +113,7 @@ export default function AutograderPage() {
         max_submissions_period_secs: values.max_submissions_period_secs || null
       });
     },
-    [refineCore, assignment_id, course_id, mutateAssignment, query?.data?.data]
+    [refineCore, assignment_id, course_id, mutateAssignment]
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");
