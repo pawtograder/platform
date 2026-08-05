@@ -558,10 +558,15 @@ async function createPushDirectSubmission(
       scope
     });
 
-    // isEmpty is null when the handout-hash lookup failed (unknown). Fail CLOSED
-    // on null when empty submissions are prohibited, mirroring the autograder
-    // path: treating an unverifiable submission as non-empty would disable the
-    // policy exactly when the check is unavailable.
+    // isEmpty is null in TWO different situations, which must not be conflated:
+    //   - the check was never requested (canDetectEmpty === false, because the
+    //     assignment defines no submissionFiles). Nothing failed; there is simply
+    //     no verdict, and a repo-only assignment has no reason to maintain a
+    //     pawtograder.yml. Treat as "not empty".
+    //   - the check WAS requested and its handout-hash lookup failed after retries
+    //     (canDetectEmpty === true, isEmpty === null). That is an unknown verdict on
+    //     a policy that matters, so it fails closed below.
+    const emptyCheckFailed = canDetectEmpty && ingestResult.isEmpty === null;
     const { error: emptyFlagError } = await adminSupabase
       .from("submissions")
       .update({ is_empty_submission: ingestResult.isEmpty ?? false })
@@ -573,12 +578,17 @@ async function createPushDirectSubmission(
       Sentry.captureException(emptyFlagError, scope);
       throw emptyFlagError;
     }
-    if (!permitEmptySubmissions && ingestResult.isEmpty !== false) {
+    // Only a real verdict (or a real failure) can reject. Gating on canDetectEmpty is
+    // essential: without it, an assignment with no submissionFiles produced isEmpty=null
+    // by design, which read as "unknown failure" and rejected + retried EVERY push
+    // forever — silently breaking the whole repo-only flow, since those assignments are
+    // exactly the ones with no pawtograder.yml.
+    if (!permitEmptySubmissions && canDetectEmpty && ingestResult.isEmpty !== false) {
       // UNKNOWN emptiness (isEmpty === null) means the handout-hash lookup failed after
       // its retries — a transient DB problem, not a verdict. Throw so the shared catch
       // below cleans up and GitHub redelivers; returning 200 would acknowledge the
       // delivery and permanently lose a real, non-empty push.
-      if (ingestResult.isEmpty === null) {
+      if (emptyCheckFailed) {
         scope.setTag("push_direct_submission_rejected", "empty_unknown");
         throw new Error(
           `Could not determine whether ${repoName}@${sha} is an empty submission (handout hash lookup failed); ` +
