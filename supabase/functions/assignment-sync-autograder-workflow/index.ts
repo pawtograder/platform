@@ -16,15 +16,38 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 
 /**
+ * Where the live workflow is parked while the autograder is off. GitHub only runs
+ * workflows matching `.github/workflows/*.yml`, so this suffix disables it without
+ * losing an instructor's customizations.
+ */
+const DISABLED_GRADE_WORKFLOW_PATH = `${GRADE_WORKFLOW_PATH}.disabled`;
+
+/** Blob sha of `path` in `repoName`, or null when the file does not exist. */
+async function getFileShaIfExists(
+  repoName: string,
+  path: string,
+  scope: Sentry.Scope
+): Promise<string | null | undefined> {
+  try {
+    return (await getFileFromRepo(repoName, path, scope)).sha;
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/**
  * Bring the handout repo's grading workflow into line with
  * `assignments.has_autograder`, so an instructor can turn the autograder on or
  * off on an assignment that already exists (issue #895).
  *
- * - autograder OFF -> remove `.github/workflows/grade.yml` from the handout, so
- *   student repos generated from it run no GitHub Actions.
- * - autograder ON  -> restore `grade.yml` from the class's configured handout
- *   template and repopulate `autograder.workflow_sha` (submissions are rejected
- *   with a "workflow sha mismatch" while it is NULL).
+ * - autograder OFF -> park `.github/workflows/grade.yml` as `grade.yml.disabled`
+ *   and delete the live file, so student repos generated from the handout run no
+ *   GitHub Actions but the (possibly customized) content survives.
+ * - autograder ON  -> restore `grade.yml` from the parked copy when there is one,
+ *   otherwise from the class's configured handout template, and repopulate
+ *   `autograder.workflow_sha` (submissions are rejected with a "workflow sha
+ *   mismatch" while it is NULL).
  *
  * Idempotent: safe to call when the handout already matches the flag, which is
  * why callers can invoke it unconditionally rather than tracking the prior value.
@@ -111,6 +134,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   if (!hasAutograder) {
+    // Park the workflow beside itself instead of just deleting it. Instructors
+    // customize grade.yml (runner labels, grading_server, extra steps), and the
+    // handout holds the only assignment-specific copy — a plain delete would lose
+    // it, and re-enabling would silently substitute the stock class template.
+    //
+    // GitHub only runs workflows matching `.github/workflows/*.yml`, so the
+    // `.disabled` suffix stops every Action while keeping the content readable and
+    // self-explanatory in the repo (and harmless if copied into student repos).
+    let parked = false;
+    try {
+      const current = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
+      await writeFileToRepo(
+        templateRepo,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        current.content,
+        "Park autograder workflow: this assignment has no autograder",
+        // Overwrite an older parked copy if one is already there.
+        (await getFileShaIfExists(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope)) ?? undefined,
+        scope
+      );
+      parked = true;
+    } catch (e) {
+      // Nothing to park (no grade.yml) is the normal case for a handout created
+      // without one. Anything else is worth knowing about, but must not block
+      // turning the autograder off.
+      if (!(e instanceof RequestError && e.status === 404)) {
+        scope.setTag("park_workflow_failed", "true");
+        Sentry.captureException(e, scope);
+      }
+    }
+    scope.setTag("parked_workflow", String(parked));
+
     const { deleted } = await deleteFileFromRepo(
       templateRepo,
       GRADE_WORKFLOW_PATH,
@@ -139,29 +194,59 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return { action: "unchanged" as const, has_autograder: true, template_repo: templateRepo };
   }
 
-  const { handout: handoutTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
-  scope.setTag("source_template_repo", handoutTemplateRepo);
-  let workflowContent: string;
+  // Prefer the copy parked when the autograder was turned off — it may carry this
+  // assignment's customizations, which the class template would not. Fall back to
+  // the class template when there is nothing parked (e.g. the handout was created
+  // repo-only and never had a workflow).
+  let workflowContent: string | undefined;
+  let restoredFrom: "parked" | "class_template" = "parked";
+  let parkedSha: string | undefined;
   try {
-    const file = await getFileFromRepo(handoutTemplateRepo, GRADE_WORKFLOW_PATH, scope);
-    workflowContent = file.content;
+    const parkedFile = await getFileFromRepo(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope);
+    workflowContent = parkedFile.content;
+    parkedSha = parkedFile.sha;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new UserVisibleError(
-      `Could not read ${GRADE_WORKFLOW_PATH} from the handout template ${handoutTemplateRepo}, so the autograder ` +
-        `workflow could not be restored: ${msg}`,
-      400
-    );
+    if (!(e instanceof RequestError && e.status === 404)) throw e;
   }
+
+  if (workflowContent === undefined) {
+    restoredFrom = "class_template";
+    const { handout: handoutTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
+    scope.setTag("source_template_repo", handoutTemplateRepo);
+    try {
+      const file = await getFileFromRepo(handoutTemplateRepo, GRADE_WORKFLOW_PATH, scope);
+      workflowContent = file.content;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new UserVisibleError(
+        `Could not read ${GRADE_WORKFLOW_PATH} from the handout template ${handoutTemplateRepo}, so the autograder ` +
+          `workflow could not be restored: ${msg}`,
+        400
+      );
+    }
+  }
+  scope.setTag("restored_workflow_from", restoredFrom);
 
   await writeFileToRepo(
     templateRepo,
     GRADE_WORKFLOW_PATH,
     workflowContent,
-    "Restore autograder workflow: this assignment now has an autograder",
+    restoredFrom === "parked"
+      ? "Restore autograder workflow from the parked copy: this assignment now has an autograder"
+      : "Restore autograder workflow from the class handout template: this assignment now has an autograder",
     undefined,
     scope
   );
+  // Clear the parked copy now that the live workflow is back, so a later toggle
+  // parks the then-current content rather than resurrecting a stale version.
+  if (parkedSha) {
+    await deleteFileFromRepo(
+      templateRepo,
+      DISABLED_GRADE_WORKFLOW_PATH,
+      "Remove parked autograder workflow: the live workflow has been restored",
+      scope
+    );
+  }
   await updateAutograderWorkflowHash(templateRepo);
 
   return { action: "added" as const, has_autograder: true, template_repo: templateRepo };

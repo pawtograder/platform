@@ -518,7 +518,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             await adminSupabase
               .from("repositories")
               .update({
-                synced_repo_sha: headSha || null
+                synced_repo_sha: headSha || null,
+                // The repo exists on GitHub and permissions are synced, so it IS
+                // ready — this path previously left the flag false and relied on a
+                // later webhook/reconciler to flip it. Consumers that gate on
+                // is_github_ready (including the push-direct submission path for
+                // no-autograder assignments) would otherwise ignore a repo the
+                // student can already push to.
+                is_github_ready: true
               })
               .eq("id", dbRepo!.id);
             if (error) {
@@ -660,7 +667,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
-            synced_handout_sha: assignment.latest_template_sha
+            synced_handout_sha: assignment.latest_template_sha,
+            // See the group-repo path above: createRepo + syncRepoPermissions have
+            // both succeeded, so mark the row ready rather than leaving it for a
+            // later reconciler.
+            is_github_ready: true
           })
           .eq("id", dbRepo!.id);
 

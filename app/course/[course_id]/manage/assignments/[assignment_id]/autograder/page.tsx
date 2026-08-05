@@ -91,7 +91,10 @@ export default function AutograderPage() {
         }
         throw syncError;
       }
-      refineCore.onFinish({
+      // Awaited so a failed save rejects inside the form handler and reaches the
+      // "Changes not saved" toast; unawaited it would escape as an unhandled
+      // rejection while the UI reported success.
+      await refineCore.onFinish({
         grader_repo: values.grader_repo,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null

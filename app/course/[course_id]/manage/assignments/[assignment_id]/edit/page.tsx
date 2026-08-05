@@ -22,7 +22,7 @@ export default function EditAssignment() {
 
   const { reset, refineCore } = form;
   const queryData = refineCore.query?.data?.data;
-  const { mutate: update } = useUpdate();
+  const { mutate: update, mutateAsync: updateAsync } = useUpdate();
 
   useEffect(() => {
     if (queryData) {
@@ -145,7 +145,10 @@ export default function EditAssignment() {
           } catch (syncError) {
             const prior = queryData?.has_autograder;
             if (prior !== undefined && prior !== values.has_autograder) {
-              update({
+              // Awaited: a fire-and-forget rollback would let the error toast claim
+              // the save failed while the row keeps the new flag, which is the exact
+              // disagreement this rollback exists to prevent.
+              await updateAsync({
                 resource: "assignments",
                 id: Number.parseInt(assignment_id as string),
                 values: { has_autograder: prior }
@@ -168,7 +171,15 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update, queryData?.has_autograder]
+    [
+      form.refineCore,
+      assignment_id,
+      course_id,
+      data?.data.self_review_setting_id,
+      update,
+      updateAsync,
+      queryData?.has_autograder
+    ]
   );
 
   if (form.refineCore.query?.error) {
