@@ -164,13 +164,20 @@ export default function EditAssignment() {
             // every save meant an unrelated edit (a due date, say) stripped grade.yml from
             // the handout of any assignment already sitting at has_autograder=false — a
             // state reached without the instructor asking for it, since the backfill
-            // migration leaves it false whenever there is no grader_repo. PR mode is
-            // excluded outright: its submissions never run Actions, so the handout's
-            // workflow is irrelevant, and the handout doubles as the upstream students
-            // fork — not something to rewrite as a side effect of an unrelated edit.
+            // migration leaves it false whenever there is no grader_repo.
+            //
+            // PR mode is excluded only in the ENABLE direction. Disabling must still run,
+            // including when the disable is a side effect of converting push -> PR: the
+            // handout doubles as the upstream students fork, so leaving grade.yml there
+            // hands every fork a workflow whose runs are rejected as
+            // "assignment has no autograder" — failing checks on student PRs until
+            // someone removes the file by hand. (The earlier note here claimed the
+            // handout's workflow was irrelevant in PR mode; it is not, for exactly that
+            // reason.) The sync itself refuses to ENABLE on a PR-mode assignment.
             const autograderFlagChanged =
               queryData?.has_autograder !== undefined && queryData.has_autograder !== values.has_autograder;
-            if (autograderFlagChanged && values.submission_mode !== "pr") {
+            const isDisabling = values.has_autograder === false;
+            if (autograderFlagChanged && (isDisabling || values.submission_mode !== "pr")) {
               const syncResult = await assignmentSyncAutograderWorkflow(
                 {
                   assignment_id: Number.parseInt(assignment_id as string),

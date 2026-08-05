@@ -71,7 +71,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("id, slug, has_autograder, template_repo, repo_mode, classes(slug,github_org)")
+    .select("id, slug, title, has_autograder, submission_mode, template_repo, repo_mode, classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -80,10 +80,32 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Assignment not found", 400);
   }
 
-  const hasAutograder = assignment.has_autograder !== false;
+  // PR-mode assignments never have an autograder: their submissions are ingested by
+  // the PR webhook and produce no Actions results. The create/edit paths coerce the
+  // flag, but the autograder page's Enabled radio can still set it, and trusting a
+  // stale `true` here would restore grade.yml into the upstream students fork from —
+  // whose Actions runs then get rejected, showing PR students failing checks.
+  // Treat PR mode as authoritative over the flag rather than the reverse.
+  const isPrMode = assignment.submission_mode === "pr";
+  const hasAutograder = !isPrMode && assignment.has_autograder !== false;
   const templateRepo = assignment.template_repo;
   scope.setTag("has_autograder", String(hasAutograder));
+  scope.setTag("submission_mode", assignment.submission_mode ?? "push");
   scope.setTag("repo_mode", assignment.repo_mode);
+  if (isPrMode && assignment.has_autograder !== false) {
+    // Correct the row so the webhook and UI stop disagreeing with the mode, then
+    // continue down the disable path below to strip any workflow already present.
+    const { error: coerceError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: false })
+      .eq("id", assignment_id)
+      .eq("class_id", class_id);
+    if (coerceError) {
+      Sentry.captureException(coerceError, scope);
+      throw coerceError;
+    }
+    scope.setTag("coerced_pr_mode_autograder_off", "true");
+  }
 
   // No handout repo (upload-only / no-submission assignments, or a handout whose
   // creation has not completed yet) means there is no workflow file to manage.
@@ -159,7 +181,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const inClassOutOfStep = allSharers.filter(
     (a) => a.class_id === class_id && a.submission_mode !== "pr" && (a.has_autograder !== false) !== hasAutograder
   );
-  const skippedPrSharers = allSharers.filter((a) => a.class_id === class_id && a.submission_mode === "pr").length;
+  const prSharers = allSharers.filter((a) => a.submission_mode === "pr");
+  // Excluding PR sharers from the FLAG update is not sufficient when enabling: the
+  // shared handout is the upstream those PR students fork from, so writing grade.yml
+  // into it hands their forks a workflow whose runs `autograder-create-submission`
+  // rejects — failing checks for students on an assignment that legitimately has no
+  // autograder. The repo cannot serve both modes, so refuse rather than half-apply.
+  if (hasAutograder && prSharers.length > 0) {
+    throw new UserVisibleError(
+      `The handout ${templateRepo} is also used by ${prSharers.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, ` +
+        `which submit by pull request. Adding the grading workflow to that handout would give their forks a ` +
+        `workflow that cannot report results, so the autograder cannot be enabled while the handout is shared ` +
+        `with a pull-request assignment. Give this assignment its own handout repository first.`,
+      409
+    );
+  }
+  const skippedPrSharers = prSharers.filter((a) => a.class_id === class_id).length;
   scope.setTag("template_repo_sharers_to_realign", String(inClassOutOfStep.length));
   scope.setTag("template_repo_pr_sharers_skipped", String(skippedPrSharers));
 

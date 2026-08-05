@@ -55,13 +55,26 @@ export default function NewAssignmentPage() {
         const sourceId = getValues("source_assignment_id");
         if (sourceId) {
           const supabase = createClient();
-          const { data: source } = await supabase
+          const { data: source, error: sourceError } = await supabase
             .from("assignments")
             .select("title, has_autograder")
             .eq("id", Number(sourceId))
             .maybeSingle();
+          // Fail CLOSED on a failed or empty lookup. Ignoring the error left `source`
+          // null, the guard passed, and creation proceeded into exactly the partial
+          // assignment this check exists to prevent.
+          if (sourceError || !source) {
+            toaster.error({
+              title: "Could not read the source assignment",
+              description:
+                `This assignment forks from another assignment, but that assignment could not be read` +
+                `${sourceError ? `: ${sourceError.message}` : " (not found, or not visible to you)"}. ` +
+                `Nothing was created — please re-select the source assignment and try again.`
+            });
+            return;
+          }
           const wantsAutograder = !isNoRepo && !isPr && getValues("has_autograder") !== false;
-          if (source && (source.has_autograder !== false) !== wantsAutograder) {
+          if ((source.has_autograder !== false) !== wantsAutograder) {
             toaster.error({
               title: "Autograder setting must match the source assignment",
               description:

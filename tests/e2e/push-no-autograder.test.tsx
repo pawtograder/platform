@@ -383,7 +383,20 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
   test("push to a stale repo after switching to repo_mode='none' creates NO submission", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
-    const { error: modeErr } = await supabase.from("assignments").update({ repo_mode: "none" }).eq("id", assignmentId);
+    // The protect_* fields must be cleared in the SAME update: the
+    // assignments_no_protection_when_no_repo constraint rejects a no-repo mode while
+    // any branch protection is still set, and insertAssignment leaves
+    // protect_block_force_push at its column default of true. (This mirrors what the
+    // edit page coerces for exactly this reason.)
+    const { error: modeErr } = await supabase
+      .from("assignments")
+      .update({
+        repo_mode: "none",
+        protect_block_force_push: false,
+        protect_require_pull_request: false,
+        protect_required_reviewers: 0
+      })
+      .eq("id", assignmentId);
     expect(modeErr).toBeNull();
 
     const sha = `66666666${SAFE_ID}`.slice(0, 40);
@@ -398,7 +411,10 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
       const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
       expect(subs ?? []).toHaveLength(0);
     } finally {
+      // Restore the repo mode first, then the protection default — the reverse order
+      // would trip the same constraint on the way back.
       await supabase.from("assignments").update({ repo_mode: "template_only_staff" }).eq("id", assignmentId);
+      await supabase.from("assignments").update({ protect_block_force_push: true }).eq("id", assignmentId);
     }
   });
 });

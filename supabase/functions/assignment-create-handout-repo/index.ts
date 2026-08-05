@@ -218,13 +218,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // and throws "File not found" when absent, which would fail the whole creation.
   // Leaving autograder.workflow_sha NULL is correct, since the sha check only runs
   // on the Actions-driven submission path, which no longer exists here.
+  let strippedHandoutSha: string | undefined;
   if (assignment.has_autograder === false) {
-    await deleteFileFromRepo(
+    const { commit_sha } = await deleteFileFromRepo(
       `${handoutRepoOrg}/${handoutRepoName}`,
       GRADE_WORKFLOW_PATH,
       "Remove autograder workflow: this assignment has no autograder",
       scope
     );
+    // Keep this sha: it is the FINAL handout commit, and it is created before
+    // template_repo exists in the DB below. So the template-repo push webhook for it
+    // finds no assignment to attribute it to and records nothing — leaving
+    // latest_template_sha null, which gives student syncs no target revision. We
+    // persist it ourselves rather than relying on that delivery.
+    strippedHandoutSha = commit_sha;
   } else {
     await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
   }
@@ -240,6 +247,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .from("assignments")
     .update({
       template_repo: handoutFullName,
+      ...(strippedHandoutSha ? { latest_template_sha: strippedHandoutSha } : {}),
       ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
