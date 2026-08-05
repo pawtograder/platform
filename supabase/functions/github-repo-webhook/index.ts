@@ -25,6 +25,7 @@ import {
   PrimaryRateLimitError,
   END_TO_END_REPO_PREFIX
 } from "../_shared/GitHubWrapper.ts";
+import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
@@ -558,15 +559,16 @@ async function createPushDirectSubmission(
       scope
     });
 
-    // isEmpty is null in TWO different situations, which must not be conflated:
-    //   - the check was never requested (canDetectEmpty === false, because the
-    //     assignment defines no submissionFiles). Nothing failed; there is simply
-    //     no verdict, and a repo-only assignment has no reason to maintain a
-    //     pawtograder.yml. Treat as "not empty".
-    //   - the check WAS requested and its handout-hash lookup failed after retries
-    //     (canDetectEmpty === true, isEmpty === null). That is an unknown verdict on
-    //     a policy that matters, so it fails closed below.
-    const emptyCheckFailed = canDetectEmpty && ingestResult.isEmpty === null;
+    // Decided by a pure, unit-tested helper: `isEmpty === null` means two different
+    // things (check never requested vs check failed) and conflating them previously
+    // rejected and retried every push on repo-only assignments. See
+    // _shared/emptySubmissionVerdict.ts for the truth table.
+    const emptyVerdict = resolveEmptySubmissionVerdict({
+      permitEmptySubmissions,
+      canDetectEmpty,
+      isEmpty: ingestResult.isEmpty
+    });
+    scope.setTag("push_direct_empty_verdict", emptyVerdict);
     const { error: emptyFlagError } = await adminSupabase
       .from("submissions")
       .update({ is_empty_submission: ingestResult.isEmpty ?? false })
@@ -578,17 +580,12 @@ async function createPushDirectSubmission(
       Sentry.captureException(emptyFlagError, scope);
       throw emptyFlagError;
     }
-    // Only a real verdict (or a real failure) can reject. Gating on canDetectEmpty is
-    // essential: without it, an assignment with no submissionFiles produced isEmpty=null
-    // by design, which read as "unknown failure" and rejected + retried EVERY push
-    // forever — silently breaking the whole repo-only flow, since those assignments are
-    // exactly the ones with no pawtograder.yml.
-    if (!permitEmptySubmissions && canDetectEmpty && ingestResult.isEmpty !== false) {
-      // UNKNOWN emptiness (isEmpty === null) means the handout-hash lookup failed after
-      // its retries — a transient DB problem, not a verdict. Throw so the shared catch
+    if (emptyVerdict !== "accept") {
+      // "retry_unknown": the check ran and its handout-hash lookup failed after
+      // retries — a transient DB problem, not a verdict. Throw so the shared catch
       // below cleans up and GitHub redelivers; returning 200 would acknowledge the
       // delivery and permanently lose a real, non-empty push.
-      if (emptyCheckFailed) {
+      if (emptyVerdict === "retry_unknown") {
         scope.setTag("push_direct_submission_rejected", "empty_unknown");
         throw new Error(
           `Could not determine whether ${repoName}@${sha} is an empty submission (handout hash lookup failed); ` +
