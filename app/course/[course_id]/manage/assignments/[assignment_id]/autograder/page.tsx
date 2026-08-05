@@ -39,6 +39,7 @@ export default function AutograderPage() {
     control,
     watch,
     reset,
+    setValue,
     formState: { errors }
   } = useForm<AutograderWithAssignment>({
     refineCoreProps: {
@@ -152,8 +153,23 @@ export default function AutograderPage() {
           },
           supabase
         );
-        // Only now is the flag durably matched by the handout's workflow state.
-        savedHasAutograder.current = nextHasAutograder;
+        // Trust what the sync actually PERSISTED, not what was requested. It can
+        // legitimately differ: a PR-mode assignment gets coerced back to false there,
+        // because PR submissions never run Actions. Recording the requested value left
+        // the form and the rollback baseline disagreeing with the row, so the next save
+        // showed Enabled or rolled back to the wrong value.
+        const persistedHasAutograder = syncResult?.has_autograder ?? nextHasAutograder;
+        savedHasAutograder.current = persistedHasAutograder;
+        if (persistedHasAutograder !== nextHasAutograder) {
+          setValue("assignments.has_autograder", persistedHasAutograder);
+          toaster.create({
+            title: "Autograder left disabled",
+            description:
+              "This assignment submits by pull request, and those submissions are graded without GitHub " +
+              "Actions, so the autograder cannot be enabled for it.",
+            type: "info"
+          });
+        }
         // The grading workflow lives in the handout repo, so assignments sharing
         // that handout necessarily share the setting. Say so plainly — otherwise
         // an instructor silently changes assignments they did not open.
@@ -163,7 +179,7 @@ export default function AutograderPage() {
             title: `Also updated ${realigned.length} assignment${realigned.length === 1 ? "" : "s"}`,
             description:
               `${realigned.map((a) => a.title).join(", ")} share this handout repository, so the autograder was ` +
-              `turned ${nextHasAutograder ? "on" : "off"} for ${realigned.length === 1 ? "it" : "them"} too.`,
+              `turned ${persistedHasAutograder ? "on" : "off"} for ${realigned.length === 1 ? "it" : "them"} too.`,
             type: "info"
           });
         }
@@ -191,7 +207,7 @@ export default function AutograderPage() {
         throw syncError;
       }
     },
-    [refineCore, assignment_id, course_id, mutateAssignment, query?.data?.data]
+    [refineCore, assignment_id, course_id, mutateAssignment, setValue, query?.data?.data]
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");

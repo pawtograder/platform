@@ -617,13 +617,29 @@ async function createPushDirectSubmission(
     }
   } catch (ingestErr) {
     const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+    // Restoration now throws on failure. Capture it separately so it neither masks
+    // ingestErr in Sentry nor silently turns a permanent rejection into a success:
+    // a failed restoration must force a retry even for too_large, because the
+    // student is otherwise left with no active submission. Redelivery converges —
+    // the rejected row is already gone, so each retry re-runs the path and gets
+    // another chance to restore, and stops retrying once restoration succeeds.
+    let reactivateErr: unknown;
+    try {
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+    } catch (e) {
+      reactivateErr = e;
+      Sentry.captureException(ingestErr, scope);
+    }
     if (!removed) {
       scope.setTag("push_direct_cleanup_failed", "true");
       Sentry.captureMessage(
         `Failed to remove partial push-direct submission ${submissionId} for ${repoName}@${sha}`,
         scope
       );
+    }
+    if (reactivateErr) {
+      scope.setTag("push_direct_retry_reason", "reactivate_failed");
+      throw reactivateErr;
     }
     if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
       // Permanent (repo/file too big): record and stop — don't make GitHub retry
@@ -696,10 +712,15 @@ async function reactivatePreviousSubmission(
     scope.setTag("reactivated_previous_submission", String(newest.id));
     console.log(`Re-activated submission ${newest.id} after rejecting a push-direct submission`);
   } catch (e) {
-    // Best-effort: the rejection itself already succeeded. Report so the missing
-    // active submission can be repaired rather than going unnoticed.
+    // NOT best-effort. Swallowing this left the student with no active submission at
+    // all — the insert had already demoted their previous one — while the caller
+    // returned 200, so GitHub never retried and nothing repaired it. Their last good
+    // work simply vanished from the gradebook. Rethrow so the delivery is retried:
+    // the rejected submission is already deleted, so a redelivery re-runs the whole
+    // path cleanly and gets another chance to restore the prior row.
     scope.setTag("reactivate_previous_submission_failed", "true");
     Sentry.captureException(e, scope);
+    throw e;
   }
 }
 
@@ -1205,12 +1226,19 @@ async function handlePushToTemplateRepo(
 ) {
   tagScopeWithGenericPayload(scope, "push_to_template_repo", payload);
   scope?.setTag("assignments_count", assignments.length.toString());
-  //Only process on the main branch
-  if (payload.ref !== "refs/heads/main") {
-    scope?.setTag("is_main_branch", "false");
+  // Only process the repo's DEFAULT branch, which is not necessarily "main". A
+  // handout on `master` previously returned here for every push, so it never
+  // recorded latest_template_sha or assignment_handout_file_hashes — which in turn
+  // left the push-direct empty check with no handout hash to compare against, so an
+  // untouched starter push read as non-empty and was accepted. Mirrors the same fix
+  // on the student-repo path.
+  const templateDefaultBranch = payload.repository?.default_branch || "main";
+  if (payload.ref !== `refs/heads/${templateDefaultBranch}`) {
+    scope?.setTag("is_default_branch", "false");
+    scope?.setTag("repo_default_branch", templateDefaultBranch);
     return;
   }
-  scope?.setTag("is_main_branch", "true");
+  scope?.setTag("is_default_branch", "true");
   if (!payload.head_commit) {
     console.error("No head commit found in payload");
     scope.setTag("error_source", "no_head_commit");
