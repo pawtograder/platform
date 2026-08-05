@@ -530,7 +530,17 @@ async function createPushDirectSubmission(
           `${ingestResult.isEmpty === null ? "emptiness could not be determined" : "matches the handout"} and ` +
           `this assignment does not permit empty submissions`
       );
-      await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+      const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+      if (!removed) {
+        // The rejected submission is still there and is_active, so it would be
+        // graded as if the student had submitted. Surface it rather than returning
+        // 200 as though the rejection worked.
+        scope.setTag("push_direct_empty_cleanup_failed", "true");
+        Sentry.captureMessage(
+          `Failed to remove rejected empty push-direct submission ${submissionId} for ${repoName}@${sha}`,
+          scope
+        );
+      }
       return;
     }
   } catch (ingestErr) {
@@ -554,8 +564,25 @@ async function cleanupPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number,
   scope: Sentry.Scope
-): Promise<void> {
+): Promise<boolean> {
   try {
+    // Break the submissions -> submission_reviews reference FIRST. The submissions
+    // AFTER-INSERT hook provisions a grading review and points
+    // submissions.grading_review_id at it, so deleting the submission row while
+    // that reference stands is rejected by the FK — leaving the submission in
+    // place. Mirrors safeCleanupRejectedSubmission in autograder-create-submission.
+    const { error: unlinkErr } = await adminSupabase
+      .from("submissions")
+      .update({ grading_review_id: null, is_active: false })
+      .eq("id", submissionId);
+    if (unlinkErr) throw unlinkErr;
+
+    const { error: reviewsErr } = await adminSupabase
+      .from("submission_reviews")
+      .delete()
+      .eq("submission_id", submissionId);
+    if (reviewsErr) throw reviewsErr;
+
     const { data: bins } = await adminSupabase
       .from("submission_files")
       .select("storage_key")
@@ -565,10 +592,15 @@ async function cleanupPushDirectSubmission(
     if (keys.length > 0) {
       await adminSupabase.storage.from("submission-files").remove(keys);
     }
-    await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
-    await adminSupabase.from("submissions").delete().eq("id", submissionId);
+    const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+    if (filesErr) throw filesErr;
+
+    const { error: subErr } = await adminSupabase.from("submissions").delete().eq("id", submissionId);
+    if (subErr) throw subErr;
+    return true;
   } catch (cleanupErr) {
     Sentry.captureException(cleanupErr, scope);
+    return false;
   }
 }
 

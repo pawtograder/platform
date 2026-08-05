@@ -257,16 +257,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // rethrowing, keeping the repo consistent with the flag the caller restores.
   try {
     await updateAutograderWorkflowHash(templateRepo);
-    // Clear the parked copy only after the hash is in place, so a failure above
-    // still leaves the preserved content available for the next attempt.
-    if (parkedSha) {
-      await deleteFileFromRepo(
-        templateRepo,
-        DISABLED_GRADE_WORKFLOW_PATH,
-        "Remove parked autograder workflow: the live workflow has been restored",
-        scope
-      );
-    }
   } catch (e) {
     scope.setTag("restore_rollback", "true");
     try {
@@ -283,6 +273,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       Sentry.captureException(rollbackError, scope);
     }
     throw e;
+  }
+
+  // The autograder is live and hashed, so the toggle has succeeded. Clearing the
+  // parked copy is tidy-up only: a leftover grade.yml.disabled runs nothing, so a
+  // failure here must NOT undo a working restore or flip has_autograder back.
+  // Deliberately after the hash update, so a hash failure still leaves the
+  // preserved content available for the next attempt.
+  if (parkedSha) {
+    try {
+      await deleteFileFromRepo(
+        templateRepo,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        "Remove parked autograder workflow: the live workflow has been restored",
+        scope
+      );
+    } catch (cleanupError) {
+      scope.setTag("parked_copy_cleanup_failed", "true");
+      Sentry.captureException(cleanupError, scope);
+    }
   }
 
   return { action: "added" as const, has_autograder: true, template_repo: templateRepo };
