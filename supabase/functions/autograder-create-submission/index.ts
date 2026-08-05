@@ -591,7 +591,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
+      "*, assignments(class_id, due_date, has_autograder, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
     .maybeSingle();
@@ -687,6 +687,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       const assignment_id = repoData.assignment_id;
       if (!workflow_ref.includes(`.github/workflows/grade.yml`)) {
         throw new Error(`Invalid workflow, got ${workflow_ref}`);
+      }
+      // The assignment has no autograder, but a stale grade.yml is still running in
+      // this student repo (it was created before the autograder was turned off, and
+      // keeps its copy until the next handout sync). Refuse: github-repo-webhook
+      // already created a submission directly for this push, so proceeding would
+      // add a second, autograder-owned submission for the same commit.
+      if (repoData.assignments.has_autograder === false) {
+        throw new UserVisibleError(
+          "This assignment does not use an autograder, so this grading workflow run was ignored. " +
+            "The submission was already recorded directly from your push — there is nothing else to do. " +
+            "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+            "handout (which no longer has one) to stop these runs."
+        );
       }
       // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (

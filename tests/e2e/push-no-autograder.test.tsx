@@ -293,6 +293,53 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(second.is_active).toBe(true);
     expect(second.ordinal).toBeGreaterThan(first.ordinal);
   });
+
+  // Handout syncs land on the student repo's default branch too. Now that every
+  // push is a submission, an instructor pushing a handout update must NOT become
+  // the student's newest "submission" — that would be work they never did.
+  test("auto-merged handout-sync PR push creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `33333333${SAFE_ID}`.slice(0, 40);
+    const detail = makePushDetail(
+      repoName,
+      sha,
+      "Merge pull request #7 from pawtograder-playground/sync-to-abc1234\n\n[Instructor Update] Sync handout to abc1234"
+    );
+    const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+  });
+
+  test("fork fast-forward to the handout's head sha creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    // A fork_merge_upstream sync leaves the student repo's head at exactly the
+    // handout's head commit, with no distinguishing commit message.
+    const handoutSha = `44444444${SAFE_ID}`.slice(0, 40);
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({ latest_template_sha: handoutSha })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+
+    const res = await deliverPush(makePushDetail(repoName, handoutSha, "Add starter files"), `e2e-push-${SAFE_ID}-6`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id")
+      .eq("repository", repoName)
+      .eq("sha", handoutSha);
+    expect(subs ?? []).toHaveLength(0);
+
+    // Clean up so later tests in this file aren't affected by the marker sha.
+    await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+  });
 });
 
 // pr-mode push guard: a push to a tracked student repo whose assignment is

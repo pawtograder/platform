@@ -1,0 +1,112 @@
+/**
+ * Unit tests for isHandoutSyncPush.
+ *
+ * This predicate is what keeps instructor-driven handout syncs from becoming
+ * student submissions on repo-only (no-autograder) assignments, where every
+ * student push IS a submission. A false negative fabricates a submission the
+ * student never made, so the cases below pin down both routes a sync can take.
+ *
+ * Run from supabase/functions:  deno test --no-check _shared/handoutSyncPush.test.ts
+ */
+import { assertEquals } from "jsr:@std/assert@^1";
+import { isHandoutSyncPush, type HandoutSyncPushInputs } from "./handoutSyncPush.ts";
+
+const STUDENT_SHA = "a".repeat(40);
+const HANDOUT_SHA = "b".repeat(40);
+
+function inputs(overrides: Partial<HandoutSyncPushInputs> = {}): HandoutSyncPushInputs {
+  return {
+    headCommitMessage: "Finish part 1",
+    afterSha: STUDENT_SHA,
+    latestTemplateSha: HANDOUT_SHA,
+    desiredHandoutSha: null,
+    syncedHandoutSha: null,
+    syncedRepoSha: null,
+    ...overrides
+  };
+}
+
+Deno.test("ordinary student push -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs()), false);
+});
+
+Deno.test("student push using #submit -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "done #submit" })), false);
+});
+
+// Route 1: auto-merged sync-to-* PR.
+Deno.test("GitHub auto-merge commit for a sync-to-* PR -> sync", () => {
+  const msg = "Merge pull request #12 from pawtograder/sync-to-abc1234\n\n[Instructor Update] Sync handout to abc1234";
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: msg })), true);
+});
+
+Deno.test("merge commit naming the sync branch without the PR title -> sync", () => {
+  assertEquals(
+    isHandoutSyncPush({ ...inputs(), headCommitMessage: "Merge pull request #3 from org/sync-to-9f8e7d6" }),
+    true
+  );
+});
+
+Deno.test("squashed sync commit keeping only the PR title -> sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "[Instructor Update] Sync handout to abc1234" })), true);
+});
+
+Deno.test("a student branch merge that is NOT a handout sync -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush(inputs({ headCommitMessage: "Merge pull request #4 from me/my-feature-branch" })),
+    false
+  );
+});
+
+// A student could name a branch to imitate the sync prefix; the merge-message
+// check alone would misfire, but that only costs them this one push. Documented
+// here so the trade-off is a decision rather than a surprise.
+Deno.test("student branch imitating the sync prefix -> treated as a sync (documented trade-off)", () => {
+  assertEquals(
+    isHandoutSyncPush(inputs({ headCommitMessage: "Merge pull request #4 from me/sync-to-my-own-thing" })),
+    true
+  );
+});
+
+// Route 2: fork fast-forward — head becomes exactly a handout sha.
+Deno.test("head equals assignments.latest_template_sha -> sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: HANDOUT_SHA })), true);
+});
+
+Deno.test("head equals repositories.desired_handout_sha -> sync", () => {
+  const desired = "c".repeat(40);
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: desired, desiredHandoutSha: desired })), true);
+});
+
+Deno.test("head equals repositories.synced_handout_sha -> sync", () => {
+  const synced = "d".repeat(40);
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: synced, syncedHandoutSha: synced })), true);
+});
+
+Deno.test("head equals repositories.synced_repo_sha (merge commit of a prior sync) -> sync", () => {
+  const mergeSha = "e".repeat(40);
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: mergeSha, syncedRepoSha: mergeSha })), true);
+});
+
+Deno.test("short-prefix overlap with a handout sha is NOT enough -> not a sync", () => {
+  // Guards against the truncated-SHA false positives this codebase has hit before.
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: HANDOUT_SHA.slice(0, 7) })), false);
+});
+
+Deno.test("null handout shas never match -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush({
+      headCommitMessage: "work",
+      afterSha: STUDENT_SHA,
+      latestTemplateSha: null,
+      desiredHandoutSha: null,
+      syncedHandoutSha: null,
+      syncedRepoSha: null
+    }),
+    false
+  );
+});
+
+Deno.test("missing afterSha and no message match -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: null, headCommitMessage: null })), false);
+});

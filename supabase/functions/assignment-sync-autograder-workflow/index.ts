@@ -2,11 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentSyncAutograderWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
+import { RequestError } from "npm:octokit";
 import {
   deleteFileFromRepo,
   getFileFromRepo,
   GRADE_WORKFLOW_PATH,
-  repoHasFileAtRef,
   updateAutograderWorkflowHash,
   writeFileToRepo
 } from "../_shared/GitHubWrapper.ts";
@@ -80,11 +80,42 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return { action: "unchanged" as const, has_autograder: hasAutograder, template_repo: templateRepo };
   }
 
+  // A handout repo can be pointed at by more than one assignment: fork-from-prior
+  // checkpoints inherit the SOURCE assignment's template_repo verbatim, and an
+  // instructor can point two assignments at one handout. Writing to it would then
+  // reach across assignments — turning the autograder off on a later checkpoint
+  // would strip grade.yml from the source assignment's handout and break it.
+  //
+  // Pawtograder does not support a handout shared between autograded and
+  // non-autograded assignments, so refuse with an explanation rather than
+  // silently clobbering the other assignment.
+  const { data: sharers, error: sharersError } = await adminSupabase
+    .from("assignments")
+    .select("id, title, has_autograder")
+    .eq("template_repo", templateRepo)
+    .neq("id", assignment_id);
+  if (sharersError) {
+    Sentry.captureException(sharersError, scope);
+    throw sharersError;
+  }
+  const conflicting = (sharers ?? []).filter((a) => (a.has_autograder !== false) !== hasAutograder);
+  scope.setTag("template_repo_sharers", String((sharers ?? []).length));
+  if (conflicting.length > 0) {
+    const names = conflicting.map((a) => `"${a.title}" (#${a.id})`).join(", ");
+    throw new UserVisibleError(
+      `The handout ${templateRepo} is also used by ${names}, whose autograder setting differs. ` +
+        `Changing the workflow here would break that assignment, so a handout cannot be shared between ` +
+        `autograded and non-autograded assignments. Give this assignment its own handout repository first.`,
+      400
+    );
+  }
+
   if (!hasAutograder) {
     const { deleted } = await deleteFileFromRepo(
       templateRepo,
       GRADE_WORKFLOW_PATH,
-      "Remove autograder workflow: this assignment has no autograder"
+      "Remove autograder workflow: this assignment has no autograder",
+      scope
     );
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
@@ -93,10 +124,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     };
   }
 
-  // Autograder turned back on. If grade.yml is already there, just make sure the
-  // hash is current; otherwise seed it from the class's handout template.
-  const alreadyPresent = await repoHasFileAtRef(templateRepo, GRADE_WORKFLOW_PATH, "main", scope);
-  if (alreadyPresent) {
+  // Autograder turned back on. Read the handout's current grade.yml rather than
+  // probing a hardcoded "main": handout repos may use another default branch, and
+  // a wrong answer here would make us try to create a file that already exists
+  // (the contents API rejects a create without the existing blob sha).
+  let existingSha: string | undefined;
+  try {
+    existingSha = (await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope)).sha;
+  } catch (e) {
+    if (!(e instanceof RequestError && e.status === 404)) throw e;
+  }
+  if (existingSha) {
     await updateAutograderWorkflowHash(templateRepo);
     return { action: "unchanged" as const, has_autograder: true, template_repo: templateRepo };
   }

@@ -25,6 +25,7 @@ import {
   PrimaryRateLimitError,
   END_TO_END_REPO_PREFIX
 } from "../_shared/GitHubWrapper.ts";
+import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
@@ -568,7 +569,7 @@ async function handlePushToStudentRepo(
   // submission directly here instead of dispatching grade.yml).
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
-    .select("submission_mode, has_autograder, allow_not_graded_submissions")
+    .select("submission_mode, has_autograder, allow_not_graded_submissions, latest_template_sha")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -611,7 +612,28 @@ async function handlePushToStudentRepo(
   // students who never learned the convention appear to have submitted nothing.
   // Repeated pushes accumulate submissions, and the submissions BEFORE-INSERT
   // trigger keeps ordinal/is_active pointing at the newest.
+  //
+  // Exception: handout syncs push to the student's default branch too (an
+  // auto-merged `sync-to-*` PR, or a fork fast-forward). Those are instructor
+  // actions, so counting them would make the student's newest "submission" be
+  // work they never did.
   if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false) {
+    if (
+      isHandoutSyncPush({
+        headCommitMessage: payload.head_commit.message,
+        afterSha: payload.after,
+        latestTemplateSha: pushAssignment.latest_template_sha,
+        desiredHandoutSha: studentRepo.desired_handout_sha,
+        syncedHandoutSha: studentRepo.synced_handout_sha,
+        syncedRepoSha: studentRepo.synced_repo_sha
+      })
+    ) {
+      scope.setTag("skipped_reason", "handout_sync_push");
+      console.log(
+        `Skipping push-direct submission for ${repoName}@${payload.after}: handout-sync push, not student work`
+      );
+      return;
+    }
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
