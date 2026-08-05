@@ -226,6 +226,16 @@ async function handleSyncGradeWorkflowContext(
   if (!templateRepo) {
     throw new CLICommandError("Assignment has no template_repo (handout)", 400);
   }
+  // Refuse rather than fall through to a confusing 404 on the handout: a
+  // no-autograder assignment has no grade.yml by design, and pushing one into
+  // every student repo would re-enable the GitHub Actions runs it exists to avoid.
+  if (assignment.has_autograder === false) {
+    throw new CLICommandError(
+      `Assignment ${assignment.id} has no autograder, so there is no ${GRADE_WORKFLOW_PATH} to sync. ` +
+        `Enable the autograder on the assignment's autograder page first.`,
+      400
+    );
+  }
 
   let gradeContent: string;
   let gradeYmlBlobSha: string | null = null;

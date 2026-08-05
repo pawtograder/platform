@@ -1,7 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -90,6 +90,9 @@ export default function EditAssignment() {
           values.protect_require_pull_request = false;
           values.protect_required_reviewers = 0;
           values.template_repo = null;
+          // The autograder is a GitHub Actions workflow in the student repo, so it
+          // cannot exist without one. Mirrors the create-page coercion.
+          values.has_autograder = false;
         }
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
@@ -121,6 +124,16 @@ export default function EditAssignment() {
               assignment_id: Number.parseInt(assignment_id as string),
               new_repo: values.template_repo,
               watch_type: "template_repo"
+            },
+            supabase
+          );
+          // The form exposes the autograder toggle, so keep the handout's
+          // grade.yml in step with it (added when enabled, removed when
+          // disabled). Idempotent, so no need to diff against the prior value.
+          await assignmentSyncAutograderWorkflow(
+            {
+              assignment_id: Number.parseInt(assignment_id as string),
+              class_id: Number.parseInt(course_id as string)
             },
             supabase
           );

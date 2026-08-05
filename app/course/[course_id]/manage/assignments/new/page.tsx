@@ -27,6 +27,7 @@ export default function NewAssignmentPage() {
       // app treats an unset value (`allow_student_formed_groups !== true`).
       allow_student_formed_groups: false,
       repo_mode: "template_only_staff",
+      has_autograder: true,
       protect_block_force_push: true,
       protect_require_pull_request: false,
       protect_required_reviewers: 0
@@ -126,10 +127,12 @@ export default function NewAssignmentPage() {
             template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
             // has_autograder must reflect reality (it gates the webhook's autograder run and the
-            // results-page empty state). The form provisions a grader/solution repo only for repo
-            // modes, so no-repo modes ('none'/'no_submission') have no autograder. Instructors can
-            // still toggle this on the autograder config page.
-            has_autograder: !isNoRepo,
+            // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
+            // — the autograder runs as a GitHub Actions workflow inside the student repo. Otherwise
+            // it's the instructor's choice: unchecking it gives a "repo only" assignment (#895),
+            // where the handout is created without grade.yml so no Actions ever run. Instructors
+            // can still toggle this later on the autograder config page.
+            has_autograder: !isNoRepo && getValues("has_autograder") !== false,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
             group_config: getValues("group_config"),

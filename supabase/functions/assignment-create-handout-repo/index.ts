@@ -2,7 +2,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  deleteFileFromRepo,
+  GRADE_WORKFLOW_PATH,
+  syncRepoPermissions,
+  updateAutograderWorkflowHash
+} from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -23,13 +29,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
+  // `*` rather than an explicit column list: the long list this used to carry
+  // overflowed postgrest-js's select-string type parser, collapsing `assignment`
+  // to GenericStringError so every field access below was an unchecked type
+  // error. One extra row's worth of columns is a fine trade for real types.
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select(
-      "id, slug, class_id, repo_mode, submission_mode, source_assignment_id, template_repo, latest_template_sha, " +
-        "protect_block_force_push, protect_require_pull_request, protect_required_reviewers, " +
-        "classes(slug,github_org)"
-    )
+    .select("*, classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -101,7 +107,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // "workflow sha mismatch" error. updateAutograderWorkflowHash bulk-updates
     // all assignments sharing this template_repo, so the source assignment is
     // unaffected (it already has the same value).
-    if (sourceAssignment!.template_repo) {
+    //
+    // Skipped when this assignment has no autograder: there is no submission
+    // path that checks workflow_sha, and the inherited handout may legitimately
+    // have no grade.yml at all (updateAutograderWorkflowHash throws in that
+    // case). Note we deliberately do NOT delete grade.yml from the inherited
+    // handout — it belongs to the source assignment, which may well have an
+    // autograder of its own.
+    if (sourceAssignment!.template_repo && assignment.has_autograder !== false) {
       await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
     }
     return {
@@ -176,7 +189,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
   // Branch protection is applied inside createRepo (both the fresh-create and
   // the pre-existing-repo branches), so we no longer need a redundant call here.
-  await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+  //
+  // Repo-only assignments (has_autograder=false) get a handout with NO grading
+  // workflow: the stock handout template ships .github/workflows/grade.yml, which
+  // would otherwise run in every student repo generated from this handout and
+  // fail (there is no autograder to report to), showing students a red X. Strip
+  // it here, after the repo exists — GitHub's create-from-template API copies the
+  // whole tree, so there is no way to exclude it up front.
+  //
+  // updateAutograderWorkflowHash must be skipped in that case: it reads grade.yml
+  // and throws "File not found" when absent, which would fail the whole creation.
+  // Leaving autograder.workflow_sha NULL is correct, since the sha check only runs
+  // on the Actions-driven submission path, which no longer exists here.
+  if (assignment.has_autograder === false) {
+    await deleteFileFromRepo(
+      `${handoutRepoOrg}/${handoutRepoName}`,
+      GRADE_WORKFLOW_PATH,
+      "Remove autograder workflow: this assignment has no autograder",
+      scope
+    );
+  } else {
+    await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+  }
 
   // Only persist the template_repo pointer after GitHub creation + permission
   // sync succeed, so a partial failure does not leave the assignment pointing

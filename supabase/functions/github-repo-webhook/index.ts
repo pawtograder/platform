@@ -328,7 +328,7 @@ async function checkCircuitBreakerOpen(
 /**
  * Push-mode zero-runner submission creation.
  *
- * For a push-mode assignment with no autograder, a `#submit` push is a complete
+ * For a push-mode assignment with no autograder, every push is a complete
  * submission on its own — there is no grade.yml workflow to run. This creates
  * the submissions row directly (mirroring the column set the autograder uses, so
  * the existing BEFORE/AFTER-INSERT triggers assign ordinal/is_active and
@@ -597,18 +597,21 @@ async function handlePushToStudentRepo(
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
 
   // Push-mode zero-runner path: when an assignment is push-mode AND has no
-  // autograder, a `#submit` push needs no GitHub Actions run to package the
-  // code — we already have access to the repo. Instead of creating a
+  // autograder, a push needs no GitHub Actions run to package the code — we
+  // already have access to the repo. Instead of creating a
   // repository_check_run and dispatching grade.yml (which would consume runner
   // minutes for nothing), create the submission row directly and ingest the
   // repo's files via the shared ingestion core. The has_autograder=true path is
   // untouched and falls through to the existing check-run + triggerWorkflow
   // logic below.
-  if (
-    pushAssignment?.submission_mode === "push" &&
-    pushAssignment?.has_autograder === false &&
-    payload.head_commit.message.includes("#submit")
-  ) {
+  //
+  // EVERY push takes this path, not just `#submit` ones. With no autograder
+  // there are no runner minutes to conserve, so a submission is just a snapshot
+  // of the repo for an instructor to hand-grade; requiring `#submit` would mean
+  // students who never learned the convention appear to have submitted nothing.
+  // Repeated pushes accumulate submissions, and the submissions BEFORE-INSERT
+  // trigger keeps ordinal/is_active pointing at the newest.
+  if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false) {
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
@@ -936,8 +939,20 @@ async function handlePushToTemplateRepo(
   // by pushing any commit (e.g. touching README) to the template repo.
   const workflowTouched = pushTouchedFile(payload, GRADER_WORKFLOW_PATH);
   scope?.setTag("workflow_touched_in_push", workflowTouched.toString());
+  // Assignments with no autograder have no grade.yml in their handout (it is
+  // stripped at creation), and nothing reads their workflow_sha. Reconciling
+  // would 404 on every push to the handout — including the very commit that
+  // removed grade.yml — so skip them. Several assignments can share a
+  // template_repo, so filter rather than bail on the first one.
+  const autogradedAssignments = assignments.filter((a) => a.has_autograder !== false);
+  scope?.setTag("autograded_assignments_count", autogradedAssignments.length.toString());
   if (!assignments[0].template_repo) {
     Sentry.captureMessage("No matching assignment found", scope);
+  } else if (autogradedAssignments.length === 0) {
+    scope?.setTag("skipped_reason", "no_autograder_assignments_for_template_repo");
+    console.log(
+      `Skipping grade.yml hash reconcile for ${assignments[0].template_repo}: no autograded assignments use it`
+    );
   } else {
     try {
       const file = (await getFileFromRepo(assignments[0].template_repo!, GRADER_WORKFLOW_PATH)) as {
@@ -952,7 +967,7 @@ async function handlePushToTemplateRepo(
         hash.update(contentWithoutWhitespace);
         const hashStr = hash.digest("hex");
         scope?.setTag("new_autograder_workflow_hash", hashStr);
-        for (const assignment of assignments) {
+        for (const assignment of autogradedAssignments) {
           const { error } = await adminSupabase
             .from("autograder")
             .update({

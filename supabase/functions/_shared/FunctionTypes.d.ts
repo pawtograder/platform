@@ -415,6 +415,20 @@ export type AssignmentCreateSolutionRepoResponse = {
   org_name: string;
 };
 
+/** Bring the handout's grading workflow into line with `assignments.has_autograder`
+ * after an instructor toggles the autograder on an existing assignment. */
+export type AssignmentSyncAutograderWorkflowRequest = {
+  assignment_id: number;
+  class_id: number;
+};
+
+export type AssignmentSyncAutograderWorkflowResponse = {
+  /** What the sync did to `.github/workflows/grade.yml` in the handout repo. */
+  action: "added" | "removed" | "unchanged";
+  has_autograder: boolean;
+  template_repo: string | null;
+};
+
 export type AutograderCreateReposForStudentRequest = {
   user_id?: string; // Optional: if provided, use this user_id instead of JWT auth
   class_id?: number; // Optional: if provided, only create repos for this specific class

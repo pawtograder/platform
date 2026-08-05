@@ -4,10 +4,14 @@ import { createClass, createUserInClass, getTestRunPrefix, insertAssignment, sup
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // E2E for the push-mode zero-runner submission path (P0 of the PR-submission
-// epic). For a push-mode assignment with has_autograder=false, a `#submit` push
-// must create a submission DIRECTLY from the github-repo-webhook handler — no
+// epic). For a push-mode assignment with has_autograder=false, EVERY push must
+// create a submission DIRECTLY from the github-repo-webhook handler — no
 // repository_check_run, no grade.yml dispatch, no workflow_events — and ingest
 // the repo's files via the shared SubmissionIngestion core.
+//
+// Note the `#submit` marker is NOT required on this path (#895): with no
+// autograder there is no workflow to conserve, so a push is a submission on its
+// own. `#NOT-GRADED` still works, and the due-date gate still applies.
 //
 // HOW THIS RUNS
 // -------------
@@ -232,15 +236,62 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(subs).toHaveLength(1);
   });
 
-  test("non-#submit push to a push-mode no-autograder repo creates NO submission", async () => {
+  // #895: with no autograder there are no runner minutes to conserve, so EVERY
+  // push is a submission — requiring #submit would mean students who never
+  // learned the convention appear to have submitted nothing.
+  test("push with NO #submit marker still creates a submission with files", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
     const sha = `0badf00d${SAFE_ID}`.slice(0, 40);
-    const res = await deliverPush(makePushDetail(repoName, sha, "WIP, not submitting yet"), `e2e-push-${SAFE_ID}-3`);
-    expect(res.status).toBe(200);
+    const res = await deliverPush(makePushDetail(repoName, sha, "WIP, no marker at all"), `e2e-push-${SAFE_ID}-3`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
 
-    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, submitted_via, is_not_graded")
+      .eq("repository", repoName)
+      .eq("sha", sha);
+    expect(subs).toHaveLength(1);
+    expect(subs![0].submitted_via).toBe("git");
+    // No #NOT-GRADED in the message, so this is a graded submission.
+    expect(subs![0].is_not_graded).toBe(false);
+
+    const { data: files } = await supabase.from("submission_files").select("name").eq("submission_id", subs![0].id);
+    expect(files!.some((f) => f.name === "Main.java")).toBe(true);
+
+    // Still zero-runner: no check run and no grade.yml dispatch.
+    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
+    expect(checkRuns ?? []).toHaveLength(0);
+    const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
+    expect(wfEvents ?? []).toHaveLength(0);
+  });
+
+  test("successive pushes accumulate submissions, newest is active", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const shaA = `11111111${SAFE_ID}`.slice(0, 40);
+    const shaB = `22222222${SAFE_ID}`.slice(0, 40);
+
+    const r1 = await deliverPush(makePushDetail(repoName, shaA, "first pass"), `e2e-push-${SAFE_ID}-4a`);
+    expect(r1.status).toBe(200);
+    const r2 = await deliverPush(makePushDetail(repoName, shaB, "second pass"), `e2e-push-${SAFE_ID}-4b`);
+    expect(r2.status).toBe(200);
+
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, sha, is_active, ordinal")
+      .in("sha", [shaA, shaB])
+      .eq("repository", repoName)
+      .order("ordinal", { ascending: true });
+    expect(subs).toHaveLength(2);
+    // The submissions BEFORE-INSERT trigger owns ordinal/is_active: only the
+    // latest push is active.
+    const [first, second] = subs!;
+    expect(first.sha).toBe(shaA);
+    expect(second.sha).toBe(shaB);
+    expect(first.is_active).toBe(false);
+    expect(second.is_active).toBe(true);
+    expect(second.ordinal).toBeGreaterThan(first.ordinal);
   });
 });
 

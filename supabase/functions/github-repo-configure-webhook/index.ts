@@ -88,7 +88,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!roles) {
     throw new SecurityError("Unauthorized");
   }
-  if (watch_type === "template_repo") {
+  if (watch_type === "template_repo" && autograder.assignments.has_autograder === false) {
+    // No autograder means the handout has no grade.yml to hash (it is stripped at
+    // creation) and nothing reads workflow_sha. Hashing would 404; the catch below
+    // would swallow it, but skipping says why.
+    console.log(`Skipping autograder workflow hash for ${new_repo}: assignment ${assignment_id} has no autograder`);
+  } else if (watch_type === "template_repo") {
     try {
       await updateAutograderWorkflowHash(new_repo);
     } catch (e) {

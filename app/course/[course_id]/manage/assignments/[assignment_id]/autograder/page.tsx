@@ -5,7 +5,7 @@ import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -68,18 +68,31 @@ export default function AutograderPage() {
         },
         supabase
       );
-      mutateAssignment({
+      await mutateAssignment({
         values: {
           has_autograder: values.assignments.has_autograder
         }
       });
+      // Bring the handout's grade.yml into line with the flag we just saved:
+      // disabling the autograder removes the workflow (so no Actions run and
+      // students see no failing check), re-enabling it restores the workflow and
+      // repopulates autograder.workflow_sha. Idempotent, so it's safe to call
+      // whether or not the radio actually changed. Must run AFTER the assignment
+      // update above, since the function reads has_autograder from the DB.
+      await assignmentSyncAutograderWorkflow(
+        {
+          assignment_id: Number.parseInt(assignment_id as string),
+          class_id: Number.parseInt(course_id as string)
+        },
+        supabase
+      );
       refineCore.onFinish({
         grader_repo: values.grader_repo,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
       });
     },
-    [refineCore, assignment_id, mutateAssignment]
+    [refineCore, assignment_id, course_id, mutateAssignment]
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");
@@ -108,10 +121,15 @@ export default function AutograderPage() {
             setLoading(true);
             await handleSubmit(onSubmit)(e);
           } catch (error) {
+            // Surface the underlying message: besides a missing pawtograder.yml, this
+            // now also covers the grade.yml add/remove done when the autograder is
+            // toggled, whose errors say exactly which repo or file was the problem.
             toaster.error({
               title: "Changes not saved",
               description:
-                "An error occurred while saving the autograder configuration. Please double-check that the repository exists and that the pawtograder.yml file is present."
+                error instanceof Error && error.message
+                  ? error.message
+                  : "An error occurred while saving the autograder configuration. Please double-check that the repository exists and that the pawtograder.yml file is present."
             });
             console.error(error);
           } finally {
@@ -123,6 +141,7 @@ export default function AutograderPage() {
           <Fieldset.Content>
             <Field
               label="Autograder configuration for this assignment"
+              helperText="Disabling the autograder removes the grading workflow from the handout repository, so no GitHub Actions run and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
               errorText={errors.enabled?.message?.toString()}
               invalid={errors.enabled ? true : false}
             >

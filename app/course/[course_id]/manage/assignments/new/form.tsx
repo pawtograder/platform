@@ -629,6 +629,14 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
 
   // Branch protection only makes sense when a repository is actually created.
   const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
+  // Same for the autograder: it runs as a GitHub Actions workflow inside the
+  // student repo, so there is nowhere for it to run without one.
+  const autograderDisabled = repoMode === "none" || repoMode === "no_submission";
+  const hasAutograder = watch("has_autograder") !== false;
+  // Student repos in this mode fork each student's PRIOR assignment repo rather
+  // than this assignment's handout, so stripping grade.yml from the handout does
+  // not reach them — they inherit whatever the prior assignment had.
+  const forkInheritsWorkflow = repoMode === "fork_from_prior_assignment" && !hasAutograder;
 
   return (
     <CardRoot>
@@ -690,6 +698,53 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             </Field>
           </Fieldset.Content>
         )}
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={autograderDisabled ? "fg.subtle" : "fg.default"}>
+            Autograder
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {autograderDisabled
+              ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
+              : "Whether student pushes are graded automatically by GitHub Actions."}
+          </Text>
+          <Fieldset.Content>
+            <Field
+              helperText={
+                autograderDisabled
+                  ? undefined
+                  : hasAutograder
+                    ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
+                    : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
+              }
+            >
+              {forkInheritsWorkflow && (
+                <Text fontSize="sm" color="fg.warning" mb={2}>
+                  Note: because student repositories fork each student&apos;s repository from the source assignment,
+                  they will still contain that assignment&apos;s grading workflow if it had one. Remove{" "}
+                  <code>.github/workflows/grade.yml</code> from the source assignment&apos;s handout to stop Actions
+                  running here.
+                </Text>
+              )}
+              <Controller
+                name="has_autograder"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value !== false}
+                    disabled={autograderDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        </Box>
         <Box mt={3}>
           <Text fontWeight="medium" mb={1} color={protectionDisabled ? "fg.subtle" : "fg.default"}>
             Branch Protection

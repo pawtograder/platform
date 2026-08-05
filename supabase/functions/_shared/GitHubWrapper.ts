@@ -717,12 +717,15 @@ export async function removePushWebhook(repoName: string, webhookId: number, sco
   console.log("webhook removed", webhook.data);
 }
 
+/** Path of the autograder's GitHub Actions workflow inside a handout/student repo. */
+export const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
 export async function updateAutograderWorkflowHash(repoName: string) {
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName });
     return null;
   }
-  const file = (await getFileFromRepo(repoName, ".github/workflows/grade.yml")) as { content: string };
+  const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH)) as { content: string };
   const hash = createHash("sha256");
   if (!file.content) {
     throw new Error("File not found");
@@ -847,6 +850,61 @@ export async function writeFileToRepo(
     commit_sha: response.data.commit?.sha,
     content_sha: response.data.content?.sha
   };
+}
+
+/**
+ * Delete a file from a repo via the GitHub contents API.
+ *
+ * Idempotent: if the file is already absent, returns `{ deleted: false }` rather
+ * than throwing, so callers can "ensure removed" without a pre-check. Used to
+ * strip `.github/workflows/grade.yml` from the handout of a no-autograder
+ * assignment, so student repos generated from it never run a grading workflow.
+ */
+export async function deleteFileFromRepo(
+  repoName: string,
+  path: string,
+  message: string,
+  scope?: Sentry.Scope
+): Promise<{ deleted: boolean; commit_sha?: string }> {
+  scope?.setTag("github_operation", "delete_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("deleteFileFromRepo", { repoName, path }, scope);
+    return { deleted: true };
+  }
+
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Delete file from repo failed: No octokit found for ${repoName}`);
+  }
+
+  // The contents API needs the blob sha of the file being deleted.
+  let sha: string | undefined;
+  try {
+    const file = await getFileFromRepo(repoName, path, scope);
+    sha = file.sha;
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      console.log(`Not deleting ${path} from ${repoName}: file does not exist`);
+      return { deleted: false };
+    }
+    throw error;
+  }
+  if (!sha) {
+    throw new Error(`Delete file from repo failed: could not resolve blob sha for ${path} in ${repoName}`);
+  }
+
+  console.log("deleting file from repo", repoName, path);
+  const response = await octokit.request("DELETE /repos/{owner}/{repo}/contents/{path}", {
+    owner: repoName.split("/")[0],
+    repo: repoName.split("/")[1],
+    path,
+    message,
+    sha
+  });
+  return { deleted: true, commit_sha: response.data.commit?.sha };
 }
 
 async function getJwks() {

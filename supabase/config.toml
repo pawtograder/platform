@@ -665,6 +665,17 @@ entrypoint = "./functions/assignment-create-solution-repo/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/assignment-create-solution-repo/*.html" ]
 
+[functions.assignment-sync-autograder-workflow]
+enabled = true
+verify_jwt = false
+import_map = "./functions/assignment-sync-autograder-workflow/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-sync-autograder-workflow/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-sync-autograder-workflow/*.html" ]
+
 [functions.autograder-sync-student-team]
 enabled = true
 verify_jwt = false 
