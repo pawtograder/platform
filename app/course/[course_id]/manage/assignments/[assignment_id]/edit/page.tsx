@@ -115,21 +115,38 @@ export default function EditAssignment() {
         }
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
+        // The assignment is already saved at this point. Re-pointing the handout repo's webhook is
+        // a follow-up that reaches GitHub, so it can fail on its own (missing app credentials, a
+        // repo that no longer exists, GitHub being down) long after the edit succeeded. Reporting
+        // that as "Failed to update the assignment" sent instructors back to re-apply changes that
+        // had in fact persisted, so it now surfaces as its own warning.
+        let webhookError: string | null = null;
         if (values.template_repo) {
-          await githubRepoConfigureWebhook(
-            {
-              assignment_id: Number.parseInt(assignment_id as string),
-              new_repo: values.template_repo,
-              watch_type: "template_repo"
-            },
-            supabase
-          );
+          try {
+            await githubRepoConfigureWebhook(
+              {
+                assignment_id: Number.parseInt(assignment_id as string),
+                new_repo: values.template_repo,
+                watch_type: "template_repo"
+              },
+              supabase
+            );
+          } catch (error) {
+            webhookError = error instanceof Error ? error.message : "An unknown error occurred.";
+          }
         }
         toaster.create({
           title: "Assignment Updated",
           description: "The assignment has been successfully updated.",
           type: "success"
         });
+        if (webhookError) {
+          toaster.create({
+            title: "Could not reconfigure the handout repository webhook",
+            description: `Your changes were saved. Autograder runs triggered by pushes to ${values.template_repo} may not be picked up until this is retried: ${webhookError}`,
+            type: "warning"
+          });
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
         toaster.create({

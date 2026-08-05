@@ -35,7 +35,8 @@ import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { CourseWithFeatures, LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
 /**
@@ -962,6 +963,12 @@ export default function AssignmentForm({
     form.getValues("require_tokens_before_due_date") == true
   );
   const timezone = course.time_zone || "America/New_York";
+  // Read off the class role rather than useCourseFeature: this form renders in both the create and
+  // edit routes, and `role.classes` is already the source for `time_zone` above.
+  const showSuggestedDueDate = courseFeatureEnabled(
+    (course as CourseWithFeatures).features,
+    COURSE_FEATURES.SUGGESTED_DUE_DATE
+  );
   const isEditing = !!form.getValues("id");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -1166,10 +1173,19 @@ export default function AssignmentForm({
                   </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
+                  {/* The field stays visible even when the course flag is off, rather than being
+                      hidden: react-hook-form drops unmounted fields from `values`, which would
+                      write `suggested_due_date: null` on the next save and silently destroy a date
+                      the instructor had already set. The helper text carries the flag state
+                      instead, so nobody sets a date expecting students to see it. */}
                   <Field
                     orientation="horizontal"
                     label="Suggested due date"
-                    helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
+                    helperText={
+                      showSuggestedDueDate
+                        ? "Optional. Shown to students as the assignment's due date; the Due Date below is presented as the end of the resubmission window."
+                        : "Optional. Not shown to students — turn on the “Suggested due dates” feature flag in Course Settings to display it."
+                    }
                     errorText={errors.suggested_due_date?.message?.toString()}
                     invalid={errors.suggested_due_date ? true : false}
                   >

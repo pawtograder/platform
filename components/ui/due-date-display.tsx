@@ -8,9 +8,6 @@ import { LuInfo } from "react-icons/lu";
 
 type DateFormat = NonNullable<ComponentProps<typeof TimeZoneAwareDate>["format"]>;
 
-export const SUGGESTED_DUE_DATE_TOOLTIP =
-  "The suggested due date is a recommended target to aim for. The due date below is the hard deadline — you can keep submitting and resubmitting until then.";
-
 // Deliberately framed as a course expectation, not a system rule. Submission enforcement
 // (`autograder-create-submission` -> `calculate_final_due_date`) only ever consults the hard
 // `due_date`; nothing in the platform rejects or down-ranks a submission for arriving after the
@@ -21,18 +18,18 @@ export const RESUBMISSION_WINDOW_TOOLTIP =
 /**
  * Shared student-facing rendering of an assignment's deadline.
  *
- * Two layouts, chosen by `emphasizeSuggested` (driven by the `suggested-due-date` course
- * feature flag at the call sites):
+ * The advisory suggested due date is shown only when `showSuggested` is set, which callers drive
+ * from the `suggested-due-date` course feature flag. A course that has not opted in never sees the
+ * date at all, on any surface — a half-emphasized "suggested" line was the confusing middle ground
+ * this flag exists to remove.
  *
- * - Default: the hard `due_date` is primary, with the advisory suggested date above it in
- *   smaller muted text.
- * - Emphasized: the suggested date IS the due date — primary, larger and semibold — and the
- *   hard deadline drops below it as the close of the resubmission window. This is the
- *   mastery-grading reading, where submitting by the suggested date is what earns a student
- *   feedback and the right to resubmit.
+ * When it is shown, the suggested date IS the due date: primary, larger and semibold, with the hard
+ * deadline demoted beneath it as the close of the resubmission window. That is the mastery-grading
+ * reading, where submitting by the suggested date is what earns a student feedback in time to
+ * resubmit.
  *
- * When there is no suggested date, both layouts collapse to just the hard due date, so
- * enabling the flag changes nothing for assignments that do not set one.
+ * `showSuggested` defaults to `false` so a caller that forgets to pass it fails safe (hidden)
+ * rather than leaking the date into a course that never enabled the feature.
  */
 export function DueDateDisplay({
   suggestedDueDate,
@@ -40,10 +37,10 @@ export function DueDateDisplay({
   dueDateNode,
   showDueLabel = false,
   dateFormat = "MMM d, h:mm a",
-  emphasizeSuggested = false,
+  showSuggested = false,
   trailing
 }: {
-  /** Raw advisory suggested due date (display-only). When falsy, the suggested line is omitted. */
+  /** Raw advisory suggested due date (display-only). Rendered only when `showSuggested` is true. */
   suggestedDueDate?: string | null;
   /** The effective hard deadline. Ignored when `dueDateNode` is provided. */
   dueDate?: Date | string | null;
@@ -52,8 +49,8 @@ export function DueDateDisplay({
   /** Prefix the primary date with "Due: ". */
   showDueLabel?: boolean;
   dateFormat?: DateFormat;
-  /** Promote the suggested date to primary and demote the hard deadline. No effect without `suggestedDueDate`. */
-  emphasizeSuggested?: boolean;
+  /** Course opted in to suggested due dates. Without it the suggested date is not rendered at all. */
+  showSuggested?: boolean;
   /** Inline content rendered after the hard due date (e.g. extension note, late-token button). */
   trailing?: ReactNode;
 }) {
@@ -67,18 +64,10 @@ export function DueDateDisplay({
       <Text minWidth={0}>-</Text>
     ));
 
-  const infoButton = (label: string, tooltip: string) => (
-    <Tooltip content={tooltip} showArrow positioning={{ placement: "top" }}>
-      <IconButton aria-label={label} variant="ghost" size="2xs" color="fg.muted" flexShrink={0}>
-        <Icon as={LuInfo} boxSize={3.5} />
-      </IconButton>
-    </Tooltip>
-  );
-
-  // Emphasized: suggested date on top as the due date, hard deadline demoted below it.
-  // The wording carries the distinction on its own, so the meaning survives without the
-  // size/weight cues (screen readers, forced-colors, zoomed reflow).
-  if (emphasizeSuggested && suggestedDueDate) {
+  // Suggested date on top as the due date, hard deadline demoted below it. The wording carries the
+  // distinction on its own, so the meaning survives without the size/weight cues (screen readers,
+  // forced-colors, zoomed reflow).
+  if (showSuggested && suggestedDueDate) {
     return (
       <Flex direction="column" gap={0.5} maxWidth="100%" minWidth={0}>
         <Flex alignItems="center" gap={1} minWidth={0} wrap="wrap" fontSize="lg" fontWeight="semibold">
@@ -90,7 +79,17 @@ export function DueDateDisplay({
         <Flex alignItems="center" gap={1} wrap="wrap" minWidth={0} color="fg.muted" fontSize="sm">
           <Text flexShrink={0}>Resubmit until</Text>
           {dueContent}
-          {infoButton("When do resubmissions close?", RESUBMISSION_WINDOW_TOOLTIP)}
+          <Tooltip content={RESUBMISSION_WINDOW_TOOLTIP} showArrow positioning={{ placement: "top" }}>
+            <IconButton
+              aria-label="When do resubmissions close?"
+              variant="ghost"
+              size="2xs"
+              color="fg.muted"
+              flexShrink={0}
+            >
+              <Icon as={LuInfo} boxSize={3.5} />
+            </IconButton>
+          </Tooltip>
           {trailing}
         </Flex>
       </Flex>
@@ -98,20 +97,10 @@ export function DueDateDisplay({
   }
 
   return (
-    <Flex direction="column" gap={0.5} maxWidth="100%" minWidth={0}>
-      {suggestedDueDate && (
-        <Flex alignItems="center" gap={1} color="fg.muted" minWidth={0} width="fit-content">
-          <Text fontSize="sm" minWidth={0}>
-            Suggested due: <TimeZoneAwareDate date={suggestedDueDate} format={dateFormat} />
-          </Text>
-          {infoButton("What is the suggested due date?", SUGGESTED_DUE_DATE_TOOLTIP)}
-        </Flex>
-      )}
-      <Flex alignItems="center" gap={1} wrap="wrap" minWidth={0}>
-        {showDueLabel && <Text flexShrink={0}>Due: </Text>}
-        {dueContent}
-        {trailing}
-      </Flex>
+    <Flex alignItems="center" gap={1} wrap="wrap" minWidth={0} maxWidth="100%">
+      {showDueLabel && <Text flexShrink={0}>Due: </Text>}
+      {dueContent}
+      {trailing}
     </Flex>
   );
 }

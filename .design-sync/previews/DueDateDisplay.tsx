@@ -36,29 +36,30 @@ export const NoDate = () => (
   </Box>
 );
 
-// Advisory suggested date present, default hierarchy: the hard deadline stays primary.
-export const WithSuggestedDate = () => (
-  <Box maxW="420px">
-    <DueDateDisplay showDueLabel suggestedDueDate="2026-03-18T23:59:00-04:00" dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
-  </Box>
-);
-
-// The `suggested-due-date` course flag on: the suggested date IS the due date, and the hard
-// deadline becomes the close of the resubmission window.
-export const SuggestedDateEmphasized = () => (
+// `suggested-due-date` course flag ON: the suggested date IS the due date, and the hard deadline
+// becomes the close of the resubmission window.
+export const SuggestedDateShown = () => (
   <Box maxW="420px">
     <DueDateDisplay
       showDueLabel
-      emphasizeSuggested
+      showSuggested
       suggestedDueDate="2026-03-18T23:59:00-04:00"
       dueDateNode={<Text>Apr 15, 11:59 PM</Text>}
     />
   </Box>
 );
 
-// With the flag on but no suggested date set, the layout is unchanged from HardDeadline.
-export const EmphasizedWithoutSuggestedDate = () => (
+// Flag OFF with a suggested date still set on the assignment: the date is not rendered at all, so
+// this is indistinguishable from HardDeadline. Courses that have not opted in never see it.
+export const SuggestedDateHiddenWhenFlagOff = () => (
   <Box maxW="420px">
-    <DueDateDisplay showDueLabel emphasizeSuggested dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
+    <DueDateDisplay showDueLabel suggestedDueDate="2026-03-18T23:59:00-04:00" dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
+  </Box>
+);
+
+// Flag on but no suggested date set: unchanged from HardDeadline.
+export const ShownWithoutSuggestedDate = () => (
+  <Box maxW="420px">
+    <DueDateDisplay showDueLabel showSuggested dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
   </Box>
 );

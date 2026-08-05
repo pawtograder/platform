@@ -116,7 +116,7 @@ export default async function StudentDashboard({
   // its suggested date is still submittable and still gradeable until the deadline, so dropping it
   // from this list would hide the resubmission window the flag exists to highlight. The card shows
   // both dates, so a passed suggested date is still legible.
-  const emphasizeSuggestedDueDate = courseFeatureEnabled(
+  const showSuggestedDueDate = courseFeatureEnabled(
     course?.features as { name: string; enabled: boolean }[] | null,
     COURSE_FEATURES.SUGGESTED_DUE_DATE
   );
@@ -351,7 +351,7 @@ export default async function StudentDashboard({
                         {assignment.due_date ? (
                           <DueDateDisplay
                             suggestedDueDate={assignment.suggested_due_date}
-                            emphasizeSuggested={emphasizeSuggestedDueDate}
+                            showSuggested={showSuggestedDueDate}
                             dueDate={assignment.due_date}
                             dateFormat="Pp"
                           />

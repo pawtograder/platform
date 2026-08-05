@@ -145,7 +145,7 @@ export default function StudentPage() {
     () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
     [courseAssignments]
   );
-  const emphasizeSuggested = useSuggestedDueDateEmphasisEnabled();
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -169,7 +169,7 @@ export default function StudentPage() {
       // emphasized layout pushes into the background.
       const suggestedForRow = suggestedDueDateById.get(assignment.id);
       const primaryDate =
-        emphasizeSuggested && suggestedForRow
+        showSuggestedDueDate && suggestedForRow
           ? new TZDate(suggestedForRow, course?.time_zone ?? "America/New_York")
           : modifiedDueDate;
       result.push({
@@ -181,7 +181,7 @@ export default function StudentPage() {
         due_date_component: modifiedDueDate ? (
           <DueDateDisplay
             suggestedDueDate={suggestedForRow}
-            emphasizeSuggested={emphasizeSuggested}
+            showSuggested={showSuggestedDueDate}
             dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
           />
         ) : (
@@ -239,7 +239,7 @@ export default function StudentPage() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id, suggestedDueDateById, emphasizeSuggested]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById, showSuggestedDueDate]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();
