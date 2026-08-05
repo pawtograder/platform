@@ -157,8 +157,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   /**
    * Bring in-class sharers to the chosen setting. Called only after the repo edit
    * has succeeded, so a GitHub failure never leaves them out of step with the
-   * handout. Non-fatal: the toggle itself already worked, and reporting beats
-   * undoing a successful workflow change.
+   * handout.
+   *
+   * FATAL on failure. By this point the shared handout already carries the new
+   * workflow state, so a sharer left on the old flag would take the wrong
+   * submission path — its webhook would dispatch a grade.yml that is gone, or
+   * create direct submissions while a live workflow also runs. Reporting success
+   * with those rows unfixed is worse than surfacing the error, so this throws and
+   * lets the caller roll the flag back.
    */
   async function realignInClassSharers(): Promise<{ id: number; title: string }[]> {
     if (inClassOutOfStep.length === 0) return [];
@@ -173,7 +179,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (alignError) {
       scope.setTag("sharer_realign_failed", "true");
       Sentry.captureException(alignError, scope);
-      return [];
+      throw new UserVisibleError(
+        `The handout ${templateRepo} is shared with ` +
+          `${inClassOutOfStep.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, and those assignments could not be ` +
+          `updated to match the new autograder setting: ${alignError.message}. The handout workflow was already ` +
+          `changed, so please retry — leaving them out of step would send their submissions down the wrong path.`,
+        502
+      );
     }
     console.log(
       `Realigned has_autograder=${hasAutograder} for assignments sharing ${templateRepo}: ` +

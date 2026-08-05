@@ -95,11 +95,28 @@ export default function AutograderPage() {
       // GitHub work means a failure leaves nothing to unwind — previously it ran
       // last, so a rejected save reported "Changes not saved" while the flag and
       // the handout workflow had already been changed.
-      await refineCore.onFinish({
+      //
+      // Ordering alone is not enough, though: whichever write happens first is
+      // still applied if a later one fails. So capture the row's prior values and
+      // restore them alongside the flag in the catch below, otherwise a failed
+      // disable would leave grader_repo/limits persisted while the UI said nothing
+      // saved — the worst case being unvalidated config left behind, since
+      // validation is deliberately skipped when disabling.
+      const priorAutograderRow = {
+        grader_repo: query?.data?.data?.grader_repo ?? null,
+        max_submissions_count: query?.data?.data?.max_submissions_count ?? null,
+        max_submissions_period_secs: query?.data?.data?.max_submissions_period_secs ?? null
+      };
+      const nextAutograderRow = {
         grader_repo: values.grader_repo,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
-      });
+      };
+      const autograderRowChanged =
+        priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
+        priorAutograderRow.max_submissions_count !== nextAutograderRow.max_submissions_count ||
+        priorAutograderRow.max_submissions_period_secs !== nextAutograderRow.max_submissions_period_secs;
+      await refineCore.onFinish(nextAutograderRow);
 
       // The flag and the handout's grade.yml must agree, and the sync reads the
       // flag from the DB — so the flag has to be written first. That leaves a
@@ -132,13 +149,23 @@ export default function AutograderPage() {
           });
         }
       } catch (syncError) {
+        // Undo BOTH writes so the reported failure matches what is stored.
         if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
           await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
+        }
+        if (autograderRowChanged) {
+          try {
+            await refineCore.onFinish(priorAutograderRow);
+          } catch (rollbackError) {
+            // Surface the original failure, but don't hide a failed rollback: the
+            // row now holds values the instructor was told did not save.
+            console.error("Failed to roll back the autograder row after a sync failure", rollbackError);
+          }
         }
         throw syncError;
       }
     },
-    [refineCore, assignment_id, course_id, mutateAssignment]
+    [refineCore, assignment_id, course_id, mutateAssignment, query?.data?.data]
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");

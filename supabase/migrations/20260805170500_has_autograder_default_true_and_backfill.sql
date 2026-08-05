@@ -13,8 +13,18 @@
 -- to be repo-only would silently take that path.
 --
 -- Two changes, so that FALSE means "the instructor turned the autograder off":
---   1. Backfill existing repo-bearing assignments to TRUE. They predate the
---      repo-only feature, so none of them can be an intentional opt-out.
+--   1. Backfill to TRUE only where there is POSITIVE EVIDENCE the autograder was
+--      actually in use. The autograder config page has always persisted a
+--      deliberate "Disabled" as the same FALSE the old default produced, so
+--      "repo-bearing" alone cannot distinguish the two — backfilling on that
+--      basis would silently re-enable grading an instructor had turned off.
+--      Evidence used (either is sufficient):
+--        - autograder.workflow_sha is set: grade.yml was hashed from the handout,
+--          which only happens while the autograder is wired up; or
+--        - a submission exists from an Actions run (run_number > 0), i.e. the
+--          workflow demonstrably graded this assignment.
+--      Anything without that evidence keeps FALSE, which is the safe direction:
+--      a hand-graded assignment stays hand-graded.
 --   2. Flip the default to TRUE, matching the assignment form's default.
 --
 -- Deliberately NOT touched:
@@ -47,6 +57,24 @@ where a.has_autograder = false
     from public.autograder g
     where g.id = a.id
       and g.grader_repo is not null
+  )
+  and (
+    -- Evidence 1: the handout's grade.yml was hashed for this assignment, which
+    -- only happens while the autograder is wired up.
+    exists (
+      select 1
+      from public.autograder g
+      where g.id = a.id
+        and g.workflow_sha is not null
+    )
+    -- Evidence 2: an Actions-backed submission exists. run_number is 0 for
+    -- push-direct and upload submissions, so > 0 means a workflow really ran.
+    or exists (
+      select 1
+      from public.submissions s
+      where s.assignment_id = a.id
+        and s.run_number > 0
+    )
   );
 
 alter table public.assignments

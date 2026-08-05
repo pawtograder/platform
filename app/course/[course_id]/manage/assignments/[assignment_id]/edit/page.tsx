@@ -97,6 +97,24 @@ export default function EditAssignment() {
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
         }
+        // Enabling the autograder from THIS form skips the grader-repo setup the
+        // autograder page performs, so without a configured grader repo we would
+        // happily restore grade.yml to the handout and leave has_autograder true —
+        // and the next Actions submission would fail with "grader config not
+        // found". Refuse and point at the page that can configure it.
+        if (values.has_autograder === true && queryData?.has_autograder === false) {
+          const { data: graderRow } = await supabase
+            .from("autograder")
+            .select("grader_repo")
+            .eq("id", Number.parseInt(assignment_id as string))
+            .maybeSingle();
+          if (!graderRow?.grader_repo) {
+            throw new Error(
+              "This assignment has no grader repository configured, so the autograder cannot be enabled here. " +
+                "Set it up on the assignment's Autograder page first, which creates and validates the grader repo."
+            );
+          }
+        }
         // Submission-mode / upstream coupling (Option A): for PR mode the
         // upstream repo IS the handout (template_repo), so keep them equal.
         // When not PR, clear PR/upstream config so toggling back to push doesn't

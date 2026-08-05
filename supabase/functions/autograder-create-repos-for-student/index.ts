@@ -515,18 +515,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               creation_method: strategy.creationMethod,
               branch_protection: branchProtectionFromAssignment(assignment)
             });
+            // NOT is_github_ready yet: the group's syncRepoPermissions runs further
+            // down this callback, and marking the repo ready here would strand it if
+            // that fails — the reconciler only repairs is_github_ready=false rows,
+            // so nothing would retry while consumers (including the push-direct
+            // submission path) treated a repo its members cannot access as usable.
             await adminSupabase
               .from("repositories")
-              .update({
-                synced_repo_sha: headSha || null,
-                // The repo exists on GitHub and permissions are synced, so it IS
-                // ready — this path previously left the flag false and relied on a
-                // later webhook/reconciler to flip it. Consumers that gate on
-                // is_github_ready (including the push-direct submission path for
-                // no-autograder assignments) would otherwise ignore a repo the
-                // student can already push to.
-                is_github_ready: true
-              })
+              .update({ synced_repo_sha: headSha || null })
               .eq("id", dbRepo!.id);
             if (error) {
               console.error(error);
@@ -562,9 +558,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .map((m) => m.user_roles.users.github_username!),
             scope
           );
+          // Only NOW is the repo genuinely usable: it exists and its members can
+          // reach it. Consumers that gate on is_github_ready (including the
+          // push-direct submission path for no-autograder assignments) depend on
+          // that meaning.
+          const { error: readyError } = await adminSupabase
+            .from("repositories")
+            .update({ is_github_ready: true })
+            .eq("repository", `${c.classes!.github_org!}/${repoName}`)
+            .eq("assignment_id", assignment.id);
+          if (readyError) {
+            console.error(readyError);
+            Sentry.captureException(readyError, scope);
+          }
         } catch (e) {
           console.log(`Error syncing repo permissions: ${repoName}`);
           console.error(e);
+          // is_github_ready stays false so the 15-minute reconciler retries.
           errorMessages.push(
             `Error syncing repo permissions: ${repoName}, please ask your instructor to check that this is configured correctly.`
           );
