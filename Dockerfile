@@ -41,6 +41,12 @@ ARG NEXT_PUBLIC_GIT_COMMIT_SHA=""
 ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
 ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
 ARG SENTRY_RELEASE=""
+# Source map upload target. Set SENTRY_URL to a self-hosted Bugsink base URL to
+# upload there instead of sentry.io; leave empty to skip upload entirely. The
+# auth token is NOT an ARG — it arrives as a BuildKit secret below.
+ARG SENTRY_URL=""
+ARG SENTRY_ORG=""
+ARG SENTRY_PROJECT=""
 ARG SUPABASE_URL=""
 
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
@@ -57,6 +63,9 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_PAWTOGRADER_CHANNEL=$NEXT_PUBLIC_PAWTOGRADER_CHANNEL \
     NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$NEXT_PUBLIC_CHANNEL_HOST_SUFFIX \
     SENTRY_RELEASE=$SENTRY_RELEASE \
+    SENTRY_URL=$SENTRY_URL \
+    SENTRY_ORG=$SENTRY_ORG \
+    SENTRY_PROJECT=$SENTRY_PROJECT \
     SUPABASE_URL=$SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_OUTPUT_STANDALONE=true
@@ -65,7 +74,24 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
 RUN test -n "$NEXT_PUBLIC_PAWTOGRADER_WEB_URL" \
     || (echo "ERROR: NEXT_PUBLIC_PAWTOGRADER_WEB_URL build arg is required" && exit 1)
 
-RUN NODE_OPTIONS=--max-old-space-size=8000 npm run build
+# The Sentry auth token is a BuildKit secret, not an ARG, so it never lands in
+# an image layer or `docker history`. The mount is optional: without a token the
+# bundler plugin still emits and injects debug IDs, it just skips the upload.
+# Empty ARGs are unset rather than exported as "" — the plugin only falls back to
+# sentry.io when SENTRY_URL is nullish, and "" would be treated as a real URL.
+RUN --mount=type=secret,id=sentry_auth_token \
+    set -eu; \
+    [ -n "${SENTRY_URL:-}" ] || unset SENTRY_URL; \
+    [ -n "${SENTRY_ORG:-}" ] || unset SENTRY_ORG; \
+    [ -n "${SENTRY_PROJECT:-}" ] || unset SENTRY_PROJECT; \
+    if [ -s /run/secrets/sentry_auth_token ]; then \
+      SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)"; \
+      export SENTRY_AUTH_TOKEN; \
+      echo "sentry: uploading source maps to ${SENTRY_URL:-sentry.io} (project ${SENTRY_PROJECT:-pawtograder-web})"; \
+    else \
+      echo "sentry: no auth token supplied, skipping source map upload"; \
+    fi; \
+    NODE_OPTIONS=--max-old-space-size=8000 npm run build
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
