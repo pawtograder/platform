@@ -392,8 +392,32 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // would leave that hash behind on an assignment the caller just marked
     // no-autograder, which the has_autograder backfill reads as evidence that the
     // autograder was in use.
+    //
+    // That ordering means a hash failure would otherwise leave the SHARERS enabled
+    // while the callers roll back only the assignment being edited — they know
+    // nothing about the sharing set. So compensate here: put the sharers back before
+    // rethrowing, since the caller cannot.
     const realigned = await realignInClassSharers();
-    await updateAutograderWorkflowHash(templateRepo);
+    try {
+      await updateAutograderWorkflowHash(templateRepo);
+    } catch (e) {
+      if (realigned.length > 0) {
+        scope.setTag("sharer_realign_rollback", "true");
+        const { error: revertError } = await adminSupabase
+          .from("assignments")
+          .update({ has_autograder: !hasAutograder })
+          .eq("class_id", class_id)
+          .in(
+            "id",
+            realigned.map((a) => a.id)
+          );
+        if (revertError) {
+          scope.setTag("sharer_realign_rollback_failed", "true");
+          Sentry.captureException(revertError, scope);
+        }
+      }
+      throw e;
+    }
     return {
       action: "unchanged" as const,
       has_autograder: true,

@@ -646,6 +646,39 @@ async function createPushDirectSubmission(
       // a delivery that can never succeed.
       scope.setTag("push_direct_submission_rejected", "too_large");
       Sentry.captureException(ingestErr, scope);
+      // Tell the STUDENT, not just Sentry. This path deliberately creates no Actions
+      // run and no check run, so without a durable record the push looks accepted:
+      // no failing check, nothing in submission history, and their work silently
+      // ungraded. workflow_run_error is the existing surface for exactly this (the
+      // results page reads it), so record it there with is_private=false.
+      const tooLargeMessage =
+        ingestErr instanceof SubmissionFileTooLargeError
+          ? `Your submission was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
+          : `Your submission was not recorded: the repository is too large to process (${ingestErr.observedMb} MB, limit ${ingestErr.limitMb} MB). Remove large files — build output and caches are the usual cause — and push again.`;
+      const { error: recordError } = await adminSupabase.from("workflow_run_error").upsert(
+        {
+          repository_id: studentRepo.id,
+          class_id: studentRepo.class_id,
+          submission_id: null,
+          // No Actions run backs a push-direct submission, so 0/0 mirrors what the
+          // submissions rows use for this path.
+          run_number: 0,
+          run_attempt: 0,
+          name: tooLargeMessage,
+          is_private: false,
+          data: {
+            repository_name: repoName,
+            sha,
+            error_type: ingestErr instanceof SubmissionFileTooLargeError ? "file_too_large" : "submission_too_large",
+            detected_at: new Date().toISOString()
+          }
+        },
+        { onConflict: "repository_id,run_number,run_attempt,name" }
+      );
+      if (recordError) {
+        scope.setTag("too_large_record_failed", "true");
+        Sentry.captureException(recordError, scope);
+      }
       return;
     }
     // Transient (clone/storage/db): rethrow so GitHub redelivers. Cleanup above
