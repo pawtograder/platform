@@ -18,6 +18,7 @@ import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster } from "./toaster";
 
@@ -203,6 +204,7 @@ export function AssignmentDueDate({
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
+  const emphasizeSuggested = useSuggestedDueDateEmphasisEnabled();
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
@@ -213,6 +215,7 @@ export function AssignmentDueDate({
   return (
     <DueDateDisplay
       suggestedDueDate={assignment.suggested_due_date}
+      emphasizeSuggested={emphasizeSuggested}
       showDueLabel={showDue}
       dueDateNode={
         <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">

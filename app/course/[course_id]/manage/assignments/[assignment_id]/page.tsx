@@ -3,6 +3,7 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Box, DataList, HStack, Link, Tabs, Text, VStack } from "@chakra-ui/react";
@@ -69,6 +70,7 @@ export default function AssignmentHome() {
   const { course, classRealTimeController } = useCourseController();
   const { assignment_id } = useParams();
   const isInstructor = useIsInstructor();
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const supabase = useMemo(() => createClient(), []);
 
   const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
@@ -118,6 +120,17 @@ export default function AssignmentHome() {
                   {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
+              {/* Mastery-grading courses start grading at the suggested date rather than the
+                  hard deadline (#894). "Due" keeps meaning the enforced deadline for staff, so
+                  nobody has to guess which date the autograder actually applies. */}
+              {showSuggestedDueDate && assignment.suggested_due_date && (
+                <DataList.Item>
+                  <DataList.ItemLabel>Suggested due</DataList.ItemLabel>
+                  <DataList.ItemValue>
+                    <TimeZoneAwareDate date={assignment.suggested_due_date} format="Pp" />
+                  </DataList.ItemValue>
+                </DataList.Item>
+              )}
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>

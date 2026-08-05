@@ -22,7 +22,7 @@ import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
-import { appendTimezoneOffset } from "@/lib/utils";
+import { appendTimezoneOffset, parseZonedFormDate } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
@@ -1136,9 +1136,9 @@ export default function AssignmentForm({
                           if (!value) return "This is required";
                           // Only enforce future date requirement when creating new assignments
                           if (!isEditing) {
-                            const selected = new TZDate(value, timezone).getTime();
+                            const selected = parseZonedFormDate(value, timezone)?.getTime();
                             const now = TZDate.tz(timezone).getTime();
-                            return selected > now || "Release date must be in the future";
+                            return (selected !== undefined && selected > now) || "Release date must be in the future";
                           }
                           return true;
                         }
@@ -1181,8 +1181,13 @@ export default function AssignmentForm({
                           if (!value) return true;
                           const dueDate = form.getValues("due_date");
                           if (!dueDate) return true;
-                          const suggested = new TZDate(value, timezone).getTime();
-                          const due = new TZDate(dueDate, timezone).getTime();
+                          // Both sides go through the course zone: in edit mode one field may
+                          // still hold an offset-carrying value from the database while the other
+                          // is a freshly-typed naive value, so a raw parse would compare apples
+                          // to oranges.
+                          const suggested = parseZonedFormDate(value, timezone)?.getTime();
+                          const due = parseZonedFormDate(dueDate, timezone)?.getTime();
+                          if (suggested === undefined || due === undefined) return true;
                           return suggested <= due || "Suggested due date must be on or before the due date";
                         },
                         deps: ["due_date"]

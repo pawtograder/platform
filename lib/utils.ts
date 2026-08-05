@@ -51,6 +51,21 @@ export function appendTimezoneOffset(date: string | null, timezone: string) {
 }
 
 /**
+ * Resolve a value from a `datetime-local` input into an absolute instant, treating the
+ * entered wall clock as being in `timezone`.
+ *
+ * A `datetime-local` value ("2026-09-01T09:00") carries no offset, so `new Date(...)` and
+ * `new TZDate(..., tz)` both anchor it to the *browser's* zone — silently shifting the time
+ * whenever the author is not sitting in the course time zone. Going through
+ * `appendTimezoneOffset` first pins it to the course zone instead. Values that already carry
+ * an offset (e.g. loaded back from the database) are passed through unchanged.
+ */
+export function parseZonedFormDate(date: string | null | undefined, timezone: string): Date | null {
+  const withOffset = appendTimezoneOffset(date ?? null, timezone);
+  return withOffset ? new Date(withOffset) : null;
+}
+
+/**
  * Helper function to detect if a file is a text/code file
  * @param file - The file to check
  * @returns True if the file is a text/code file

@@ -36,7 +36,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 
 function SurveyDashboardCta({
   href,
@@ -107,6 +107,13 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
+
+  // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
+  // first paint instead of flipping once the client course controller hydrates.
+  const emphasizeSuggestedDueDate = courseFeatureEnabled(
+    course?.features as { name: string; enabled: boolean }[] | null,
+    COURSE_FEATURES.SUGGESTED_DUE_DATE
+  );
 
   const nowMs = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
@@ -338,6 +345,7 @@ export default async function StudentDashboard({
                         {assignment.due_date ? (
                           <DueDateDisplay
                             suggestedDueDate={assignment.suggested_due_date}
+                            emphasizeSuggested={emphasizeSuggestedDueDate}
                             dueDate={assignment.due_date}
                             dateFormat="Pp"
                           />

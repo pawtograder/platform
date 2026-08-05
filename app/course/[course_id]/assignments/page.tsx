@@ -9,6 +9,7 @@ import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useIdentity } from "@/hooks/useIdentities";
 import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
@@ -143,6 +144,7 @@ export default function StudentPage() {
     () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
     [courseAssignments]
   );
+  const emphasizeSuggested = useSuggestedDueDateEmphasisEnabled();
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -169,6 +171,7 @@ export default function StudentPage() {
         due_date_component: modifiedDueDate ? (
           <DueDateDisplay
             suggestedDueDate={suggestedDueDateById.get(assignment.id)}
+            emphasizeSuggested={emphasizeSuggested}
             dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
           />
         ) : (
@@ -220,7 +223,7 @@ export default function StudentPage() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id, suggestedDueDateById]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById, emphasizeSuggested]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();

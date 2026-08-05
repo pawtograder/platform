@@ -4,7 +4,7 @@ import "server-only";
  * Uncached SSR loaders for course dashboards and manage views.
  * Callers must pass the request-scoped cookie Supabase client.
  */
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type ManageAssignmentsOverviewRow = Database["public"]["Views"]["assignment_overview"]["Row"];
@@ -121,6 +121,8 @@ export type StudentDashboardBundle = {
     time_zone: string | null;
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
+    /** `classes.features` — read server-side so feature-gated dashboard content renders without a flash. */
+    features: Json | null;
   } | null;
   courseError: string | null;
   assignments: unknown;
@@ -180,7 +182,7 @@ export async function fetchStudentDashboardBundle(
   ] = await Promise.all([
     supabase
       .from("classes")
-      .select("time_zone, office_hours_ics_url, events_ics_url, name")
+      .select("time_zone, office_hours_ics_url, events_ics_url, name, features")
       .eq("id", courseId)
       .single(),
     supabase

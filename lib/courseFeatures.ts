@@ -9,7 +9,8 @@ export const COURSE_FEATURES = {
   GRADEBOOK: "gradebook",
   SURVEYS: "surveys",
   POLLS: "polls",
-  GRADEBOOK_WHAT_IF: "gradebook-what-if"
+  GRADEBOOK_WHAT_IF: "gradebook-what-if",
+  SUGGESTED_DUE_DATE: "suggested-due-date"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -96,6 +97,16 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Allow What-If grade simulations for students",
     ariaLabel: "Enable student gradebook What-If"
+  },
+  {
+    name: COURSE_FEATURES.SUGGESTED_DUE_DATE,
+    title: "Suggested due dates",
+    description:
+      "For mastery/standards grading, where the suggested due date is the date students should work to and the due date is the end of the resubmission window. When enabled, an assignment's suggested due date is presented to students as its due date, and the hard deadline is shown beneath it as the point resubmissions close; staff also get a Suggested Due Date column on Manage Assignments. Assignments with no suggested due date are unaffected.",
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Present the suggested due date as the due date",
+    ariaLabel: "Enable suggested due date emphasis for this course"
   }
 ];
 
