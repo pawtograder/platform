@@ -89,7 +89,7 @@ export default function AutograderPage() {
       const nextHasAutograder = values.assignments.has_autograder;
       await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
       try {
-        await assignmentSyncAutograderWorkflow(
+        const syncResult = await assignmentSyncAutograderWorkflow(
           {
             assignment_id: Number.parseInt(assignment_id as string),
             class_id: Number.parseInt(course_id as string)
@@ -98,6 +98,19 @@ export default function AutograderPage() {
         );
         // Only now is the flag durably matched by the handout's workflow state.
         savedHasAutograder.current = nextHasAutograder;
+        // The grading workflow lives in the handout repo, so assignments sharing
+        // that handout necessarily share the setting. Say so plainly — otherwise
+        // an instructor silently changes assignments they did not open.
+        const realigned = syncResult?.realigned_assignments ?? [];
+        if (realigned.length > 0) {
+          toaster.create({
+            title: `Also updated ${realigned.length} assignment${realigned.length === 1 ? "" : "s"}`,
+            description:
+              `${realigned.map((a) => a.title).join(", ")} share this handout repository, so the autograder was ` +
+              `turned ${nextHasAutograder ? "on" : "off"} for ${realigned.length === 1 ? "it" : "them"} too.`,
+            type: "info"
+          });
+        }
       } catch (syncError) {
         if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
           await mutateAssignment({ values: { has_autograder: priorHasAutograder } });

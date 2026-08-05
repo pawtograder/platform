@@ -521,7 +521,11 @@ async function createPushDirectSubmission(
       .update({ is_empty_submission: ingestResult.isEmpty ?? false })
       .eq("id", submissionId);
     if (emptyFlagError) {
+      // Throw rather than log-and-continue: the catch below deletes the partial
+      // submission and rethrows, so GitHub redelivers and we try again. Accepting
+      // it would leave a submission whose empty-state metadata was never recorded.
       Sentry.captureException(emptyFlagError, scope);
+      throw emptyFlagError;
     }
     if (!permitEmptySubmissions && ingestResult.isEmpty !== false) {
       scope.setTag("push_direct_submission_rejected", ingestResult.isEmpty === null ? "empty_unknown" : "empty");
@@ -531,6 +535,9 @@ async function createPushDirectSubmission(
           `this assignment does not permit empty submissions`
       );
       const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+      if (removed) {
+        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
+      }
       if (!removed) {
         // The rejected submission is still there and is_active, so it would be
         // graded as if the student had submitted. Surface it rather than returning
@@ -544,7 +551,10 @@ async function createPushDirectSubmission(
       return;
     }
   } catch (ingestErr) {
-    await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    if (removed) {
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
+    }
     if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
       // Permanent (repo/file too big): record and stop — don't make GitHub retry
       // a delivery that can never succeed.
@@ -560,6 +570,57 @@ async function createPushDirectSubmission(
 
 // Best-effort cleanup of a push-direct submission whose file ingest failed:
 // remove any uploaded binary objects, then the file rows, then the submission.
+/**
+ * Re-activate the newest surviving submission for this student/group after a
+ * rejected submission is deleted.
+ *
+ * The submissions BEFORE-INSERT trigger demotes the previous active row when a
+ * new one arrives, and `submissions_one_active_individual_per_student` /
+ * `submissions_one_active_group_per_group` allow only one active row. So deleting
+ * a rejected submission leaves the student with NO active submission — their
+ * previous good work disappears from the gradebook and review flows until they
+ * push again.
+ */
+async function reactivatePreviousSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const base = adminSupabase
+      .from("submissions")
+      .select("id, is_active, ordinal")
+      .eq("assignment_id", studentRepo.assignment_id);
+    // Scope to the same submitter the unique indexes key on: the group when this
+    // is a group repo, otherwise the individual (group id explicitly NULL).
+    const scoped = studentRepo.assignment_group_id
+      ? base.eq("assignment_group_id", studentRepo.assignment_group_id)
+      : base.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+
+    const { data: newest, error: newestErr } = await scoped
+      .order("ordinal", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (newestErr) throw newestErr;
+    // Nothing left to promote, or something is already active (the unique indexes
+    // guarantee at most one, so leave it alone).
+    if (!newest || newest.is_active) return;
+
+    const { error: promoteErr } = await adminSupabase
+      .from("submissions")
+      .update({ is_active: true })
+      .eq("id", newest.id);
+    if (promoteErr) throw promoteErr;
+    scope.setTag("reactivated_previous_submission", String(newest.id));
+    console.log(`Re-activated submission ${newest.id} after rejecting a push-direct submission`);
+  } catch (e) {
+    // Best-effort: the rejection itself already succeeded. Report so the missing
+    // active submission can be repaired rather than going unnoticed.
+    scope.setTag("reactivate_previous_submission_failed", "true");
+    Sentry.captureException(e, scope);
+  }
+}
+
 async function cleanupPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number,
@@ -712,6 +773,27 @@ async function handlePushToStudentRepo(
       );
       return;
     }
+    // This path clones the repo zipball, so it makes real GitHub calls and must
+    // respect the same circuit breaker as the Actions path below — otherwise
+    // repo-only pushes keep hammering GitHub during an outage and deepen it.
+    // Throwing (rather than returning) is deliberate: GitHub redelivers, so the
+    // submission is created once the circuit closes instead of being lost.
+    const directCircuit = await checkCircuitBreakerOpen(
+      adminSupabase,
+      repoName.split("/")[0],
+      "cloneRepository",
+      scope
+    );
+    if (directCircuit.isOpen) {
+      const openUntil = directCircuit.openUntil ? new Date(directCircuit.openUntil).toLocaleString() : "unknown";
+      scope.setTag("skipped_reason", "circuit_breaker_open");
+      throw new Error(
+        `Circuit breaker open for org ${repoName.split("/")[0]}: cannot ingest push-direct submission for ` +
+          `${repoName}@${payload.after}. Reason: ${directCircuit.reason || "Rate limit or error threshold exceeded"}. ` +
+          `Open until: ${openUntil}`
+      );
+    }
+
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,

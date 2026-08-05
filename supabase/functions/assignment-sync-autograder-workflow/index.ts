@@ -105,13 +105,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   // A handout repo can be pointed at by more than one assignment: fork-from-prior
   // checkpoints inherit the SOURCE assignment's template_repo verbatim, and an
-  // instructor can point two assignments at one handout. Writing to it would then
-  // reach across assignments — turning the autograder off on a later checkpoint
-  // would strip grade.yml from the source assignment's handout and break it.
+  // instructor can point two assignments at one handout. The workflow file is a
+  // property of that shared repo, so the sharers cannot disagree about it.
   //
-  // Pawtograder does not support a handout shared between autograded and
-  // non-autograded assignments, so refuse with an explanation rather than
-  // silently clobbering the other assignment.
+  // The UI toggles one assignment at a time, so by the time we run, only THIS
+  // assignment carries the new value. Rejecting on any difference would therefore
+  // make a shared handout permanently un-toggleable — there is no order of
+  // single-assignment saves that ever converges. Instead, bring the whole sharing
+  // set to the value the instructor just chose, then write the repo once.
   const { data: sharers, error: sharersError } = await adminSupabase
     .from("assignments")
     .select("id, title, has_autograder")
@@ -121,15 +122,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Sentry.captureException(sharersError, scope);
     throw sharersError;
   }
-  const conflicting = (sharers ?? []).filter((a) => (a.has_autograder !== false) !== hasAutograder);
+  const outOfStep = (sharers ?? []).filter((a) => (a.has_autograder !== false) !== hasAutograder);
   scope.setTag("template_repo_sharers", String((sharers ?? []).length));
-  if (conflicting.length > 0) {
-    const names = conflicting.map((a) => `"${a.title}" (#${a.id})`).join(", ");
-    throw new UserVisibleError(
-      `The handout ${templateRepo} is also used by ${names}, whose autograder setting differs. ` +
-        `Changing the workflow here would break that assignment, so a handout cannot be shared between ` +
-        `autograded and non-autograded assignments. Give this assignment its own handout repository first.`,
-      400
+  scope.setTag("template_repo_sharers_realigned", String(outOfStep.length));
+  const realigned = outOfStep.map((a) => ({ id: a.id, title: a.title }));
+  if (outOfStep.length > 0) {
+    const { error: alignError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: hasAutograder })
+      .in(
+        "id",
+        outOfStep.map((a) => a.id)
+      );
+    if (alignError) {
+      Sentry.captureException(alignError, scope);
+      throw new UserVisibleError(
+        `The handout ${templateRepo} is shared with ${outOfStep.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, ` +
+          `and those assignments could not be updated to match, so the autograder setting was left unchanged: ` +
+          `${alignError.message}`,
+        502
+      );
+    }
+    console.log(
+      `Realigned has_autograder=${hasAutograder} for assignments sharing ${templateRepo}: ` +
+        outOfStep.map((a) => a.id).join(", ")
     );
   }
 
@@ -187,7 +203,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
-      template_repo: templateRepo
+      template_repo: templateRepo,
+      realigned_assignments: realigned
     };
   }
 
@@ -203,7 +220,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   if (existingSha) {
     await updateAutograderWorkflowHash(templateRepo);
-    return { action: "unchanged" as const, has_autograder: true, template_repo: templateRepo };
+    return {
+      action: "unchanged" as const,
+      has_autograder: true,
+      template_repo: templateRepo,
+      realigned_assignments: realigned
+    };
   }
 
   // Prefer the copy parked when the autograder was turned off — it may carry this
@@ -294,7 +316,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  return { action: "added" as const, has_autograder: true, template_repo: templateRepo };
+  return {
+    action: "added" as const,
+    has_autograder: true,
+    template_repo: templateRepo,
+    realigned_assignments: realigned
+  };
 }
 
 Deno.serve(async (req) => {

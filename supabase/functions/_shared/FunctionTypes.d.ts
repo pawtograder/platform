@@ -427,6 +427,13 @@ export type AssignmentSyncAutograderWorkflowResponse = {
   action: "added" | "removed" | "unchanged";
   has_autograder: boolean;
   template_repo: string | null;
+  /**
+   * Other assignments sharing this handout that were brought to the same
+   * `has_autograder` value. The workflow file belongs to the shared repo, so they
+   * cannot disagree; callers should tell the instructor when this is non-empty,
+   * since it changes assignments they did not explicitly edit.
+   */
+  realigned_assignments?: { id: number; title: string }[];
 };
 
 export type AutograderCreateReposForStudentRequest = {
