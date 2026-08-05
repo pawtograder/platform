@@ -58,15 +58,24 @@ export default function AutograderPage() {
   // second toggle in the same visit that stale baseline would either skip the
   // rollback or restore the wrong value.
   const savedHasAutograder = useRef<boolean | undefined>(undefined);
+  // Which assignment the ref describes. The App Router reuses this component across a
+  // change of the [assignment_id] param, so refs survive client-side navigation — without
+  // this, opening assignment A and then B would leave B's rollback baseline holding A's
+  // value.
+  const savedForAssignmentId = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (query?.data?.data) {
       reset(query.data.data);
-      if (savedHasAutograder.current === undefined) {
+      const currentId = assignment_id as string;
+      // Re-seed on a new assignment, and also whenever the baseline is still unknown --
+      // leaving it undefined would silently skip the rollback below.
+      if (savedForAssignmentId.current !== currentId || savedHasAutograder.current === undefined) {
+        savedForAssignmentId.current = currentId;
         savedHasAutograder.current = query.data.data.assignments?.has_autograder;
       }
     }
-  }, [query?.data?.data, reset]);
+  }, [query?.data?.data, reset, assignment_id]);
 
   const onSubmit = useCallback(
     async (values: FieldValues) => {
@@ -112,10 +121,15 @@ export default function AutograderPage() {
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
       };
+      // Number-vs-string comparison: `register()` on a `<Input type="number">` yields a
+      // string, so a plain `!==` against the number from the DB reported a change on every
+      // save and fired a pointless rollback write.
+      const sameLimit = (a: string | number | null, b: string | number | null) =>
+        a === b || (a !== null && b !== null && Number(a) === Number(b));
       const autograderRowChanged =
         priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
-        priorAutograderRow.max_submissions_count !== nextAutograderRow.max_submissions_count ||
-        priorAutograderRow.max_submissions_period_secs !== nextAutograderRow.max_submissions_period_secs;
+        !sameLimit(priorAutograderRow.max_submissions_count, nextAutograderRow.max_submissions_count) ||
+        !sameLimit(priorAutograderRow.max_submissions_period_secs, nextAutograderRow.max_submissions_period_secs);
       await refineCore.onFinish(nextAutograderRow);
 
       // The flag and the handout's grade.yml must agree, and the sync reads the
@@ -124,8 +138,13 @@ export default function AutograderPage() {
       // the edit) with the flag already persisted, which would leave the webhook
       // treating the assignment as no-autograder while repos still carry the
       // workflow. Roll the flag back on failure so the two never disagree.
-      await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
+      //
+      // The flag write is INSIDE the try: it can fail too (RLS, network), and leaving it
+      // outside meant that failure skipped the rollback of the autograder row that was
+      // already saved above — reporting "Changes not saved" while an unvalidated
+      // grader_repo stayed persisted.
       try {
+        await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
         const syncResult = await assignmentSyncAutograderWorkflow(
           {
             assignment_id: Number.parseInt(assignment_id as string),
@@ -149,9 +168,16 @@ export default function AutograderPage() {
           });
         }
       } catch (syncError) {
-        // Undo BOTH writes so the reported failure matches what is stored.
+        // Undo BOTH writes so the reported failure matches what is stored. Each rollback
+        // is individually guarded: an unguarded rejection here would replace the original
+        // error (so the instructor never learns what actually failed) and skip the
+        // remaining rollback.
         if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
-          await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
+          try {
+            await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
+          } catch (rollbackError) {
+            console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
+          }
         }
         if (autograderRowChanged) {
           try {

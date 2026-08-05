@@ -273,6 +273,11 @@ export type IngestScope = {
    *
    * When omitted, the empty-check hash covers everything ingested (the autograder's
    * case, where `fileFilter` has already narrowed ingestion to the same set).
+   *
+   * If the filter matches none of the ingested files there is nothing comparable, and
+   * `isEmpty` is reported as `false` rather than compared: the hash of the empty file set
+   * is a constant that the handout side records too whenever its own tree has no matching
+   * file, so comparing them would falsely report a match.
    */
   emptyHashFilter?: (relativePath: string) => boolean;
   scope?: Sentry.Scope;
@@ -502,14 +507,22 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
   // Hash used for the handout comparison. Narrowed to `emptyHashFilter` when the
   // caller ingested more than the handout hashes cover, so the two are computed
   // over the same file set (see the field's doc comment).
-  const emptyCheckHash = emptyHashFilter
-    ? combinedHashFromPerFileHexHashes(
-        Object.fromEntries(Object.entries(file_hashes).filter(([name]) => emptyHashFilter(name)))
-      )
-    : combinedHash;
+  const narrowedHashes = emptyHashFilter
+    ? Object.fromEntries(Object.entries(file_hashes).filter(([name]) => emptyHashFilter(name)))
+    : file_hashes;
+  const emptyCheckHash = emptyHashFilter ? combinedHashFromPerFileHexHashes(narrowedHashes) : combinedHash;
 
   let isEmpty: boolean | null = null;
-  if (detectEmptyForAssignmentId !== undefined) {
+  // When the filter selects nothing, the narrowed hash is the hash of the empty set — a
+  // fixed constant that the handout side also records whenever ITS tree has no file
+  // matching those globs. Comparing them would report "identical to the handout" for a
+  // submission whose real content simply lives outside the glob set, and the caller may
+  // then delete it. There is nothing comparable here, so report "not empty".
+  const narrowedSetIsEmpty = emptyHashFilter !== undefined && Object.keys(narrowedHashes).length === 0;
+  if (detectEmptyForAssignmentId !== undefined && narrowedSetIsEmpty) {
+    scope?.setTag("empty_check_skipped", "no_files_matched_empty_hash_filter");
+    isEmpty = false;
+  } else if (detectEmptyForAssignmentId !== undefined) {
     // Empty submission detection: if the submitted files match ANY recorded
     // handout version for the assignment, mark the submission as empty.
     //

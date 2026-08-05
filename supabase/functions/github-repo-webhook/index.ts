@@ -384,6 +384,46 @@ async function createPushDirectSubmission(
     return;
   }
 
+  // The handout's recorded hashes cover only the configured submissionFiles, so build
+  // the same matcher to compare like with like. Read BEFORE the submission is inserted:
+  // this decides whether the emptiness check can run at all, and a failure here must not
+  // cost an insert plus the trigger work that demotes the student's previous submission.
+  const { data: graderConfigRow, error: graderConfigError } = await adminSupabase
+    .from("autograder")
+    .select("config")
+    .eq("id", studentRepo.assignment_id)
+    .maybeSingle();
+  if (graderConfigError) {
+    // Transient (statement timeout, pool exhaustion). Throwing makes GitHub redeliver,
+    // which is the only way this push gets recorded. Returning or rejecting instead
+    // would answer 200 and lose real student work with no retry.
+    Sentry.captureException(graderConfigError, scope);
+    throw graderConfigError;
+  }
+  const submissionFilesConfig = (graderConfigRow?.config as unknown as PawtograderConfig | null)?.submissionFiles;
+  const expectedFilePatterns = submissionFilesConfig
+    ? [...(submissionFilesConfig.files ?? []), ...(submissionFilesConfig.testFiles ?? [])]
+    : [];
+  // One compiled matcher for all files, rather than recompiling every glob per file.
+  const expectedFileMatcher = expectedFilePatterns.length > 0 ? micromatch.matcher(expectedFilePatterns) : null;
+  const emptyHashFilter = expectedFileMatcher ? (relativePath: string) => expectedFileMatcher(relativePath) : null;
+  scope.setTag("empty_hash_filter_patterns", String(expectedFilePatterns.length));
+
+  // With no submissionFiles globs there is nothing to narrow the empty-check hash to, so
+  // the comparison would be over a different file set than the handout hashes and could
+  // never be meaningful. Skip the check instead of rejecting: a repo-only assignment has
+  // no reason to maintain a pawtograder.yml, so rejecting would silently discard every
+  // push on the very assignments this path exists for. The instructor hand-grades these
+  // submissions and can see an untouched repo for themselves.
+  const canDetectEmpty = emptyHashFilter !== null;
+  if (!canDetectEmpty) {
+    scope.setTag("push_direct_empty_check", "skipped_no_submission_files");
+    console.log(
+      `Not checking emptiness for ${repoName}@${sha}: assignment ${studentRepo.assignment_id} has no ` +
+        `submissionFiles configured, so there is no comparable handout hash`
+    );
+  }
+
   // Resolve a profile id for the due-date calculation. For group repos use any
   // member's profile (mirrors the autograder fallback).
   let profileId = studentRepo.profile_id;
@@ -490,49 +530,6 @@ async function createPushDirectSubmission(
     return;
   }
 
-  // The handout's recorded hashes cover only the configured submissionFiles, so
-  // build the same matcher to compare like with like. Absent config means we
-  // cannot narrow, and the emptiness comparison stays unreliable — see the
-  // fail-closed handling below.
-  const { data: graderConfigRow, error: graderConfigError } = await adminSupabase
-    .from("autograder")
-    .select("config")
-    .eq("id", studentRepo.assignment_id)
-    .maybeSingle();
-  if (graderConfigError) {
-    Sentry.captureException(graderConfigError, scope);
-  }
-  const submissionFilesConfig = (graderConfigRow?.config as unknown as PawtograderConfig | null)?.submissionFiles;
-  const expectedFilePatterns = submissionFilesConfig
-    ? [...(submissionFilesConfig.files ?? []), ...(submissionFilesConfig.testFiles ?? [])]
-    : [];
-  const emptyHashFilter =
-    expectedFilePatterns.length > 0
-      ? (relativePath: string) => expectedFilePatterns.some((pattern) => micromatch.isMatch(relativePath, pattern))
-      : null;
-  scope.setTag("empty_hash_filter_patterns", String(expectedFilePatterns.length));
-
-  // Without the glob set we cannot narrow the empty-check hash, so the comparison
-  // below is over a different file set than the handout hashes and reads "not
-  // empty" for even an untouched starter tree. That is an UNKNOWN emptiness
-  // result, not a negative one — so when empty submissions are prohibited it must
-  // fail closed exactly like a failed handout-hash lookup, rather than silently
-  // accepting the submission.
-  const emptinessVerifiable = emptyHashFilter !== null && !graderConfigError;
-  if (!permitEmptySubmissions && !emptinessVerifiable) {
-    scope.setTag("push_direct_submission_rejected", "empty_check_unavailable");
-    console.log(
-      `Rejecting push-direct submission for ${repoName}@${sha}: cannot verify emptiness ` +
-        `(${graderConfigError ? "autograder config lookup failed" : "no submissionFiles configured"}) and this ` +
-        `assignment does not permit empty submissions`
-    );
-    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-    if (removed) {
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
-    }
-    return;
-  }
-
   // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
   // The insert above and this ingest are NOT in one transaction, so if ingest
   // fails we must clean up the just-created row — otherwise the idempotency
@@ -550,8 +547,9 @@ async function createPushDirectSubmission(
       // Compare the pushed tree against the assignment's recorded handout
       // versions, exactly as the Actions-backed path does. Without this, an
       // untouched starter-template push would become the newest active
-      // submission on an assignment that prohibits empty submissions.
-      detectEmptyForAssignmentId: studentRepo.assignment_id,
+      // submission on an assignment that prohibits empty submissions. Only
+      // requested when the comparison can be made comparable (see canDetectEmpty).
+      detectEmptyForAssignmentId: canDetectEmpty ? studentRepo.assignment_id : undefined,
       // Store the WHOLE tree (hand-grading wants the full repo) but compare only
       // the configured submissionFiles, because that is the set the handout hashes
       // cover. Without narrowing, the two hashes are computed over different file
@@ -576,20 +574,32 @@ async function createPushDirectSubmission(
       throw emptyFlagError;
     }
     if (!permitEmptySubmissions && ingestResult.isEmpty !== false) {
-      scope.setTag("push_direct_submission_rejected", ingestResult.isEmpty === null ? "empty_unknown" : "empty");
+      // UNKNOWN emptiness (isEmpty === null) means the handout-hash lookup failed after
+      // its retries — a transient DB problem, not a verdict. Throw so the shared catch
+      // below cleans up and GitHub redelivers; returning 200 would acknowledge the
+      // delivery and permanently lose a real, non-empty push.
+      if (ingestResult.isEmpty === null) {
+        scope.setTag("push_direct_submission_rejected", "empty_unknown");
+        throw new Error(
+          `Could not determine whether ${repoName}@${sha} is an empty submission (handout hash lookup failed); ` +
+            `rejecting this delivery so GitHub retries it`
+        );
+      }
+      scope.setTag("push_direct_submission_rejected", "empty");
       console.log(
-        `Rejecting push-direct submission for ${repoName}@${sha}: ` +
-          `${ingestResult.isEmpty === null ? "emptiness could not be determined" : "matches the handout"} and ` +
-          `this assignment does not permit empty submissions`
+        `Rejecting push-direct submission for ${repoName}@${sha}: matches the handout and this assignment does ` +
+          `not permit empty submissions`
       );
       const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-      if (removed) {
-        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
-      }
+      // Restore the previous submission whether or not cleanup finished. The insert
+      // already demoted it, so skipping this on a partial failure leaves the student
+      // with NO active submission — a worse outcome than the rejection itself.
+      // `excludeSubmissionId` keeps a surviving zombie row from being promoted.
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
       if (!removed) {
-        // The rejected submission is still there and is_active, so it would be
-        // graded as if the student had submitted. Surface it rather than returning
-        // 200 as though the rejection worked.
+        // The rejected submission row is still there (inactive, with its grading review
+        // unlinked), so it needs manual cleanup. Surface it rather than returning 200 as
+        // though the rejection worked.
         scope.setTag("push_direct_empty_cleanup_failed", "true");
         Sentry.captureMessage(
           `Failed to remove rejected empty push-direct submission ${submissionId} for ${repoName}@${sha}`,
@@ -600,8 +610,13 @@ async function createPushDirectSubmission(
     }
   } catch (ingestErr) {
     const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-    if (removed) {
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+    if (!removed) {
+      scope.setTag("push_direct_cleanup_failed", "true");
+      Sentry.captureMessage(
+        `Failed to remove partial push-direct submission ${submissionId} for ${repoName}@${sha}`,
+        scope
+      );
     }
     if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
       // Permanent (repo/file too big): record and stop — don't make GitHub retry
@@ -632,13 +647,25 @@ async function createPushDirectSubmission(
 async function reactivatePreviousSubmission(
   adminSupabase: SupabaseClient<Database>,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
-  scope: Sentry.Scope
+  scope: Sentry.Scope,
+  /**
+   * The submission being rejected. Excluded from the search because cleanup can fail
+   * partway, and promoting the row we just rejected would be worse than doing nothing.
+   */
+  excludeSubmissionId?: number
 ): Promise<void> {
   try {
-    const base = adminSupabase
+    let base = adminSupabase
       .from("submissions")
       .select("id, is_active, ordinal")
-      .eq("assignment_id", studentRepo.assignment_id);
+      .eq("assignment_id", studentRepo.assignment_id)
+      // #NOT-GRADED rows are deliberately left inactive by the insert trigger, so
+      // promoting one would activate a submission the student asked not to be
+      // graded. Only ever restore a gradeable submission.
+      .eq("is_not_graded", false);
+    if (excludeSubmissionId !== undefined) {
+      base = base.neq("id", excludeSubmissionId);
+    }
     // Scope to the same submitter the unique indexes key on: the group when this
     // is a group repo, otherwise the individual (group id explicitly NULL).
     const scoped = studentRepo.assignment_group_id
@@ -692,14 +719,19 @@ async function cleanupPushDirectSubmission(
       .eq("submission_id", submissionId);
     if (reviewsErr) throw reviewsErr;
 
-    const { data: bins } = await adminSupabase
+    const { data: bins, error: binsErr } = await adminSupabase
       .from("submission_files")
       .select("storage_key")
       .eq("submission_id", submissionId)
       .eq("is_binary", true);
+    if (binsErr) throw binsErr;
     const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
     if (keys.length > 0) {
-      await adminSupabase.storage.from("submission-files").remove(keys);
+      // Abort on a storage failure rather than deleting the rows anyway: the rows are the
+      // only record of these object keys, so dropping them would orphan the blobs
+      // permanently. Mirrors safeCleanupRejectedSubmission.
+      const { error: storageErr } = await adminSupabase.storage.from("submission-files").remove(keys);
+      if (storageErr) throw storageErr;
     }
     const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
     if (filesErr) throw filesErr;
@@ -795,6 +827,20 @@ async function handlePushToStudentRepo(
   // otherwise be recorded as a git submission for an upload-only assignment.
   const pushRepoModeHasRepo = pushAssignment?.repo_mode !== "none" && pushAssignment?.repo_mode !== "no_submission";
   if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false && pushRepoModeHasRepo) {
+    // Only the default branch is a submission. Without the `#submit` marker this path
+    // has no other filter, so a push to a scratch branch or a `git push --tags` would
+    // otherwise be recorded as the student's newest submission — from a tree that is not
+    // what they are turning in. The Actions path below is unaffected: it still keys off
+    // `#submit` in the commit message.
+    const pushDefaultBranch = payload.repository.default_branch || "main";
+    if (payload.ref !== `refs/heads/${pushDefaultBranch}`) {
+      scope.setTag("skipped_reason", "not_default_branch");
+      console.log(
+        `Skipping push-direct submission for ${repoName}@${payload.after}: ref ${payload.ref} is not the ` +
+          `default branch (refs/heads/${pushDefaultBranch})`
+      );
+      return;
+    }
     // The `repositories` row is inserted BEFORE createRepo runs, so GitHub's
     // initial branch push for a freshly generated repo can arrive while the row
     // is still is_github_ready=false. That push is the starter template, not

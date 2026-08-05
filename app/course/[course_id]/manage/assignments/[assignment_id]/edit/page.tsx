@@ -120,6 +120,10 @@ export default function EditAssignment() {
         // When not PR, clear PR/upstream config so toggling back to push doesn't
         // leave stale upstream values behind.
         if (values.submission_mode === "pr") {
+          // PR submissions are ingested by the PR webhook and never produce
+          // grader_results, so the autograder flag must be false here — mirrors the
+          // create page and the backfill migration, both of which exclude PR mode.
+          values.has_autograder = false;
           values.upstream_repo = values.template_repo ?? null;
           // "branch_convention" identification is only meaningful with a non-empty regex; if it's
           // blank, fall back to "base_branch" so we never persist an inconsistent PR config
@@ -137,22 +141,23 @@ export default function EditAssignment() {
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {
-          await githubRepoConfigureWebhook(
-            {
-              assignment_id: Number.parseInt(assignment_id as string),
-              new_repo: values.template_repo,
-              watch_type: "template_repo"
-            },
-            supabase
-          );
-          // The form exposes the autograder toggle, so keep the handout's
-          // grade.yml in step with it (added when enabled, removed when
-          // disabled). Idempotent, so no need to diff against the prior value.
-          //
-          // The row is already saved at this point, so a sync failure would leave
-          // the flag and the repos disagreeing. Roll the flag back to what it was
-          // before reporting the error.
+          // Both GitHub-touching calls sit in ONE rollback scope. The row is already
+          // saved by this point, so anything that throws here would otherwise leave
+          // has_autograder at its new value with the handout untouched — and the
+          // webhook-configure step runs first, so keeping it outside the try meant a
+          // transient GitHub failure there skipped the rollback entirely.
           try {
+            await githubRepoConfigureWebhook(
+              {
+                assignment_id: Number.parseInt(assignment_id as string),
+                new_repo: values.template_repo,
+                watch_type: "template_repo"
+              },
+              supabase
+            );
+            // The form exposes the autograder toggle, so keep the handout's
+            // grade.yml in step with it (added when enabled, removed when
+            // disabled). Idempotent, so no need to diff against the prior value.
             await assignmentSyncAutograderWorkflow(
               {
                 assignment_id: Number.parseInt(assignment_id as string),

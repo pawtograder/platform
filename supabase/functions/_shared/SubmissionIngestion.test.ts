@@ -398,3 +398,35 @@ Deno.test("ingestSubmissionFilesFromZip: without emptyHashFilter the whole-tree 
 
   assertEquals(result.isEmpty, false);
 });
+
+// Regression: when the glob set matches NONE of the submitted files, the narrowed hash is
+// the hash of the empty set. The handout side records that same constant whenever its own
+// tree has no matching file, so a naive comparison reports "identical to the handout" and
+// the caller deletes a submission full of real work.
+Deno.test("ingestSubmissionFilesFromZip: an emptyHashFilter that matches nothing reports not-empty", async () => {
+  const zipBuffer = await buildZip({
+    "essay.md": "# a lot of real work\n",
+    "notes.txt": "more real work\n"
+  });
+  // The handout's recorded hash for globs that match nothing in its tree either.
+  const emptySetHash = combinedHash({});
+  const { client, insertedFiles } = makeFakeSupabase({
+    handoutHashesByAssignment: new Map([[123, new Set([emptySetHash])]])
+  });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123,
+    // Mirrors submissionFiles: ["**/*.java"] on a repo whose work is all markdown.
+    emptyHashFilter: (name) => name.endsWith(".java")
+  });
+
+  assertEquals(insertedFiles.length, 2);
+  assertEquals(result.isEmpty, false);
+});

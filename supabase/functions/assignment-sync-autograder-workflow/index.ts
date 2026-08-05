@@ -369,24 +369,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope
   );
 
-  // Advertise the restore commit as the handout head, mirroring what the disable
-  // branch does for the delete commit. The repo-sync paths target
-  // `latest_template_sha`, so until the template-repo push webhook catches up an
-  // instructor syncing student repos right after re-enabling would be told they
-  // are already current, or would sync the previous revision that has no
-  // workflow — while has_autograder is already true.
-  if (restoreCommitSha) {
-    const { error: shaError } = await adminSupabase
-      .from("assignments")
-      .update({ latest_template_sha: restoreCommitSha })
-      .eq("template_repo", templateRepo)
-      .eq("class_id", class_id);
-    if (shaError) {
-      scope.setTag("pin_latest_template_sha_failed", "true");
-      Sentry.captureException(shaError, scope);
-    }
-  }
-
   // From here the handout has a RUNNABLE workflow. If anything below fails we
   // throw, and callers roll has_autograder back to false — which would leave a
   // live grade.yml on a no-autograder assignment: Actions would fire on pushes
@@ -417,6 +399,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       Sentry.captureException(rollbackError, scope);
     }
     throw e;
+  }
+
+  // Advertise the restore commit as the handout head, mirroring what the disable
+  // branch does for the delete commit: repo-sync targets `latest_template_sha`, so
+  // until the template-repo push webhook catches up an instructor syncing student
+  // repos right after re-enabling would be told they are already current, or would
+  // sync the previous revision that has no workflow.
+  //
+  // Deliberately AFTER the guard above. Pinning before it meant a rollback deleted
+  // the restored grade.yml while this pointer still named the restore commit that
+  // CONTAINS it — so a later student sync would reintroduce the workflow on an
+  // assignment whose flag the caller had just set back to false. Leaving the
+  // pointer at the older, workflow-free revision is the safe direction.
+  if (restoreCommitSha) {
+    const { error: shaError } = await adminSupabase
+      .from("assignments")
+      .update({ latest_template_sha: restoreCommitSha })
+      .eq("template_repo", templateRepo)
+      .eq("class_id", class_id);
+    if (shaError) {
+      scope.setTag("pin_latest_template_sha_failed", "true");
+      Sentry.captureException(shaError, scope);
+    }
   }
 
   // The autograder is live and hashed, so the toggle has succeeded. Clearing the

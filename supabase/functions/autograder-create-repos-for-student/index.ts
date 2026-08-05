@@ -449,6 +449,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.log(
           `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`
         );
+        // Row id of the `repositories` row this iteration is provisioning, used by the
+        // readiness update below. Resolved from the pre-existing row when there is one,
+        // or from the insert when we create it — never reconstructed from `group.name`,
+        // which changes when a group is renamed while `repositories.repository` keeps
+        // the name it was created with.
+        let repoRowId: number | undefined = groupMembership.assignment_groups.repositories[0]?.id;
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
@@ -474,6 +480,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             console.error(error);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
+          repoRowId = dbRepo!.id;
           try {
             const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
             const strategy = resolveRepoCreationStrategy(
@@ -515,18 +522,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               creation_method: strategy.creationMethod,
               branch_protection: branchProtectionFromAssignment(assignment)
             });
-            // NOT is_github_ready yet: the group's syncRepoPermissions runs further
-            // down this callback, and marking the repo ready here would strand it if
-            // that fails — the reconciler only repairs is_github_ready=false rows,
-            // so nothing would retry while consumers (including the push-direct
-            // submission path) treated a repo its members cannot access as usable.
             await adminSupabase
               .from("repositories")
               .update({ synced_repo_sha: headSha || null })
               .eq("id", dbRepo!.id);
-            if (error) {
-              console.error(error);
-              throw new UserVisibleError(`Error creating repo: ${error}`);
+            // Sync permissions and mark ready HERE. This branch returns below without
+            // reaching the existing-repo sync further down, so deferring the flag to
+            // that point left every newly created group repo at is_github_ready=false
+            // — and the push-direct submission path skips unready repos, so the
+            // group's real pushes would be ignored until a reconciler happened to fix
+            // it. Sync first, then flag: a permission failure must leave the row
+            // unready, because the reconciler only repairs is_github_ready=false rows.
+            await syncRepoPermissions(
+              c.classes!.github_org!,
+              repoName,
+              c.classes!.slug!,
+              group.assignment_groups_members
+                .filter((m) => m.user_roles)
+                .filter((m) => m.user_roles.users.github_username)
+                .map((m) => m.user_roles.users.github_username!),
+              scope
+            );
+            const { error: readyError } = await adminSupabase
+              .from("repositories")
+              .update({ is_github_ready: true })
+              .eq("id", dbRepo!.id);
+            if (readyError) {
+              console.error(readyError);
+              Sentry.captureException(readyError, scope);
             }
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);
@@ -562,14 +585,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // reach it. Consumers that gate on is_github_ready (including the
           // push-direct submission path for no-autograder assignments) depend on
           // that meaning.
-          const { error: readyError } = await adminSupabase
-            .from("repositories")
-            .update({ is_github_ready: true })
-            .eq("repository", `${c.classes!.github_org!}/${repoName}`)
-            .eq("assignment_id", assignment.id);
-          if (readyError) {
-            console.error(readyError);
-            Sentry.captureException(readyError, scope);
+          //
+          // Keyed on the row id and with `.select()` so a zero-row match is reported:
+          // a bare `.update()` returns error=null when nothing matched, which would
+          // leave the repo permanently unusable with no signal.
+          if (repoRowId === undefined) {
+            const err = new Error(
+              `Could not resolve the repositories row for ${c.classes!.github_org!}/${repoName} (assignment ${assignment.id}); is_github_ready not set`
+            );
+            console.error(err);
+            Sentry.captureException(err, scope);
+          } else {
+            const { data: readyRows, error: readyError } = await adminSupabase
+              .from("repositories")
+              .update({ is_github_ready: true })
+              .eq("id", repoRowId)
+              .select("id");
+            if (readyError || (readyRows ?? []).length === 0) {
+              console.error(readyError ?? `No repositories row matched id=${repoRowId} when marking it ready`);
+              Sentry.captureException(
+                readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`),
+                scope
+              );
+            }
           }
         } catch (e) {
           console.log(`Error syncing repo permissions: ${repoName}`);

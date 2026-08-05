@@ -128,11 +128,13 @@ export default function NewAssignmentPage() {
             submission_files: getValues("submission_files"),
             // has_autograder must reflect reality (it gates the webhook's autograder run and the
             // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
-            // — the autograder runs as a GitHub Actions workflow inside the student repo. Otherwise
+            // — the autograder runs as a GitHub Actions workflow inside the student repo. PR mode
+            // cannot either: those submissions are ingested by the PR webhook and never produce
+            // grader_results, which is why the backfill migration excludes them too. Otherwise
             // it's the instructor's choice: unchecking it gives a "repo only" assignment (#895),
             // where the handout is created without grade.yml so no Actions ever run. Instructors
             // can still toggle this later on the autograder config page.
-            has_autograder: !isNoRepo && getValues("has_autograder") !== false,
+            has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
             group_config: getValues("group_config"),
