@@ -115,38 +115,71 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // set to the value the instructor just chose, then write the repo once.
   const { data: sharers, error: sharersError } = await adminSupabase
     .from("assignments")
-    .select("id, title, has_autograder")
+    .select("id, title, class_id, has_autograder")
     .eq("template_repo", templateRepo)
     .neq("id", assignment_id);
   if (sharersError) {
     Sentry.captureException(sharersError, scope);
     throw sharersError;
   }
-  const outOfStep = (sharers ?? []).filter((a) => (a.has_autograder !== false) !== hasAutograder);
-  scope.setTag("template_repo_sharers", String((sharers ?? []).length));
-  scope.setTag("template_repo_sharers_realigned", String(outOfStep.length));
-  const realigned = outOfStep.map((a) => ({ id: a.id, title: a.title }));
-  if (outOfStep.length > 0) {
+  const allSharers = sharers ?? [];
+  scope.setTag("template_repo_sharers", String(allSharers.length));
+
+  // Only `class_id` was authorized above, and the writes below use the
+  // service-role client. So the realignment must be confined to THIS class:
+  // otherwise an instructor who administers one section could silently flip
+  // has_autograder for another class that happens to point at the same
+  // `owner/repo` handout.
+  const foreignSharers = allSharers.filter((a) => a.class_id !== class_id);
+  const outOfStepForeign = foreignSharers.filter((a) => (a.has_autograder !== false) !== hasAutograder);
+  scope.setTag("template_repo_foreign_sharers", String(foreignSharers.length));
+  if (outOfStepForeign.length > 0) {
+    // We cannot authorize those assignments, and editing the shared repo would
+    // change grading for them anyway. Refuse rather than reach outside the class.
+    throw new UserVisibleError(
+      `The handout ${templateRepo} is also used by ${outOfStepForeign.length} assignment` +
+        `${outOfStepForeign.length === 1 ? "" : "s"} in another class with a different autograder setting. ` +
+        `Changing it here would alter grading for a class you do not administer, so this handout cannot be ` +
+        `toggled. Give this assignment its own handout repository first.`,
+      403
+    );
+  }
+
+  // In-class sharers CAN be realigned, but not yet: this function is about to
+  // edit the repo, and if that fails the callers only roll back the assignment
+  // the instructor opened. Flipping the others first would leave them disagreeing
+  // with a handout that never changed. Collect them now, write them at the end.
+  const inClassOutOfStep = allSharers.filter(
+    (a) => a.class_id === class_id && (a.has_autograder !== false) !== hasAutograder
+  );
+  scope.setTag("template_repo_sharers_to_realign", String(inClassOutOfStep.length));
+
+  /**
+   * Bring in-class sharers to the chosen setting. Called only after the repo edit
+   * has succeeded, so a GitHub failure never leaves them out of step with the
+   * handout. Non-fatal: the toggle itself already worked, and reporting beats
+   * undoing a successful workflow change.
+   */
+  async function realignInClassSharers(): Promise<{ id: number; title: string }[]> {
+    if (inClassOutOfStep.length === 0) return [];
     const { error: alignError } = await adminSupabase
       .from("assignments")
       .update({ has_autograder: hasAutograder })
+      .eq("class_id", class_id)
       .in(
         "id",
-        outOfStep.map((a) => a.id)
+        inClassOutOfStep.map((a) => a.id)
       );
     if (alignError) {
+      scope.setTag("sharer_realign_failed", "true");
       Sentry.captureException(alignError, scope);
-      throw new UserVisibleError(
-        `The handout ${templateRepo} is shared with ${outOfStep.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, ` +
-          `and those assignments could not be updated to match, so the autograder setting was left unchanged: ` +
-          `${alignError.message}`,
-        502
-      );
+      return [];
     }
     console.log(
       `Realigned has_autograder=${hasAutograder} for assignments sharing ${templateRepo}: ` +
-        outOfStep.map((a) => a.id).join(", ")
+        inClassOutOfStep.map((a) => a.id).join(", ")
     );
+    return inClassOutOfStep.map((a) => ({ id: a.id, title: a.title }));
   }
 
   if (!hasAutograder) {
@@ -194,12 +227,37 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     scope.setTag("parked_workflow", String(!!liveWorkflow));
 
-    const { deleted } = await deleteFileFromRepo(
+    const { deleted, commit_sha: deleteCommitSha } = await deleteFileFromRepo(
       templateRepo,
       GRADE_WORKFLOW_PATH,
       "Remove autograder workflow: this assignment has no autograder",
       scope
     );
+
+    // Parking and deleting are two commits, so there is an intermediate revision
+    // that still contains a runnable grade.yml. The template-repo push webhook
+    // sets `latest_template_sha` from whatever push it processes, and if those two
+    // deliveries are handled out of order it can settle on that intermediate
+    // commit — which later handout syncs would then copy into student repos,
+    // reinstating the workflow. Pin the advertised head to the DELETE commit so
+    // the published handout revision never contains a live workflow.
+    //
+    // (A single-commit park+delete via the Git tree API would remove the race
+    // entirely rather than correcting after it; this closes the harmful window
+    // without a new GitHub write path.)
+    if (deleted && deleteCommitSha) {
+      const { error: shaError } = await adminSupabase
+        .from("assignments")
+        .update({ latest_template_sha: deleteCommitSha })
+        .eq("template_repo", templateRepo)
+        .eq("class_id", class_id);
+      if (shaError) {
+        scope.setTag("pin_latest_template_sha_failed", "true");
+        Sentry.captureException(shaError, scope);
+      }
+    }
+
+    const realigned = await realignInClassSharers();
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
@@ -224,7 +282,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       action: "unchanged" as const,
       has_autograder: true,
       template_repo: templateRepo,
-      realigned_assignments: realigned
+      realigned_assignments: await realignInClassSharers()
     };
   }
 
@@ -320,7 +378,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     action: "added" as const,
     has_autograder: true,
     template_repo: templateRepo,
-    realigned_assignments: realigned
+    realigned_assignments: await realignInClassSharers()
   };
 }
 

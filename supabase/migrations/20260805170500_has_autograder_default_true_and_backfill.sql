@@ -25,12 +25,23 @@
 --     choice — assignment-create-handout-repo reads the flag when deciding
 --     whether to strip grade.yml, and we must not flip that decision for an
 --     assignment mid-provisioning.
+--   - Assignments whose autograder row has no grader_repo. Nothing can grade
+--     them: autograder-create-submission needs the grader repo, so flipping them
+--     to TRUE would route pushes down the Actions path only to fail there,
+--     instead of treating them as hand-graded. FALSE is already the truthful
+--     value for these, whether or not it was set deliberately.
 
-update public.assignments
+update public.assignments a
 set has_autograder = true
-where has_autograder = false
-  and template_repo is not null
-  and repo_mode not in ('none', 'no_submission');
+where a.has_autograder = false
+  and a.template_repo is not null
+  and a.repo_mode not in ('none', 'no_submission')
+  and exists (
+    select 1
+    from public.autograder g
+    where g.id = a.id
+      and g.grader_repo is not null
+  );
 
 alter table public.assignments
   alter column has_autograder set default true;
