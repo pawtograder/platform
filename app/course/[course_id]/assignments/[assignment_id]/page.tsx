@@ -115,9 +115,15 @@ export default function AssignmentPage() {
   }
   // No-repo / no-submission / PR-mode assignments have no autograder by
   // convention, so an autograder score is not meaningful — show "N/A" instead
-  // of progress/score.
+  // of progress/score. `has_autograder === false` covers repo-only assignments
+  // (#895), whose push submissions never get grader_results — without it the
+  // score column would sit at "In Progress" forever.
   const isPrMode = assignment.submission_mode === "pr";
-  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission" || isPrMode;
+  const noAutograder =
+    assignment.has_autograder === false ||
+    assignment.repo_mode === "none" ||
+    assignment.repo_mode === "no_submission" ||
+    isPrMode;
   return (
     <Box p={4}>
       <LinkAccount />
@@ -199,7 +205,12 @@ export default function AssignmentPage() {
           {enrollment?.role === "student" && (
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
-          {submissionsPeriod && maxSubmissions ? (
+          {/* Submission limits throttle autograder runs, so they are meaningless
+              without an autograder — and the `autograder` row is auto-created with
+              a default 5-per-24h limit for EVERY assignment. Showing this banner on
+              a repo-only assignment would promise that extra pushes "will be
+              ignored" when in fact every push becomes a gradeable submission. */}
+          {submissionsPeriod && maxSubmissions && !noAutograder ? (
             <Box w="100%" maxW="4xl" data-visual-test="removed">
               <Alert.Root
                 status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}

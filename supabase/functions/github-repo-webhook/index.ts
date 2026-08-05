@@ -569,7 +569,7 @@ async function handlePushToStudentRepo(
   // submission directly here instead of dispatching grade.yml).
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
-    .select("submission_mode, has_autograder, allow_not_graded_submissions, latest_template_sha")
+    .select("submission_mode, has_autograder, allow_not_graded_submissions, latest_template_sha, repo_mode")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -617,7 +617,23 @@ async function handlePushToStudentRepo(
   // auto-merged `sync-to-*` PR, or a fork fast-forward). Those are instructor
   // actions, so counting them would make the student's newest "submission" be
   // work they never did.
-  if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false) {
+  //
+  // Also guarded: `repo_mode` must still be a repo mode. Switching an existing
+  // assignment to none/no_submission coerces has_autograder=false but leaves the
+  // old `repositories` rows behind, and a later push to one of those would
+  // otherwise be recorded as a git submission for an upload-only assignment.
+  const pushRepoModeHasRepo = pushAssignment?.repo_mode !== "none" && pushAssignment?.repo_mode !== "no_submission";
+  if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false && pushRepoModeHasRepo) {
+    // The `repositories` row is inserted BEFORE createRepo runs, so GitHub's
+    // initial branch push for a freshly generated repo can arrive while the row
+    // is still is_github_ready=false. That push is the starter template, not
+    // student work — recording it would make the handout the student's active
+    // submission before they have written a line.
+    if (!studentRepo.is_github_ready) {
+      scope.setTag("skipped_reason", "repo_not_github_ready");
+      console.log(`Skipping push-direct submission for ${repoName}@${payload.after}: repo is still being provisioned`);
+      return;
+    }
     if (
       isHandoutSyncPush({
         headCommitMessage: payload.head_commit.message,

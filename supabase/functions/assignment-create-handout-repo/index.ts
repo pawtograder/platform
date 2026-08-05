@@ -56,11 +56,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
     const { data: src } = await adminSupabase
       .from("assignments")
-      .select("id, class_id, template_repo, latest_template_sha")
+      .select("id, class_id, title, has_autograder, template_repo, latest_template_sha")
       .eq("id", assignment.source_assignment_id)
       .maybeSingle();
     if (src) {
       sourceAssignment = src as HandoutSourceAssignment;
+      // This mode adopts the SOURCE assignment's handout repo verbatim, and
+      // student repos fork each student's source-assignment repo. So the two
+      // assignments share one handout, and the autograder setting is a property
+      // of that shared handout — it cannot differ between them. Allowing it
+      // would leave a state that assignment-sync-autograder-workflow later
+      // refuses (so every subsequent save fails), and the student forks would
+      // inherit the source's grade.yml regardless of this assignment's flag.
+      if ((src.has_autograder !== false) !== (assignment.has_autograder !== false)) {
+        throw new UserVisibleError(
+          `This assignment forks from "${src.title}" (#${src.id}), so both share that assignment's handout ` +
+            `repository and must have the same autograder setting. ` +
+            `"${src.title}" has the autograder ${src.has_autograder === false ? "disabled" : "enabled"}, ` +
+            `so this assignment must too. Change the autograder setting to match, or pick a different ` +
+            `repository configuration so this assignment gets its own handout.`,
+          400
+        );
+      }
     }
   }
 

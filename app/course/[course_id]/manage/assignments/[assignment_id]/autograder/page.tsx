@@ -68,31 +68,36 @@ export default function AutograderPage() {
         },
         supabase
       );
-      await mutateAssignment({
-        values: {
-          has_autograder: values.assignments.has_autograder
+      // The flag and the handout's grade.yml must agree, and the sync reads the
+      // flag from the DB — so the flag has to be written first. That leaves a
+      // window where the sync can fail (shared-handout conflict, GitHub rejects
+      // the edit) with the flag already persisted, which would leave the webhook
+      // treating the assignment as no-autograder while repos still carry the
+      // workflow. Roll the flag back on failure so the two never disagree.
+      const priorHasAutograder = query?.data?.data?.assignments?.has_autograder;
+      const nextHasAutograder = values.assignments.has_autograder;
+      await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
+      try {
+        await assignmentSyncAutograderWorkflow(
+          {
+            assignment_id: Number.parseInt(assignment_id as string),
+            class_id: Number.parseInt(course_id as string)
+          },
+          supabase
+        );
+      } catch (syncError) {
+        if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
+          await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
         }
-      });
-      // Bring the handout's grade.yml into line with the flag we just saved:
-      // disabling the autograder removes the workflow (so no Actions run and
-      // students see no failing check), re-enabling it restores the workflow and
-      // repopulates autograder.workflow_sha. Idempotent, so it's safe to call
-      // whether or not the radio actually changed. Must run AFTER the assignment
-      // update above, since the function reads has_autograder from the DB.
-      await assignmentSyncAutograderWorkflow(
-        {
-          assignment_id: Number.parseInt(assignment_id as string),
-          class_id: Number.parseInt(course_id as string)
-        },
-        supabase
-      );
+        throw syncError;
+      }
       refineCore.onFinish({
         grader_repo: values.grader_repo,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
       });
     },
-    [refineCore, assignment_id, course_id, mutateAssignment]
+    [refineCore, assignment_id, course_id, mutateAssignment, query?.data?.data]
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");

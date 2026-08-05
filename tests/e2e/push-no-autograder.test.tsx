@@ -151,7 +151,8 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
         repository: repoName,
         class_id: classId,
         profile_id: student.private_profile_id,
-        synced_handout_sha: "none"
+        synced_handout_sha: "none",
+        is_github_ready: true
       })
       .select("id")
       .single();
@@ -340,6 +341,55 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     // Clean up so later tests in this file aren't affected by the marker sha.
     await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
   });
+
+  // The `repositories` row is inserted before createRepo runs, so GitHub's initial
+  // push for a freshly generated repo can arrive while is_github_ready is still
+  // false. That push is the starter template, not student work.
+  test("push to a repo still being provisioned creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const { error: notReadyErr } = await supabase
+      .from("repositories")
+      .update({ is_github_ready: false })
+      .eq("id", repoId);
+    expect(notReadyErr).toBeNull();
+
+    const sha = `55555555${SAFE_ID}`.slice(0, 40);
+    const res = await deliverPush(
+      makePushDetail(repoName, sha, "Initial commit from template"),
+      `e2e-push-${SAFE_ID}-7`
+    );
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+
+    await supabase.from("repositories").update({ is_github_ready: true }).eq("id", repoId);
+  });
+
+  // Switching an assignment to a no-repo mode coerces has_autograder=false but
+  // leaves the old repositories rows behind; a later push to one of those must not
+  // become a git submission for an upload-only assignment.
+  test("push to a stale repo after switching to repo_mode='none' creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const { error: modeErr } = await supabase.from("assignments").update({ repo_mode: "none" }).eq("id", assignmentId);
+    expect(modeErr).toBeNull();
+
+    const sha = `66666666${SAFE_ID}`.slice(0, 40);
+    const res = await deliverPush(
+      makePushDetail(repoName, sha, "still pushing to my old repo"),
+      `e2e-push-${SAFE_ID}-8`
+    );
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+    expect(subs ?? []).toHaveLength(0);
+
+    await supabase.from("assignments").update({ repo_mode: "template_only_staff" }).eq("id", assignmentId);
+  });
 });
 
 // pr-mode push guard: a push to a tracked student repo whose assignment is
@@ -397,7 +447,8 @@ test.describe("Push to a pr-mode repo is a no-op (no submission / check run / wo
         repository: repoName,
         class_id: classId,
         profile_id: student.private_profile_id,
-        synced_handout_sha: "none"
+        synced_handout_sha: "none",
+        is_github_ready: true
       })
       .select("id")
       .single();
@@ -480,7 +531,8 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
       repository: repoName,
       class_id: classId,
       profile_id: student.private_profile_id,
-      synced_handout_sha: "none"
+      synced_handout_sha: "none",
+      is_github_ready: true
     });
     expect(repoErr).toBeNull();
   });
@@ -561,7 +613,8 @@ test.describe("Push-direct submission skips gracefully on the group-transition 2
       repository: individualRepoName,
       class_id: classId,
       profile_id: student.private_profile_id,
-      synced_handout_sha: "none"
+      synced_handout_sha: "none",
+      is_github_ready: true
     });
     expect(repoErr).toBeNull();
 

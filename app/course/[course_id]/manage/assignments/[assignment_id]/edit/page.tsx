@@ -130,13 +130,29 @@ export default function EditAssignment() {
           // The form exposes the autograder toggle, so keep the handout's
           // grade.yml in step with it (added when enabled, removed when
           // disabled). Idempotent, so no need to diff against the prior value.
-          await assignmentSyncAutograderWorkflow(
-            {
-              assignment_id: Number.parseInt(assignment_id as string),
-              class_id: Number.parseInt(course_id as string)
-            },
-            supabase
-          );
+          //
+          // The row is already saved at this point, so a sync failure would leave
+          // the flag and the repos disagreeing. Roll the flag back to what it was
+          // before reporting the error.
+          try {
+            await assignmentSyncAutograderWorkflow(
+              {
+                assignment_id: Number.parseInt(assignment_id as string),
+                class_id: Number.parseInt(course_id as string)
+              },
+              supabase
+            );
+          } catch (syncError) {
+            const prior = queryData?.has_autograder;
+            if (prior !== undefined && prior !== values.has_autograder) {
+              update({
+                resource: "assignments",
+                id: Number.parseInt(assignment_id as string),
+                values: { has_autograder: prior }
+              });
+            }
+            throw syncError;
+          }
         }
         toaster.create({
           title: "Assignment Updated",
@@ -152,7 +168,7 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
+    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update, queryData?.has_autograder]
   );
 
   if (form.refineCore.query?.error) {

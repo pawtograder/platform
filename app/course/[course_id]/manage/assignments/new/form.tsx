@@ -633,10 +633,16 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // student repo, so there is nowhere for it to run without one.
   const autograderDisabled = repoMode === "none" || repoMode === "no_submission";
   const hasAutograder = watch("has_autograder") !== false;
-  // Student repos in this mode fork each student's PRIOR assignment repo rather
-  // than this assignment's handout, so stripping grade.yml from the handout does
-  // not reach them — they inherit whatever the prior assignment had.
-  const forkInheritsWorkflow = repoMode === "fork_from_prior_assignment" && !hasAutograder;
+  // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
+  // student's source-assignment repo, so the two assignments share one handout
+  // and cannot disagree about the autograder. Surface the clash here rather than
+  // letting assignment-create-handout-repo reject the save.
+  const sourceAssignmentId = watch("source_assignment_id");
+  const selectedSource =
+    repoMode === "fork_from_prior_assignment" && sourceAssignmentId
+      ? eligibleSourceAssignments?.find((a) => a.id === Number(sourceAssignmentId))
+      : undefined;
+  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== hasAutograder;
 
   return (
     <CardRoot>
@@ -717,12 +723,12 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                     : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
               }
             >
-              {forkInheritsWorkflow && (
-                <Text fontSize="sm" color="fg.warning" mb={2}>
-                  Note: because student repositories fork each student&apos;s repository from the source assignment,
-                  they will still contain that assignment&apos;s grading workflow if it had one. Remove{" "}
-                  <code>.github/workflows/grade.yml</code> from the source assignment&apos;s handout to stop Actions
-                  running here.
+              {forkAutograderMismatch && (
+                <Text fontSize="sm" color="fg.error" mb={2}>
+                  This assignment forks from &quot;{selectedSource?.title}&quot;, so both share that assignment&apos;s
+                  handout repository and must have the same autograder setting. &quot;{selectedSource?.title}&quot; has
+                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}, so this assignment
+                  must too. Saving will fail until they match.
                 </Text>
               )}
               <Controller
