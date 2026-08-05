@@ -690,35 +690,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
       // A stale grade.yml can still be running in a student repo whose assignment
       // no longer uses an autograder (the repo keeps its copy until the next
-      // handout sync). In that case github-repo-webhook has already recorded the
-      // push directly, so continuing would add a SECOND submission for the same
-      // commit.
+      // handout sync). github-repo-webhook records that push directly, so letting
+      // the workflow through would add a SECOND submission for the same commit —
+      // and would run grading the instructor explicitly turned off.
       //
-      // Gate on that duplicate directly rather than on has_autograder alone:
-      // has_autograder DEFAULTS TO FALSE in the database, so plenty of assignments
-      // with a perfectly working autograder have it unset (anything created outside
-      // the assignment form, and every e2e fixture). Rejecting on the flag alone
-      // disabled grading for all of them.
+      // Gated on the flag alone, deliberately. An earlier revision also required a
+      // push-direct submission to already exist, which made this a race: the
+      // Actions job can reach this function before the webhook finishes cloning and
+      // inserting, and then the stale workflow proceeded anyway. Checking the flag
+      // is race-free.
+      //
+      // This is only safe because has_autograder is now trustworthy: it used to
+      // default to FALSE, so assignments with working autograders had it unset and
+      // rejecting on the flag broke them (it took out every e2e fixture). The
+      // backfill + default flip in 20260805170500 means FALSE now genuinely means
+      // "the instructor turned the autograder off".
       if (repoData.assignments.has_autograder === false) {
-        const { data: pushDirect } = await adminSupabase
-          .from("submissions")
-          .select("id")
-          .eq("repository", repository)
-          .eq("sha", sha)
-          .eq("submitted_via", "git")
-          .eq("run_number", 0)
-          .eq("run_attempt", 0)
-          .limit(1)
-          .maybeSingle();
-        if (pushDirect) {
-          scope?.setTag("rejected_reason", "push_direct_submission_exists");
-          throw new UserVisibleError(
-            "This assignment does not use an autograder, so this grading workflow run was ignored. " +
-              "The submission was already recorded directly from your push — there is nothing else to do. " +
-              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
-              "handout (which no longer has one) to stop these runs."
-          );
-        }
+        scope?.setTag("rejected_reason", "assignment_has_no_autograder");
+        throw new UserVisibleError(
+          "This assignment does not use an autograder, so this grading workflow run was ignored. " +
+            "Your push was recorded as a submission directly — there is nothing else to do. " +
+            "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+            "handout (which no longer has one) to stop these runs."
+        );
       }
       // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (

@@ -30,12 +30,18 @@
 --     to TRUE would route pushes down the Actions path only to fail there,
 --     instead of treating them as hand-graded. FALSE is already the truthful
 --     value for these, whether or not it was set deliberately.
+--   - submission_mode = 'pr' assignments. PR submissions are ingested by the PR
+--     webhook/RPC path, not by Actions, so they never produce grader_results —
+--     FALSE is correct for them and the UI relies on it for the manual-grading
+--     empty state. They still get an auto-created autograder row with a
+--     grader_repo, so the grader_repo condition above does not exclude them.
 
 update public.assignments a
 set has_autograder = true
 where a.has_autograder = false
   and a.template_repo is not null
   and a.repo_mode not in ('none', 'no_submission')
+  and a.submission_mode <> 'pr'
   and exists (
     select 1
     from public.autograder g

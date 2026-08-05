@@ -319,7 +319,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   scope.setTag("restored_workflow_from", restoredFrom);
 
-  await writeFileToRepo(
+  const { commit_sha: restoreCommitSha } = await writeFileToRepo(
     templateRepo,
     GRADE_WORKFLOW_PATH,
     workflowContent,
@@ -329,6 +329,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     undefined,
     scope
   );
+
+  // Advertise the restore commit as the handout head, mirroring what the disable
+  // branch does for the delete commit. The repo-sync paths target
+  // `latest_template_sha`, so until the template-repo push webhook catches up an
+  // instructor syncing student repos right after re-enabling would be told they
+  // are already current, or would sync the previous revision that has no
+  // workflow — while has_autograder is already true.
+  if (restoreCommitSha) {
+    const { error: shaError } = await adminSupabase
+      .from("assignments")
+      .update({ latest_template_sha: restoreCommitSha })
+      .eq("template_repo", templateRepo)
+      .eq("class_id", class_id);
+    if (shaError) {
+      scope.setTag("pin_latest_template_sha_failed", "true");
+      Sentry.captureException(shaError, scope);
+    }
+  }
 
   // From here the handout has a RUNNABLE workflow. If anything below fails we
   // throw, and callers roll has_autograder back to false — which would leave a

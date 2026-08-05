@@ -71,22 +71,42 @@ export default function AutograderPage() {
   const onSubmit = useCallback(
     async (values: FieldValues) => {
       const supabase = createClient();
-      await githubRepoConfigureWebhook(
-        {
-          assignment_id: Number.parseInt(assignment_id as string),
-          new_repo: values.grader_repo,
-          watch_type: "grader_solution"
-        },
-        supabase
-      );
+      const priorHasAutograder = savedHasAutograder.current;
+      const nextHasAutograder = values.assignments.has_autograder;
+
+      // Only validate the grader repo when the autograder will REMAIN enabled.
+      // This reads pawtograder.yml from that repo, so doing it unconditionally
+      // meant a broken or missing grader repo blocked the save — making it
+      // impossible to turn the autograder OFF precisely when an instructor most
+      // needs to, while student pushes keep hitting the broken workflow.
+      if (nextHasAutograder) {
+        await githubRepoConfigureWebhook(
+          {
+            assignment_id: Number.parseInt(assignment_id as string),
+            new_repo: values.grader_repo,
+            watch_type: "grader_solution"
+          },
+          supabase
+        );
+      }
+
+      // Save the autograder row FIRST. It is a plain DB write and the only step
+      // here that can be retried cleanly, so doing it before the irreversible
+      // GitHub work means a failure leaves nothing to unwind — previously it ran
+      // last, so a rejected save reported "Changes not saved" while the flag and
+      // the handout workflow had already been changed.
+      await refineCore.onFinish({
+        grader_repo: values.grader_repo,
+        max_submissions_count: values.max_submissions_count || null,
+        max_submissions_period_secs: values.max_submissions_period_secs || null
+      });
+
       // The flag and the handout's grade.yml must agree, and the sync reads the
       // flag from the DB — so the flag has to be written first. That leaves a
       // window where the sync can fail (shared-handout conflict, GitHub rejects
       // the edit) with the flag already persisted, which would leave the webhook
       // treating the assignment as no-autograder while repos still carry the
       // workflow. Roll the flag back on failure so the two never disagree.
-      const priorHasAutograder = savedHasAutograder.current;
-      const nextHasAutograder = values.assignments.has_autograder;
       await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
       try {
         const syncResult = await assignmentSyncAutograderWorkflow(
@@ -117,14 +137,6 @@ export default function AutograderPage() {
         }
         throw syncError;
       }
-      // Awaited so a failed save rejects inside the form handler and reaches the
-      // "Changes not saved" toast; unawaited it would escape as an unhandled
-      // rejection while the UI reported success.
-      await refineCore.onFinish({
-        grader_repo: values.grader_repo,
-        max_submissions_count: values.max_submissions_count || null,
-        max_submissions_period_secs: values.max_submissions_period_secs || null
-      });
     },
     [refineCore, assignment_id, course_id, mutateAssignment]
   );
