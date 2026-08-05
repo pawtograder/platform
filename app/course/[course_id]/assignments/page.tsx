@@ -36,8 +36,9 @@ type AssignmentUnit = {
   name: string;
   type: "assignment" | "self review";
   due_date: TZDate | undefined;
+  /** The date the row displays as "Due" — the suggested date in emphasized courses. Drives ordering and the 24-hour highlight. */
+  primary_date: TZDate | undefined;
   due_date_component: JSX.Element;
-  due_date_link?: string;
   repo: string;
   is_repo_ready: boolean;
   name_link: string;
@@ -163,21 +164,29 @@ export default function StudentPage() {
       const modifiedDueDate = assignment.due_date
         ? new TZDate(assignment.due_date, course?.time_zone ?? "America/New_York")
         : undefined;
+      // The date this row actually shows as "Due". Ordering and the 24-hour highlight follow it
+      // so the list reads in the order students see, rather than by a hard deadline the
+      // emphasized layout pushes into the background.
+      const suggestedForRow = suggestedDueDateById.get(assignment.id);
+      const primaryDate =
+        emphasizeSuggested && suggestedForRow
+          ? new TZDate(suggestedForRow, course?.time_zone ?? "America/New_York")
+          : modifiedDueDate;
       result.push({
         key: assignment.id.toString(),
         name: assignment.title!,
         type: "assignment",
         due_date: modifiedDueDate,
+        primary_date: primaryDate,
         due_date_component: modifiedDueDate ? (
           <DueDateDisplay
-            suggestedDueDate={suggestedDueDateById.get(assignment.id)}
+            suggestedDueDate={suggestedForRow}
             emphasizeSuggested={emphasizeSuggested}
             dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
           />
         ) : (
           <>-</>
         ),
-        due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
@@ -197,6 +206,7 @@ export default function StudentPage() {
           name: "Self Review for " + assignment.title,
           type: "self review",
           due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
+          primary_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           is_repo_ready: assignment.is_github_ready ?? false,
@@ -206,14 +216,20 @@ export default function StudentPage() {
         });
       }
     });
-    // Sort by effective due date (includes lab-based scheduling and extensions)
+    // Sort by the date each row displays (the suggested date in emphasized courses, otherwise the
+    // effective due date, which includes lab-based scheduling and extensions).
     const sortedResult = result.sort((a, b) => {
-      const dateA = a.due_date ? new TZDate(a.due_date) : new TZDate(new Date());
-      const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
+      const dateA = new TZDate(a.primary_date ?? a.due_date ?? new Date());
+      const dateB = new TZDate(b.primary_date ?? b.due_date ?? new Date());
       return dateB.getTime() - dateA.getTime();
     });
     const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
 
+    // Past/future bucketing intentionally stays on the hard deadline even when the suggested date
+    // is emphasized. The buckets answer "can I still act on this?", and an assignment past its
+    // suggested date is still submittable and still gradeable until the deadline — filing it under
+    // "Past Assignments" would hide exactly the resubmission window this feature exists to
+    // support. The row itself shows both dates, so the distinction stays visible.
     return {
       allAssignedWork: sortedResult,
       workInFuture: sortedResult.filter((work) => {
@@ -319,7 +335,10 @@ export default function StudentPage() {
             </Table.Row>
           )}
           {visibleFuture.map((work) => {
-            const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
+            // Highlight against the date the row displays, so an approaching suggested date is
+            // what gets flagged in courses that emphasize it.
+            const highlightDate = work.primary_date ?? work.due_date;
+            const isCloseDeadline = highlightDate && differenceInHours(highlightDate, new Date()) < 24;
             return (
               <Table.Row
                 key={work.key}
@@ -327,9 +346,7 @@ export default function StudentPage() {
                 borderColor={isCloseDeadline ? "border.info" : undefined}
                 bg={isCloseDeadline ? "bg.info" : undefined}
               >
-                <Table.Cell>
-                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
-                </Table.Cell>
+                <Table.Cell>{work.due_date_component}</Table.Cell>
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
@@ -398,9 +415,7 @@ export default function StudentPage() {
           {visiblePast.map((work) => {
             return (
               <Table.Row key={work.key}>
-                <Table.Cell>
-                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
-                </Table.Cell>
+                <Table.Cell>{work.due_date_component}</Table.Cell>
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>

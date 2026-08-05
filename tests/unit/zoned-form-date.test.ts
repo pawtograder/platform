@@ -51,6 +51,15 @@ describe("parseZonedFormDate", () => {
     expect(parseZonedFormDate(undefined, COURSE_TZ)).toBeNull();
   });
 
+  it("returns null rather than an Invalid Date for a value it cannot normalize", () => {
+    // `appendTimezoneOffset` spots an existing offset only at index length - 6, so a Z-suffixed
+    // value becomes "2026-09-01T13:00:00Z-04:00". Handing the resulting Invalid Date back to the
+    // form validators would make every NaN comparison false and reject a valid entry, so the
+    // helper must reject it outright. Raised in review on PR #896.
+    expect(parseZonedFormDate("2026-09-01T13:00:00Z", COURSE_TZ)).toBeNull();
+    expect(parseZonedFormDate("not a date", COURSE_TZ)).toBeNull();
+  });
+
   it("handles a course zone west of the browser zone", () => {
     // 9:00 AM PDT is 16:00 UTC.
     expect(parseZonedFormDate("2026-09-01T09:00", "America/Los_Angeles")?.toISOString()).toBe(

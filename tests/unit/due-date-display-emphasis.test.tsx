@@ -12,7 +12,7 @@
  */
 import { render, screen, within } from "@testing-library/react";
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
-import { DueDateDisplay } from "@/components/ui/due-date-display";
+import { DueDateDisplay, RESUBMISSION_WINDOW_TOOLTIP } from "@/components/ui/due-date-display";
 
 // The component formats through TimeZoneAwareDate, which reads the browser/course preference
 // from a provider the app mounts in the course layout. Pin it so assertions are deterministic.
@@ -93,6 +93,13 @@ describe("DueDateDisplay", () => {
       const { container: plain } = renderDisplay({ dueDate: HARD_DEADLINE, showDueLabel: true });
 
       expect(emphasizedHtml).toEqual(plain.innerHTML);
+    });
+
+    it("frames the resubmission note as course expectation, not enforcement", () => {
+      // Submission enforcement only ever consults the hard `due_date`, so the tooltip must not
+      // promise that submitting late forfeits the right to resubmit. Raised in review on PR #896.
+      expect(RESUBMISSION_WINDOW_TOOLTIP).toMatch(/your course asks you/i);
+      expect(RESUBMISSION_WINDOW_TOOLTIP).not.toMatch(/keep the option to resubmit/i);
     });
 
     it("keeps trailing content (extension note, late-token button) with the hard deadline", () => {

@@ -110,6 +110,12 @@ export default async function StudentDashboard({
 
   // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
   // first paint instead of flipping once the client course controller hydrates.
+  //
+  // Which assignments count as "upcoming" deliberately stays keyed to the hard deadline in
+  // fetchStudentDashboardBundle (`gte("due_date", now)`), even for emphasized courses: work past
+  // its suggested date is still submittable and still gradeable until the deadline, so dropping it
+  // from this list would hide the resubmission window the flag exists to highlight. The card shows
+  // both dates, so a passed suggested date is still legible.
   const emphasizeSuggestedDueDate = courseFeatureEnabled(
     course?.features as { name: string; enabled: boolean }[] | null,
     COURSE_FEATURES.SUGGESTED_DUE_DATE

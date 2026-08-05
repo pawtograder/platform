@@ -90,7 +90,16 @@ export default function NewAssignmentPage() {
             }
           );
 
+          // A successful response with no id never reaches the cleanup below, so without this the
+          // loading toast would stay up forever and the 5-second timer would still rewrite it to
+          // "Finishing up..." for a creation that never started. (`onError` only covers throws.)
           if (!settings.data.id) {
+            clearTimeout(messageUpdateTimer);
+            toaster.dismiss(loadingToast);
+            toaster.error({
+              title: "Error creating assignment",
+              description: "Self review settings were not created. Please try again."
+            });
             return;
           }
 

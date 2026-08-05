@@ -61,8 +61,27 @@ export function appendTimezoneOffset(date: string | null, timezone: string) {
  * an offset (e.g. loaded back from the database) are passed through unchanged.
  */
 export function parseZonedFormDate(date: string | null | undefined, timezone: string): Date | null {
-  const withOffset = appendTimezoneOffset(date ?? null, timezone);
-  return withOffset ? new Date(withOffset) : null;
+  if (!date) {
+    return null;
+  }
+  let withOffset: string | null;
+  try {
+    withOffset = appendTimezoneOffset(date, timezone);
+  } catch {
+    // `appendTimezoneOffset` calls `toISOString()` on the parsed value, which throws RangeError
+    // for input `Date` cannot parse at all. Callers here are validators, so a bad value is a
+    // "no opinion" answer rather than a crash.
+    return null;
+  }
+  if (!withOffset) {
+    return null;
+  }
+  // `appendTimezoneOffset` recognizes an existing offset only by the character at length - 6, so a
+  // UTC-suffixed value ("2026-09-01T13:00:00Z") slips through and becomes
+  // "2026-09-01T13:00:00Z-04:00". Returning the resulting Invalid Date would make callers' NaN
+  // comparisons silently false, surfacing as a bogus "must be in the future" validation error.
+  const parsed = new Date(withOffset);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**

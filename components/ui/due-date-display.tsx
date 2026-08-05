@@ -11,8 +11,12 @@ type DateFormat = NonNullable<ComponentProps<typeof TimeZoneAwareDate>["format"]
 export const SUGGESTED_DUE_DATE_TOOLTIP =
   "The suggested due date is a recommended target to aim for. The due date below is the hard deadline — you can keep submitting and resubmitting until then.";
 
+// Deliberately framed as a course expectation, not a system rule. Submission enforcement
+// (`autograder-create-submission` -> `calculate_final_due_date`) only ever consults the hard
+// `due_date`; nothing in the platform rejects or down-ranks a submission for arriving after the
+// suggested date. Promising that late work loses the right to resubmit would be false.
 export const RESUBMISSION_WINDOW_TOOLTIP =
-  "Submit by the due date above to have your work graded and to keep the option to resubmit. Resubmissions close at this later date — after it passes you can no longer change your work.";
+  "Your course asks you to submit by the due date above so your work can be graded and returned with time to resubmit. Submissions stay open until this later date; after it passes you can no longer change your work.";
 
 /**
  * Shared student-facing rendering of an assignment's deadline.
