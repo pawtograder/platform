@@ -711,7 +711,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           "This assignment does not use an autograder, so this grading workflow run was ignored. " +
             "Your push was recorded as a submission directly — there is nothing else to do. " +
             "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
-            "handout (which no longer has one) to stop these runs."
+            "handout (which no longer has one) to stop these runs.",
+          // Expected terminal condition, not a server fault: 400 so the action does
+          // not retry (UserVisibleError defaults to 500).
+          400
         );
       }
       // Helper to fetch user roles by GitHub username and class ID (works with or without check run)

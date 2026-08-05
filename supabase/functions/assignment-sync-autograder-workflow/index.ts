@@ -269,7 +269,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
     }
 
-    const realigned = await realignInClassSharers();
+    // Same hazard as the restore path, mirrored: realignInClassSharers throws on
+    // failure, and by now the live workflow is GONE. If that throw escaped, the
+    // caller would roll has_autograder back to true and the assignment would claim
+    // an autograder with no workflow to run. Put the workflow back before
+    // rethrowing so the repo matches the flag the caller restores.
+    let realigned: { id: number; title: string }[] = [];
+    try {
+      realigned = await realignInClassSharers();
+    } catch (e) {
+      if (deleted && liveWorkflow) {
+        scope.setTag("disable_rollback", "true");
+        try {
+          await writeFileToRepo(
+            templateRepo,
+            GRADE_WORKFLOW_PATH,
+            liveWorkflow.content,
+            "Roll back autograder workflow removal: disabling the autograder failed",
+            undefined,
+            scope
+          );
+        } catch (rollbackError) {
+          scope.setTag("disable_rollback_failed", "true");
+          Sentry.captureException(rollbackError, scope);
+        }
+      }
+      throw e;
+    }
+
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
@@ -365,8 +392,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // live grade.yml on a no-autograder assignment: Actions would fire on pushes
   // while the webhook also created direct submissions. So undo the restore before
   // rethrowing, keeping the repo consistent with the flag the caller restores.
+  //
+  // The sharer realignment MUST sit inside this guard. It throws on failure, and
+  // running it after the guard let that throw escape with the workflow live while
+  // the caller set has_autograder=false — precisely the state this comment says
+  // must not happen.
+  let realignedOnRestore: { id: number; title: string }[] = [];
   try {
     await updateAutograderWorkflowHash(templateRepo);
+    realignedOnRestore = await realignInClassSharers();
   } catch (e) {
     scope.setTag("restore_rollback", "true");
     try {
@@ -408,7 +442,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     action: "added" as const,
     has_autograder: true,
     template_repo: templateRepo,
-    realigned_assignments: await realignInClassSharers()
+    realigned_assignments: realignedOnRestore
   };
 }
 

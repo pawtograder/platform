@@ -494,11 +494,14 @@ async function createPushDirectSubmission(
   // build the same matcher to compare like with like. Absent config means we
   // cannot narrow, and the emptiness comparison stays unreliable — see the
   // fail-closed handling below.
-  const { data: graderConfigRow } = await adminSupabase
+  const { data: graderConfigRow, error: graderConfigError } = await adminSupabase
     .from("autograder")
     .select("config")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
+  if (graderConfigError) {
+    Sentry.captureException(graderConfigError, scope);
+  }
   const submissionFilesConfig = (graderConfigRow?.config as unknown as PawtograderConfig | null)?.submissionFiles;
   const expectedFilePatterns = submissionFilesConfig
     ? [...(submissionFilesConfig.files ?? []), ...(submissionFilesConfig.testFiles ?? [])]
@@ -508,6 +511,27 @@ async function createPushDirectSubmission(
       ? (relativePath: string) => expectedFilePatterns.some((pattern) => micromatch.isMatch(relativePath, pattern))
       : null;
   scope.setTag("empty_hash_filter_patterns", String(expectedFilePatterns.length));
+
+  // Without the glob set we cannot narrow the empty-check hash, so the comparison
+  // below is over a different file set than the handout hashes and reads "not
+  // empty" for even an untouched starter tree. That is an UNKNOWN emptiness
+  // result, not a negative one — so when empty submissions are prohibited it must
+  // fail closed exactly like a failed handout-hash lookup, rather than silently
+  // accepting the submission.
+  const emptinessVerifiable = emptyHashFilter !== null && !graderConfigError;
+  if (!permitEmptySubmissions && !emptinessVerifiable) {
+    scope.setTag("push_direct_submission_rejected", "empty_check_unavailable");
+    console.log(
+      `Rejecting push-direct submission for ${repoName}@${sha}: cannot verify emptiness ` +
+        `(${graderConfigError ? "autograder config lookup failed" : "no submissionFiles configured"}) and this ` +
+        `assignment does not permit empty submissions`
+    );
+    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    if (removed) {
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
+    }
+    return;
+  }
 
   // Ingest the repo's files (whole tree; push-mode has no submissionFiles glob).
   // The insert above and this ingest are NOT in one transaction, so if ingest
