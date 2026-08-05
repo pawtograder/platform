@@ -115,7 +115,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // set to the value the instructor just chose, then write the repo once.
   const { data: sharers, error: sharersError } = await adminSupabase
     .from("assignments")
-    .select("id, title, class_id, has_autograder")
+    .select("id, title, class_id, has_autograder, submission_mode")
     .eq("template_repo", templateRepo)
     .neq("id", assignment_id);
   if (sharersError) {
@@ -149,10 +149,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // edit the repo, and if that fails the callers only roll back the assignment
   // the instructor opened. Flipping the others first would leave them disagreeing
   // with a handout that never changed. Collect them now, write them at the end.
+  //
+  // PR-mode sharers are excluded: their submissions are ingested by the PR webhook
+  // and never produce Actions grader results, so has_autograder must stay false for
+  // them (the create/edit paths and the backfill migration all enforce that).
+  // Flipping one to true here would make its submissions render as an autograder
+  // run that never completes. They keep their own correct value while the shared
+  // handout's workflow follows this assignment.
   const inClassOutOfStep = allSharers.filter(
-    (a) => a.class_id === class_id && (a.has_autograder !== false) !== hasAutograder
+    (a) => a.class_id === class_id && a.submission_mode !== "pr" && (a.has_autograder !== false) !== hasAutograder
   );
+  const skippedPrSharers = allSharers.filter((a) => a.class_id === class_id && a.submission_mode === "pr").length;
   scope.setTag("template_repo_sharers_to_realign", String(inClassOutOfStep.length));
+  scope.setTag("template_repo_pr_sharers_skipped", String(skippedPrSharers));
 
   /**
    * Bring in-class sharers to the chosen setting. Called only after the repo edit
@@ -243,7 +252,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       templateRepo,
       GRADE_WORKFLOW_PATH,
       "Remove autograder workflow: this assignment has no autograder",
-      scope
+      scope,
+      // Blob sha already in hand from the park read above, so skip the re-fetch.
+      liveWorkflow?.sha
     );
 
     // Parking and deleting are two commits, so there is an intermediate revision
@@ -257,12 +268,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // (A single-commit park+delete via the Git tree API would remove the race
     // entirely rather than correcting after it; this closes the harmful window
     // without a new GitHub write path.)
+    //
+    // Not class-scoped, unlike the has_autograder realignment above. The repo edit already
+    // applies to every sharer, and the 403 guard established that any foreign sharer
+    // already agrees with the new setting — so this only records where the shared repo's
+    // head actually is now. Scoping it to this class left a foreign sharer advertising the
+    // pre-delete revision, whose sync would reinstall the workflow it just lost.
     if (deleted && deleteCommitSha) {
       const { error: shaError } = await adminSupabase
         .from("assignments")
         .update({ latest_template_sha: deleteCommitSha })
-        .eq("template_repo", templateRepo)
-        .eq("class_id", class_id);
+        .eq("template_repo", templateRepo);
       if (shaError) {
         scope.setTag("pin_latest_template_sha_failed", "true");
         Sentry.captureException(shaError, scope);
@@ -281,7 +297,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (deleted && liveWorkflow) {
         scope.setTag("disable_rollback", "true");
         try {
-          await writeFileToRepo(
+          const { commit_sha: rollbackCommitSha } = await writeFileToRepo(
             templateRepo,
             GRADE_WORKFLOW_PATH,
             liveWorkflow.content,
@@ -289,6 +305,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             undefined,
             scope
           );
+          // Move the advertised head off the delete commit as well. Leaving it there
+          // would have handout syncs strip grade.yml from student repos while the caller
+          // restores has_autograder=true, so those repos could neither run Actions nor
+          // take the push-direct path (which requires the flag to be false).
+          if (rollbackCommitSha) {
+            const { error: rollbackShaError } = await adminSupabase
+              .from("assignments")
+              // Repo-wide, matching the forward pin above and for the same reason: the
+              // commit exists for every sharer, so leaving a foreign sharer pointed at
+              // the delete commit would have its sync strip grade.yml from student repos
+              // even though the workflow is back.
+              .update({ latest_template_sha: rollbackCommitSha })
+              .eq("template_repo", templateRepo);
+            if (rollbackShaError) {
+              scope.setTag("disable_rollback_sha_failed", "true");
+              Sentry.captureException(rollbackShaError, scope);
+            }
+          }
         } catch (rollbackError) {
           scope.setTag("disable_rollback_failed", "true");
           Sentry.captureException(rollbackError, scope);
@@ -316,12 +350,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!(e instanceof RequestError && e.status === 404)) throw e;
   }
   if (existingSha) {
+    // Realign BEFORE hashing. realignInClassSharers throws on failure and the callers
+    // answer that by rolling has_autograder back to false; writing workflow_sha first
+    // would leave that hash behind on an assignment the caller just marked
+    // no-autograder, which the has_autograder backfill reads as evidence that the
+    // autograder was in use.
+    const realigned = await realignInClassSharers();
     await updateAutograderWorkflowHash(templateRepo);
     return {
       action: "unchanged" as const,
       has_autograder: true,
       template_repo: templateRepo,
-      realigned_assignments: await realignInClassSharers()
+      realigned_assignments: realigned
     };
   }
 
@@ -412,12 +452,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // CONTAINS it — so a later student sync would reintroduce the workflow on an
   // assignment whose flag the caller had just set back to false. Leaving the
   // pointer at the older, workflow-free revision is the safe direction.
+  // Not class-scoped, for the same reason as the delete-commit pin above: the repo edit
+  // reached every sharer, so every sharer's advertised head must follow it.
   if (restoreCommitSha) {
     const { error: shaError } = await adminSupabase
       .from("assignments")
       .update({ latest_template_sha: restoreCommitSha })
-      .eq("template_repo", templateRepo)
-      .eq("class_id", class_id);
+      .eq("template_repo", templateRepo);
     if (shaError) {
       scope.setTag("pin_latest_template_sha_failed", "true");
       Sentry.captureException(shaError, scope);
@@ -435,7 +476,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         templateRepo,
         DISABLED_GRADE_WORKFLOW_PATH,
         "Remove parked autograder workflow: the live workflow has been restored",
-        scope
+        scope,
+        parkedSha
       );
     } catch (cleanupError) {
       scope.setTag("parked_copy_cleanup_failed", "true");

@@ -370,13 +370,22 @@ export default function GraderResults() {
     );
   }
   if (!query.data.data.grader_results) {
-    // No autograder result for this submission. has_autograder is maintained as a
-    // reliable signal — set from grader-repo provisioning at create time and
-    // backfilled for existing rows — so when it's false the autograder will never
-    // produce a result: show a "manual grading" notice instead of "autograder
-    // hasn't finished". This only picks the empty-state copy; a submission that DOES
-    // have grader_results always renders them (below), regardless of the flag.
-    if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
+    // No autograder result for this submission. Decide per SUBMISSION first, not from the
+    // assignment's current has_autograder: that flag is mutable while submissions are
+    // historical, so keying only off it leaves a push-direct submission stuck on
+    // "Autograder has not finished running" forever once the autograder is re-enabled.
+    // Channels that never produce grader results: upload, manual entry, a PR submission,
+    // or a push-direct submission (run_number 0 — no Actions run backs it). The
+    // assignment flag is only the fallback for an Actions-backed submission with no result
+    // yet. This picks the empty-state copy only; a submission that DOES have
+    // grader_results always renders them below, regardless of the flag.
+    const via = query.data.data.submitted_via;
+    const submissionCannotHaveResults =
+      via === "upload" ||
+      via === "manual" ||
+      via === "pr" ||
+      (via === "git" && (query.data.data.run_number ?? 0) === 0);
+    if (submissionCannotHaveResults || query.data.data.assignments?.has_autograder === false) {
       return (
         <Container>
           <Box p={4} margin={{ base: "2", lg: "4" }}>

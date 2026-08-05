@@ -46,6 +46,34 @@ export default function NewAssignmentPage() {
       const isPr = getValues("submission_mode") === "pr";
       const willCreateRepos = !isNoRepo;
 
+      // Validate the fork/source autograder agreement BEFORE inserting anything.
+      // assignment-create-handout-repo rejects this mismatch, but by then the
+      // assignment and its self-review settings already exist and nothing deletes
+      // them — the instructor is left with a partial assignment that has no handout.
+      // The form warns about this inline; this is the enforcement.
+      if (repoMode === "fork_from_prior_assignment") {
+        const sourceId = getValues("source_assignment_id");
+        if (sourceId) {
+          const supabase = createClient();
+          const { data: source } = await supabase
+            .from("assignments")
+            .select("title, has_autograder")
+            .eq("id", Number(sourceId))
+            .maybeSingle();
+          const wantsAutograder = !isNoRepo && !isPr && getValues("has_autograder") !== false;
+          if (source && (source.has_autograder !== false) !== wantsAutograder) {
+            toaster.error({
+              title: "Autograder setting must match the source assignment",
+              description:
+                `This assignment forks from "${source.title}", so both share that assignment's handout ` +
+                `repository and must have the same autograder setting. "${source.title}" has the autograder ` +
+                `${source.has_autograder === false ? "disabled" : "enabled"}. Nothing was created.`
+            });
+            return;
+          }
+        }
+      }
+
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
         title: "Creating Assignment",

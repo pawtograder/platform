@@ -26,8 +26,25 @@
 /** Branch prefix used by `syncRepositoryToHandout` for its sync PRs. */
 export const SYNC_BRANCH_PREFIX = "sync-to-";
 
+/**
+ * The full generated sync branch name: `sync-to-` followed by an abbreviated commit
+ * sha (`toSha.substring(0, 7)` in `syncRepositoryToHandout`). Requiring the hex
+ * suffix — and a word boundary before it — is what separates instructor machinery
+ * from a student branch that merely starts with the same words.
+ */
+export const SYNC_BRANCH_NAME_RE = /(?:^|[\s/])sync-to-[0-9a-f]{7,40}\b/;
+
 /** Title prefix used by `syncRepositoryToHandout` for its sync PRs. */
 export const SYNC_PR_TITLE_PREFIX = "[Instructor Update]";
+
+/**
+ * Subject prefix of the COMMIT `syncRepositoryToHandout` creates on the sync branch
+ * (`Sync handout updates to <sha7>`). Distinct from the PR title, and the only marker that
+ * survives a squash or rebase merge: those replay the commit's own message, not the PR
+ * title, so without this a sync landed by anything other than a merge commit reads as
+ * student work.
+ */
+export const SYNC_COMMIT_MESSAGE_PREFIX = "Sync handout updates to";
 
 export type HandoutSyncPushInputs = {
   /** `head_commit.message` of the push, if any. */
@@ -55,14 +72,31 @@ export type HandoutSyncPushInputs = {
 export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
   const { headCommitMessage, afterSha } = inputs;
 
-  // Route 1: GitHub's auto-merge commit for a `sync-to-*` PR. Match the branch
-  // name inside the merge message rather than the whole message, so it survives
-  // "Merge pull request #12 from org/repo-sync-to-abc1234" formatting variants.
+  // Route 1: the sync PR landing on the default branch. Three shapes, because the merge
+  // method is not ours to choose: the worker requests `merge_method: "merge"`, but that is
+  // rejected outright on a repo where merge commits are disabled, leaving the PR for
+  // someone to land with Squash or Rebase instead.
   if (headCommitMessage) {
-    if (headCommitMessage.includes(SYNC_BRANCH_PREFIX) && /merge pull request/i.test(headCommitMessage)) {
+    // Squash or rebase: the sync commit's own message is replayed, and the sync PR has
+    // exactly one commit so GitHub uses that commit's subject rather than the PR title.
+    // Neither `sync-to-` nor the PR-title prefix appears anywhere in it.
+    if (headCommitMessage.split("\n").some((line) => line.trimStart().startsWith(SYNC_COMMIT_MESSAGE_PREFIX))) {
       return true;
     }
-    if (headCommitMessage.includes(SYNC_PR_TITLE_PREFIX)) {
+    // Merge-commit shape: "Merge pull request #N from <owner>/sync-to-<sha7>". Matched
+    // against the FULL generated branch name, not a bare `sync-to-` substring — the
+    // worker always names the branch `sync-to-<short sha>`, so requiring the hex suffix
+    // keeps a student branch called e.g. `sync-to-tests` from being mistaken for
+    // instructor machinery. On a repo-only assignment that push IS the submission, so a
+    // false positive here silently discards their work.
+    if (/merge pull request/i.test(headCommitMessage) && SYNC_BRANCH_NAME_RE.test(headCommitMessage)) {
+      return true;
+    }
+    // Squash-merged sync PR: the commit message is the PR title, so the prefix is at
+    // the START of a line. Anchored deliberately — a bare `includes` matched anywhere in
+    // the message, so a student writing "fixing what [Instructor Update] broke" had that
+    // push silently discarded instead of recorded as their submission.
+    if (headCommitMessage.split("\n").some((line) => line.trimStart().startsWith(SYNC_PR_TITLE_PREFIX))) {
       return true;
     }
   }

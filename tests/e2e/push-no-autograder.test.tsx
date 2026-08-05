@@ -327,19 +327,24 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
       .eq("id", assignmentId);
     expect(cfgErr).toBeNull();
 
-    const res = await deliverPush(makePushDetail(repoName, handoutSha, "Add starter files"), `e2e-push-${SAFE_ID}-6`);
-    expect(res.status, await res.text().catch(() => "")).toBe(200);
+    // try/finally, not a trailing statement: these tests run serially against one
+    // assignment and repo, so a restore skipped by a failed assertion leaves the next
+    // test asserting "no submission" against still-mutated state, where it passes
+    // vacuously and hides whatever broke.
+    try {
+      const res = await deliverPush(makePushDetail(repoName, handoutSha, "Add starter files"), `e2e-push-${SAFE_ID}-6`);
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 1500));
-    const { data: subs } = await supabase
-      .from("submissions")
-      .select("id")
-      .eq("repository", repoName)
-      .eq("sha", handoutSha);
-    expect(subs ?? []).toHaveLength(0);
-
-    // Clean up so later tests in this file aren't affected by the marker sha.
-    await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase
+        .from("submissions")
+        .select("id")
+        .eq("repository", repoName)
+        .eq("sha", handoutSha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+    }
   });
 
   // The `repositories` row is inserted before createRepo runs, so GitHub's initial
@@ -355,17 +360,21 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(notReadyErr).toBeNull();
 
     const sha = `55555555${SAFE_ID}`.slice(0, 40);
-    const res = await deliverPush(
-      makePushDetail(repoName, sha, "Initial commit from template"),
-      `e2e-push-${SAFE_ID}-7`
-    );
-    expect(res.status, await res.text().catch(() => "")).toBe(200);
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, sha, "Initial commit from template"),
+        `e2e-push-${SAFE_ID}-7`
+      );
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 1500));
-    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
-
-    await supabase.from("repositories").update({ is_github_ready: true }).eq("id", repoId);
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      // Restored even on failure: leaving the repo unready would make the next test's
+      // "no submission" assertion pass for the wrong reason.
+      await supabase.from("repositories").update({ is_github_ready: true }).eq("id", repoId);
+    }
   });
 
   // Switching an assignment to a no-repo mode coerces has_autograder=false but
@@ -378,17 +387,19 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(modeErr).toBeNull();
 
     const sha = `66666666${SAFE_ID}`.slice(0, 40);
-    const res = await deliverPush(
-      makePushDetail(repoName, sha, "still pushing to my old repo"),
-      `e2e-push-${SAFE_ID}-8`
-    );
-    expect(res.status, await res.text().catch(() => "")).toBe(200);
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, sha, "still pushing to my old repo"),
+        `e2e-push-${SAFE_ID}-8`
+      );
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 1500));
-    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
-
-    await supabase.from("assignments").update({ repo_mode: "template_only_staff" }).eq("id", assignmentId);
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      await supabase.from("assignments").update({ repo_mode: "template_only_staff" }).eq("id", assignmentId);
+    }
   });
 });
 

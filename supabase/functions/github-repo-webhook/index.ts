@@ -767,12 +767,14 @@ async function handlePushToStudentRepo(
   // Also load has_autograder + due-date inputs for the push-mode zero-runner
   // path below (a push-mode assignment with no autograder creates the
   // submission directly here instead of dispatching grade.yml).
-  // `*` rather than an explicit column list: once the list grows past a certain
-  // length postgrest-js's select-string type parser gives up and collapses the row
-  // to GenericStringError, making every field access below an unchecked type error.
+  // Named columns, not `*`: this query runs on EVERY push delivery for every student repo,
+  // and `assignments` carries an unbounded `description` body that nothing here reads.
+  // Naming them also keeps the column dependency visible to a rename.
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
-    .select("*")
+    .select(
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha"
+    )
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -1424,7 +1426,16 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
         throw studentRepoError;
       }
       if (studentRepo) {
-        if (payload.ref !== "refs/heads/main") {
+        // Compare against the repo's ACTUAL default branch, not a hardcoded "main".
+        // For no-autograder assignments this webhook is the only thing that creates
+        // submissions, so a repo whose default branch is `master` (or anything else)
+        // had every push silently ignored. Actions-backed repos survived the
+        // hardcoding because the workflow could still call autograder-create-submission.
+        // Falls back to "main" when the payload omits default_branch.
+        const defaultBranch = payload.repository?.default_branch || "main";
+        if (payload.ref !== `refs/heads/${defaultBranch}`) {
+          scope.setTag("skipped_reason", "not_default_branch");
+          scope.setTag("repo_default_branch", defaultBranch);
           return;
         }
         scope.setTag("student_repo", studentRepo.id.toString());

@@ -864,7 +864,13 @@ export async function deleteFileFromRepo(
   repoName: string,
   path: string,
   message: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  /**
+   * Blob sha of the file being deleted, when the caller already read it. Skips a redundant
+   * contents-API round trip (and the extra failure point it adds) in the common case where
+   * the caller has just fetched the file.
+   */
+  knownSha?: string
 ): Promise<{ deleted: boolean; commit_sha?: string }> {
   scope?.setTag("github_operation", "delete_file");
   scope?.setTag("repository", repoName);
@@ -881,16 +887,18 @@ export async function deleteFileFromRepo(
   }
 
   // The contents API needs the blob sha of the file being deleted.
-  let sha: string | undefined;
-  try {
-    const file = await getFileFromRepo(repoName, path, scope);
-    sha = file.sha;
-  } catch (error) {
-    if (error instanceof RequestError && error.status === 404) {
-      console.log(`Not deleting ${path} from ${repoName}: file does not exist`);
-      return { deleted: false };
+  let sha: string | undefined = knownSha;
+  if (!sha) {
+    try {
+      const file = await getFileFromRepo(repoName, path, scope);
+      sha = file.sha;
+    } catch (error) {
+      if (error instanceof RequestError && error.status === 404) {
+        console.log(`Not deleting ${path} from ${repoName}: file does not exist`);
+        return { deleted: false };
+      }
+      throw error;
     }
-    throw error;
   }
   if (!sha) {
     throw new Error(`Delete file from repo failed: could not resolve blob sha for ${path} in ${repoName}`);

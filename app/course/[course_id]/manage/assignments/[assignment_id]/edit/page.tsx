@@ -155,16 +155,46 @@ export default function EditAssignment() {
               },
               supabase
             );
-            // The form exposes the autograder toggle, so keep the handout's
-            // grade.yml in step with it (added when enabled, removed when
-            // disabled). Idempotent, so no need to diff against the prior value.
-            await assignmentSyncAutograderWorkflow(
-              {
-                assignment_id: Number.parseInt(assignment_id as string),
-                class_id: Number.parseInt(course_id as string)
-              },
-              supabase
-            );
+            // The form exposes the autograder toggle, so keep the handout's grade.yml in
+            // step with it (added when enabled, removed when disabled).
+            //
+            // ONLY when the flag actually changed. The sync is idempotent in outcome but
+            // NOT in effect: it rewrites the handout repo, re-pins latest_template_sha,
+            // and realigns every in-class assignment sharing that handout. Running it on
+            // every save meant an unrelated edit (a due date, say) stripped grade.yml from
+            // the handout of any assignment already sitting at has_autograder=false — a
+            // state reached without the instructor asking for it, since the backfill
+            // migration leaves it false whenever there is no grader_repo. PR mode is
+            // excluded outright: its submissions never run Actions, so the handout's
+            // workflow is irrelevant, and the handout doubles as the upstream students
+            // fork — not something to rewrite as a side effect of an unrelated edit.
+            const autograderFlagChanged =
+              queryData?.has_autograder !== undefined && queryData.has_autograder !== values.has_autograder;
+            if (autograderFlagChanged && values.submission_mode !== "pr") {
+              const syncResult = await assignmentSyncAutograderWorkflow(
+                {
+                  assignment_id: Number.parseInt(assignment_id as string),
+                  class_id: Number.parseInt(course_id as string)
+                },
+                supabase
+              );
+              // The workflow file belongs to the shared handout repo, so sharers cannot
+              // disagree and the sync brings them along. Say so — FunctionTypes.d.ts makes
+              // this the caller's job, and the autograder page already does it; without it
+              // an instructor silently changes assignments they never opened.
+              const realigned = syncResult?.realigned_assignments ?? [];
+              if (realigned.length > 0) {
+                toaster.create({
+                  title: `Also updated ${realigned.length} assignment${realigned.length === 1 ? "" : "s"}`,
+                  description:
+                    `${realigned.map((a) => a.title).join(", ")} share this handout repository, so the autograder ` +
+                    `was turned ${values.has_autograder ? "on" : "off"} for ${
+                      realigned.length === 1 ? "it" : "them"
+                    } too.`,
+                  type: "info"
+                });
+              }
+            }
           } catch (syncError) {
             const prior = queryData?.has_autograder;
             if (prior !== undefined && prior !== values.has_autograder) {

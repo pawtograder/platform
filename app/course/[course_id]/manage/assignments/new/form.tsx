@@ -604,7 +604,6 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     register,
     control,
     watch,
-    setValue,
     formState: { errors }
   } = form;
 
@@ -634,16 +633,12 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // student repo, so there is nowhere for it to run without one.
   const autograderDisabled = repoMode === "none" || repoMode === "no_submission";
   const hasAutograder = watch("has_autograder") !== false;
-  // Switching to a no-repo mode must clear the form value, not just disable the
-  // control: a disabled checkbox keeps whatever it was last set to, so it would
-  // sit visibly checked while the helper text says the autograder is
-  // unavailable. Both save paths already coerce the persisted value, so this is
-  // about the form telling the truth (and not depending on that coercion).
-  useEffect(() => {
-    if (autograderDisabled && hasAutograder) {
-      setValue("has_autograder", false, { shouldDirty: true });
-    }
-  }, [autograderDisabled, hasAutograder, setValue]);
+  // Shown as unchecked while a no-repo mode is selected, WITHOUT writing the form value.
+  // Forcing the value to false in an effect was a one-way door: flipping repo_mode to
+  // 'none' and back left it false with the checkbox re-enabled and unchecked, silently
+  // turning a mode experiment into a repo-only assignment. Both save paths already coerce
+  // the persisted value for no-repo modes, so display is all that is needed here.
+  const autograderChecked = !autograderDisabled && hasAutograder;
   // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
   // student's source-assignment repo, so the two assignments share one handout
   // and cannot disagree about the autograder. Surface the clash here rather than
@@ -653,7 +648,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     repoMode === "fork_from_prior_assignment" && sourceAssignmentId
       ? eligibleSourceAssignments?.find((a) => a.id === Number(sourceAssignmentId))
       : undefined;
-  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== hasAutograder;
+  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== autograderChecked;
 
   return (
     <CardRoot>
@@ -729,7 +724,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
               helperText={
                 autograderDisabled
                   ? undefined
-                  : hasAutograder
+                  : autograderChecked
                     ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
                     : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
               }
@@ -747,7 +742,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 control={control}
                 render={({ field }) => (
                   <Checkbox.Root
-                    checked={field.value !== false}
+                    checked={!autograderDisabled && field.value !== false}
                     disabled={autograderDisabled}
                     onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                   >
