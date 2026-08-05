@@ -1,0 +1,996 @@
+{
+  "recordedAt": "2026-08-05T19:25:05.535Z",
+  "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
+  "entries": {
+    "assignment-detail|dark|aria-valid-attr-value|incomplete": {
+      "route": "assignment-detail",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "critical",
+      "sample": "#popover\\:«rq»\\:trigger"
+    },
+    "assignment-detail|dark|color-contrast|incomplete": {
+      "route": "assignment-detail",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "assignment-detail|light|aria-valid-attr-value|incomplete": {
+      "route": "assignment-detail",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "critical",
+      "sample": "#popover\\:«rq»\\:trigger"
+    },
+    "assignment-detail|light|color-contrast|incomplete": {
+      "route": "assignment-detail",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "assignment-detail|light|reflow-320|violation": {
+      "route": "assignment-detail",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[assignment detail] no page-level horizontal scrolling at 320px (scrollWidth 394 vs clientWidth 320)"
+    },
+    "assignments|dark|aria-valid-attr-value|incomplete": {
+      "route": "assignments",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«ro»\\:trigger"
+    },
+    "assignments|dark|color-contrast|incomplete": {
+      "route": "assignments",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "span[data-visual-test=\"transparent\"]"
+    },
+    "assignments|light|aria-valid-attr-value|incomplete": {
+      "route": "assignments",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«ro»\\:trigger"
+    },
+    "assignments|light|color-contrast|incomplete": {
+      "route": "assignments",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "span[data-visual-test=\"transparent\"]"
+    },
+    "canvas-classes|light|landmark-structure|violation": {
+      "route": "canvas-classes",
+      "scheme": "light",
+      "rule": "landmark-structure",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[canvas classes] main landmark renders"
+    },
+    "canvas-classes|light|reflow-320|violation": {
+      "route": "canvas-classes",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[canvas classes] main landmark visible at 320px"
+    },
+    "course-home|dark|aria-valid-attr-value|incomplete": {
+      "route": "course-home",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«r10»\\:trigger"
+    },
+    "course-home|dark|color-contrast|incomplete": {
+      "route": "course-home",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "serious",
+      "sample": "span[data-visual-placeholder=\"date\"]"
+    },
+    "course-home|light|aria-valid-attr-value|incomplete": {
+      "route": "course-home",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«r10»\\:trigger"
+    },
+    "course-home|light|color-contrast|incomplete": {
+      "route": "course-home",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "serious",
+      "sample": "span[data-visual-placeholder=\"date\"]"
+    },
+    "course-home|light|color-contrast|violation": {
+      "route": "course-home",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-10d65bq"
+    },
+    "discussion-list|dark|color-contrast|incomplete": {
+      "route": "discussion-list",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "p[data-visual-test=\"transparent\"]"
+    },
+    "discussion-list|light|color-contrast|incomplete": {
+      "route": "discussion-list",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "p[data-visual-test=\"transparent\"]"
+    },
+    "discussion-new|dark|aria-valid-attr-value|incomplete": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#radio-group\\:«ri»"
+    },
+    "discussion-new|dark|color-contrast|incomplete": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 11,
+      "impact": "serious",
+      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+    },
+    "discussion-new|dark|label|violation": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "label",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "textarea"
+    },
+    "discussion-new|dark|svg-img-alt|violation": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "svg-img-alt",
+      "kind": "violation",
+      "nodes": 9,
+      "impact": "serious",
+      "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
+    },
+    "discussion-new|light|aria-valid-attr-value|incomplete": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#radio-group\\:«ri»"
+    },
+    "discussion-new|light|color-contrast|incomplete": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 11,
+      "impact": "serious",
+      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+    },
+    "discussion-new|light|label|violation": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "label",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "textarea"
+    },
+    "discussion-new|light|svg-img-alt|violation": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "svg-img-alt",
+      "kind": "violation",
+      "nodes": 9,
+      "impact": "serious",
+      "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
+    },
+    "discussion-thread|dark|color-contrast|incomplete": {
+      "route": "discussion-thread",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-0[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+    },
+    "discussion-thread|light|color-contrast|incomplete": {
+      "route": "discussion-thread",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-0[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+    },
+    "discussion-thread|light|landmark-structure|violation": {
+      "route": "discussion-thread",
+      "scheme": "light",
+      "rule": "landmark-structure",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[discussion thread] <title> includes the product name (\"Pawtograder\")"
+    },
+    "notifications|dark|aria-valid-attr-value|incomplete": {
+      "route": "notifications",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rf»\\:trigger"
+    },
+    "notifications|light|aria-valid-attr-value|incomplete": {
+      "route": "notifications",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rf»\\:trigger"
+    },
+    "notifications|light|reflow-320|violation": {
+      "route": "notifications",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[notifications] no page-level horizontal scrolling at 320px (scrollWidth 353 vs clientWidth 320)"
+    },
+    "office-hours-queue-new|dark|aria-command-name|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "aria-command-name",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-fcnpod"
+    },
+    "office-hours-queue-new|dark|aria-prohibited-attr|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "aria-prohibited-attr",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-xqf4pu"
+    },
+    "office-hours-queue-new|dark|color-contrast|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
+    },
+    "office-hours-queue-new|dark|color-contrast|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-ap60qa > a[href$=\"discussion\"]"
+    },
+    "office-hours-queue-new|dark|duplicate-id-aria|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": ".chakra-field__label.css-65zcwe[for=\"«rt»\"]"
+    },
+    "office-hours-queue-new|dark|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "#«rt»"
+    },
+    "office-hours-queue-new|light|aria-command-name|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "aria-command-name",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-fcnpod"
+    },
+    "office-hours-queue-new|light|aria-prohibited-attr|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "aria-prohibited-attr",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-xqf4pu"
+    },
+    "office-hours-queue-new|light|color-contrast|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
+    },
+    "office-hours-queue-new|light|duplicate-id-aria|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": ".chakra-field__label.css-65zcwe[for=\"«rt»\"]"
+    },
+    "office-hours-queue-new|light|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "#«rt»"
+    },
+    "office-hours-queue-new|light|reflow-320|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[new help request] no page-level horizontal scrolling at 320px (scrollWidth 812 vs clientWidth 320)"
+    },
+    "office-hours-search|dark|color-contrast|incomplete": {
+      "route": "office-hours-search",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "p[data-visual-test=\"transparent\"]"
+    },
+    "office-hours-search|light|color-contrast|incomplete": {
+      "route": "office-hours-search",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "p[data-visual-test=\"transparent\"]"
+    },
+    "public-poll|light|landmark-structure|violation": {
+      "route": "public-poll",
+      "scheme": "light",
+      "rule": "landmark-structure",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[public poll] main landmark renders"
+    },
+    "public-poll|light|reflow-320|violation": {
+      "route": "public-poll",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[public poll] main landmark visible at 320px"
+    },
+    "regrade-requests|dark|color-contrast|incomplete": {
+      "route": "regrade-requests",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": "td:nth-child(7) > .css-l0zmib[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+    },
+    "regrade-requests|light|color-contrast|incomplete": {
+      "route": "regrade-requests",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": "td:nth-child(7) > .css-l0zmib[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+    },
+    "regrade-requests|light|color-contrast|violation": {
+      "route": "regrade-requests",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-10d65bq"
+    },
+    "submission-checks|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-checks",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-checks|dark|color-contrast|incomplete": {
+      "route": "submission-checks",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-checks|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-checks",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-checks|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-checks",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-checks|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-checks",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-checks|light|color-contrast|incomplete": {
+      "route": "submission-checks",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-checks|light|duplicate-id-aria|incomplete": {
+      "route": "submission-checks",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-checks|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-checks",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-deployments|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-deployments|dark|color-contrast|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-deployments|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-deployments|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-deployments|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-deployments|light|color-contrast|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-deployments|light|duplicate-id-aria|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-deployments|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-deployments",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-files|dark|aria-prohibited-attr|incomplete": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "aria-prohibited-attr",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-dj5smh"
+    },
+    "submission-files|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 6,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-files|dark|color-contrast|incomplete": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 8,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-files|dark|color-contrast|violation": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".mtk7:nth-child(2)"
+    },
+    "submission-files|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r1d» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-files|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r1c»"
+    },
+    "submission-files|light|aria-prohibited-attr|incomplete": {
+      "route": "submission-files",
+      "scheme": "light",
+      "rule": "aria-prohibited-attr",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": ".css-dj5smh"
+    },
+    "submission-files|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-files",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 6,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-files|light|color-contrast|incomplete": {
+      "route": "submission-files",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 8,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-files|light|duplicate-id-aria|incomplete": {
+      "route": "submission-files",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r1d» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-files|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-files",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r1c»"
+    },
+    "submission-grade|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-grade",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-grade|dark|color-contrast|incomplete": {
+      "route": "submission-grade",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-grade|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-grade",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-grade|light|color-contrast|incomplete": {
+      "route": "submission-grade",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-repo-analytics|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-repo-analytics|dark|color-contrast|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-repo-analytics|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-repo-analytics|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-repo-analytics|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-repo-analytics|light|color-contrast|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-repo-analytics|light|duplicate-id-aria|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-repo-analytics|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-repo-analytics",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-results|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-results",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-results|dark|color-contrast|incomplete": {
+      "route": "submission-results",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-results|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-results",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-results|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-results",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-results|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-results",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-results|light|color-contrast|incomplete": {
+      "route": "submission-results",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-results|light|duplicate-id-aria|incomplete": {
+      "route": "submission-results",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-results|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-results",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-root|dark|aria-valid-attr-value|incomplete": {
+      "route": "submission-root",
+      "scheme": "dark",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-root|dark|color-contrast|incomplete": {
+      "route": "submission-root",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-root|dark|duplicate-id-aria|incomplete": {
+      "route": "submission-root",
+      "scheme": "dark",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-root|dark|form-field-multiple-labels|incomplete": {
+      "route": "submission-root",
+      "scheme": "dark",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submission-root|light|aria-valid-attr-value|incomplete": {
+      "route": "submission-root",
+      "scheme": "light",
+      "rule": "aria-valid-attr-value",
+      "kind": "incomplete",
+      "nodes": 5,
+      "impact": "critical",
+      "sample": "#popover\\:«rp»\\:trigger"
+    },
+    "submission-root|light|color-contrast|incomplete": {
+      "route": "submission-root",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 4,
+      "impact": "serious",
+      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submission-root|light|duplicate-id-aria|incomplete": {
+      "route": "submission-root",
+      "scheme": "light",
+      "rule": "duplicate-id-aria",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "critical",
+      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
+    },
+    "submission-root|light|form-field-multiple-labels|incomplete": {
+      "route": "submission-root",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 3,
+      "impact": "moderate",
+      "sample": "#«r11»"
+    },
+    "submissions-list|dark|color-contrast|incomplete": {
+      "route": "submissions-list",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": "span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "submissions-list|light|color-contrast|incomplete": {
+      "route": "submissions-list",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 2,
+      "impact": "serious",
+      "sample": "span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+    },
+    "survey-taking|light|color-contrast|violation": {
+      "route": "survey-taking",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".sd-btn"
+    },
+    "unsubscribe-thread|dark|color-contrast|violation": {
+      "route": "unsubscribe-thread",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "h2"
+    }
+  }
+}
