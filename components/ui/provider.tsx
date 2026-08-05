@@ -5,16 +5,20 @@ import { createClient } from "@/utils/supabase/client";
 import { ChakraProvider } from "@chakra-ui/react";
 
 import { Refine } from "@refinedev/core";
-import { dataProvider, liveProvider } from "@refinedev/supabase";
+import { liveProvider } from "@refinedev/supabase";
+import { createDataProvider } from "@/lib/refineDataProvider";
 import { ColorModeProvider, type ColorModeProviderProps } from "./color-mode";
 
 const supabaseClient = createClient();
+// Built once, outside the component, so a re-render doesn't hand <Refine> a
+// freshly-allocated provider object on every pass.
+const refineDataProvider = createDataProvider(supabaseClient);
 export function Provider(props: ColorModeProviderProps) {
   // const notificationProvider = useNotificationProvider();
   return (
     <ChakraProvider value={system}>
       <Refine
-        dataProvider={dataProvider(supabaseClient)}
+        dataProvider={refineDataProvider}
         //notificationProvider={notificationProvider}
         options={{ disableTelemetry: true }}
         liveProvider={liveProvider(supabaseClient)}

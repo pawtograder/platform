@@ -36,18 +36,18 @@ export default function EditAssignment() {
   });
   useEffect(() => {
     if (queryData) {
-      form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
-      form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
-      form.setValue("allow_early", selfReviewSetting?.data.allow_early);
-      form.setValue("self_review_release_at", selfReviewSetting?.data.release_at ?? null);
+      form.setValue("eval_config", selfReviewSetting?.data?.enabled ? "use_eval" : "base_only");
+      form.setValue("deadline_offset", selfReviewSetting?.data?.deadline_offset);
+      form.setValue("allow_early", selfReviewSetting?.data?.allow_early);
+      form.setValue("self_review_release_at", selfReviewSetting?.data?.release_at ?? null);
     }
   }, [
     queryData,
     form,
-    selfReviewSetting?.data.allow_early,
-    selfReviewSetting?.data.deadline_offset,
-    selfReviewSetting?.data.enabled,
-    selfReviewSetting?.data.release_at
+    selfReviewSetting?.data?.allow_early,
+    selfReviewSetting?.data?.deadline_offset,
+    selfReviewSetting?.data?.enabled,
+    selfReviewSetting?.data?.release_at
   ]);
 
   const onFinish = useCallback(
@@ -59,7 +59,7 @@ export default function EditAssignment() {
           update(
             {
               resource: "assignment_self_review_settings",
-              id: data?.data.self_review_setting_id,
+              id: data?.data?.self_review_setting_id,
               values: {
                 enabled: isEnabled,
                 deadline_offset: isEnabled ? values.deadline_offset : null,
@@ -139,7 +139,7 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
+    [form.refineCore, assignment_id, course_id, data?.data?.self_review_setting_id, update]
   );
 
   if (form.refineCore.query?.error) {

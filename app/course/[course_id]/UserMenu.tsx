@@ -374,12 +374,12 @@ const ProfileChangesMenu = () => {
   });
 
   useEffect(() => {
-    if (publicProfile) {
-      setPublicAvatarLink(publicProfile?.data.avatar_url);
+    if (publicProfile?.data) {
+      setPublicAvatarLink(publicProfile.data.avatar_url);
     }
-    if (privateProfile) {
-      setPrivateAvatarLink(privateProfile?.data.avatar_url);
-      setName(privateProfile?.data.name ?? "");
+    if (privateProfile?.data) {
+      setPrivateAvatarLink(privateProfile.data.avatar_url);
+      setName(privateProfile.data.name ?? "");
     }
   }, [publicProfile, privateProfile]);
 
@@ -389,7 +389,7 @@ const ProfileChangesMenu = () => {
    */
   const updateProfile = async () => {
     removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
-    if (publicAvatarLink && publicProfile) {
+    if (publicAvatarLink && publicProfile?.data) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: publicAvatarLink })
@@ -402,7 +402,7 @@ const ProfileChangesMenu = () => {
         });
       }
     }
-    if (privateAvatarLink && privateProfile) {
+    if (privateAvatarLink && privateProfile?.data) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: privateAvatarLink })
@@ -416,7 +416,7 @@ const ProfileChangesMenu = () => {
       }
     }
 
-    if (privateProfile) {
+    if (privateProfile?.data) {
       const trimmedName = name?.trim() || "";
       if (trimmedName.length === 0) {
         toaster.error({
@@ -441,12 +441,12 @@ const ProfileChangesMenu = () => {
     invalidate({
       resource: "profiles",
       invalidates: ["list", "detail"],
-      id: publicProfile?.data.id
+      id: publicProfile?.data?.id
     });
     invalidate({
       resource: "profiles",
       invalidates: ["list", "detail"],
-      id: privateProfile?.data.id
+      id: privateProfile?.data?.id
     });
   };
   /**
@@ -535,7 +535,7 @@ const ProfileChangesMenu = () => {
                     </Flex>
                     <Text fontSize="sm" color="fg.muted" mt={6}>
                       Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
-                      {publicProfile?.data.name}&quot;.
+                      {publicProfile?.data?.name}&quot;.
                     </Text>
                   </Flex>
                 </Flex>
@@ -545,12 +545,12 @@ const ProfileChangesMenu = () => {
                   <Button
                     variant="outline"
                     onClick={() => {
-                      setPrivateAvatarLink(privateProfile?.data.avatar_url ?? null);
-                      setPublicAvatarLink(publicProfile?.data.avatar_url ?? null);
-                      setName(privateProfile?.data.name ?? "");
+                      setPrivateAvatarLink(privateProfile?.data?.avatar_url ?? null);
+                      setPublicAvatarLink(publicProfile?.data?.avatar_url ?? null);
+                      setName(privateProfile?.data?.name ?? "");
                       removeUnusedImages(
-                        privateProfile?.data.avatar_url ?? null,
-                        publicProfile?.data.avatar_url ?? null
+                        privateProfile?.data?.avatar_url ?? null,
+                        publicProfile?.data?.avatar_url ?? null
                       );
                     }}
                   >
@@ -733,8 +733,8 @@ function UserSettingsMenu() {
       <Drawer.Trigger asChild>
         <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
           <Avatar.Root size="sm" colorPalette="gray">
-            <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
+            <Avatar.Fallback name={privateProfile?.data?.name?.charAt(0) ?? "?"} />
+            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data?.avatar_url)} alt="" />
           </Avatar.Root>
         </IconButton>
       </Drawer.Trigger>
@@ -747,12 +747,12 @@ function UserSettingsMenu() {
                 <HStack justifyContent="space-between" alignItems="flex-start" width="100%" pb={2}>
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
-                      <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
+                      <Avatar.Fallback name={privateProfile?.data?.name?.charAt(0) ?? "?"} />
+                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data?.avatar_url)} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
-                        {privateProfile?.data.name}
+                        {privateProfile?.data?.name}
                       </Text>
                       {gitHubUsername && (
                         <Text fontSize="sm">
