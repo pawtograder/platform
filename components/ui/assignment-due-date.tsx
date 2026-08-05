@@ -45,6 +45,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   // cannot move. Name the thing it actually extends instead.
   const showSuggested = useSuggestedDueDateEmphasisEnabled() && Boolean(assignment.suggested_due_date);
   const deadlineNoun = showSuggested ? "resubmission deadline" : "due date";
+  const deadlineNounTitle = showSuggested ? "Resubmission Deadline" : "Due Date";
 
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
@@ -99,7 +100,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     >
       <Dialog.Trigger asChild>
         <Button size="xs" variant="surface" colorPalette="yellow">
-          {showSuggested ? "Extend resubmission deadline" : "Extend Due Date"}
+          Extend {deadlineNounTitle}
         </Button>
       </Dialog.Trigger>
       {requireTokensBeforeDueDate && (
@@ -113,7 +114,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
           <Dialog.Header>
             <Dialog.Description>
               <Dialog.Title>
-                {showSuggested ? "Extend Resubmission Deadline" : "Extend Due Date"} For {assignment.title}
+                Extend {deadlineNounTitle} For {assignment.title}
               </Dialog.Title>
               {requireTokensBeforeDueDate && (
                 <>
@@ -124,8 +125,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
               The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
               extends the {deadlineNoun} by 24 hours.{" "}
               {requireTokensBeforeDueDate
-                ? "Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due."
-                : "Tokens can be applied before the deadline using this form, or will be automatically applied when you submit after the deadline."}{" "}
+                ? `Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the ${deadlineNoun} passes.`
+                : `Tokens can be applied before the ${deadlineNoun} using this form, or will be automatically applied when you submit after it.`}{" "}
               You can apply up to {assignment.max_late_tokens} tokens to this assignment. You have already applied{" "}
               {lateTokensAppliedToAssignment} tokens to this assignment.
               {assignment.max_late_tokens > 1 && (
@@ -227,6 +228,9 @@ export function AssignmentDueDate({
       suggestedDueDate={assignment.suggested_due_date}
       showSuggested={showSuggestedDueDate}
       showDueLabel={showDue}
+      // `dueDateNode` renders it; `dueDate` is the value behind that node, so the component can
+      // tell whether the suggested date actually precedes this student's effective deadline.
+      dueDate={dueDate}
       dueDateNode={
         <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
           <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" visualPlaceholder="date" />

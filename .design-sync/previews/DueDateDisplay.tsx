@@ -37,29 +37,18 @@ export const NoDate = () => (
 );
 
 // `suggested-due-date` course flag ON: the suggested date IS the due date, and the hard deadline
-// becomes the close of the resubmission window.
+// becomes the close of the resubmission window. Both dates go in as plain nodes — the emphasis
+// hierarchy is the whole point of this card, and a bare `suggestedDueDate` would render through
+// TimeZoneAwareDate and capture blank (see the harness note at the top of this file).
 export const SuggestedDateShown = () => (
   <Box maxW="420px">
     <DueDateDisplay
       showDueLabel
       showSuggested
       suggestedDueDate="2026-03-18T23:59:00-04:00"
+      suggestedDueDateNode={<Text>Mar 18, 11:59 PM</Text>}
+      dueDate="2026-04-15T23:59:00-04:00"
       dueDateNode={<Text>Apr 15, 11:59 PM</Text>}
     />
-  </Box>
-);
-
-// Flag OFF with a suggested date still set on the assignment: the date is not rendered at all, so
-// this is indistinguishable from HardDeadline. Courses that have not opted in never see it.
-export const SuggestedDateHiddenWhenFlagOff = () => (
-  <Box maxW="420px">
-    <DueDateDisplay showDueLabel suggestedDueDate="2026-03-18T23:59:00-04:00" dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
-  </Box>
-);
-
-// Flag on but no suggested date set: unchanged from HardDeadline.
-export const ShownWithoutSuggestedDate = () => (
-  <Box maxW="420px">
-    <DueDateDisplay showDueLabel showSuggested dueDateNode={<Text>Apr 15, 11:59 PM</Text>} />
   </Box>
 );

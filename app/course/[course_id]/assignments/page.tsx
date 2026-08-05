@@ -168,9 +168,15 @@ export default function StudentPage() {
       // so the list reads in the order students see, rather than by a hard deadline the
       // emphasized layout pushes into the background.
       const suggestedForRow = suggestedDueDateById.get(assignment.id);
+      const suggestedTZDate = suggestedForRow
+        ? new TZDate(suggestedForRow, course?.time_zone ?? "America/New_York")
+        : undefined;
+      // Mirrors the fallback inside DueDateDisplay: a suggested date later than this student's
+      // effective deadline is not rendered as the due date, so it must not drive ordering or the
+      // highlight either.
       const primaryDate =
-        showSuggestedDueDate && suggestedForRow
-          ? new TZDate(suggestedForRow, course?.time_zone ?? "America/New_York")
+        showSuggestedDueDate && suggestedTZDate && !(modifiedDueDate && suggestedTZDate > modifiedDueDate)
+          ? suggestedTZDate
           : modifiedDueDate;
       result.push({
         key: assignment.id.toString(),
@@ -182,6 +188,7 @@ export default function StudentPage() {
           <DueDateDisplay
             suggestedDueDate={suggestedForRow}
             showSuggested={showSuggestedDueDate}
+            dueDate={modifiedDueDate}
             dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
           />
         ) : (
@@ -201,12 +208,15 @@ export default function StudentPage() {
         const evalDueDate = assignment.due_date
           ? addHours(new Date(assignment.due_date), assignment.self_review_deadline_offset ?? 0)
           : undefined;
+        // One instance for both fields: a self review has no suggested date, so its displayed date
+        // and its deadline are the same moment and must not be able to drift apart.
+        const evalDueTZDate = evalDueDate ? new TZDate(evalDueDate) : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
           type: "self review",
-          due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
-          primary_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
+          due_date: evalDueTZDate,
+          primary_date: evalDueTZDate,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           is_repo_ready: assignment.is_github_ready ?? false,
@@ -218,10 +228,14 @@ export default function StudentPage() {
     });
     // Sort by the date each row displays (the suggested date in emphasized courses, otherwise the
     // effective due date, which includes lab-based scheduling and extensions).
+    // `primary_date` is only unset when `due_date` is too, so no fallback chain is needed. These
+    // are already TZDate instances; re-wrapping them just to read `getTime()` recomputes the zone
+    // offset twice per comparison for no change in the value.
+    const nowMs = Date.now();
     const sortedResult = result.sort((a, b) => {
-      const dateA = new TZDate(a.primary_date ?? a.due_date ?? new Date());
-      const dateB = new TZDate(b.primary_date ?? b.due_date ?? new Date());
-      return dateB.getTime() - dateA.getTime();
+      const dateA = a.primary_date?.getTime() ?? nowMs;
+      const dateB = b.primary_date?.getTime() ?? nowMs;
+      return dateB - dateA;
     });
     const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
 
@@ -335,10 +349,18 @@ export default function StudentPage() {
             </Table.Row>
           )}
           {visibleFuture.map((work) => {
-            // Highlight against the date the row displays, so an approaching suggested date is
-            // what gets flagged in courses that emphasize it.
-            const highlightDate = work.primary_date ?? work.due_date;
-            const isCloseDeadline = highlightDate && differenceInHours(highlightDate, new Date()) < 24;
+            // Flag a row when either date it shows is within the next 24 hours: the suggested date
+            // students are asked to work to, or the hard deadline after which submissions close.
+            // Both bounds matter. Without the lower bound, an emphasized row whose suggested date
+            // has passed reports a large negative difference, satisfies `< 24`, and stays flagged
+            // for its whole resubmission window; without the hard deadline in the union, that same
+            // row loses the cue at the moment the enforced deadline is actually imminent.
+            const now = new Date();
+            const isCloseDeadline = [work.primary_date, work.due_date].some((date) => {
+              if (!date) return false;
+              const hoursUntil = differenceInHours(date, now);
+              return hoursUntil >= 0 && hoursUntil < 24;
+            });
             return (
               <Table.Row
                 key={work.key}

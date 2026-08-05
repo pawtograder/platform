@@ -115,15 +115,19 @@ export default function EditAssignment() {
         }
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
-        // The assignment is already saved at this point. Re-pointing the handout repo's webhook is
-        // a follow-up that reaches GitHub, so it can fail on its own (missing app credentials, a
-        // repo that no longer exists, GitHub being down) long after the edit succeeded. Reporting
-        // that as "Failed to update the assignment" sent instructors back to re-apply changes that
-        // had in fact persisted, so it now surfaces as its own warning.
+        // The assignment is already saved at this point. Re-pointing the handout repo is a follow-up
+        // that reaches GitHub, so it can fail on its own (e.g. missing app credentials, a repo that
+        // no longer exists, GitHub being down) long after the edit succeeded. Reporting that as
+        // "Failed to update the assignment" sent instructors back to re-apply changes that had in
+        // fact persisted, so it is now reported as its own warning.
+        //
+        // A missing repo does not throw: for watch_type "template_repo" the edge function answers
+        // 200 with `{ message: "Repository not found" }`, and `invokeEdgeFunction` only throws on a
+        // transport error or an `error` key. So check the returned message too.
         let webhookError: string | null = null;
         if (values.template_repo) {
           try {
-            await githubRepoConfigureWebhook(
+            const result = await githubRepoConfigureWebhook(
               {
                 assignment_id: Number.parseInt(assignment_id as string),
                 new_repo: values.template_repo,
@@ -131,6 +135,10 @@ export default function EditAssignment() {
               },
               supabase
             );
+            // Success returns nothing; any message back is a soft failure.
+            if (result?.message) {
+              webhookError = result.message;
+            }
           } catch (error) {
             webhookError = error instanceof Error ? error.message : "An unknown error occurred.";
           }
@@ -142,8 +150,8 @@ export default function EditAssignment() {
         });
         if (webhookError) {
           toaster.create({
-            title: "Could not reconfigure the handout repository webhook",
-            description: `Your changes were saved. Autograder runs triggered by pushes to ${values.template_repo} may not be picked up until this is retried: ${webhookError}`,
+            title: "Could not re-point the handout repository",
+            description: `Your changes were saved, but the autograder workflow hash for ${values.template_repo} was not updated, so student submissions may be rejected with a workflow sha mismatch. Save this assignment again to retry: ${webhookError}`,
             type: "warning"
           });
         }

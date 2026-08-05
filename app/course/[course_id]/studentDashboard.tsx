@@ -116,10 +116,7 @@ export default async function StudentDashboard({
   // its suggested date is still submittable and still gradeable until the deadline, so dropping it
   // from this list would hide the resubmission window the flag exists to highlight. The card shows
   // both dates, so a passed suggested date is still legible.
-  const showSuggestedDueDate = courseFeatureEnabled(
-    course?.features as { name: string; enabled: boolean }[] | null,
-    COURSE_FEATURES.SUGGESTED_DUE_DATE
-  );
+  const showSuggestedDueDate = courseFeatureEnabled(course?.features, COURSE_FEATURES.SUGGESTED_DUE_DATE);
 
   const nowMs = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(

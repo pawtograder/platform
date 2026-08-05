@@ -2,7 +2,7 @@ import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
 import { differenceInHours, differenceInMilliseconds, formatDistance } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -37,17 +37,44 @@ export function formatDueDateInTimezone(
   return formatInTimeZone(date, courseTimezone || "America/New_York", "MMM d h:mm aaa") + timezone + advice;
 }
 
+/** Matches a trailing UTC designator or numeric offset: "Z", "+05:30", "-0400". */
+export const HAS_UTC_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/** The exact shape an `<input type="datetime-local">` produces: a wall clock with no zone. */
+const DATETIME_LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+
+/**
+ * Stamp the offset `timezone` has *at the entered wall clock* onto a `datetime-local` value,
+ * so "2026-09-01T09:00" becomes "2026-09-01T09:00-04:00" for a New York course.
+ *
+ * The offset has to be resolved from the wall clock in the target zone, not from the same text
+ * parsed in the browser's zone: those two instants differ by up to a day, so on a DST-transition
+ * day the browser-anchored reading lands on the wrong side of the transition and the stamped
+ * offset is an hour off (#890). `fromZonedTime` does the target-zone reading.
+ *
+ * Anything that is not a bare wall clock is returned unchanged: values that already carry an
+ * offset or `Z`, empty values, and date-only values (which have no time to place in a zone).
+ */
 export function appendTimezoneOffset(date: string | null, timezone: string) {
-  if (!date) {
+  if (!date || !DATETIME_LOCAL.test(date)) {
     return date;
   }
-  const notTheRightTimeButRightTimezone = new TZDate(date, timezone).toISOString();
-  const offset = notTheRightTimeButRightTimezone.substring(notTheRightTimeButRightTimezone.length - 6);
-  //If there is already an offset, keep it as is
-  if (date.charAt(date.length - 6) === "+" || date.charAt(date.length - 6) === "-") {
+  const instant = fromZonedTime(date, timezone);
+  // `Date.parse(date + "Z")` reads the same wall clock as UTC, so the difference is exactly the
+  // offset that turns this text into `instant`. Deriving it this way rather than formatting the
+  // offset in effect *at* `instant` keeps the two in agreement inside a spring-forward gap, where
+  // the entered wall clock does not exist and the two readings differ by an hour.
+  const offsetMinutes = (Date.parse(date + "Z") - instant.getTime()) / 60_000;
+  if (!Number.isFinite(offsetMinutes)) {
+    // Nothing sensible to append. Hand the value back untouched and let the caller's own
+    // validation reject it, rather than producing a string that only looks well-formed.
     return date;
   }
-  return date + offset;
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absMinutes = Math.abs(offsetMinutes);
+  const hh = String(Math.floor(absMinutes / 60)).padStart(2, "0");
+  const mm = String(Math.round(absMinutes % 60)).padStart(2, "0");
+  return `${date}${sign}${hh}:${mm}`;
 }
 
 /**
@@ -59,28 +86,37 @@ export function appendTimezoneOffset(date: string | null, timezone: string) {
  * whenever the author is not sitting in the course time zone. Going through
  * `appendTimezoneOffset` first pins it to the course zone instead. Values that already carry
  * an offset (e.g. loaded back from the database) are passed through unchanged.
+ *
+ * Returns `null` for anything unparseable, so callers never have to reason about `Invalid Date`.
  */
+/**
+ * Render a stored timestamp as the value an `<input type="datetime-local">` accepts, showing the
+ * wall clock in `timezone`. The inverse of `appendTimezoneOffset`.
+ */
+export function toDateTimeLocalValue(value: string | null | undefined, timezone: string): string {
+  if (!value) {
+    return "";
+  }
+  // A bare wall clock is already what the input wants; only zoned values need re-expressing in the
+  // course zone. Matching on the same regex the write path uses keeps the two halves of the
+  // round-trip in agreement — an offset form the reader failed to recognize would be handed to the
+  // input verbatim, which rejects it and renders blank, silently discarding the date on save.
+  if (!HAS_UTC_OFFSET.test(value)) {
+    return value;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  // "yyyy-MM-ddTHH:mm" — the format `<input type="datetime-local">` accepts.
+  return formatInTimeZone(parsed, timezone, "yyyy-MM-dd'T'HH:mm");
+}
+
 export function parseZonedFormDate(date: string | null | undefined, timezone: string): Date | null {
   if (!date) {
     return null;
   }
-  let withOffset: string | null;
-  try {
-    withOffset = appendTimezoneOffset(date, timezone);
-  } catch {
-    // `appendTimezoneOffset` calls `toISOString()` on the parsed value, which throws RangeError
-    // for input `Date` cannot parse at all. Callers here are validators, so a bad value is a
-    // "no opinion" answer rather than a crash.
-    return null;
-  }
-  if (!withOffset) {
-    return null;
-  }
-  // `appendTimezoneOffset` recognizes an existing offset only by the character at length - 6, so a
-  // UTC-suffixed value ("2026-09-01T13:00:00Z") slips through and becomes
-  // "2026-09-01T13:00:00Z-04:00". Returning the resulting Invalid Date would make callers' NaN
-  // comparisons silently false, surfacing as a bogus "must be in the future" validation error.
-  const parsed = new Date(withOffset);
+  const parsed = new Date(appendTimezoneOffset(date, timezone)!);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 

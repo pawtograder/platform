@@ -93,7 +93,11 @@ export default function NewAssignmentPage() {
           // A successful response with no id never reaches the cleanup below, so without this the
           // loading toast would stay up forever and the 5-second timer would still rewrite it to
           // "Finishing up..." for a creation that never started. (`onError` only covers throws.)
-          if (!settings.data.id) {
+          // Optional chaining because a policy that permits INSERT but not SELECT on the new row
+          // yields a resolved mutation with no `data` at all, and throwing here would replace the
+          // message below with an unactionable "cannot read properties of undefined".
+          const selfReviewSettingId = settings?.data?.id;
+          if (!selfReviewSettingId) {
             clearTimeout(messageUpdateTimer);
             toaster.dismiss(loadingToast);
             toaster.error({
@@ -118,9 +122,13 @@ export default function NewAssignmentPage() {
             .insert({
               title: getValues("title"),
               slug: getValues("slug"),
-              release_date: values.release_date ?? "",
-              due_date: values.due_date ?? "",
-              suggested_due_date: values.suggested_due_date ?? null,
+              // `|| null`, not `?? null`: a cleared `datetime-local` reports "", which
+              // `appendTimezoneOffset` passes straight through, and "" is not nullish — so `??`
+              // would send an empty string to a timestamptz column and Postgres would reject the
+              // whole insert with "invalid input syntax for type timestamp with time zone".
+              release_date: values.release_date || "",
+              due_date: values.due_date || "",
+              suggested_due_date: values.suggested_due_date || null,
               allow_late: getValues("allow_late"),
               description: getValues("description"),
               max_late_tokens: getValues("max_late_tokens") || null,
@@ -150,9 +158,9 @@ export default function NewAssignmentPage() {
                 (getValues("minutes_due_after_lab") as unknown as string) === ""
                   ? null
                   : getValues("minutes_due_after_lab"),
-              regrade_deadline: values.regrade_deadline ?? null,
-              self_review_setting_id: settings.data.id as number,
-              group_formation_deadline: values.group_formation_deadline ?? null,
+              regrade_deadline: values.regrade_deadline || null,
+              self_review_setting_id: selfReviewSettingId as number,
+              group_formation_deadline: values.group_formation_deadline || null,
               repo_mode: repoMode,
               source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
               // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
@@ -178,9 +186,15 @@ export default function NewAssignmentPage() {
             .select("id")
             .single();
           if (error || !data) {
+            // Same cleanup as the success and catch paths: without it the loading toast never goes
+            // away and the 5-second timer still rewrites it to "Finishing up..." for an insert that
+            // already failed. `error` is read defensively because the condition also covers the
+            // no-error-but-no-row case.
+            clearTimeout(messageUpdateTimer);
+            toaster.dismiss(loadingToast);
             toaster.error({
-              title: "Error creating assignment: " + error.name,
-              description: error.message
+              title: "Error creating assignment",
+              description: error?.message ?? "The assignment was not created. Please try again."
             });
           } else {
             if (!isNoRepo) {

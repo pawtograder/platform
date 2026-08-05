@@ -22,11 +22,10 @@ import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
-import { appendTimezoneOffset, parseZonedFormDate } from "@/lib/utils";
+import { appendTimezoneOffset, parseZonedFormDate, toDateTimeLocalValue } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -35,8 +34,8 @@ import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { CourseWithFeatures, LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
-import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
 /**
@@ -357,14 +356,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                   control={control}
                   rules={{ required: false }}
                   render={({ field }) => {
-                    const hasATimezoneOffset =
-                      field.value &&
-                      (field.value.charAt(field.value.length - 6) === "+" ||
-                        field.value.charAt(field.value.length - 6) === "-");
-                    const localValue =
-                      field.value && hasATimezoneOffset
-                        ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                        : field.value;
+                    const localValue = toDateTimeLocalValue(field.value, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -574,12 +566,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                   control={control}
                   render={({ field }) => {
                     const raw = field.value as string | null | undefined;
-                    const hasATimezoneOffset =
-                      typeof raw === "string" &&
-                      raw.length >= 6 &&
-                      (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
-                    const localValue =
-                      raw && hasATimezoneOffset ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm") : (raw ?? "");
+                    const localValue = toDateTimeLocalValue(raw, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -963,12 +950,12 @@ export default function AssignmentForm({
     form.getValues("require_tokens_before_due_date") == true
   );
   const timezone = course.time_zone || "America/New_York";
-  // Read off the class role rather than useCourseFeature: this form renders in both the create and
-  // edit routes, and `role.classes` is already the source for `time_zone` above.
-  const showSuggestedDueDate = courseFeatureEnabled(
-    (course as CourseWithFeatures).features,
-    COURSE_FEATURES.SUGGESTED_DUE_DATE
-  );
+  // Read through the course controller, not `role.classes`: that role snapshot is fetched once per
+  // page load and has no realtime subscription, so an instructor who toggles the flag in Course
+  // Settings and soft-navigates here would keep seeing the pre-toggle helper text. `useCourse()`
+  // merges `classes` realtime updates. Both routes that render this form sit under
+  // `CourseControllerProvider` (LabDueDatePreview in this file already calls useCourseController).
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const isEditing = !!form.getValues("id");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -1141,24 +1128,21 @@ export default function AssignmentForm({
                         required: "This is required",
                         validate: (value: string) => {
                           if (!value) return "This is required";
+                          const selected = parseZonedFormDate(value, timezone);
+                          // Report an unparseable value as such, rather than as "must be in the
+                          // future", which sends the instructor looking for the wrong problem.
+                          if (!selected) return "Enter a valid date and time";
                           // Only enforce future date requirement when creating new assignments
                           if (!isEditing) {
-                            const selected = parseZonedFormDate(value, timezone)?.getTime();
-                            const now = TZDate.tz(timezone).getTime();
-                            return (selected !== undefined && selected > now) || "Release date must be in the future";
+                            return (
+                              selected.getTime() > TZDate.tz(timezone).getTime() || "Release date must be in the future"
+                            );
                           }
                           return true;
                         }
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1173,18 +1157,17 @@ export default function AssignmentForm({
                   </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
-                  {/* The field stays visible even when the course flag is off, rather than being
-                      hidden: react-hook-form drops unmounted fields from `values`, which would
-                      write `suggested_due_date: null` on the next save and silently destroy a date
-                      the instructor had already set. The helper text carries the flag state
-                      instead, so nobody sets a date expecting students to see it. */}
+                  {/* The field stays visible even when the course flag is off, so staff can set the
+                      date ahead of opting in and can still see and edit one an earlier term left
+                      behind. The helper text carries the flag state instead, so nobody sets a date
+                      expecting students to see it. */}
                   <Field
                     orientation="horizontal"
                     label="Suggested due date"
                     helperText={
                       showSuggestedDueDate
                         ? "Optional. Shown to students as the assignment's due date; the Due Date below is presented as the end of the resubmission window."
-                        : "Optional. Not shown to students — turn on the “Suggested due dates” feature flag in Course Settings to display it."
+                        : "Optional. Not shown to students - turn on the 'Suggested due dates' feature flag in Course Settings to display it."
                     }
                     errorText={errors.suggested_due_date?.message?.toString()}
                     invalid={errors.suggested_due_date ? true : false}
@@ -1195,28 +1178,26 @@ export default function AssignmentForm({
                       rules={{
                         validate: (value: string) => {
                           if (!value) return true;
-                          const dueDate = form.getValues("due_date");
-                          if (!dueDate) return true;
                           // Both sides go through the course zone: in edit mode one field may
                           // still hold an offset-carrying value from the database while the other
                           // is a freshly-typed naive value, so a raw parse would compare apples
                           // to oranges.
-                          const suggested = parseZonedFormDate(value, timezone)?.getTime();
-                          const due = parseZonedFormDate(dueDate, timezone)?.getTime();
-                          if (suggested === undefined || due === undefined) return true;
-                          return suggested <= due || "Suggested due date must be on or before the due date";
+                          const suggested = parseZonedFormDate(value, timezone);
+                          if (!suggested) return "Enter a valid date and time";
+                          const dueDate = form.getValues("due_date");
+                          const due = parseZonedFormDate(dueDate, timezone);
+                          // Nothing to compare against yet; the due-date field reports its own
+                          // missing/invalid value.
+                          if (!due) return true;
+                          return (
+                            suggested.getTime() <= due.getTime() ||
+                            "Suggested due date must be on or before the due date"
+                          );
                         },
                         deps: ["due_date"]
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1241,16 +1222,13 @@ export default function AssignmentForm({
                     <Controller
                       name="due_date"
                       control={control}
-                      rules={{ required: "This is required" }}
+                      // `deps` re-validates the listed fields when THIS one changes, so the
+                      // suggested-vs-due rule has to be re-run from here too: without it, moving
+                      // the due date earlier than an already-set suggested date passes client
+                      // validation and only trips the DB CHECK.
+                      rules={{ required: "This is required", deps: ["suggested_due_date"] }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1357,14 +1335,7 @@ export default function AssignmentForm({
                             control={control}
                             rules={{ required: false }}
                             render={({ field }) => {
-                              const hasATimezoneOffset =
-                                field.value &&
-                                (field.value.charAt(field.value.length - 6) === "+" ||
-                                  field.value.charAt(field.value.length - 6) === "-");
-                              const localValue =
-                                field.value && hasATimezoneOffset
-                                  ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                                  : field.value;
+                              const localValue = toDateTimeLocalValue(field.value, timezone);
                               return (
                                 <Input
                                   type="datetime-local"

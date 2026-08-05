@@ -102,7 +102,7 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     name: COURSE_FEATURES.SUGGESTED_DUE_DATE,
     title: "Suggested due dates",
     description:
-      "For mastery/standards grading, where the suggested due date is the date students should work to and the due date is the end of the resubmission window. When enabled, an assignment's suggested due date is presented to students as its due date, and the hard deadline is shown beneath it as the point resubmissions close; staff also get a Suggested Due Date column on Manage Assignments. Assignments with no suggested due date are unaffected.",
+      "For mastery/standards grading, where the suggested due date is the date students work to and the due date is the end of the resubmission window. When enabled, students see the suggested due date as the assignment's due date, with the hard deadline beneath it. Staff also get a Suggested Due Date column on Manage Assignments. Assignments with no suggested due date are unaffected.",
     defaultWhenMissing: false,
     navAffectsStaff: false,
     switchLabel: "Present the suggested due date as the due date",
@@ -127,7 +127,10 @@ export function courseFeatureEffectiveEnabled(
   name: CourseFeatureName,
   defaultWhenMissing: boolean
 ): boolean {
-  const row = features?.find((f) => f.name === name);
+  // `classes.features` is a bare jsonb column with no default and no CHECK, and callers reach it
+  // through a cast. A non-array value would make `.find` throw — inside a Server Component that
+  // takes down the whole page — so treat anything that is not an array as "no entries".
+  const row = Array.isArray(features) ? features.find((f) => f?.name === name) : undefined;
   return row?.enabled ?? defaultWhenMissing;
 }
 

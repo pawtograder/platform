@@ -1,13 +1,20 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
+// A fifth column of `Pp`-formatted timestamps overflows narrow viewports and high zoom levels;
+// ResponsiveTable scrolls inside its own box instead of pushing the page horizontal (WCAG 1.4.10).
+import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { fetchManageAssignmentsOverview } from "@/lib/ssr-course-dashboard";
 import { createClient } from "@/utils/supabase/server";
+import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Table, Text } from "@chakra-ui/react";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
   const supabase = await createClient();
-  const [{ data: assignmentRows, error: overviewError }, { data: courseRow }] = await Promise.all([
+  // Read features on the request-scoped client rather than through the cached `getCourse` loader:
+  // that loader caches for an hour under a `course:<id>` tag that nothing in the codebase emits, so
+  // a flag toggle would not reach this table.
+  const [{ data: assignmentRows, error: overviewError }, { data: courseRow, error: courseError }] = await Promise.all([
     fetchManageAssignmentsOverview(supabase, courseId),
     supabase.from("classes").select("features").eq("id", courseId).single()
   ]);
@@ -25,61 +32,72 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
   // know when grading can start (#894). Gated on the same course flag that drives the
   // student-facing emphasis, so the two views agree on which date the course runs on.
   const showSuggestedDueDate = courseFeatureEnabled(
-    courseRow?.features as { name: string; enabled: boolean }[] | null,
+    (courseRow as Pick<CourseWithFeatures, "features"> | null)?.features,
     COURSE_FEATURES.SUGGESTED_DUE_DATE
   );
   const columnCount = showSuggestedDueDate ? 5 : 4;
 
   return (
-    <Table.Root>
-      <Table.Header>
-        <Table.Row>
-          <Table.ColumnHeader>Title</Table.ColumnHeader>
-          <Table.ColumnHeader>Release Date</Table.ColumnHeader>
-          {showSuggestedDueDate && <Table.ColumnHeader>Suggested Due Date</Table.ColumnHeader>}
-          <Table.ColumnHeader>Due Date</Table.ColumnHeader>
-          <Table.ColumnHeader>Open Regrade Requests</Table.ColumnHeader>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {assignmentRows?.length === 0 ? (
+    <>
+      {courseError && (
+        <Alert.Root status="warning" borderRadius="md" mb={2}>
+          <Alert.Title>Could not read this course&apos;s feature flags</Alert.Title>
+          <Alert.Description>
+            The Suggested Due Date column is hidden because the course settings could not be loaded:{" "}
+            {courseError.message}
+          </Alert.Description>
+        </Alert.Root>
+      )}
+      <ResponsiveTable>
+        <Table.Header>
           <Table.Row>
-            <Table.Cell colSpan={columnCount}>
-              <Text color="fg.muted" fontSize="sm">
-                No assignments in this course.
-              </Text>
-            </Table.Cell>
+            <Table.ColumnHeader>Title</Table.ColumnHeader>
+            <Table.ColumnHeader>Release Date</Table.ColumnHeader>
+            {showSuggestedDueDate && <Table.ColumnHeader>Suggested Due Date</Table.ColumnHeader>}
+            <Table.ColumnHeader>Due Date</Table.ColumnHeader>
+            <Table.ColumnHeader>Open Regrade Requests</Table.ColumnHeader>
           </Table.Row>
-        ) : (
-          assignmentRows?.map((assignment) => (
-            <Table.Row key={assignment.id}>
-              <Table.Cell>
-                <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
-              </Table.Cell>
-              <Table.Cell>
-                {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
-              </Table.Cell>
-              {showSuggestedDueDate && (
-                <Table.Cell>
-                  {assignment.suggested_due_date ? (
-                    <TimeZoneAwareDate date={assignment.suggested_due_date} format="Pp" />
-                  ) : (
-                    <Text color="fg.muted">N/A</Text>
-                  )}
-                </Table.Cell>
-              )}
-              <Table.Cell>
-                {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
-              </Table.Cell>
-              <Table.Cell>
-                <Link href={`/course/${courseId}/manage/assignments/${assignment.id}/regrade-requests`}>
-                  {assignment.open_regrade_requests_count}
-                </Link>
+        </Table.Header>
+        <Table.Body>
+          {assignmentRows?.length === 0 ? (
+            <Table.Row>
+              <Table.Cell colSpan={columnCount}>
+                <Text color="fg.muted" fontSize="sm">
+                  No assignments in this course.
+                </Text>
               </Table.Cell>
             </Table.Row>
-          ))
-        )}
-      </Table.Body>
-    </Table.Root>
+          ) : (
+            assignmentRows?.map((assignment) => (
+              <Table.Row key={assignment.id}>
+                <Table.Cell>
+                  <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
+                </Table.Cell>
+                <Table.Cell>
+                  {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
+                </Table.Cell>
+                {showSuggestedDueDate && (
+                  <Table.Cell>
+                    {assignment.suggested_due_date ? (
+                      <TimeZoneAwareDate date={assignment.suggested_due_date} format="Pp" />
+                    ) : (
+                      <Text color="fg.muted">N/A</Text>
+                    )}
+                  </Table.Cell>
+                )}
+                <Table.Cell>
+                  {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
+                </Table.Cell>
+                <Table.Cell>
+                  <Link href={`/course/${courseId}/manage/assignments/${assignment.id}/regrade-requests`}>
+                    {assignment.open_regrade_requests_count}
+                  </Link>
+                </Table.Cell>
+              </Table.Row>
+            ))
+          )}
+        </Table.Body>
+      </ResponsiveTable>
+    </>
   );
 }
