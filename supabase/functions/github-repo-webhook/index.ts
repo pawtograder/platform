@@ -536,9 +536,19 @@ async function createPushDirectSubmission(
       // active — precisely the ordering regression this branch exists to prevent.
       scope.setTag("demote_superseded_submission_failed", "true");
       Sentry.captureException(demoteError, scope);
+      await unwindSupersededInsert(adminSupabase, studentRepo, inserted.id, scope);
       throw demoteError;
     }
-    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+    try {
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+    } catch (reactivateErr) {
+      // Same reasoning as the demotion failure: the row is inserted and the student's
+      // previous submission is still demoted, so nothing is active. Unwind, then let the
+      // throw ask GitHub to redeliver.
+      scope.setTag("reactivate_after_superseded_insert_failed", "true");
+      await unwindSupersededInsert(adminSupabase, studentRepo, inserted.id, scope);
+      throw reactivateErr;
+    }
   }
   if (insertError) {
     // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
@@ -673,6 +683,16 @@ async function createPushDirectSubmission(
         Sentry.captureMessage(
           `Failed to remove rejected empty push-direct submission ${submissionId} for ${repoName}@${sha}`,
           scope
+        );
+        // Throw rather than return 200. cleanupPushDirectSubmission unlinks the grading
+        // review before deleting, so a partial failure leaves exactly the row shape the
+        // idempotency check at the top of this function reads as "resume me" — but only a
+        // redelivery ever re-runs that check, and a 200 gives GitHub no reason to send
+        // one. Acknowledging here would strand the row permanently.
+        scope.setTag("push_direct_retry_reason", "empty_cleanup_incomplete");
+        throw new Error(
+          `Rejected empty push-direct submission ${submissionId} for ${repoName}@${sha} could not be removed; ` +
+            `rejecting this delivery so GitHub retries it`
         );
       }
       return;
@@ -945,6 +965,38 @@ async function deactivateRejectedSubmission(
       Sentry.captureException(markErr, scope);
     }
     return false;
+  }
+}
+
+/**
+ * Undo a superseded insert whose demotion or re-promotion failed.
+ *
+ * The caller throws so GitHub redelivers, but a throw alone does not make the redelivery
+ * useful: the AFTER-INSERT hook has already attached a grading review to the new row, and
+ * the idempotency check at the top of createPushDirectSubmission reads a row WITH a review
+ * as a finished submission and returns immediately. The active-submission state would then
+ * never be repaired — stale code left active if the demotion failed, nothing active if the
+ * re-promotion did.
+ *
+ * Removing the row is the fix; a partial removal is also fine, because cleanup unlinks the
+ * review first and a null review is precisely the marker that same check treats as
+ * resumable. Never throws: the caller is about to propagate the original failure and that
+ * error must not be masked.
+ */
+async function unwindSupersededInsert(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  submissionId: number,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    if (!removed) scope.setTag("superseded_unwind_incomplete", "true");
+    // The insert demoted whatever was active; put it back now that the stale row is gone.
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+  } catch (unwindErr) {
+    scope.setTag("superseded_unwind_failed", "true");
+    Sentry.captureException(unwindErr, scope);
   }
 }
 

@@ -787,7 +787,17 @@ export async function repoHasFileAtRef(
   }
 }
 
-export async function getFileFromRepo(repoName: string, path: string, scope?: Sentry.Scope) {
+export async function getFileFromRepo(
+  repoName: string,
+  path: string,
+  scope?: Sentry.Scope,
+  /**
+   * Commit sha / branch / tag to read at. Omit for the default branch's current head.
+   * Pass an exact commit sha when the read has to be consistent with other reads of the
+   * same tree — an unqualified read races with any push landing between the two calls.
+   */
+  ref?: string
+) {
   scope?.setTag("github_operation", "get_file");
   scope?.setTag("repository", repoName);
   scope?.setTag("file_path", path);
@@ -801,7 +811,8 @@ export async function getFileFromRepo(repoName: string, path: string, scope?: Se
   const file = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
     owner: repoName.split("/")[0],
     repo: repoName.split("/")[1],
-    path
+    path,
+    ...(ref ? { ref } : {})
   });
   if ("content" in file.data) {
     const base64Content = file.data.content;
@@ -926,64 +937,101 @@ export async function renameFileInRepo(
   }
   const [owner, repo] = repoName.split("/");
 
-  // Read the source blob first: absent means there is nothing to move.
-  let content: string;
-  try {
-    content = (await getFileFromRepo(repoName, fromPath, scope)).content;
-  } catch (error) {
-    if (error instanceof RequestError && error.status === 404) {
-      console.log(`Not moving ${fromPath} in ${repoName}: file does not exist`);
-      return { moved: false };
-    }
-    throw error;
-  }
-
-  // Resolve the default branch and its head commit, rather than assuming "main".
+  // Resolve the default branch once, rather than assuming "main". The branch itself does
+  // not move; only its head does, which is what the retry loop re-reads.
   const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
   const branch = repoData.default_branch;
-  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branch}`
-  });
-  const headSha = ref.object.sha;
-  const { data: headCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
-    owner,
-    repo,
-    commit_sha: headSha
-  });
 
-  // One tree carrying both halves of the move: the new path added, the old deleted
-  // (a null sha is the trees API's delete).
-  const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
-    owner,
-    repo,
-    base_tree: headCommit.tree.sha,
-    tree: [
-      // `mode`/`type` are literal unions in the Octokit types, so they must not widen
-      // to `string`. A null sha is how the trees API expresses a delete.
-      { path: toPath, mode: "100644" as const, type: "blob" as const, content },
-      { path: fromPath, mode: "100644" as const, type: "blob" as const, sha: null }
-    ]
-  });
+  // The head is resolved BEFORE the source file is read, and the read is pinned to it.
+  //
+  // Reading first and resolving after was a lost-update race: an instructor pushing a
+  // grade.yml customization in between meant the contents call returned the OLD file
+  // while the ref call returned the NEWER head. The commit was then a legitimate
+  // fast-forward from that newer head, so nothing rejected it — it just wrote the stale
+  // content to `toPath` and deleted the newer live file, silently discarding the
+  // customization. Pinning the read to the exact commit the tree is based on makes the
+  // two views of the repo consistent by construction.
+  //
+  // The branch can still move after the pinned read, but then the parent is stale and
+  // GitHub rejects the ref update as a non-fast-forward (422) rather than losing the
+  // push, so retrying re-reads at the new head. Bounded, since a repo under continuous
+  // pushes should fail loudly instead of looping.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${branch}`
+    });
+    const headSha = ref.object.sha;
 
-  const { data: commit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
-    owner,
-    repo,
-    message,
-    tree: newTree.sha,
-    parents: [headSha]
-  });
+    // Absent at this commit means there is nothing to move.
+    let content: string;
+    try {
+      content = (await getFileFromRepo(repoName, fromPath, scope, headSha)).content;
+    } catch (error) {
+      if (error instanceof RequestError && error.status === 404) {
+        console.log(`Not moving ${fromPath} in ${repoName}: file does not exist at ${headSha}`);
+        return { moved: false };
+      }
+      throw error;
+    }
 
-  await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-    owner,
-    repo,
-    ref: `heads/${branch}`,
-    sha: commit.sha
-  });
+    const { data: headCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner,
+      repo,
+      commit_sha: headSha
+    });
 
-  console.log(`Moved ${fromPath} -> ${toPath} in ${repoName} as ${commit.sha}`);
-  return { moved: true, commit_sha: commit.sha };
+    // One tree carrying both halves of the move: the new path added, the old deleted
+    // (a null sha is the trees API's delete).
+    const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+      owner,
+      repo,
+      base_tree: headCommit.tree.sha,
+      tree: [
+        // `mode`/`type` are literal unions in the Octokit types, so they must not widen
+        // to `string`. A null sha is how the trees API expresses a delete.
+        { path: toPath, mode: "100644" as const, type: "blob" as const, content },
+        { path: fromPath, mode: "100644" as const, type: "blob" as const, sha: null }
+      ]
+    });
+
+    const { data: commit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
+      owner,
+      repo,
+      message,
+      tree: newTree.sha,
+      parents: [headSha]
+    });
+
+    try {
+      await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: commit.sha
+      });
+    } catch (error) {
+      // 422 = the ref no longer points at our parent, i.e. someone pushed while we were
+      // building. The commit object we created is unreferenced and harmless; take the
+      // new head and redo the move on top of it.
+      if (error instanceof RequestError && error.status === 422 && attempt < MAX_ATTEMPTS) {
+        scope?.setTag("rename_file_retry", String(attempt));
+        console.log(`Ref ${branch} in ${repoName} moved while renaming ${fromPath}; retrying (attempt ${attempt})`);
+        continue;
+      }
+      throw error;
+    }
+
+    console.log(`Moved ${fromPath} -> ${toPath} in ${repoName} as ${commit.sha}`);
+    return { moved: true, commit_sha: commit.sha };
+  }
+
+  throw new Error(
+    `Rename ${fromPath} -> ${toPath} in ${repoName} failed: the default branch moved on every one of ` +
+      `${MAX_ATTEMPTS} attempts`
+  );
 }
 
 export async function deleteFileFromRepo(

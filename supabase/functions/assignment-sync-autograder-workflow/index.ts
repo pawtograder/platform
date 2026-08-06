@@ -281,6 +281,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
    * with those rows unfixed is worse than surfacing the error, so this throws and
    * lets the caller roll the flag back.
    */
+  /**
+   * Put in-class sharers back on their previous flag after a later step failed.
+   *
+   * The callers roll back only the assignment being edited — they know nothing about the
+   * sharing set — so any failure AFTER realignInClassSharers has to compensate here or
+   * the sharers keep a flag that no longer matches the handout's workflow state. Never
+   * throws: every caller is about to throw the failure that brought it here, and that
+   * error must not be masked by a rollback problem.
+   */
+  async function revertRealignedSharers(realignedIds: number[], tag: string): Promise<void> {
+    if (realignedIds.length === 0) return;
+    scope.setTag(tag, "true");
+    const { error: revertError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: !hasAutograder })
+      .eq("class_id", class_id)
+      .in("id", realignedIds);
+    if (revertError) {
+      scope.setTag(`${tag}_failed`, "true");
+      Sentry.captureException(revertError, scope);
+    }
+  }
+
   async function realignInClassSharers(): Promise<{ id: number; title: string }[]> {
     if (inClassOutOfStep.length === 0) return [];
     const { error: alignError } = await adminSupabase
@@ -444,20 +467,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             Sentry.captureException(rollbackError, scope);
           }
         }
-        if (realigned.length > 0) {
-          const { error: revertError } = await adminSupabase
-            .from("assignments")
-            .update({ has_autograder: !hasAutograder })
-            .eq("class_id", class_id)
-            .in(
-              "id",
-              realigned.map((a) => a.id)
-            );
-          if (revertError) {
-            scope.setTag("pin_failure_sharer_rollback_failed", "true");
-            Sentry.captureException(revertError, scope);
-          }
-        }
+        await revertRealignedSharers(
+          realigned.map((a) => a.id),
+          "pin_failure_sharer_rollback"
+        );
         throw new UserVisibleError(
           `The autograder workflow was removed from ${templateRepo}, but the handout revision pointer could not ` +
             `be updated (${shaError.message}). The change was rolled back — please try again.`,
@@ -510,21 +523,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     try {
       await updateAutograderWorkflowHash(templateRepo);
     } catch (e) {
-      if (realigned.length > 0) {
-        scope.setTag("sharer_realign_rollback", "true");
-        const { error: revertError } = await adminSupabase
-          .from("assignments")
-          .update({ has_autograder: !hasAutograder })
-          .eq("class_id", class_id)
-          .in(
-            "id",
-            realigned.map((a) => a.id)
-          );
-        if (revertError) {
-          scope.setTag("sharer_realign_rollback_failed", "true");
-          Sentry.captureException(revertError, scope);
-        }
-      }
+      await revertRealignedSharers(
+        realigned.map((a) => a.id),
+        "sharer_realign_rollback"
+      );
       throw e;
     }
 
@@ -534,11 +536,31 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // still a commit from the OLD repo and existing student repos still hold the old
     // workflow. Resolve this repo's head, pin it, and queue the syncs — the same three
     // steps the file-writing paths do, just without a write of our own.
-    const unchangedHeadSha = await getDefaultBranchHeadSha(templateRepo, scope).catch((headErr) => {
+    //
+    // Neither step is best-effort. workflow_sha has ALREADY been updated from the
+    // replacement handout above, so acknowledging success with the pointer still naming a
+    // commit in the old repository is the one combination that breaks grading outright:
+    // the queued syncs hand students the old workflow, and the Actions submissions it
+    // produces are rejected for a hash mismatch against the new one. Propagate instead,
+    // so the caller rolls the flag and the autograder row back together.
+    const realignedIds = realigned.map((a) => a.id);
+    let unchangedHeadSha: string | undefined;
+    try {
+      unchangedHeadSha = await getDefaultBranchHeadSha(templateRepo, scope);
+    } catch (headErr) {
       scope.setTag("unchanged_head_lookup_failed", "true");
       Sentry.captureException(headErr, scope);
-      return undefined;
-    });
+      await revertRealignedSharers(realignedIds, "unchanged_head_sharer_rollback");
+      throw new UserVisibleError(
+        `${templateRepo} already contains the autograder workflow, but its current revision could not be read ` +
+          `(${headErr instanceof Error ? headErr.message : String(headErr)}). Student repositories would have been ` +
+          `synced to the wrong revision, so the change was not completed — please try again.`,
+        502
+      );
+    }
+    // A genuine lookup failure throws and is handled above; `undefined` comes back only
+    // under the E2E GitHub stub, where there is no repo to read and no pointer worth
+    // pinning. Skip rather than fail, matching how the other pin sites treat the stub.
     if (unchangedHeadSha) {
       const { error: shaError } = await adminSupabase
         .from("assignments")
@@ -547,6 +569,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (shaError) {
         scope.setTag("pin_latest_template_sha_failed", "true");
         Sentry.captureException(shaError, scope);
+        await revertRealignedSharers(realignedIds, "unchanged_pin_sharer_rollback");
+        throw new UserVisibleError(
+          `${templateRepo} already contains the autograder workflow, but the handout revision pointer could not be ` +
+            `updated (${shaError.message}). Student repositories would have been synced to the wrong revision, so ` +
+            `the change was not completed — please try again.`,
+          502
+        );
       }
     }
     await queueHandoutSyncsForAssignments(
