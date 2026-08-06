@@ -1342,10 +1342,24 @@ async function handlePushToStudentRepo(
     try {
       studentRepoHeadSha = await getDefaultBranchHeadSha(repoName, scope);
     } catch (headErr) {
-      // Never block a submission on this check; fall through and treat the push as
-      // current, which is the behaviour that existed before it.
+      // Throw, do NOT assume the push is current. Falling through treated an out-of-order
+      // delivery as the newest one, so it was inserted active and the insert trigger demoted
+      // the genuinely newer submission — the student's active submission and its grading
+      // review rolled back to stale code, permanently, because the delivery was then
+      // acknowledged and nothing revisits the ordering.
+      //
+      // The earlier comment here reasoned that a submission should never be blocked on this
+      // lookup. That was the wrong comparison: a throw means GitHub redelivers and the push is
+      // recorded a moment later, whereas guessing wrong silently corrupts which commit is
+      // being graded. (`undefined` — the E2E GitHub stub — still falls through as current;
+      // only a real failure propagates.)
       scope.setTag("student_repo_head_lookup_failed", "true");
       Sentry.captureException(headErr, scope);
+      throw new Error(
+        `Could not resolve the current head of ${repoName} to check whether ${payload.after} is superseded ` +
+          `(${headErr instanceof Error ? headErr.message : String(headErr)}); rejecting this delivery so GitHub ` +
+          `retries it`
+      );
     }
     const isSupersededPush = !!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after;
     if (isSupersededPush) {

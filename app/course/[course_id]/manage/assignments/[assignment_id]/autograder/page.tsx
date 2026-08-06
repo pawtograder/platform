@@ -207,6 +207,20 @@ export default function AutograderPage() {
             type: "info"
           });
         }
+        if (syncResult?.repo_sync_queue_failed) {
+          // The handout is correct but existing student repositories were not queued, so they
+          // still hold the previous workflow state. Silence here would leave students pushing
+          // into a repo that can neither run the autograder nor take the direct-ingestion
+          // path, with nothing to explain it.
+          toaster.create({
+            title: "Student repositories were not synced",
+            description:
+              "The handout repository was updated, but the sync jobs for existing student " +
+              "repositories could not be queued. Sync them from the assignment's repositories " +
+              "page — until then they still have the previous autograder setup.",
+            type: "warning"
+          });
+        }
         // The grading workflow lives in the handout repo, so assignments sharing
         // that handout necessarily share the setting. Say so plainly — otherwise
         // an instructor silently changes assignments they did not open.

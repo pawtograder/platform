@@ -203,6 +203,20 @@ export default function EditAssignment() {
                 },
                 supabase
               );
+              if (syncResult?.repo_sync_queue_failed) {
+                // The handout is correct but existing student repositories were not queued, so they
+                // still hold the previous workflow state. Silence here would leave students pushing
+                // into a repo that can neither run the autograder nor take the direct-ingestion
+                // path, with nothing to explain it.
+                toaster.create({
+                  title: "Student repositories were not synced",
+                  description:
+                    "The handout repository was updated, but the sync jobs for existing student " +
+                    "repositories could not be queued. Sync them from the assignment's repositories " +
+                    "page — until then they still have the previous autograder setup.",
+                  type: "warning"
+                });
+              }
               // The workflow file belongs to the shared handout repo, so sharers cannot
               // disagree and the sync brings them along. Say so — FunctionTypes.d.ts makes
               // this the caller's job, and the autograder page already does it; without it

@@ -70,21 +70,28 @@ async function queueHandoutSyncsForAssignments(
   authHeader: string | null,
   assignmentIds: number[],
   scope: Sentry.Scope
-): Promise<void> {
+): Promise<{ queued: number; failed: boolean }> {
   const { data: repoRows, error: repoRowsError } = await adminSupabase
     .from("repositories")
     .select("id")
     .in("assignment_id", assignmentIds);
   if (repoRowsError) {
+    // Same reasoning as the queue failure below: without the repository ids nothing was
+    // queued, so this is a failure to report, not to log.
     scope.setTag("queue_repo_syncs_lookup_failed", "true");
     Sentry.captureException(repoRowsError, scope);
-    return;
+    return { queued: 0, failed: true };
   }
-  if (!repoRows || repoRows.length === 0) return;
+  // Nothing to sync is a success: an assignment whose repos have not been created yet gets
+  // the current handout at creation time.
+  if (!repoRows || repoRows.length === 0) return { queued: 0, failed: false };
   if (!authHeader) {
+    // queue_repository_syncs requires auth.uid(), so a service-role invocation genuinely
+    // cannot queue. Report it rather than pretending: a caller with no user context still
+    // needs to know the repositories were left alone.
     scope.setTag("queue_repo_syncs_skipped", "no_user_context");
     console.log("Skipping repository sync queueing: no Authorization header to satisfy queue_repository_syncs");
-    return;
+    return { queued: 0, failed: true };
   }
   const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: { headers: { Authorization: authHeader } }
@@ -93,11 +100,23 @@ async function queueHandoutSyncsForAssignments(
     p_repository_ids: repoRows.map((r) => r.id)
   });
   if (queueError) {
+    // Reported, not swallowed. The handout is correct by this point but existing student
+    // repositories are not: after an enable, `#submit` cannot run a workflow their repo does
+    // not have yet AND ordinary pushes no longer take the direct-ingestion path, so their
+    // submissions simply go unrecorded until someone syncs. Returning success over that left
+    // nothing to detect it.
+    //
+    // Not a throw: the workflow change itself succeeded, and undoing it (plus the sharer
+    // realignment and the revision pin) to report a queueing failure would make enabling the
+    // autograder impossible whenever this RPC is unavailable — and every step of that unwind
+    // can fail too. A manual handout sync is a real, documented instructor action, so the
+    // honest outcome is to hand the instructor exactly that.
     scope.setTag("queue_repo_syncs_failed", "true");
     Sentry.captureException(queueError, scope);
-    return;
+    return { queued: 0, failed: true };
   }
   scope.setTag("queued_repo_syncs", String(repoRows.length));
+  return { queued: repoRows.length, failed: false };
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -513,7 +532,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // carry the live grade.yml until they sync, so every push keeps burning Actions
     // minutes and showing the failing check this feature exists to remove. Queue after
     // pinning, so the syncs target the revision that no longer has the workflow.
-    await queueHandoutSyncsForAssignments(
+    const disableQueue = await queueHandoutSyncsForAssignments(
       adminSupabase,
       req.headers.get("Authorization"),
       [assignment_id, ...realigned.map((a) => a.id)],
@@ -524,7 +543,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
       template_repo: templateRepo,
-      realigned_assignments: realigned
+      realigned_assignments: realigned,
+      repo_sync_queue_failed: disableQueue.failed
     };
   }
 
@@ -608,7 +628,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
       }
     }
-    await queueHandoutSyncsForAssignments(
+    const unchangedQueue = await queueHandoutSyncsForAssignments(
       adminSupabase,
       req.headers.get("Authorization"),
       [assignment_id, ...realigned.map((a) => a.id)],
@@ -619,7 +639,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       action: "unchanged" as const,
       has_autograder: true,
       template_repo: templateRepo,
-      realigned_assignments: realigned
+      realigned_assignments: realigned,
+      repo_sync_queue_failed: unchangedQueue.failed
     };
   }
 
@@ -831,7 +852,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  await queueHandoutSyncsForAssignments(
+  const restoreQueue = await queueHandoutSyncsForAssignments(
     adminSupabase,
     req.headers.get("Authorization"),
     [assignment_id, ...realignedOnRestore.map((a) => a.id)],
@@ -862,7 +883,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     action: "added" as const,
     has_autograder: true,
     template_repo: templateRepo,
-    realigned_assignments: realignedOnRestore
+    realigned_assignments: realignedOnRestore,
+    repo_sync_queue_failed: restoreQueue.failed
   };
 }
 

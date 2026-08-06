@@ -445,6 +445,16 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * since it changes assignments they did not explicitly edit.
    */
   realigned_assignments?: { id: number; title: string }[];
+  /**
+   * True when the handout-sync jobs for existing student repositories could NOT be queued.
+   *
+   * The handout itself is correct at this point, but existing student repositories still hold
+   * the previous workflow state — so after an enable, `#submit` cannot run a workflow their
+   * repo does not have yet, and after a disable their pushes keep burning Actions minutes.
+   * Callers must tell the instructor to sync student repositories by hand; swallowing this
+   * reported success over a state that only a manual sync repairs.
+   */
+  repo_sync_queue_failed?: boolean;
 };
 
 export type AutograderCreateReposForStudentRequest = {
