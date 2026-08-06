@@ -286,7 +286,7 @@ async function createPushDirectSubmission(
   // repository+sha uniquely identifies this push-direct submission.)
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
-    .select("id, grading_review_id")
+    .select("id, grading_review_id, is_active, is_not_graded")
     .eq("repository", repoName)
     .eq("sha", sha)
     .limit(1)
@@ -325,6 +325,18 @@ async function createPushDirectSubmission(
   } else if (existing) {
     scope.setTag("push_direct_submission_skipped", "already_exists");
     console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
+    // A force-push BACK to an already-recorded commit is not a redelivery, and the sha-keyed
+    // lookup cannot tell them apart. Student pushes A, then B, then force-pushes A again: this
+    // branch is reached with A's submission already present but inactive, so treating it as a
+    // duplicate left B active while the repository head — and the student's latest intent — is
+    // A. The gradebook then grades code the student rolled back.
+    //
+    // The caller has verified that this sha IS the current head, which is exactly what makes
+    // promotion correct here rather than a guess.
+    if (existing.is_active === false) {
+      await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, repoName, sha, scope);
+      return;
+    }
     // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
     // its grading review on purpose, so this branch is where a redelivery for that commit
     // lands — and if the reactivation that should have followed the rejection failed
@@ -789,6 +801,76 @@ async function createPushDirectSubmission(
  * previous good work disappears from the gradebook and review flows until they
  * push again.
  */
+/**
+ * Make an already-recorded submission active again because its commit is the repo head.
+ *
+ * Reached when a student force-pushes back to a commit that already has a submission. The
+ * (repository, sha) idempotency lookup reads that as a redelivery, so without this the NEWER
+ * submission stays active while the head is the older commit — the gradebook grades code the
+ * student rolled back.
+ *
+ * Refuses in the two cases where an inactive row is inactive ON PURPOSE:
+ *   - is_not_graded: the student asked for it not to be graded.
+ *   - a retained oversized rejection: it was refused and was never ingested, so promoting it
+ *     would make an empty submission the graded one.
+ *
+ * Demotes before promoting, since submissions_one_active_* permits only one active row.
+ */
+async function promoteSubmissionForCurrentHead(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  existing: { id: number; is_not_graded: boolean | null },
+  repoName: string,
+  sha: string,
+  scope: Sentry.Scope
+): Promise<void> {
+  if (existing.is_not_graded) {
+    scope.setTag("force_push_promote_skipped", "is_not_graded");
+    return;
+  }
+  const { data: rejectionErrors, error: rejectionErr } = await adminSupabase
+    .from("workflow_run_error")
+    .select("submission_id, data")
+    .eq("submission_id", existing.id);
+  if (rejectionErr) throw rejectionErr;
+  const wasRejected = (rejectionErrors ?? []).some((e) => {
+    const errorType = (e.data as { error_type?: string } | null)?.error_type;
+    return errorType === "file_too_large" || errorType === "submission_too_large";
+  });
+  if (wasRejected) {
+    scope.setTag("force_push_promote_skipped", "retained_rejection");
+    return;
+  }
+
+  // Demote the current active row for this submitter first. Scoped exactly like the unique
+  // indexes: the group for a group repo, the individual otherwise.
+  let demote = adminSupabase
+    .from("submissions")
+    .update({ is_active: false })
+    .eq("assignment_id", studentRepo.assignment_id)
+    .eq("is_active", true)
+    .neq("id", existing.id);
+  demote = studentRepo.assignment_group_id
+    ? demote.eq("assignment_group_id", studentRepo.assignment_group_id)
+    : demote.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+  const { error: demoteErr } = await demote;
+  if (demoteErr) throw demoteErr;
+
+  const { error: promoteErr } = await adminSupabase
+    .from("submissions")
+    .update({ is_active: true })
+    .eq("id", existing.id);
+  if (promoteErr) {
+    // Nothing is active now, since the demotion succeeded. Throwing asks GitHub to redeliver,
+    // and this branch is idempotent, so the retry re-promotes.
+    scope.setTag("force_push_promote_failed", "true");
+    Sentry.captureException(promoteErr, scope);
+    throw promoteErr;
+  }
+  scope.setTag("force_push_promoted_submission", String(existing.id));
+  console.log(`Re-activated submission ${existing.id}: ${repoName} was force-pushed back to ${sha}`);
+}
+
 /** Page size for the paginated candidate scan in reactivatePreviousSubmission. */
 const PAGE_SIZE = 50;
 
