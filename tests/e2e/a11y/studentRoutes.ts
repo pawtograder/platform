@@ -19,7 +19,7 @@
  */
 import { addDays } from "date-fns";
 import { seedAgentPages, type AgentSeed } from "../a11yAgentSeeding";
-import { insertOfficeHoursQueue, insertHelpQueueAssignment, supabase } from "../TestingUtils";
+import { insertOfficeHoursQueue, insertHelpQueueAssignment, insertHelpRequest, supabase } from "../TestingUtils";
 
 export type StudentRouteState = {
   /** Stable id used as the baseline key — keep it stable across refactors. */
@@ -33,16 +33,25 @@ export type StudentRouteState = {
    * this text is the record of why the gap exists.
    */
   skip?: string;
-  /** Some routes legitimately have no <main> landmark (auth shells). */
+  /** Some routes legitimately have no <main>/nav landmark (auth shells). */
   expectLandmarks?: boolean;
+  /**
+   * Reflow at 320px is checked by default and gated separately from
+   * `expectLandmarks`: a shell with no nav still owes 1.4.10. Set false only
+   * where there is no <main> for `assertReflowAt320` to measure.
+   */
+  expectReflow?: boolean;
   /** Routes that must be visited signed-out. */
   anonymous?: boolean;
 };
 
 export type StudentSurface = AgentSeed & {
-  pollId: string | null;
-  queueId: string | null;
-  deckId: string | null;
+  // Non-nullable by construction: seedStudentSurface throws rather than hand
+  // back an id that would build an unreachable path.
+  pollId: string;
+  queueId: string;
+  deckId: string;
+  helpRequestId: string;
   assignmentId: string;
   submissionId: string;
   threadId: string;
@@ -58,93 +67,165 @@ export type StudentSurface = AgentSeed & {
 export async function seedStudentSurface(): Promise<StudentSurface> {
   const seed = await seedAgentPages();
 
-  // Derive ids the registry needs from the routes seedAgentPages built.
+  // Every fixture below is REQUIRED. A missing one used to become "" or null
+  // and flow straight into a path like `/office-hours/null`, which renders an
+  // error page, scans clean, and counts as covered — the exact opposite of the
+  // honest denominator this registry claims to be. Fail at seed time instead.
   const resultsPath = seed.routes["autograder-results"];
   const m = resultsPath.match(/assignments\/(\d+)\/submissions\/(\d+)/);
-  const assignmentId = m?.[1] ?? "";
-  const submissionId = m?.[2] ?? "";
+  if (!m) {
+    throw new Error(
+      `seedStudentSurface: could not read assignment/submission ids from ` +
+        `routes["autograder-results"] (${resultsPath}). The submission routes cannot be built.`
+    );
+  }
+  const assignmentId = m[1];
+  const submissionId = m[2];
   const threadId = seed.seedValues.threadId;
   const surveyId = seed.seedValues.surveyId;
 
-  // A live poll so /polls and /poll/[course_id] render content rather than an
-  // empty state (the empty state is worth scanning too, but content exercises
-  // more markup).
-  let pollId: string | null = null;
-  try {
-    const { data: poll } = await supabase
-      .from("live_polls")
-      .insert({
-        class_id: seed.course.id,
-        created_by: seed.instructor.public_profile_id,
-        question: "How is the pace of the course?",
-        is_live: true,
-        require_login: true
-      })
-      .select("id")
-      .single();
-    pollId = poll ? String(poll.id) : null;
-  } catch {
-    pollId = null;
+  // A live poll so /polls and /poll/[course_id] render the answer form rather
+  // than an empty state. `question` must be a SurveyJS config: the page casts
+  // it and bails to "No Live Poll Available" when `elements` is absent.
+  // `require_login` stays false because the public-poll route is scanned
+  // signed-out, and the page renders a "Login Required" stub otherwise.
+  const { data: poll, error: pollError } = await supabase
+    .from("live_polls")
+    .insert({
+      class_id: seed.course.id,
+      created_by: seed.instructor.public_profile_id,
+      question: {
+        elements: [
+          {
+            type: "radiogroup",
+            title: "How is the pace of the course?",
+            choices: ["Too slow", "About right", "Too fast"]
+          }
+        ]
+      },
+      is_live: true,
+      require_login: false
+    })
+    .select("id")
+    .single();
+  if (pollError || !poll) {
+    throw new Error(`seedStudentSurface: could not seed live_polls — ${pollError?.message ?? "no row returned"}`);
   }
+  const pollId = String(poll.id);
 
   // A queue with staff on duty, so the queue sub-routes are reachable and the
   // New Request affordance is enabled.
-  let queueId: string | null = null;
-  try {
-    const queue = await insertOfficeHoursQueue({ class_id: seed.course.id, name: "A11y Coverage Queue" });
-    await insertHelpQueueAssignment({
-      help_queue_id: queue.id,
-      ta_profile_id: seed.instructor.private_profile_id,
-      class_id: seed.course.id
-    });
-    queueId = String(queue.id);
-  } catch {
-    queueId = null;
-  }
+  const queue = await insertOfficeHoursQueue({ class_id: seed.course.id, name: "A11y Coverage Queue" });
+  await insertHelpQueueAssignment({
+    help_queue_id: queue.id,
+    ta_profile_id: seed.instructor.private_profile_id,
+    class_id: seed.course.id
+  });
+  const queueId = String(queue.id);
 
-  // A flashcard deck, if the feature's tables are present in this schema.
-  let deckId: string | null = null;
-  try {
-    const { data: deck } = await supabase
-      .from("flashcard_decks")
-      .insert({
-        class_id: seed.course.id,
-        name: "A11y Coverage Deck",
-        description: "Deck seeded for the student a11y sweep",
-        creator_id: seed.instructor.public_profile_id
-      })
-      .select("id")
-      .single();
-    deckId = deck ? String(deck.id) : null;
-  } catch {
-    deckId = null;
+  // An open request ON that queue, so both help-request detail routes are
+  // reachable with a known queue id. seedAgentPages' own request lives on a
+  // different queue and does not expose it.
+  const helpRequest = await insertHelpRequest({
+    class_id: seed.course.id,
+    student_profile_id: seed.student.private_profile_id,
+    request: "Seeded for the a11y coverage sweep: how do I read the autograder output?",
+    help_queue_id: queue.id,
+    active_staff_profile_id: seed.instructor.private_profile_id
+  });
+  const helpRequestId = String(helpRequest.id);
+
+  // `flashcard_decks.creator_id` references users(user_id), NOT profiles(id) —
+  // passing a profile id is an FK error, and because supabase-js returns
+  // errors rather than throwing, that used to leave deckId null and scan
+  // `/flashcards/null`.
+  const { data: deck, error: deckError } = await supabase
+    .from("flashcard_decks")
+    .insert({
+      class_id: seed.course.id,
+      name: "A11y Coverage Deck",
+      description: "Deck seeded for the student a11y sweep",
+      creator_id: seed.instructor.user_id
+    })
+    .select("id")
+    .single();
+  if (deckError || !deck) {
+    throw new Error(`seedStudentSurface: could not seed flashcard_decks — ${deckError?.message ?? "no row returned"}`);
+  }
+  const deckId = String(deck.id);
+
+  // The unsubscribe page updates the watcher row and renders its error state
+  // when it matches none. The thread was inserted through the service-role
+  // client, so the discussion trigger saw no auth.uid() and created no watcher
+  // — without this the route measures "Unsubscribe Error", not the real
+  // unsubscribe surface.
+  const { error: watcherError } = await supabase.from("discussion_thread_watchers").insert({
+    user_id: seed.student.user_id,
+    discussion_thread_root_id: Number(threadId),
+    class_id: seed.course.id,
+    enabled: true
+  });
+  if (watcherError) {
+    throw new Error(`seedStudentSurface: could not seed discussion_thread_watchers — ${watcherError.message}`);
   }
 
   void addDays; // kept for future date-dependent routes
 
-  return { ...seed, pollId, queueId, deckId, assignmentId, submissionId, threadId, surveyId };
+  return { ...seed, pollId, queueId, deckId, helpRequestId, assignmentId, submissionId, threadId, surveyId };
 }
 
 const sub = (s: StudentSurface, leaf: string) =>
   `/course/${s.course.id}/assignments/${s.assignmentId}/submissions/${s.submissionId}${leaf}`;
 
 /**
- * The 46 student-facing routes. Ordered roughly by student journey so a
- * failure list reads like a walkthrough of the product.
+ * The student-facing routes, ordered roughly by student journey so a failure
+ * list reads like a walkthrough of the product.
+ *
+ * Counts are derived, never asserted by hand — see the registry test, which
+ * prints `ACTIVE_ROUTES.length` scanned and `SKIPPED_ROUTES.length` skipped.
+ * A hard-coded total in this comment is exactly the kind of number that drifts
+ * away from the set actually scanned.
  */
 export const STUDENT_ROUTES: StudentRouteState[] = [
   // ---- auth / top-level -----------------------------------------------------
+  // The auth shells have no nav landmark, so they are exempt from the landmark
+  // checks — but sign-in DOES render <main id="main-content"> (app/(auth-pages)
+  // /layout.tsx), so it still owes 1.4.10 and reflow is measured.
   { id: "sign-in", label: "sign-in", path: () => "/sign-in", anonymous: true, expectLandmarks: false },
-  { id: "login", label: "login", path: () => "/login", anonymous: true, expectLandmarks: false },
-  { id: "root", label: "root redirect", path: () => "/", anonymous: true, expectLandmarks: false },
+  {
+    id: "login",
+    label: "login",
+    path: () => "/login",
+    anonymous: true,
+    expectLandmarks: false,
+    expectReflow: false // app/login/page.tsx renders no <main> to measure
+  },
+  {
+    id: "root",
+    label: "root redirect",
+    path: () => "/",
+    anonymous: true,
+    expectLandmarks: false,
+    expectReflow: false // redirect shell, no <main> of its own
+  },
   { id: "course-picker", label: "course picker", path: () => "/course" },
-  { id: "canvas-classes", label: "canvas classes", path: () => "/course/canvas-classes" },
+  {
+    id: "canvas-classes",
+    label: "canvas classes",
+    path: () => "/course/canvas-classes"
+    // Renders an unbuilt stub (`return <div>WIP</div>`) and so has no <main>.
+    // Kept under the landmark checks anyway: it is reachable, the missing
+    // landmark is a real 1.3.1 failure, and the row is verified evidence. The
+    // duplicate reflow row it used to carry is gone because reflow is skipped
+    // once the main-landmark check has already failed.
+  },
   {
     id: "error-page",
     label: "error page",
     path: () => "/error",
     anonymous: true,
-    expectLandmarks: false
+    expectLandmarks: false,
+    expectReflow: false // app/error/page.tsx renders no <main> to measure
   },
   {
     id: "auth-magic-link",
@@ -238,6 +319,17 @@ export const STUDENT_ROUTES: StudentRouteState[] = [
     id: "office-hours-queue-history",
     label: "queue history",
     path: (s) => `/course/${s.course.id}/office-hours/${s.queueId}/history`
+  },
+  {
+    id: "office-hours-request-in-queue",
+    label: "help request detail (in queue)",
+    path: (s) => `/course/${s.course.id}/office-hours/${s.queueId}/${s.helpRequestId}`
+  },
+  {
+    // The queue-less form, which is what notification links and chat pop-outs open.
+    id: "office-hours-request",
+    label: "help request detail (direct link)",
+    path: (s) => `/course/${s.course.id}/office-hours/request/${s.helpRequestId}`
   },
   {
     id: "office-hours-meet",

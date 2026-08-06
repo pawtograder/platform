@@ -69,6 +69,36 @@ function suppressed(rule: string, target: string): boolean {
 
 const FREEZE_STYLE_ID = "a11y-coverage-animation-freeze";
 
+const VISUAL_TEST_ATTR = "data-visual-tests";
+
+/**
+ * Turn off the screenshot-masking mode for the duration of a scan.
+ *
+ * `tests/global-setup.ts` sets `data-visual-tests` on every page so visual
+ * diffs are stable: it paints synthetic placeholder text over dates and ids,
+ * makes tagged content transparent, hides `[data-visual-test="removed"]`, and
+ * expands scrollable containers. Every one of those changes the pixels and the
+ * DOM that axe measures, so scanning with it on reports contrast against
+ * test-only rendering while hiding the real UI. `assertReflowAt320` already
+ * removes it for the same reason; the axe passes never did.
+ *
+ * Returns whether it was on, so it can be restored for later assertions.
+ */
+async function disableVisualTestMasking(page: Page): Promise<boolean> {
+  return await page
+    .evaluate((attr) => {
+      const was = document.documentElement.hasAttribute(attr);
+      document.documentElement.removeAttribute(attr);
+      return was;
+    }, VISUAL_TEST_ATTR)
+    .catch(() => false);
+}
+
+async function restoreVisualTestMasking(page: Page, wasEnabled: boolean): Promise<void> {
+  if (!wasEnabled) return;
+  await page.evaluate((attr) => document.documentElement.setAttribute(attr, ""), VISUAL_TEST_ATTR).catch(() => {});
+}
+
 /**
  * Snap animations to their final state so axe's pixel sampling is deterministic.
  * Same rationale as axeStudentA11y.ts: mid-transition opacity blends produce
@@ -235,6 +265,7 @@ export async function collectFindings(page: Page, colorScheme: ColorScheme): Pro
       /* let axe report an genuinely empty title */
     });
   await freezeAnimations(page);
+  const maskingWasOn = await disableVisualTestMasking(page);
   try {
     const tagged = await decideUndecidedPopupControls(
       page,
@@ -251,6 +282,7 @@ export async function collectFindings(page: Page, colorScheme: ColorScheme): Pro
       ...toFindings(extra, "incomplete")
     ];
   } finally {
+    await restoreVisualTestMasking(page, maskingWasOn);
     await unfreezeAnimations(page);
     await page.emulateMedia({ colorScheme: "light" });
   }

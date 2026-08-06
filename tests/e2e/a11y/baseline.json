@@ -1,24 +1,24 @@
 {
-  "recordedAt": "2026-08-05T19:25:05.535Z",
+  "recordedAt": "2026-08-06T13:53:39.073Z",
   "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
   "entries": {
-    "assignment-detail|dark|color-contrast|incomplete": {
+    "assignment-detail|dark|nested-interactive|violation": {
       "route": "assignment-detail",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "assignment-detail|light|color-contrast|incomplete": {
+    "assignment-detail|light|nested-interactive|violation": {
       "route": "assignment-detail",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
     "assignment-detail|light|reflow-320|violation": {
       "route": "assignment-detail",
@@ -29,59 +29,41 @@
       "impact": "serious",
       "sample": "[assignment detail] no page-level horizontal scrolling at 320px (scrollWidth 394 vs clientWidth 320)"
     },
-    "assignments|dark|color-contrast|incomplete": {
+    "assignments|dark|nested-interactive|violation": {
       "route": "assignments",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
+      "rule": "nested-interactive",
+      "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "span[data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "assignments|light|color-contrast|incomplete": {
+    "assignments|light|nested-interactive|violation": {
       "route": "assignments",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
+      "rule": "nested-interactive",
+      "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "span[data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "canvas-classes|light|landmark-structure|violation": {
+    "canvas-classes|light|main-landmark|violation": {
       "route": "canvas-classes",
       "scheme": "light",
-      "rule": "landmark-structure",
+      "rule": "main-landmark",
       "kind": "violation",
       "nodes": 1,
       "impact": "serious",
       "sample": "[canvas classes] main landmark renders"
     },
-    "canvas-classes|light|reflow-320|violation": {
-      "route": "canvas-classes",
-      "scheme": "light",
-      "rule": "reflow-320",
+    "course-home|dark|nested-interactive|violation": {
+      "route": "course-home",
+      "scheme": "dark",
+      "rule": "nested-interactive",
       "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "[canvas classes] main landmark visible at 320px"
-    },
-    "course-home|dark|color-contrast|incomplete": {
-      "route": "course-home",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "serious",
-      "sample": "span[data-visual-placeholder=\"date\"]"
-    },
-    "course-home|light|color-contrast|incomplete": {
-      "route": "course-home",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "serious",
-      "sample": "span[data-visual-placeholder=\"date\"]"
+      "sample": ".css-lnfksf"
     },
     "course-home|light|color-contrast|violation": {
       "route": "course-home",
@@ -92,23 +74,32 @@
       "impact": "serious",
       "sample": ".css-10d65bq"
     },
-    "discussion-list|dark|color-contrast|incomplete": {
+    "course-home|light|nested-interactive|violation": {
+      "route": "course-home",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "discussion-list|dark|nested-interactive|violation": {
       "route": "discussion-list",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
+      "rule": "nested-interactive",
+      "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "p[data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "discussion-list|light|color-contrast|incomplete": {
+    "discussion-list|light|nested-interactive|violation": {
       "route": "discussion-list",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
+      "rule": "nested-interactive",
+      "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "p[data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
     "discussion-new|dark|color-contrast|incomplete": {
       "route": "discussion-new",
@@ -117,7 +108,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|dark|label|violation": {
       "route": "discussion-new",
@@ -127,6 +118,15 @@
       "nodes": 1,
       "impact": "critical",
       "sample": "textarea"
+    },
+    "discussion-new|dark|nested-interactive|violation": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "discussion-new|dark|svg-img-alt|violation": {
       "route": "discussion-new",
@@ -144,7 +144,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|light|label|violation": {
       "route": "discussion-new",
@@ -155,6 +155,15 @@
       "impact": "critical",
       "sample": "textarea"
     },
+    "discussion-new|light|nested-interactive|violation": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
     "discussion-new|light|svg-img-alt|violation": {
       "route": "discussion-new",
       "scheme": "light",
@@ -164,32 +173,140 @@
       "impact": "serious",
       "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
     },
-    "discussion-thread|dark|color-contrast|incomplete": {
+    "discussion-thread|dark|nested-interactive|violation": {
       "route": "discussion-thread",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-0[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+      "sample": ".css-lnfksf"
     },
-    "discussion-thread|light|color-contrast|incomplete": {
+    "discussion-thread|light|nested-interactive|violation": {
       "route": "discussion-thread",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-0[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+      "sample": ".css-lnfksf"
     },
-    "discussion-thread|light|landmark-structure|violation": {
+    "discussion-thread|light|page-title|violation": {
       "route": "discussion-thread",
       "scheme": "light",
-      "rule": "landmark-structure",
+      "rule": "page-title",
       "kind": "violation",
       "nodes": 1,
       "impact": "serious",
       "sample": "[discussion thread] <title> includes the product name (\"Pawtograder\")"
+    },
+    "flashcard-deck|dark|nested-interactive|violation": {
+      "route": "flashcard-deck",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "flashcard-deck|light|nested-interactive|violation": {
+      "route": "flashcard-deck",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "flashcards|dark|heading-order|violation": {
+      "route": "flashcards",
+      "scheme": "dark",
+      "rule": "heading-order",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "h3"
+    },
+    "flashcards|dark|nested-interactive|violation": {
+      "route": "flashcards",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "flashcards|light|heading-order|violation": {
+      "route": "flashcards",
+      "scheme": "light",
+      "rule": "heading-order",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "h3"
+    },
+    "flashcards|light|nested-interactive|violation": {
+      "route": "flashcards",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "github-help|dark|nested-interactive|violation": {
+      "route": "github-help",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "github-help|light|nested-interactive|violation": {
+      "route": "github-help",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "gradebook|dark|nested-interactive|violation": {
+      "route": "gradebook",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "gradebook|light|nested-interactive|violation": {
+      "route": "gradebook",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "notifications|dark|nested-interactive|violation": {
+      "route": "notifications",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "notifications|light|nested-interactive|violation": {
+      "route": "notifications",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "notifications|light|reflow-320|violation": {
       "route": "notifications",
@@ -232,9 +349,9 @@
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "violation",
-      "nodes": 1,
+      "nodes": 2,
       "impact": "serious",
-      "sample": ".css-ap60qa > a[href$=\"discussion\"]"
+      "sample": ".css-hwpfmi"
     },
     "office-hours-queue-new|light|aria-command-name|violation": {
       "route": "office-hours-queue-new",
@@ -263,6 +380,15 @@
       "impact": "serious",
       "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
+    "office-hours-queue-new|light|color-contrast|violation": {
+      "route": "office-hours-queue-new",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-1ka9wf2"
+    },
     "office-hours-queue-new|light|reflow-320|violation": {
       "route": "office-hours-queue-new",
       "scheme": "light",
@@ -272,59 +398,104 @@
       "impact": "serious",
       "sample": "[new help request] no page-level horizontal scrolling at 320px (scrollWidth 812 vs clientWidth 320)"
     },
-    "office-hours-search|dark|color-contrast|incomplete": {
-      "route": "office-hours-search",
+    "office-hours-request-in-queue|dark|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-request-in-queue",
       "scheme": "dark",
-      "rule": "color-contrast",
+      "rule": "form-field-multiple-labels",
       "kind": "incomplete",
       "nodes": 1,
-      "impact": "serious",
-      "sample": "p[data-visual-test=\"transparent\"]"
+      "impact": "moderate",
+      "sample": "#«r15»"
     },
-    "office-hours-search|light|color-contrast|incomplete": {
-      "route": "office-hours-search",
+    "office-hours-request-in-queue|light|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-request-in-queue",
       "scheme": "light",
-      "rule": "color-contrast",
+      "rule": "form-field-multiple-labels",
       "kind": "incomplete",
       "nodes": 1,
-      "impact": "serious",
-      "sample": "p[data-visual-test=\"transparent\"]"
+      "impact": "moderate",
+      "sample": "#«r15»"
     },
-    "public-poll|light|landmark-structure|violation": {
-      "route": "public-poll",
-      "scheme": "light",
-      "rule": "landmark-structure",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[public poll] main landmark renders"
-    },
-    "public-poll|light|reflow-320|violation": {
-      "route": "public-poll",
+    "office-hours-request-in-queue|light|reflow-320|violation": {
+      "route": "office-hours-request-in-queue",
       "scheme": "light",
       "rule": "reflow-320",
       "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "[public poll] main landmark visible at 320px"
+      "sample": "[help request detail (in queue)] no page-level horizontal scrolling at 320px (scrollWidth 526 vs clientWidth 320)"
     },
-    "regrade-requests|dark|color-contrast|incomplete": {
-      "route": "regrade-requests",
+    "office-hours-request|dark|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-request",
       "scheme": "dark",
-      "rule": "color-contrast",
+      "rule": "form-field-multiple-labels",
       "kind": "incomplete",
-      "nodes": 2,
-      "impact": "serious",
-      "sample": "td:nth-child(7) > .css-l0zmib[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "#«r13»"
     },
-    "regrade-requests|light|color-contrast|incomplete": {
-      "route": "regrade-requests",
+    "office-hours-request|light|form-field-multiple-labels|incomplete": {
+      "route": "office-hours-request",
+      "scheme": "light",
+      "rule": "form-field-multiple-labels",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "moderate",
+      "sample": "#«r13»"
+    },
+    "office-hours-request|light|reflow-320|violation": {
+      "route": "office-hours-request",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[help request detail (direct link)] no page-level horizontal scrolling at 320px (scrollWidth 526 vs clientWidth 320)"
+    },
+    "polls|dark|nested-interactive|violation": {
+      "route": "polls",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "polls|light|nested-interactive|violation": {
+      "route": "polls",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "public-poll|light|color-contrast|violation": {
+      "route": "public-poll",
       "scheme": "light",
       "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": "td:nth-child(7) > .css-l0zmib[data-visual-test=\"transparent\"][data-visual-placeholder=\"relative-time\"]"
+      "sample": ".sd-btn"
+    },
+    "public-poll|light|main-landmark|violation": {
+      "route": "public-poll",
+      "scheme": "light",
+      "rule": "main-landmark",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[public poll] main landmark renders"
+    },
+    "regrade-requests|dark|nested-interactive|violation": {
+      "route": "regrade-requests",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "regrade-requests|light|color-contrast|violation": {
       "route": "regrade-requests",
@@ -335,41 +506,95 @@
       "impact": "serious",
       "sample": ".css-10d65bq"
     },
+    "regrade-requests|light|nested-interactive|violation": {
+      "route": "regrade-requests",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "sign-in|light|reflow-320|violation": {
+      "route": "sign-in",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[sign-in] no page-level horizontal scrolling at 320px (scrollWidth 323 vs clientWidth 320)"
+    },
     "submission-checks|dark|color-contrast|incomplete": {
       "route": "submission-checks",
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-checks|dark|nested-interactive|violation": {
+      "route": "submission-checks",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-checks|light|color-contrast|incomplete": {
       "route": "submission-checks",
       "scheme": "light",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-checks|light|nested-interactive|violation": {
+      "route": "submission-checks",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-deployments|dark|color-contrast|incomplete": {
       "route": "submission-deployments",
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-deployments|dark|nested-interactive|violation": {
+      "route": "submission-deployments",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-deployments|light|color-contrast|incomplete": {
       "route": "submission-deployments",
       "scheme": "light",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-deployments|light|nested-interactive|violation": {
+      "route": "submission-deployments",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-files|dark|aria-prohibited-attr|incomplete": {
       "route": "submission-files",
@@ -380,15 +605,6 @@
       "impact": "serious",
       "sample": ".css-dj5smh"
     },
-    "submission-files|dark|color-contrast|incomplete": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 8,
-      "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
     "submission-files|dark|color-contrast|violation": {
       "route": "submission-files",
       "scheme": "dark",
@@ -397,6 +613,15 @@
       "nodes": 2,
       "impact": "serious",
       "sample": ".mtk7:nth-child(2)"
+    },
+    "submission-files|dark|nested-interactive|violation": {
+      "route": "submission-files",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-files|light|aria-prohibited-attr|incomplete": {
       "route": "submission-files",
@@ -407,104 +632,167 @@
       "impact": "serious",
       "sample": ".css-dj5smh"
     },
-    "submission-files|light|color-contrast|incomplete": {
+    "submission-files|light|nested-interactive|violation": {
       "route": "submission-files",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 8,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "submission-grade|dark|color-contrast|incomplete": {
+    "submission-grade|dark|nested-interactive|violation": {
       "route": "submission-grade",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 5,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "submission-grade|light|color-contrast|incomplete": {
+    "submission-grade|light|nested-interactive|violation": {
       "route": "submission-grade",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 5,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
     "submission-repo-analytics|dark|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-repo-analytics|dark|nested-interactive|violation": {
+      "route": "submission-repo-analytics",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-repo-analytics|light|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
       "scheme": "light",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-repo-analytics|light|nested-interactive|violation": {
+      "route": "submission-repo-analytics",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-results|dark|color-contrast|incomplete": {
       "route": "submission-results",
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-results|dark|nested-interactive|violation": {
+      "route": "submission-results",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-results|light|color-contrast|incomplete": {
       "route": "submission-results",
       "scheme": "light",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-results|light|nested-interactive|violation": {
+      "route": "submission-results",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-root|dark|color-contrast|incomplete": {
       "route": "submission-root",
       "scheme": "dark",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
+    },
+    "submission-root|dark|nested-interactive|violation": {
+      "route": "submission-root",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "submission-root|light|color-contrast|incomplete": {
       "route": "submission-root",
       "scheme": "light",
       "rule": "color-contrast",
       "kind": "incomplete",
-      "nodes": 4,
+      "nodes": 11,
       "impact": "serious",
-      "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submissions-list|dark|color-contrast|incomplete": {
+    "submission-root|light|nested-interactive|violation": {
+      "route": "submission-root",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "submissions-list|dark|nested-interactive|violation": {
       "route": "submissions-list",
       "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": "span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
     },
-    "submissions-list|light|color-contrast|incomplete": {
+    "submissions-list|light|nested-interactive|violation": {
       "route": "submissions-list",
       "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 2,
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
       "impact": "serious",
-      "sample": "span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
+      "sample": ".css-lnfksf"
+    },
+    "survey-taking|dark|nested-interactive|violation": {
+      "route": "survey-taking",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
     },
     "survey-taking|light|color-contrast|violation": {
       "route": "survey-taking",
@@ -515,14 +803,59 @@
       "impact": "serious",
       "sample": ".sd-btn"
     },
-    "unsubscribe-thread|dark|color-contrast|violation": {
-      "route": "unsubscribe-thread",
-      "scheme": "dark",
-      "rule": "color-contrast",
+    "survey-taking|light|nested-interactive|violation": {
+      "route": "survey-taking",
+      "scheme": "light",
+      "rule": "nested-interactive",
       "kind": "violation",
       "nodes": 1,
       "impact": "serious",
-      "sample": "h2"
+      "sample": ".css-lnfksf"
+    },
+    "surveys|dark|nested-interactive|violation": {
+      "route": "surveys",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "surveys|light|nested-interactive|violation": {
+      "route": "surveys",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "unsubscribe-thread|dark|nested-interactive|violation": {
+      "route": "unsubscribe-thread",
+      "scheme": "dark",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "unsubscribe-thread|light|nested-interactive|violation": {
+      "route": "unsubscribe-thread",
+      "scheme": "light",
+      "rule": "nested-interactive",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": ".css-lnfksf"
+    },
+    "unsubscribe-thread|light|reflow-320|violation": {
+      "route": "unsubscribe-thread",
+      "scheme": "light",
+      "rule": "reflow-320",
+      "kind": "violation",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "[unsubscribe (thread)] no page-level horizontal scrolling at 320px (scrollWidth 480 vs clientWidth 320)"
     }
   }
 }

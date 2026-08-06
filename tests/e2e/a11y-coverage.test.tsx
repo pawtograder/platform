@@ -8,8 +8,11 @@
  * Per route it checks the criteria that are decidable without new measurement
  * infrastructure:
  *   - axe WCAG 2.1 A/AA + heading-order, in BOTH color schemes (dark mode had
- *     zero coverage before this), reading `violations` AND `incomplete`
- *   - landmark structure, page title, html[lang]   (1.3.1 / 2.4.2 / 3.1.1)
+ *     zero coverage before this), reading `violations` AND `incomplete`, with
+ *     the screenshot-masking mode OFF so axe measures the real UI
+ *   - page-title / html-lang / main-landmark / nav-landmarks, one baseline key
+ *     each so a recorded defect cannot mask the criteria behind it
+ *     (2.4.2 / 3.1.1 / 1.3.1)
  *   - reflow at 320px                              (1.4.10 — was 7 routes)
  *
  * It does NOT fail on pre-existing findings: those are recorded in
@@ -20,7 +23,13 @@
  */
 import { expect, test } from "../global-setup";
 import { loginAsUser } from "./TestingUtils";
-import { assertPageHasLandmarks, assertReflowAt320 } from "./axeStudentA11y";
+import {
+  assertHtmlLang,
+  assertMainLandmark,
+  assertNavLandmarks,
+  assertPageTitle,
+  assertReflowAt320
+} from "./axeStudentA11y";
 import { settlePage } from "../../tools/a11y-judge/agent/pageReady";
 import { collectFindings, type ColorScheme, type Finding } from "./a11y/scan";
 import {
@@ -43,13 +52,20 @@ import {
 const SCHEMES: ColorScheme[] = ["light", "dark"];
 
 // Accumulated across the file so `A11Y_BASELINE_UPDATE=1` can rewrite the
-// ledger in one pass rather than per-test.
+// ledger in one pass rather than per-test. `coveredRoutes` is what lets
+// writeBaseline tell a full sweep from a filtered or crashed one.
 const recorded: Record<string, BaselineEntry> = {};
+const coveredRoutes = new Set<string>();
 
 /**
  * Run a structural assertion and turn a failure into a Finding instead of
  * throwing, so one bad route cannot hide the rest of the sweep and so
  * structural defects are baselined on the same terms as axe findings.
+ *
+ * One rule id per criterion, deliberately: the baseline key is
+ * route|scheme|rule|kind, so a shared id would let one recorded defect suppress
+ * every other criterion behind it. `assertPageHasLandmarks` alone spans 1.3.1,
+ * 2.4.2 and 3.1.1, and its try/catch stops at the first failure.
  */
 async function structural(rule: string, fn: () => Promise<void>): Promise<Finding[]> {
   try {
@@ -61,8 +77,16 @@ async function structural(rule: string, fn: () => Promise<void>): Promise<Findin
   }
 }
 
+/** Routes whose final URL is legitimately not the one requested. */
+const REDIRECTS_BY_DESIGN = new Set(["root"]);
+
 test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
-  test.skip(!process.env.A11Y_COVERAGE, "coverage sweep is opt-in (set A11Y_COVERAGE=1)");
+  // Update mode enables the suite too: otherwise `A11Y_BASELINE_UPDATE=1` alone
+  // skips every test, afterAll never runs, and the regeneration silently no-ops.
+  test.skip(
+    !process.env.A11Y_COVERAGE && !isUpdateMode(),
+    "coverage sweep is opt-in (set A11Y_COVERAGE=1, or A11Y_BASELINE_UPDATE=1 to re-record)"
+  );
   // Deliberately NOT serial: this is a sweep, and one unreachable route must
   // not prevent the other 30+ from being measured.
 
@@ -102,8 +126,26 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
         await loginAsUser(page, surface.student, surface.course);
       }
       const url = route.path(surface);
-      await page.goto(url);
+      // A route that never rendered still scans clean, so without these three
+      // checks an unresolved fixture id ("/office-hours/null") or a bounce to
+      // /sign-in counts as covered. False coverage is worse than a known gap:
+      // the registry's whole claim is that it is an honest denominator.
+      expect(url, `[${route.label}] path has an unresolved fixture id: ${url}`).not.toMatch(
+        /\/(null|undefined)(\/|$)|\/\//
+      );
+      const response = await page.goto(url);
+      expect(response?.status() ?? 0, `[${route.label}] ${url} returned an error status`).toBeLessThan(400);
       await page.waitForLoadState("domcontentloaded");
+      // "Bounced to an auth or error shell" means landing somewhere OTHER than
+      // the requested path — /sign-in is a legitimate destination for the
+      // sign-in route itself.
+      const intendedPath = new URL(url, "http://localhost").pathname;
+      const landedPath = new URL(page.url()).pathname;
+      if (!REDIRECTS_BY_DESIGN.has(route.id) && landedPath !== intendedPath) {
+        expect(landedPath, `[${route.label}] ${url} redirected to ${landedPath}`).not.toMatch(
+          /^\/(sign-in|login|error)$/
+        );
+      }
       // Settle before scanning. Without this the two color-scheme passes see
       // different DOMs: popovers and checkbox groups mount late (after realtime
       // connects), so the second pass picks up rules the first never saw and the
@@ -118,17 +160,35 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
         perScheme[scheme] = await collectFindings(page, scheme);
       }
 
-      // Structural checks. Both need a <main> landmark (assertReflowAt320
-      // measures it directly), so auth shells that legitimately have none are
-      // exempt. Recorded under "light" — they are scheme-independent.
+      // Structural checks, one baseline key per success criterion. Recorded
+      // under "light" — they are scheme-independent.
+      //
+      // Title and lang apply to every route including auth shells; only the
+      // landmark checks are exempt where a shell legitimately has none.
+      perScheme.light.push(...(await structural("page-title", () => assertPageTitle(page, route.label))));
+      perScheme.light.push(...(await structural("html-lang", () => assertHtmlLang(page, route.label))));
+      let mainLandmarkFailed = false;
       if (route.expectLandmarks !== false) {
-        perScheme.light.push(
-          ...(await structural("landmark-structure", () => assertPageHasLandmarks(page, route.label)))
-        );
+        const mainFindings = await structural("main-landmark", () => assertMainLandmark(page, route.label));
+        mainLandmarkFailed = mainFindings.length > 0;
+        perScheme.light.push(...mainFindings);
+        perScheme.light.push(...(await structural("nav-landmarks", () => assertNavLandmarks(page, route.label))));
+      }
+      // Reflow is gated separately from the landmark checks: assertReflowAt320
+      // needs a <main> to measure, but "has no nav landmark" is not a reason to
+      // skip 1.4.10. Folding it into expectLandmarks left sign-in — which does
+      // render <main id="main-content"> — with desktop-only coverage.
+      //
+      // It is skipped when the main landmark is already missing, because
+      // assertReflowAt320 asserts that landmark first: recording both would put
+      // two rows in the ledger for one defect, and the reflow row would read as
+      // a measurement that never happened.
+      if ((route.expectReflow ?? true) && !mainLandmarkFailed) {
         perScheme.light.push(...(await structural("reflow-320", () => assertReflowAt320(page, route.label))));
       }
 
       const all: Finding[] = [];
+      coveredRoutes.add(route.id);
       for (const scheme of SCHEMES) {
         const findings = perScheme[scheme];
         Object.assign(recorded, toEntries(route.id, scheme, findings));
@@ -138,7 +198,8 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
           const fresh = newFindings(baseline, route.id, scheme, findings);
           expect(
             fresh,
-            `[${route.label}] ${scheme} mode — NEW accessibility findings (not in baseline.json):\n${formatFindings(fresh)}`
+            `[${route.label}] ${scheme} mode — accessibility findings that are new, or affect more nodes than ` +
+              `baseline.json records:\n${formatFindings(fresh)}`
           ).toEqual([]);
         }
       }
@@ -154,7 +215,8 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
       writeBaseline(
         recorded,
         "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. " +
-          "Entries are debt, not policy — deleting a line is the proof a defect was fixed."
+          "Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
+        { expected: ACTIVE_ROUTES.map((r) => r.id), covered: coveredRoutes }
       );
       console.log(`[a11y-coverage] baseline rewritten with ${Object.keys(recorded).length} entries`);
     }

@@ -13,8 +13,9 @@
  * can only shrink — `baseline.json` is a checked-in ledger, and removing a line
  * from it is the proof that something got fixed.
  *
- * Regenerate after intentional changes:
- *   A11Y_BASELINE_UPDATE=1 npx playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium
+ * Regenerate after intentional changes — unfiltered, or the write is refused:
+ *   A11Y_COVERAGE=1 A11Y_BASELINE_UPDATE=1 \
+ *     npx playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -28,7 +29,15 @@ export type BaselineEntry = {
   scheme: ColorScheme;
   rule: string;
   kind: "violation" | "incomplete";
-  /** Node count when recorded — informational; growth is not itself a failure. */
+  /**
+   * Node count when recorded. Growth IS a failure — see newFindings.
+   *
+   * The key is route|scheme|rule|kind, so without this a second inaccessible
+   * control on a route that already baselines that rule would only lengthen
+   * axe's `nodes` array and slip through as "already known". Counting is the
+   * stable way to catch that: keying on node targets instead would churn on
+   * every build, because the selectors carry React's generated ids (`«r12»`).
+   */
   nodes: number;
   impact: string;
   sample: string;
@@ -45,16 +54,47 @@ export function loadBaseline(): Baseline {
   if (!fs.existsSync(BASELINE_PATH)) {
     return { recordedAt: "never", note: "no baseline recorded yet", entries: {} };
   }
-  return JSON.parse(fs.readFileSync(BASELINE_PATH, "utf8")) as Baseline;
+  // This ledger is edited by hand — deleting a line is how a fix is claimed — so
+  // a conflicted merge is the likely way it breaks. Name the file and the
+  // recovery, rather than letting a bare SyntaxError surface in 37 route tests.
+  let parsed: Partial<Baseline>;
+  try {
+    parsed = JSON.parse(fs.readFileSync(BASELINE_PATH, "utf8")) as Partial<Baseline>;
+  } catch (e) {
+    throw new Error(
+      `a11y baseline at ${BASELINE_PATH} is not valid JSON (${(e as Error).message}). ` +
+        `Fix the file, or regenerate it with A11Y_BASELINE_UPDATE=1.`
+    );
+  }
+  if (parsed.entries !== undefined && (typeof parsed.entries !== "object" || parsed.entries === null)) {
+    throw new Error(`a11y baseline at ${BASELINE_PATH} has a non-object "entries" field.`);
+  }
+  // A file without `entries` would otherwise reach `key in undefined`, which is
+  // a TypeError in every route test rather than an explicable failure.
+  return {
+    recordedAt: parsed.recordedAt ?? "unknown",
+    note: parsed.note ?? "",
+    entries: parsed.entries ?? {}
+  };
 }
 
 export function isUpdateMode(): boolean {
   return Boolean(process.env.A11Y_BASELINE_UPDATE);
 }
 
-/** Findings not present in the baseline — these are what fail the run. */
+/**
+ * Findings not covered by the baseline — these are what fail the run.
+ *
+ * "Covered" means both the key is recorded AND the rule matches no more nodes
+ * than when it was recorded. A rule that grows from 3 nodes to 4 has a newly
+ * inaccessible control on it, which is a regression the key alone cannot see.
+ */
 export function newFindings(baseline: Baseline, routeId: string, scheme: ColorScheme, findings: Finding[]): Finding[] {
-  return findings.filter((f) => !(findingKey(routeId, scheme, f) in baseline.entries));
+  return findings.filter((f) => {
+    const known = baseline.entries[findingKey(routeId, scheme, f)];
+    if (!known) return true;
+    return f.nodes > known.nodes;
+  });
 }
 
 export function toEntries(routeId: string, scheme: ColorScheme, findings: Finding[]): Record<string, BaselineEntry> {
@@ -73,7 +113,30 @@ export function toEntries(routeId: string, scheme: ColorScheme, findings: Findin
   return out;
 }
 
-export function writeBaseline(entries: Record<string, BaselineEntry>, note: string): void {
+/**
+ * Replace the ledger — but only from a run that actually covered everything.
+ *
+ * `writeBaseline` rewrites the whole file, while the caller's accumulator only
+ * holds routes that ran AND reached the recording line. A `--grep` filter, a
+ * crashed route, or a second worker therefore rewrites the ledger from a
+ * subset, silently deleting rows for routes nobody scanned. Since deleting a
+ * row is how this repo claims a defect is fixed, a partial write fabricates
+ * that proof. Demand the covered set and refuse otherwise.
+ */
+export function writeBaseline(
+  entries: Record<string, BaselineEntry>,
+  note: string,
+  coverage: { expected: string[]; covered: Set<string> }
+): void {
+  const missing = coverage.expected.filter((id) => !coverage.covered.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `Refusing to rewrite ${path.basename(BASELINE_PATH)} from a partial run: ` +
+        `${coverage.covered.size}/${coverage.expected.length} routes recorded, missing ${missing.join(", ")}.\n` +
+        `Regenerate with a full, unfiltered run:\n` +
+        `  A11Y_COVERAGE=1 A11Y_BASELINE_UPDATE=1 npx playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium`
+    );
+  }
   const sorted: Record<string, BaselineEntry> = {};
   for (const k of Object.keys(entries).sort()) sorted[k] = entries[k];
   const payload: Baseline = { recordedAt: new Date().toISOString(), note, entries: sorted };
