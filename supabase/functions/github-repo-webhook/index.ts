@@ -407,10 +407,23 @@ async function createPushDirectSubmission(
   // success. Spending their tokens to undo their own finalization — and to activate a submission
   // after the one their self-review is tied to — is not something the token policy is for.
   const mayRecordSubmission = !existing || existingIsIncomplete || existingRejectionType === "after_due_date";
+  // Why the push ended up uncovered, for the student-facing rejection below. "You have no late
+  // tokens left" is only true when the balance was actually consulted and came up short. The
+  // assignment may offer no tokens, the policy may decline to spend them automatically
+  // (require_tokens_before_due_date, which is the default), or the student's own early
+  // finalization may rule it out — and in each of those the balance is never read, so reporting
+  // exhaustion states something we did not check and sends the student to the wrong remedy.
+  let lateTokenOutcome: "none_offered" | "not_automatic" | "finalized_early" | "exhausted" =
+    lateTokenPolicy.maxLateTokens <= 0
+      ? "none_offered"
+      : lateTokenPolicy.requireTokensBeforeDueDate
+        ? "not_automatic"
+        : "exhausted";
   let stillLate = isLate;
   if (isLate && mayRecordSubmission) {
     if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
       scope.setTag("push_direct_finalized_early", "true");
+      lateTokenOutcome = "finalized_early";
     } else {
       const extended = await applyAutomaticLateTokens({
         adminSupabase,
@@ -594,7 +607,16 @@ async function createPushDirectSubmission(
     // to make somewhere to put it, so it records a rejected submission: fileless, inactive, and
     // ungradeable, exactly like the empty and oversized rejections.
     scope.setTag("push_direct_submission_rejected", "after_due_date");
+    scope.setTag("push_direct_late_token_outcome", lateTokenOutcome);
     console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
+    const lateTokenClause = {
+      none_offered: "",
+      not_automatic:
+        ", and late tokens for this assignment have to be applied before the deadline, so none covered this push",
+      finalized_early:
+        ", and you have already finalized your work for this assignment, so late tokens were not applied",
+      exhausted: " and you have no late tokens left to cover it"
+    }[lateTokenOutcome];
     await recordRejectedPush({
       adminSupabase,
       studentRepo,
@@ -604,8 +626,7 @@ async function createPushDirectSubmission(
       errorType: "after_due_date",
       errorName:
         `Your submission at commit ${sha.slice(0, 7)} was not recorded: it was pushed after the deadline for this ` +
-        `assignment${lateTokenPolicy.maxLateTokens > 0 ? " and you have no late tokens left to cover it" : ""}. ` +
-        `Contact your instructor if you believe this is wrong.`,
+        `assignment${lateTokenClause}. Contact your instructor if you believe this is wrong.`,
       scope
     });
     return;
