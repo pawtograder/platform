@@ -3,7 +3,7 @@
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { getFileFromRepo, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import { getFileFromRepo, updateAutograderWorkflowHash, getDefaultBranchHeadSha } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
@@ -105,18 +105,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
     const { data: adoptedHandout } = await adminForSeed
       .from("assignments")
-      .select("template_repo, latest_template_sha, class_id")
+      .select("class_id")
       .eq("id", assignment_id)
       .maybeSingle();
-    if (adoptedHandout?.template_repo) {
+    if (adoptedHandout) {
+      // Resolve `new_repo`'s OWN head rather than reading latest_template_sha. The edit page calls
+      // this function BEFORE the workflow sync re-pins that column, so on a handout replacement it
+      // still names a commit in the OLD repository — seedHandoutFileHashes would then ask GitHub
+      // for a sha the replacement does not contain, catch the failure, and seed nothing. The
+      // repository being attached is the one whose hashes are wanted, so ask it directly.
+      const adoptedHeadSha = await getDefaultBranchHeadSha(new_repo, scope).catch((headErr) => {
+        scope?.setTag("adopted_handout_head_lookup_failed", "true");
+        Sentry.captureException(headErr, scope);
+        return undefined;
+      });
       const seedResult = await seedHandoutFileHashes({
         adminSupabase: adminForSeed,
         assignmentId: assignment_id,
         classId: adoptedHandout.class_id,
-        templateRepo: adoptedHandout.template_repo,
-        // The pointer may not have caught up to the replacement yet, so fall back to the repo
-        // being attached — seedHandoutFileHashes resolves nothing when the sha is absent.
-        commitSha: adoptedHandout.latest_template_sha,
+        templateRepo: new_repo,
+        commitSha: adoptedHeadSha,
         scope
       });
       if (!seedResult.seeded) {

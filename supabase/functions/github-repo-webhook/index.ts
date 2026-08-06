@@ -1703,6 +1703,14 @@ async function handlePushToStudentRepo(
         `Skipping push-direct submission for ${repoName}@${payload.after}: ref ${payload.ref} is not the ` +
           `default branch (refs/heads/${pushDefaultBranch})`
       );
+      // Not a submission, but still activity worth recording. `repository_check_runs` is what
+      // CommitHistoryDialog and the staff commit history read, and the Actions-backed path recorded
+      // commits on EVERY branch — so returning here made a repo-only assignment lose branch work
+      // from the history that an autograded one keeps. Only the submission is restricted to the
+      // default branch; the history is not.
+      for (const commit of payload.commits) {
+        await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
+      }
       return;
     }
     // The `repositories` row is inserted BEFORE createRepo runs, so GitHub's

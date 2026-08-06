@@ -554,11 +554,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
 
+  // Find the corresponding student and assignment
+  console.log("Creating submission for", repository, sha, workflow_ref);
+  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
+  const { data: repoData, error: repoError } = await adminSupabase
+    .from("repositories")
+    .select(
+      "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
+    )
+    .eq("repository", repository)
+    .maybeSingle();
+  if (repoError) {
+    Sentry.captureException(repoError, scope);
+    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
+  }
+
+  // Circuit-breaker gate, deliberately AFTER the repository lookup above.
+  //
+  // It used to run first, which meant a leftover grade.yml in a migrated PR-mode fork produced a
+  // FAILING check during any GitHub outage — even though the response for that case does no GitHub
+  // work at all: it is a no-op that exists precisely so those runs stop showing students a red X.
+  // Nothing between the two points calls GitHub (this is one database read), so moving the gate
+  // costs nothing and lets the exemption be expressed.
+  const isPrModeLeftoverRun =
+    repoData?.assignments?.submission_mode === "pr" && repoData?.assignments?.has_autograder === false;
+  if (isPrModeLeftoverRun) {
+    scope?.setTag("circuit_exempt", "pr_mode_leftover_workflow");
+  }
   try {
     const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
     if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
       const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
-      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+      if (!isPrModeLeftoverRun && row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
         scope.setTag("circuit_state", "open");
         scope.setContext("circuit_breaker_active", {
           org,
@@ -584,20 +611,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       error_message: e instanceof Error ? e.message : String(e)
     });
     Sentry.captureException(e, scope);
-  }
-  // Find the corresponding student and assignment
-  console.log("Creating submission for", repository, sha, workflow_ref);
-  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
-  const { data: repoData, error: repoError } = await adminSupabase
-    .from("repositories")
-    .select(
-      "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
-    )
-    .eq("repository", repository)
-    .maybeSingle();
-  if (repoError) {
-    Sentry.captureException(repoError, scope);
-    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
   }
 
   if (repoData) {

@@ -258,7 +258,24 @@ export default function AutograderPage() {
         // remaining rollback.
         if (priorHasAutograder !== undefined && priorHasAutograder !== nextHasAutograder) {
           try {
-            await mutateAssignment({ values: { has_autograder: priorHasAutograder } });
+            // CONDITIONAL, like the autograder-row rollback below. I guarded that one and left this
+            // one unconditional, which is worse than leaving both: restoring the flag over a second
+            // instructor's successful save puts it back into disagreement with the workflow state
+            // THEY established — the exact mismatch this rollback exists to prevent, caused by the
+            // rollback itself. Only restore while the row still holds what this save wrote.
+            const { data: rolledBack, error: rollbackDbError } = await supabase
+              .from("assignments")
+              .update({ has_autograder: priorHasAutograder })
+              .eq("id", Number.parseInt(assignment_id as string))
+              .eq("has_autograder", nextHasAutograder)
+              .select("id");
+            if (rollbackDbError) throw rollbackDbError;
+            if ((rolledBack ?? []).length === 0) {
+              console.warn(
+                "Not rolling back has_autograder: the assignment no longer holds the value this save wrote, so " +
+                  "another save has superseded it."
+              );
+            }
           } catch (rollbackError) {
             console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
           }
