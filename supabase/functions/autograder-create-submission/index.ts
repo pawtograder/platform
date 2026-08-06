@@ -758,6 +758,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // So claim it: the first run to use the exception records its identity, and
         // afterwards only that same run/attempt is honored. Same-run retries (a transient
         // failure inside this function) still pass, since they carry the same identity.
+        // Does an Actions-backed submission already exist for this commit?
+        //
+        // The exception is for a run that was in flight when the autograder was turned off, and such
+        // a run has NOT yet recorded a submission — recording one is what it is here to do. A run
+        // that completed normally while the assignment was enabled did record one, and it never
+        // wrote a claim, because claims are only written inside this branch. So the first manual
+        // rerun of ANY historical run satisfied "stamped, unclaimed" and was admitted, adding an
+        // Actions-backed submission that can displace the current hand-graded one. An existing
+        // run_number > 0 submission for this sha is durable evidence that the dispatch this run
+        // belongs to already finished.
+        const { data: priorActionsSubmission, error: priorActionsError } = await adminSupabase
+          .from("submissions")
+          .select("id, run_number, run_attempt")
+          .eq("repository_id", repoData.id)
+          .eq("sha", sha)
+          .gt("run_number", 0)
+          .limit(1)
+          .maybeSingle();
+        if (priorActionsError) {
+          Sentry.captureException(priorActionsError, scope);
+          throw new Error(
+            `Could not determine whether ${repository}@${sha} already has an Actions-backed submission: ` +
+              `${priorActionsError.message}`
+          );
+        }
+        if (priorActionsSubmission) {
+          scope?.setTag("rejected_reason", "post_disable_rerun_of_completed_run");
+          throw new UserVisibleError(
+            "This assignment no longer uses an autograder. The grading run for this commit already completed while " +
+              "it did, so this re-run was ignored. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            400
+          );
+        }
         const claim = dispatchedStatus?.autograder_disabled_exception;
         const claimedByThisRun = claim
           ? claim.run_id === decoded.run_id && claim.run_attempt === decoded.run_attempt

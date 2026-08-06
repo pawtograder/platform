@@ -432,19 +432,43 @@ async function createPushDirectSubmission(
   } else if (existing) {
     scope.setTag("push_direct_submission_skipped", "already_exists");
     console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
-    // A force-push BACK to an already-recorded commit is not a redelivery, and the sha-keyed
-    // lookup cannot tell them apart. Student pushes A, then B, then force-pushes A again: this
-    // branch is reached with A's submission already present but inactive, so treating it as a
-    // duplicate left B active while the repository head — and the student's latest intent — is
-    // A. The gradebook then grades code the student rolled back.
-    //
-    // The caller has verified that this sha IS the current head, which is exactly what makes
-    // promotion correct here rather than a guess.
-    if (existing.is_active === false) {
-      // Subject to the SAME deadline as a new submission. Promoting an earlier commit changes
-      // which submission is graded, so a force-push after the cutoff must not do it when a
-      // post-deadline push cannot create one — otherwise the deadline is enforced against new
-      // work but not against reverting to old work.
+    // Classify FIRST: what happens next depends on why this row exists, and two of the three
+    // answers were unreachable while the is_active test ran ahead of them.
+    const existingRejectionType = await getRejectionErrorType(adminSupabase, existing.id);
+
+    // A DEADLINE rejection is about timing, not about the commit, so it must not be permanent.
+    // Once an instructor grants an extension that very same commit is timely — and treating the row
+    // like an oversized rejection (which IS permanent) forced the student to manufacture a new
+    // commit to be graded at all. Checked before the is_active branch, because such a row is
+    // normally inactive and would otherwise be handed to the promotion path, which refuses every
+    // rejection type and returns.
+    if (existingRejectionType === "after_due_date" && !stillLate) {
+      scope.setTag("push_direct_deadline_rejection_retried", String(existing.id));
+      console.log(
+        `Reprocessing ${repoName}@${sha}: its earlier rejection was for the deadline, which the current deadline ` +
+          `check now passes`
+      );
+      const removed = await cleanupPushDirectSubmission(adminSupabase, existing.id, scope);
+      if (!removed) {
+        throw new Error(
+          `Could not remove the stale deadline rejection ${existing.id} for ${repoName}@${sha}; rejecting this ` +
+            `delivery so GitHub retries it`
+        );
+      }
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, existing.id);
+      // Deliberately does NOT return: the push is ingested fresh below, as though it had just
+      // arrived, which is what the extension makes it.
+    } else if (existing.is_active === false) {
+      // A force-push BACK to an already-recorded commit is not a redelivery, and the sha-keyed
+      // lookup cannot tell them apart. Student pushes A, then B, then force-pushes A again: this
+      // branch is reached with A's submission present but inactive, so treating it as a duplicate
+      // left B active while the repository head — and the student's latest intent — is A. The
+      // gradebook then grades code the student rolled back.
+      //
+      // The caller has verified that this sha IS the current head, which is what makes promotion
+      // correct here rather than a guess. Subject to the SAME deadline as a new submission:
+      // promoting an earlier commit changes which submission is graded, so a force-push after the
+      // cutoff must not do it when a post-deadline push cannot create one.
       if (stillLate) {
         scope.setTag("force_push_promote_skipped", "after_due_date");
         console.log(
@@ -454,40 +478,39 @@ async function createPushDirectSubmission(
       }
       await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, repoName, sha, scope);
       return;
-    }
-    // A rejected oversized row that is STILL ACTIVE is a failed deactivation, not a duplicate.
-    // deactivateRejectedSubmission writes the workflow_run_error first and only then deactivates,
-    // so an outage between the two leaves the row active with its review intact — which every
-    // check below reads as a completed submission, so the redelivery the caller asked for
-    // returned without retrying anything and a rejected push stayed the graded submission
-    // indefinitely. Retry the deactivation here; the error row is the durable marker that makes
-    // this recognisable.
-    if (await hasOversizedRejectionError(adminSupabase, existing.id)) {
+    } else if (existingRejectionType) {
+      // A rejected row that is STILL ACTIVE is a failed deactivation, not a duplicate.
+      // deactivateRejectedSubmission writes the workflow_run_error first and deactivates second, so
+      // an outage between them leaves the row active with its review intact — which every check
+      // reads as a completed submission, so the redelivery the caller asked for returned without
+      // retrying anything and a rejected push stayed the graded submission indefinitely. The error
+      // row is the durable marker that makes this recognisable.
       scope.setTag("push_direct_retry_failed_deactivation", String(existing.id));
-      console.log(`Retrying the deactivation of rejected oversized submission ${existing.id} for ${repoName}@${sha}`);
+      console.log(`Retrying the deactivation of rejected submission ${existing.id} for ${repoName}@${sha}`);
       const deactivated = await deactivateRejectedSubmission(adminSupabase, existing.id, scope);
       await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, existing.id);
       if (!deactivated) {
         throw new Error(
-          `Rejected oversized submission ${existing.id} for ${repoName}@${sha} is still active and could not be ` +
-            `deactivated; rejecting this delivery so GitHub retries it`
+          `Rejected submission ${existing.id} for ${repoName}@${sha} is still active and could not be deactivated; ` +
+            `rejecting this delivery so GitHub retries it`
         );
       }
       return;
+    } else {
+      // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
+      // its grading review on purpose, so this branch is where a redelivery for that commit
+      // lands — and if the reactivation that should have followed the rejection failed
+      // transiently, the throw that asked for this redelivery could never repair anything: the
+      // check above reads the retained row as complete and returned here. The student's last
+      // valid submission then stayed inactive permanently.
+      //
+      // No exclusion is passed: reactivatePreviousSubmission already skips retained rejections
+      // and returns untouched when a submission is already active, so this is a no-op on an
+      // ordinary duplicate delivery and a repair on the one that needs it. It throws on
+      // failure, which correctly asks for another delivery.
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
+      return;
     }
-    // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
-    // its grading review on purpose, so this branch is where a redelivery for that commit
-    // lands — and if the reactivation that should have followed the rejection failed
-    // transiently, the throw that asked for this redelivery could never repair anything: the
-    // check above reads the retained row as complete and returned here. The student's last
-    // valid submission then stayed inactive permanently.
-    //
-    // No exclusion is passed: reactivatePreviousSubmission already skips retained rejections
-    // and returns untouched when a submission is already active, so this is a no-op on an
-    // ordinary duplicate delivery and a repair on the one that needs it. It throws on
-    // failure, which correctly asks for another delivery.
-    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
-    return;
   }
 
   // The handout's recorded hashes cover only the configured submissionFiles, so build
@@ -824,7 +847,12 @@ async function createPushDirectSubmission(
       await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
     } catch (e) {
       reactivateErr = e;
-      Sentry.captureException(ingestErr, scope);
+      // `e`, not `ingestErr`. The comment above says to capture the restoration failure
+      // "separately so it neither masks ingestErr", and reporting ingestErr here did the
+      // opposite: it filed a second copy of the clone error (already captured for the
+      // too_large branch) and threw away the only record of WHY the student's previous
+      // submission could not be restored.
+      Sentry.captureException(e, scope);
     }
     if (!removed) {
       // Returning 200 here gave GitHub no reason to redeliver, so the incomplete row
@@ -1019,6 +1047,16 @@ async function resolvePusherStanding(
     .select("role, private_profile_id")
     .eq("user_id", user.user_id)
     .eq("class_id", studentRepo.class_id)
+    // (user_id, class_id) is unique only among ACTIVE rows — idx_user_roles_one_active_per_class
+    // is partial, `WHERE disabled = false` (20260522120001) — and dropping an enrollment sets
+    // disabled = true rather than deleting the row. So anyone re-added after being dropped, or a
+    // TA who was previously enrolled as a student, has two rows here and maybeSingle() raised
+    // PGRST116. That threw out of handlePushToStudentRepo and answered 500, and because the error
+    // is deterministic every GitHub redelivery hit it again: on a repo-only assignment, where this
+    // is the only path that records a submission, their pushes were lost with nothing to show for
+    // it. The filter is also the correct semantics — a dropped instructor is not current staff.
+    .eq("disabled", false)
+    .limit(1)
     .maybeSingle();
   if (roleError) throw roleError;
   if (!role || (role.role !== "instructor" && role.role !== "grader")) return notStaff;
@@ -1050,19 +1088,20 @@ async function resolvePusherStanding(
  * makes it a durable signal rather than a race: a row with the marker was rejected, whatever
  * state the rest of the cleanup reached.
  */
-async function hasOversizedRejectionError(
+async function getRejectionErrorType(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number
-): Promise<boolean> {
+): Promise<string | null> {
   const { data: rejectionErrors, error } = await adminSupabase
     .from("workflow_run_error")
     .select("submission_id, data")
     .eq("submission_id", submissionId);
   if (error) throw error;
-  return (rejectionErrors ?? []).some((e) => {
+  for (const e of rejectionErrors ?? []) {
     const errorType = (e.data as { error_type?: string } | null)?.error_type;
-    return REJECTION_ERROR_TYPES.has(errorType ?? "");
-  });
+    if (errorType && REJECTION_ERROR_TYPES.has(errorType)) return errorType;
+  }
+  return null;
 }
 
 /**
@@ -1252,7 +1291,7 @@ async function promoteSubmissionForCurrentHead(
     scope.setTag("force_push_promote_skipped", "is_not_graded");
     return;
   }
-  if (await hasOversizedRejectionError(adminSupabase, existing.id)) {
+  if (await getRejectionErrorType(adminSupabase, existing.id)) {
     scope.setTag("force_push_promote_skipped", "retained_rejection");
     return;
   }
@@ -1310,6 +1349,40 @@ async function reactivatePreviousSubmission(
   excludeSubmissionId?: number
 ): Promise<void> {
   try {
+    // Is ANY submission already active for this submitter? Asked up front, and about the whole
+    // set rather than about one candidate row.
+    //
+    // The check further down — `if (!newest || newest.is_active) return` — only asks whether the
+    // HIGHEST-ordinal promotable row is active, and reads "it is not" as "nothing is". That is
+    // false exactly where promoteSubmissionForCurrentHead has just done its job: a force-push back
+    // to an earlier commit deliberately makes a LOWER-ordinal row active while the newer one stays
+    // inactive. Any later delivery for that commit then reached here and promoted the newer row on
+    // top of the active older one, which submissions_one_active_individual_per_student /
+    // submissions_one_active_group_per_group (20260424200000) reject with 23505 — thrown, so the
+    // webhook answered 500 and GitHub redelivered into the identical deterministic failure. When
+    // the promote did land it silently undid the revert the student had asked for.
+    //
+    // The unique indexes guarantee at most one active row, so finding one means there is nothing
+    // to restore. `excludeSubmissionId` is honoured here too: the row being rejected does not count
+    // as the student's active submission even while its deactivation is still pending.
+    let activeProbe = adminSupabase
+      .from("submissions")
+      .select("id")
+      .eq("assignment_id", studentRepo.assignment_id)
+      .eq("is_active", true);
+    if (excludeSubmissionId !== undefined) {
+      activeProbe = activeProbe.neq("id", excludeSubmissionId);
+    }
+    activeProbe = studentRepo.assignment_group_id
+      ? activeProbe.eq("assignment_group_id", studentRepo.assignment_group_id)
+      : activeProbe.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+    const { data: alreadyActive, error: alreadyActiveErr } = await activeProbe.limit(1).maybeSingle();
+    if (alreadyActiveErr) throw alreadyActiveErr;
+    if (alreadyActive) {
+      scope.setTag("reactivate_previous_submission_skipped", "already_active");
+      return;
+    }
+
     // Built fresh per page rather than once: a postgrest builder is mutable and returns
     // itself, so reusing one across the paginated loop below would accumulate modifiers.
     const candidatePage = (offset: number) => {
@@ -1918,6 +1991,24 @@ async function handlePushToStudentRepo(
           `${repoName} has no ${GRADER_WORKFLOW_PATH} at ${payload.after} yet, so ingesting this #submit push ` +
             `directly instead of dispatching a workflow that is not there`
         );
+        // Same actor rules as the normal direct path: this fallback reaches the identical
+        // ingestion, so leaving them out meant a staff assistance push became the student's active
+        // submission here while being skipped there, and a staff member's own test push had the
+        // student gates applied. The rule belongs to ingestion, not to the branch that reaches it.
+        const fallbackStanding = await resolvePusherStanding(
+          adminSupabase,
+          studentRepo,
+          payload.pusher?.name ?? payload.sender?.login,
+          scope
+        );
+        if (fallbackStanding.isForeignStaff) {
+          scope.setTag("skipped_reason", "staff_push_to_student_repo");
+          console.log(
+            `Skipping the direct-ingestion fallback for ${repoName}@${payload.after}: pushed by course staff to a ` +
+              `repository that is not theirs`
+          );
+          return;
+        }
         await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
           allowNotGradedSubmissions: pushAssignment?.allow_not_graded_submissions ?? false,
           permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
@@ -1925,6 +2016,7 @@ async function handlePushToStudentRepo(
             maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
             requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
           },
+          actorIsStaffOwner: fallbackStanding.isOwnerStaff,
           scope
         });
         return;
