@@ -4,7 +4,7 @@
 
 import { Buffer } from "node:buffer";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
-import { getFileFromRepo } from "../../_shared/GitHubWrapper.ts";
+import { getFileFromRepo, GRADE_WORKFLOW_PATH } from "../../_shared/GitHubWrapper.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
@@ -22,8 +22,6 @@ import type {
 
 /** Group ids per `.in()` batch; rows per batch are drained by pageAll. */
 const BATCH = 200;
-
-const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
 /**
  * Repositories for an assignment, excluding those owned by a disabled enrollment.

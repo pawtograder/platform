@@ -370,7 +370,7 @@ async function createPushDirectSubmission(
   // repository+sha uniquely identifies this push-direct submission.)
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
-    .select("id, submission_files(count)")
+    .select("id, grading_review_id")
     .eq("repository", repoName)
     .eq("sha", sha)
     .limit(1)
@@ -381,14 +381,20 @@ async function createPushDirectSubmission(
   }
   // A surviving row from a run whose cleanup ALSO failed is incomplete, not a
   // completed submission: returning here on redelivery meant ingestion and cleanup
-  // were never retried, so a fileless row could persist forever. Treat "row exists
-  // but has no files" as unfinished work and resume by removing it, so the rest of
-  // this function runs from a clean state.
-  const existingFileCount = (existing?.submission_files as unknown as { count: number }[] | undefined)?.[0]?.count ?? 0;
-  if (existing && existingFileCount === 0) {
+  // were never retried, so a broken row could persist forever.
+  //
+  // The marker is a NULL grading_review_id, not a zero file count. Every completed
+  // submission has a review, assigned by the AFTER-INSERT hook, whereas
+  // cleanupPushDirectSubmission nulls it as its first step — so NULL means "cleanup
+  // started and did not finish". File count cannot be used: a legitimately empty
+  // submission has zero files (permit_empty_submissions=true, or the path where
+  // empty detection is skipped for want of submissionFiles), and treating those as
+  // incomplete would delete an ACCEPTED submission and its grading on redelivery.
+  const existingIsIncomplete = existing !== null && existing.grading_review_id === null;
+  if (existing && existingIsIncomplete) {
     scope.setTag("push_direct_incomplete_row_resumed", String(existing.id));
     console.log(
-      `Found an incomplete push-direct submission ${existing.id} for ${repoName}@${sha} (no files); removing it and retrying`
+      `Found an incomplete push-direct submission ${existing.id} for ${repoName}@${sha} (no grading review); removing it and retrying`
     );
     const removed = await cleanupPushDirectSubmission(adminSupabase, existing.id, scope);
     if (!removed) {
@@ -643,7 +649,20 @@ async function createPushDirectSubmission(
       return;
     }
   } catch (ingestErr) {
-    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+    const isTooLarge = ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError;
+    // For an oversized push we KEEP the submission row, deactivated, so the student
+    // has something to see. Deleting it left them with no history entry, no failing
+    // check (this path creates none by design) and no reachable error — the push
+    // simply looked accepted. An inactive row with its review intact cannot be graded
+    // but does appear in submission history, and the workflow_run_error below can
+    // attach to it, which is the only surface a student can actually reach.
+    //
+    // Its review link is deliberately left in place: a NULL grading_review_id is the
+    // marker for "cleanup started and did not finish", and nulling it here would make
+    // a redelivery treat this deliberate row as junk to be deleted and re-ingested.
+    const removed = isTooLarge
+      ? await deactivateRejectedSubmission(adminSupabase, submissionId, scope)
+      : await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
     // Restoration now throws on failure. Capture it separately so it neither masks
     // ingestErr in Sentry nor silently turns a permanent rejection into a success:
     // a failed restoration must force a retry even for too_large, because the
@@ -664,7 +683,6 @@ async function createPushDirectSubmission(
         scope
       );
     }
-    const isTooLarge = ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError;
     if (isTooLarge) {
       // Permanent (repo/file too big): record it here, BEFORE the reactivation
       // rethrow below. Recording after that rethrow meant an unrelated restoration
@@ -674,13 +692,9 @@ async function createPushDirectSubmission(
       // name), so writing it before a retry is safe.
       scope.setTag("push_direct_submission_rejected", "too_large");
       Sentry.captureException(ingestErr, scope);
-      // NOTE: this reaches INSTRUCTORS, not the student. workflow_run_error's student
-      // RLS branch requires submission_id IS NOT NULL and the only student-facing
-      // reader embeds it through `submissions`, but the submission was just deleted -
-      // so the row is written unattached and only the instructor error list shows it.
-      // Matches how autograder-create-submission records rejections whose submission
-      // is gone. The push-direct path has no check run, so there is still no
-      // student-visible surface for an oversized push; see issue #895 follow-up.
+      // Attached to the retained submission, which is what makes it student-visible:
+      // workflow_run_error's student RLS branch requires submission_id IS NOT NULL and
+      // the student-facing reader embeds it through `submissions`.
       const tooLargeMessage =
         ingestErr instanceof SubmissionFileTooLargeError
           ? `Your submission was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
@@ -689,7 +703,7 @@ async function createPushDirectSubmission(
         {
           repository_id: studentRepo.id,
           class_id: studentRepo.class_id,
-          submission_id: null,
+          submission_id: removed ? submissionId : null,
           // No Actions run backs a push-direct submission, so 0/0 mirrors what the
           // submissions rows use for this path.
           run_number: 0,
@@ -791,6 +805,54 @@ async function reactivatePreviousSubmission(
     scope.setTag("reactivate_previous_submission_failed", "true");
     Sentry.captureException(e, scope);
     throw e;
+  }
+}
+
+/**
+ * Retain a rejected push-direct submission as a visible, ungradeable record.
+ *
+ * Used for permanent rejections (an oversized repo or file) where the student needs to
+ * SEE why their push was not accepted. Deleting the row left them with nothing: this
+ * path creates no Actions run and no check run, so a rejected push was
+ * indistinguishable from one that worked.
+ *
+ * Deactivates the row and clears any files already written, but deliberately keeps
+ * `grading_review_id`: that column being NULL is the marker for "cleanup started and
+ * did not finish", so nulling it here would make a later redelivery mistake this
+ * intentional record for junk and delete it.
+ *
+ * Returns whether the row is in the intended state, so the caller knows if it can
+ * attach a workflow_run_error to it.
+ */
+async function deactivateRejectedSubmission(
+  adminSupabase: SupabaseClient<Database>,
+  submissionId: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const { data: bins } = await adminSupabase
+      .from("submission_files")
+      .select("storage_key")
+      .eq("submission_id", submissionId)
+      .eq("is_binary", true);
+    const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
+    if (keys.length > 0) {
+      await adminSupabase.storage.from("submission-files").remove(keys);
+    }
+    const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+    if (filesErr) throw filesErr;
+
+    const { error: deactivateErr } = await adminSupabase
+      .from("submissions")
+      .update({ is_active: false })
+      .eq("id", submissionId);
+    if (deactivateErr) throw deactivateErr;
+    scope.setTag("rejected_submission_retained", String(submissionId));
+    return true;
+  } catch (e) {
+    scope.setTag("deactivate_rejected_submission_failed", "true");
+    Sentry.captureException(e, scope);
+    return false;
   }
 }
 

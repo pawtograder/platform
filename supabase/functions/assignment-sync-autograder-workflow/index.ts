@@ -337,6 +337,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       throw e;
     }
 
+    // Advertise the disable commit as the handout head. Repo-sync targets
+    // latest_template_sha, so returning while assignments still point at the older
+    // revision lets a sync that runs before the template-repo webhook copy the live
+    // grade.yml back into student repos even though has_autograder=false.
+    //
+    // AFTER realignment, mirroring the enable path: a rollback above restores the
+    // workflow, and pinning first would leave the pointer on a commit that no longer
+    // reflects the repo. Repo-wide rather than class-scoped — the commit exists for
+    // every sharer, and the 403 guard established that any foreign sharer already
+    // agrees with this setting.
+    if (deleted && deleteCommitSha) {
+      const { error: shaError } = await adminSupabase
+        .from("assignments")
+        .update({ latest_template_sha: deleteCommitSha })
+        .eq("template_repo", templateRepo);
+      if (shaError) {
+        scope.setTag("pin_latest_template_sha_failed", "true");
+        Sentry.captureException(shaError, scope);
+      }
+    }
+
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
