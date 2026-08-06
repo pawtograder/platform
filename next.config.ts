@@ -13,8 +13,13 @@ const disableSentryComponentAnnotation =
   process.env.SENTRY_DISABLE_COMPONENT_ANNOTATION === "1" || useFastSentryBuildProfile;
 const disableSentryRouteManifestInjection =
   process.env.SENTRY_DISABLE_ROUTE_MANIFEST_INJECTION === "1" || useFastSentryBuildProfile;
-const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1";
-const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1";
+// SENTRY_URL is only set when the build points at a self-hosted Bugsink rather
+// than sentry.io. Bugsink implements the source map upload endpoints that
+// sentry-cli uses (chunk-upload, artifactbundle/assemble) but not the release
+// API, so create/finalize 404 there — default them off when talking to Bugsink.
+const usingBugsink = !!process.env.SENTRY_URL;
+const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1" || usingBugsink;
+const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1" || usingBugsink;
 const disableSentrySourcemaps = process.env.SENTRY_DISABLE_SOURCEMAPS === "1";
 const useSentryRunAfterProductionCompileHook = process.env.SENTRY_USE_RUN_AFTER_PRODUCTION_COMPILE === "1";
 
@@ -185,8 +190,12 @@ const hasSentryDsn = !!process.env.NEXT_PUBLIC_BUGSINK_DSN;
 
 const sentryConfig = {
   tunnelRoute: true,
-  org: "pawtograder",
-  project: "pawtograder-web",
+  // Overridable so a build can target a Bugsink project slug. Bugsink is
+  // single-org and ignores `org` entirely, but since 2.2.0 it rejects an upload
+  // whose `project` does not match an existing project slug.
+  // `||` not `??`: the Dockerfile passes these through as ARGs that default to "".
+  org: process.env.SENTRY_ORG || "pawtograder",
+  project: process.env.SENTRY_PROJECT || "pawtograder-web",
   // Keep Sentry enabled in CI while reducing build-time-only instrumentation overhead.
   routeManifestInjection: disableSentryRouteManifestInjection ? false : true,
   reactComponentAnnotation: {
@@ -200,8 +209,41 @@ const sentryConfig = {
     create: !disableSentryReleaseCreate,
     finalize: !disableSentryReleaseFinalize
   },
-  silent: !isCi,
+  // Quiet for local dev, but never while actually uploading source maps: the
+  // build runs inside Docker where CI is unset, and the upload report is the
+  // only evidence the upload happened at all.
+  silent: !isCi && !process.env.SENTRY_AUTH_TOKEN,
   disableLogger: true
 };
 
-export default hasSentryDsn && !disableSentryBundlingPlugin ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
+const sentryPluginEnabled = hasSentryDsn && !disableSentryBundlingPlugin;
+
+// An auth token means this build intends to upload source maps, so anything that
+// would quietly turn the upload into a no-op is an error. A build that reports
+// "uploading" and then ships minified stack traces is the exact failure this
+// change exists to remove. The Dockerfile pre-checks the same conditions to fail
+// before spending a build, but the guards belong here too: the upload runs for
+// any `npm run build`, not only the containerized one.
+if (process.env.SENTRY_AUTH_TOKEN && !disableSentrySourcemaps) {
+  // The only symbolication target is the self-hosted Bugsink named by SENTRY_URL;
+  // there is no sentry.io account. The bundler plugin normalizes a nullish URL to
+  // https://sentry.io, so a token without a URL hands private maps to a third party.
+  if (!process.env.SENTRY_URL) {
+    throw new Error(
+      "SENTRY_AUTH_TOKEN is set but SENTRY_URL is empty: refusing to upload source maps to sentry.io. " +
+        "Set SENTRY_URL to the Bugsink base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
+    );
+  }
+  // `withSentryConfig` is what installs the uploader, and the DSN is what turns it
+  // on. Without the DSN nothing uploads — and nothing reports errors either, so
+  // there would be no minified trace to symbolicate in the first place.
+  if (!sentryPluginEnabled) {
+    throw new Error(
+      "SENTRY_AUTH_TOKEN is set but the Sentry bundler plugin is disabled " +
+        `(${hasSentryDsn ? "NEXT_DISABLE_SENTRY=1" : "NEXT_PUBLIC_BUGSINK_DSN is empty"}), so no source maps ` +
+        "would be uploaded. Pass the DSN the app reports errors to, or unset SENTRY_AUTH_TOKEN to skip the upload."
+    );
+  }
+}
+
+export default sentryPluginEnabled ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
