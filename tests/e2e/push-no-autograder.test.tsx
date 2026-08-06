@@ -318,18 +318,54 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
   test("auto-merged handout-sync PR push creates NO submission", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
-    const sha = `33333333${SAFE_ID}`.slice(0, 40);
+    // The marker has to abbreviate a handout revision the row actually carries — a
+    // hex-shaped token is deliberately NOT enough, because a student commit body can
+    // contain one. syncRepositoryToHandout names the branch and PR after
+    // `toSha.substring(0, 7)`, so seed the handout sha the sync would have been toward.
+    const handoutSha = `abc1234b${SAFE_ID}`.slice(0, 40);
+    const markerSha = handoutSha.slice(0, 7);
+    const { error: pinErr } = await supabase
+      .from("assignments")
+      .update({ latest_template_sha: handoutSha })
+      .eq("id", assignmentId);
+    expect(pinErr).toBeNull();
+    try {
+      const sha = `33333333${SAFE_ID}`.slice(0, 40);
+      const detail = makePushDetail(
+        repoName,
+        sha,
+        `Merge pull request #7 from pawtograder-playground/sync-to-${markerSha}\n\n[Instructor Update] Sync handout to ${markerSha}`
+      );
+      const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5`);
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      // Leave the assignment as the other tests expect to find it.
+      await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+    }
+  });
+
+  // The other half of that rule, and the reason the fixture above has to seed a real sha:
+  // the same message shape naming a revision nobody knows about is STUDENT work.
+  test("sync-shaped commit naming an unknown sha DOES create a submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `3a3a3a3a${SAFE_ID}`.slice(0, 40);
     const detail = makePushDetail(
       repoName,
       sha,
-      "Merge pull request #7 from pawtograder-playground/sync-to-abc1234\n\n[Instructor Update] Sync handout to abc1234"
+      // Hex-shaped, but not an abbreviation of any handout revision this repo carries.
+      "Merge pull request #8 from student/sync-to-deadbee\n\n[Instructor Update] Sync handout to deadbee"
     );
-    const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5`);
+    const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5b`);
     expect(res.status, await res.text().catch(() => "")).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 2500));
     const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
+    expect(subs ?? []).toHaveLength(1);
   });
 
   test("fork fast-forward to the handout's head sha creates NO submission", async () => {

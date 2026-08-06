@@ -362,16 +362,10 @@ async function createPushDirectSubmission(
   opts: {
     allowNotGradedSubmissions: boolean;
     permitEmptySubmissions: boolean;
-    /**
-     * Record the submission but do not let it become active. Set for a delivery whose
-     * commit has already been superseded, so a late-arriving older push cannot demote
-     * the student's newer active submission.
-     */
-    insertInactive?: boolean;
     scope: Sentry.Scope;
   }
 ): Promise<void> {
-  const { allowNotGradedSubmissions, permitEmptySubmissions, insertInactive, scope } = opts;
+  const { allowNotGradedSubmissions, permitEmptySubmissions, scope } = opts;
   const headCommit = payload.head_commit;
   if (!headCommit) return; // guarded by caller, narrows the type
   const repoName = payload.repository.full_name;
@@ -536,34 +530,6 @@ async function createPushDirectSubmission(
     })
     .select("id")
     .single();
-  // The BEFORE-INSERT trigger owns is_active and always promotes the new row, so a
-  // superseded delivery has to be demoted right after the insert rather than inserted
-  // inactive. Then re-promote whatever is genuinely newest.
-  if (!insertError && inserted && insertInactive) {
-    const { error: demoteError } = await adminSupabase
-      .from("submissions")
-      .update({ is_active: false })
-      .eq("id", inserted.id);
-    if (demoteError) {
-      // Throw: the insert trigger has already promoted this stale row and demoted the
-      // newer submission, so continuing would acknowledge the delivery with stale code
-      // active — precisely the ordering regression this branch exists to prevent.
-      scope.setTag("demote_superseded_submission_failed", "true");
-      Sentry.captureException(demoteError, scope);
-      await unwindSupersededInsert(adminSupabase, studentRepo, inserted.id, scope);
-      throw demoteError;
-    }
-    try {
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
-    } catch (reactivateErr) {
-      // Same reasoning as the demotion failure: the row is inserted and the student's
-      // previous submission is still demoted, so nothing is active. Unwind, then let the
-      // throw ask GitHub to redeliver.
-      scope.setTag("reactivate_after_superseded_insert_failed", "true");
-      await unwindSupersededInsert(adminSupabase, studentRepo, inserted.id, scope);
-      throw reactivateErr;
-    }
-  }
   if (insertError) {
     // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
     // a no-op so we don't force GitHub to retry the whole delivery.
@@ -1054,38 +1020,6 @@ async function deactivateRejectedSubmission(
   }
 }
 
-/**
- * Undo a superseded insert whose demotion or re-promotion failed.
- *
- * The caller throws so GitHub redelivers, but a throw alone does not make the redelivery
- * useful: the AFTER-INSERT hook has already attached a grading review to the new row, and
- * the idempotency check at the top of createPushDirectSubmission reads a row WITH a review
- * as a finished submission and returns immediately. The active-submission state would then
- * never be repaired — stale code left active if the demotion failed, nothing active if the
- * re-promotion did.
- *
- * Removing the row is the fix; a partial removal is also fine, because cleanup unlinks the
- * review first and a null review is precisely the marker that same check treats as
- * resumable. Never throws: the caller is about to propagate the original failure and that
- * error must not be masked.
- */
-async function unwindSupersededInsert(
-  adminSupabase: SupabaseClient<Database>,
-  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
-  submissionId: number,
-  scope: Sentry.Scope
-): Promise<void> {
-  try {
-    const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-    if (!removed) scope.setTag("superseded_unwind_incomplete", "true");
-    // The insert demoted whatever was active; put it back now that the stale row is gone.
-    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
-  } catch (unwindErr) {
-    scope.setTag("superseded_unwind_failed", "true");
-    Sentry.captureException(unwindErr, scope);
-  }
-}
-
 async function cleanupPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number,
@@ -1332,12 +1266,12 @@ async function handlePushToStudentRepo(
       console.log(`Skipping push-direct submission for ${repoName}@${payload.after}: repo is still being provisioned`);
       return;
     }
-    // A delivery for a superseded commit must not become the active submission. The
-    // submissions trigger assigns ordinals by INSERT order and demotes whatever was
-    // active, so an older push that arrives late (a retry after a transient ingestion
-    // failure, say) would otherwise roll the student's active submission and grading
-    // review back to stale code. Same test as the handout pointer: if the pushed sha is
-    // not the repo's current default-branch head, a newer push exists.
+    // A delivery for a superseded commit must not be recorded at all. The submissions trigger
+    // assigns ordinals by INSERT order and demotes whatever was active, so an older push that
+    // arrives late (a retry after a transient ingestion failure, say) would otherwise roll the
+    // student's active submission and grading review back to stale code. Same test as the
+    // handout pointer: if the pushed sha is not the repo's current default-branch head, a
+    // newer push exists.
     let studentRepoHeadSha: string | undefined;
     try {
       studentRepoHeadSha = await getDefaultBranchHeadSha(repoName, scope);
@@ -1361,9 +1295,27 @@ async function handlePushToStudentRepo(
           `retries it`
       );
     }
-    const isSupersededPush = !!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after;
-    if (isSupersededPush) {
-      scope.setTag("push_direct_superseded", "true");
+    // A delivery whose commit is no longer the repo head is stale: a newer push exists and
+    // carries its own delivery. SKIP it rather than storing it.
+    //
+    // Recording it inactive was the previous approach and it does not work, because the
+    // submissions trigger assigns ordinals by INSERT order: the stale row lands with the
+    // HIGHEST ordinal despite being the oldest commit, so every later scan that means "the
+    // newest submission" — restoring an active row after a rejection, most of all — reads it
+    // as newest and either trips submissions_one_active_* or promotes stale code. No column
+    // records "superseded", so each of those scans would need to re-derive it. Not creating
+    // the row removes the question, and takes the demote/re-promote/unwind machinery with it.
+    //
+    // What is lost is a history entry for an intermediate commit, which is what the behaviour
+    // before this feature did anyway (only `#submit` pushes were recorded). The student's
+    // newest push still becomes their submission, via its own delivery.
+    if (!!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after) {
+      scope.setTag("skipped_reason", "push_superseded");
+      console.log(
+        `Skipping push-direct submission for ${repoName}@${payload.after}: the repository head is now ` +
+          `${studentRepoHeadSha}, so a newer push supersedes this delivery`
+      );
+      return;
     }
     if (
       isHandoutSyncPush({
@@ -1404,8 +1356,6 @@ async function handlePushToStudentRepo(
 
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
-      // Recorded as history, but not promoted over the newer push that superseded it.
-      insertInactive: isSupersededPush,
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       scope

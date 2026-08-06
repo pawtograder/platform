@@ -197,8 +197,13 @@ export default function AutograderPage() {
         // showed Enabled or rolled back to the wrong value.
         const persistedHasAutograder = syncResult?.has_autograder ?? nextHasAutograder;
         savedHasAutograder.current = persistedHasAutograder;
+        // ALWAYS reapply, not only when the sync coerced the request. `refineCore.onFinish`
+        // has already kicked off the autograder refetch while the assignment row still held
+        // the PRIOR flag, so the effect above can reset the radio to that old value mid-save.
+        // Updating only the ref left the radio showing the opposite of what was just
+        // persisted, and the next save wrote that stale value back.
+        setValue("assignments.has_autograder", persistedHasAutograder);
         if (persistedHasAutograder !== nextHasAutograder) {
-          setValue("assignments.has_autograder", persistedHasAutograder);
           toaster.create({
             title: "Autograder left disabled",
             description:

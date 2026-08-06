@@ -570,30 +570,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // nothing about the sharing set. So compensate here: put the sharers back before
     // rethrowing, since the caller cannot.
     const realigned = await realignInClassSharers();
-    try {
-      await updateAutograderWorkflowHash(templateRepo);
-    } catch (e) {
-      await revertRealignedSharers(
-        realigned.map((a) => a.id),
-        "sharer_realign_rollback"
-      );
-      throw e;
-    }
-
-    // No workflow file was written, but the assignment may still be pointing at the
-    // WRONG revision: the edit flow reaches this branch when template_repo is replaced
-    // with a handout that already has grade.yml, in which case latest_template_sha is
-    // still a commit from the OLD repo and existing student repos still hold the old
-    // workflow. Resolve this repo's head, pin it, and queue the syncs — the same three
-    // steps the file-writing paths do, just without a write of our own.
-    //
-    // Neither step is best-effort. workflow_sha has ALREADY been updated from the
-    // replacement handout above, so acknowledging success with the pointer still naming a
-    // commit in the old repository is the one combination that breaks grading outright:
-    // the queued syncs hand students the old workflow, and the Actions submissions it
-    // produces are rejected for a hash mismatch against the new one. Propagate instead,
-    // so the caller rolls the flag and the autograder row back together.
     const realignedIds = realigned.map((a) => a.id);
+    // Resolve the head BEFORE hashing and use that one revision for both the hash and the
+    // pointer, exactly as the restore path does. Hashing the unqualified head and resolving
+    // the head separately let an instructor push in between produce the mismatch this branch
+    // is otherwise careful to avoid: workflow_sha describing the old head while
+    // latest_template_sha names the new one, so the queued syncs hand students a workflow
+    // whose Actions submissions are rejected against the recorded hash.
     let unchangedHeadSha: string | undefined;
     try {
       unchangedHeadSha = await getDefaultBranchHeadSha(templateRepo, scope);
@@ -608,6 +591,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         502
       );
     }
+    try {
+      await updateAutograderWorkflowHash(templateRepo, unchangedHeadSha);
+    } catch (e) {
+      await revertRealignedSharers(realignedIds, "sharer_realign_rollback");
+      throw e;
+    }
+
+    // No workflow file was written, but the assignment may still be pointing at the
+    // WRONG revision: the edit flow reaches this branch when template_repo is replaced
+    // with a handout that already has grade.yml, in which case latest_template_sha is
+    // still a commit from the OLD repo and existing student repos still hold the old
+    // workflow. Resolve this repo's head, pin it, and queue the syncs — the same three
+    // steps the file-writing paths do, just without a write of our own.
+    //
+    // Neither the hash above nor the pin below is best-effort: acknowledging success with the
+    // pointer still naming a commit in the old repository is the one combination that breaks
+    // grading outright, since the queued syncs hand students the old workflow and its Actions
+    // submissions are rejected for a hash mismatch. Propagate instead, so the caller rolls the
+    // flag and the autograder row back together.
+    //
     // A genuine lookup failure throws and is handled above; `undefined` comes back only
     // under the E2E GitHub stub, where there is no repo to read and no pointer worth
     // pinning. Skip rather than fail, matching how the other pin sites treat the stub.
@@ -689,8 +692,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // Whether the workflow now in the handout is OURS. The rollback below deletes grade.yml,
   // which must never happen to a file an instructor pushed themselves.
   let weWroteTheWorkflow = false;
+  // The blob sha our write produced. Passed to the rollback delete so GitHub rejects it if
+  // the file has since been MODIFIED: `weWroteTheWorkflow` only records who created the file,
+  // and an instructor editing grade.yml between our write and a later failure would otherwise
+  // have their version resolved and deleted. A conflict is the correct outcome there.
+  let restoreContentSha: string | undefined;
   try {
-    ({ commit_sha: restoreCommitSha } = await writeFileToRepo(
+    ({ commit_sha: restoreCommitSha, content_sha: restoreContentSha } = await writeFileToRepo(
       templateRepo,
       GRADE_WORKFLOW_PATH,
       workflowContent,
@@ -767,7 +775,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         templateRepo,
         GRADE_WORKFLOW_PATH,
         "Roll back autograder workflow restore: enabling the autograder failed",
-        scope
+        scope,
+        restoreContentSha
       );
     } catch (rollbackError) {
       // Report the failed rollback too — the repo is now genuinely inconsistent
@@ -823,7 +832,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           templateRepo,
           GRADE_WORKFLOW_PATH,
           "Roll back autograder workflow restore: the handout revision pointer could not be updated",
-          scope
+          scope,
+          restoreContentSha
         );
       } catch (rollbackError) {
         scope.setTag("pin_failure_workflow_rollback_failed", "true");
