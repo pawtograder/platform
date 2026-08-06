@@ -66,6 +66,15 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
   // Deliberately NOT serial: this is a sweep, and one unreachable route must
   // not prevent the other 30+ from being measured.
 
+  // A scanned route costs far more than a normal e2e test: login, settle, then
+  // FOUR axe passes (violations + best-practice rules, in two color schemes),
+  // plus landmark and a 320px reflow measurement. That lands around 25s per
+  // route on a prod build, so the repo-wide 60s in playwright.config.ts leaves
+  // no headroom — canvas-classes and public-poll timed out on it while still
+  // rendering fine, which reads like a broken route rather than a slow one.
+  // Raised only for this suite; the rest of the estate keeps the 60s default.
+  test.describe.configure({ timeout: 180_000 });
+
   let surface: StudentSurface;
 
   test.beforeAll(async () => {
