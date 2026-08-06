@@ -262,6 +262,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     a.submission_mode !== "pr" && a.has_autograder !== false;
   const outOfStepForeign = foreignSharers.filter((a) => effectiveHasAutograder(a) !== hasAutograder);
   scope.setTag("template_repo_foreign_sharers", String(foreignSharers.length));
+  // Foreign sharers that this toggle changes the handout for but whose student repositories it
+  // CANNOT sync. queue_repository_syncs is class-scoped by design — it requires instructor
+  // privileges in the repositories' own class and refuses a mixed-class batch — so their repos
+  // keep the previous workflow state until an instructor over there syncs them.
+  //
+  // Reported as a COUNT ONLY, matching the PR-sharer refusal: an instructor in this class is
+  // not authorized to learn which assignments in another class exist.
+  //
+  // Not a reason to refuse the toggle. These sharers already agree with the requested flag —
+  // the 403 above rejected the ones that disagree — which means their flag and this handout
+  // were ALREADY inconsistent before this call: enabling means their repos never had the
+  // workflow their true flag implies, and disabling means their repos still carry one their
+  // false flag rejects. The toggle fixes the handout for everyone and leaves only their repo
+  // sync lagging, so refusing would leave both classes broken instead of one.
+  const unsyncedOtherClassCount = foreignSharers.length;
   if (outOfStepForeign.length > 0) {
     // We cannot authorize those assignments, and editing the shared repo would
     // change grading for them anyway. Refuse rather than reach outside the class.
@@ -608,7 +623,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       has_autograder: false,
       template_repo: templateRepo,
       realigned_assignments: realigned,
-      repo_sync_queue_failed: disableQueue.failed
+      repo_sync_queue_failed: disableQueue.failed,
+      unsynced_other_class_count: unsyncedOtherClassCount
     };
   }
 
@@ -707,7 +723,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       has_autograder: true,
       template_repo: templateRepo,
       realigned_assignments: realigned,
-      repo_sync_queue_failed: unchangedQueue.failed
+      repo_sync_queue_failed: unchangedQueue.failed,
+      unsynced_other_class_count: unsyncedOtherClassCount
     };
   }
 
@@ -958,7 +975,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     has_autograder: true,
     template_repo: templateRepo,
     realigned_assignments: realignedOnRestore,
-    repo_sync_queue_failed: restoreQueue.failed
+    repo_sync_queue_failed: restoreQueue.failed,
+    unsynced_other_class_count: unsyncedOtherClassCount
   };
 }
 

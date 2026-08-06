@@ -455,6 +455,18 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * reported success over a state that only a manual sync repairs.
    */
   repo_sync_queue_failed?: boolean;
+  /**
+   * How many assignments in OTHER classes share this handout repository.
+   *
+   * The workflow change reaches them — the file and the revision pointer belong to the shared
+   * repo — but their student repositories cannot be queued from here: queue_repository_syncs
+   * requires instructor privileges in the repositories' own class and refuses a mixed-class
+   * batch. Callers should tell the instructor that those classes need a manual sync.
+   *
+   * A COUNT rather than a list, deliberately: an instructor in this class is not authorized to
+   * learn which assignments exist in another one.
+   */
+  unsynced_other_class_count?: number;
 };
 
 export type AutograderCreateReposForStudentRequest = {

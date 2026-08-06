@@ -137,8 +137,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .eq("id", assignment_id)
       .maybeSingle();
     if (handoutTarget?.template_repo) {
+      // SERVICE ROLE, not the JWT-scoped client above. assignment_handout_file_hashes has only
+      // an "instructors read" policy (20260114180000), so an authenticated upsert is rejected
+      // by RLS — and seedHandoutFileHashes reports rather than throwing, so that rejection
+      // turned into a silent `{ seeded: false }`. The hashes then stayed on the OLD globs after
+      // an instructor edited submissionFiles, which is exactly when they need recomputing.
+      const adminSupabase = createClient<Database>(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      );
       const seedResult = await seedHandoutFileHashes({
-        adminSupabase: supabase,
+        adminSupabase,
         assignmentId: assignment_id,
         classId: handoutTarget.class_id,
         templateRepo: handoutTarget.template_repo,

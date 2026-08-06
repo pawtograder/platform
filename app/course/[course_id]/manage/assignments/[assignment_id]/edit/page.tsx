@@ -217,6 +217,18 @@ export default function EditAssignment() {
                   type: "warning"
                 });
               }
+              if ((syncResult?.unsynced_other_class_count ?? 0) > 0) {
+                // Count only: naming assignments in another class would disclose them to an
+                // instructor who is not authorized for it.
+                const otherCount = syncResult!.unsynced_other_class_count!;
+                toaster.create({
+                  title: `${otherCount} assignment${otherCount === 1 ? "" : "s"} in another class share this handout`,
+                  description:
+                    "Their handout repository was updated too, but their student repositories cannot be synced from " +
+                    "here — an instructor in those classes needs to sync them.",
+                  type: "info"
+                });
+              }
               // The workflow file belongs to the shared handout repo, so sharers cannot
               // disagree and the sync brings them along. Say so — FunctionTypes.d.ts makes
               // this the caller's job, and the autograder page already does it; without it
