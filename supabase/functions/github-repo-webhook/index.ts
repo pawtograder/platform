@@ -1175,6 +1175,31 @@ async function handlePushToStudentRepo(
       console.log(`Skipping push-direct submission for ${repoName}@${payload.after}: repo is still being provisioned`);
       return;
     }
+    // BEFORE the first GitHub call on this path. This branch clones the repo zipball and now
+    // also resolves the repo head below, so it must respect the same circuit breaker as the
+    // Actions path — otherwise repo-only pushes keep hammering GitHub during an outage and
+    // deepen it. Checking after the head lookup was worse than useless once that lookup began
+    // throwing: the throw asks GitHub to redeliver, so every retry re-issued the very repo and
+    // ref requests the breaker exists to suppress.
+    //
+    // Throwing (rather than returning) is deliberate: GitHub redelivers, so the submission is
+    // created once the circuit closes instead of being lost.
+    const directCircuit = await checkCircuitBreakerOpen(
+      adminSupabase,
+      repoName.split("/")[0],
+      "cloneRepository",
+      scope
+    );
+    if (directCircuit.isOpen) {
+      const openUntil = directCircuit.openUntil ? new Date(directCircuit.openUntil).toLocaleString() : "unknown";
+      scope.setTag("skipped_reason", "circuit_breaker_open");
+      throw new Error(
+        `Circuit breaker open for org ${repoName.split("/")[0]}: cannot ingest push-direct submission for ` +
+          `${repoName}@${payload.after}. Reason: ${directCircuit.reason || "Rate limit or error threshold exceeded"}. ` +
+          `Open until: ${openUntil}`
+      );
+    }
+
     // A delivery for a superseded commit must not be recorded at all. The submissions trigger
     // assigns ordinals by INSERT order and demotes whatever was active, so an older push that
     // arrives late (a retry after a transient ingestion failure, say) would otherwise roll the
@@ -1242,27 +1267,6 @@ async function handlePushToStudentRepo(
       );
       return;
     }
-    // This path clones the repo zipball, so it makes real GitHub calls and must
-    // respect the same circuit breaker as the Actions path below — otherwise
-    // repo-only pushes keep hammering GitHub during an outage and deepen it.
-    // Throwing (rather than returning) is deliberate: GitHub redelivers, so the
-    // submission is created once the circuit closes instead of being lost.
-    const directCircuit = await checkCircuitBreakerOpen(
-      adminSupabase,
-      repoName.split("/")[0],
-      "cloneRepository",
-      scope
-    );
-    if (directCircuit.isOpen) {
-      const openUntil = directCircuit.openUntil ? new Date(directCircuit.openUntil).toLocaleString() : "unknown";
-      scope.setTag("skipped_reason", "circuit_breaker_open");
-      throw new Error(
-        `Circuit breaker open for org ${repoName.split("/")[0]}: cannot ingest push-direct submission for ` +
-          `${repoName}@${payload.after}. Reason: ${directCircuit.reason || "Rate limit or error threshold exceeded"}. ` +
-          `Open until: ${openUntil}`
-      );
-    }
-
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,

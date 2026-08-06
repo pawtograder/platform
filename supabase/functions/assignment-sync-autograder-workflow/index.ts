@@ -236,16 +236,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // make a shared handout permanently un-toggleable — there is no order of
   // single-assignment saves that ever converges. Instead, bring the whole sharing
   // set to the value the instructor just chose, then write the repo once.
-  const { data: sharers, error: sharersError } = await adminSupabase
-    .from("assignments")
-    .select("id, title, class_id, has_autograder, submission_mode")
-    .eq("template_repo", templateRepo)
-    .neq("id", assignment_id);
-  if (sharersError) {
-    Sentry.captureException(sharersError, scope);
-    throw sharersError;
+  // PAGINATED, and this one is not merely about completeness: the sharer set feeds the
+  // foreign-class conflict check, so a max_rows = 1000 truncation — which arrives with no
+  // error — could hide the very assignment whose class this instructor has no authority over,
+  // letting the toggle edit a handout another class depends on. It also feeds the realignment,
+  // the sync queue and the warning count, so a truncated page leaves sharers on the wrong
+  // submission path.
+  const SHARER_PAGE_SIZE = 1000;
+  const allSharers: {
+    id: number;
+    title: string;
+    class_id: number;
+    has_autograder: boolean | null;
+    submission_mode: string | null;
+  }[] = [];
+  for (let offset = 0; ; offset += SHARER_PAGE_SIZE) {
+    const { data: sharers, error: sharersError } = await adminSupabase
+      .from("assignments")
+      .select("id, title, class_id, has_autograder, submission_mode")
+      .eq("template_repo", templateRepo)
+      .neq("id", assignment_id)
+      .order("id", { ascending: true })
+      .range(offset, offset + SHARER_PAGE_SIZE - 1);
+    if (sharersError) {
+      Sentry.captureException(sharersError, scope);
+      throw sharersError;
+    }
+    if (!sharers || sharers.length === 0) break;
+    allSharers.push(...sharers);
+    if (sharers.length < SHARER_PAGE_SIZE) break;
   }
-  const allSharers = sharers ?? [];
   scope.setTag("template_repo_sharers", String(allSharers.length));
 
   // Only `class_id` was authorized above, and the writes below use the

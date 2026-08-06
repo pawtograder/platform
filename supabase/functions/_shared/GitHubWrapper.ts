@@ -992,13 +992,25 @@ export async function renameFileInRepo(
           repo,
           ref: `heads/${branch}`
         });
-        if (recheck.object.sha !== headSha && attempt < MAX_ATTEMPTS) {
-          scope?.setTag("rename_file_absent_recheck_retry", String(attempt));
-          console.log(
-            `${fromPath} was absent at ${headSha} in ${repoName}, but the branch has moved to ` +
-              `${recheck.object.sha}; retrying before reporting it missing`
+        if (recheck.object.sha !== headSha) {
+          if (attempt < MAX_ATTEMPTS) {
+            scope?.setTag("rename_file_absent_recheck_retry", String(attempt));
+            console.log(
+              `${fromPath} was absent at ${headSha} in ${repoName}, but the branch has moved to ` +
+                `${recheck.object.sha}; retrying before reporting it missing`
+            );
+            continue;
+          }
+          // Out of attempts with the head still moving: THROW rather than report the file
+          // absent. `moved: false` is read as "already gone", and the disable flow then pins
+          // the current head — which, if the file was created during this probe, contains a
+          // live workflow on an assignment about to be recorded as having no autograder.
+          // Reporting an absence we could not confirm is the one answer that must not escape.
+          scope?.setTag("rename_file_absent_recheck_exhausted", "true");
+          throw new Error(
+            `Could not confirm whether ${fromPath} exists in ${repoName}: it was absent at ${headSha}, but the ` +
+              `default branch moved on every one of ${MAX_ATTEMPTS} attempts`
           );
-          continue;
         }
         console.log(`Not moving ${fromPath} in ${repoName}: file does not exist at ${headSha}`);
         return { moved: false };
