@@ -531,11 +531,14 @@ async function createPushDirectSubmission(
       .update({ is_active: false })
       .eq("id", inserted.id);
     if (demoteError) {
+      // Throw: the insert trigger has already promoted this stale row and demoted the
+      // newer submission, so continuing would acknowledge the delivery with stale code
+      // active — precisely the ordering regression this branch exists to prevent.
       scope.setTag("demote_superseded_submission_failed", "true");
       Sentry.captureException(demoteError, scope);
-    } else {
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+      throw demoteError;
     }
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
   }
   if (insertError) {
     // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
@@ -746,8 +749,23 @@ async function createPushDirectSubmission(
         { onConflict: "repository_id,run_number,run_attempt,name" }
       );
       if (recordError) {
+        // Do NOT acknowledge the delivery. Without this record the retained row is a
+        // bare inactive submission with no explanation — the exact silent state
+        // retaining it was meant to replace. And a redelivery could not repair it: the
+        // idempotency pre-check sees the retained row's non-null grading_review_id,
+        // reads it as complete, and returns before reaching this upsert.
+        //
+        // So drop the retained row and retry from scratch. Either the student gets a
+        // row WITH its explanation, or there is no row and the delivery is retried —
+        // never a row without an explanation.
         scope.setTag("too_large_record_failed", "true");
         Sentry.captureException(recordError, scope);
+        await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+        throw new Error(
+          `Could not record the oversized-submission error for ${repoName}@${sha} (${recordError.message}); ` +
+            `rejecting this delivery so GitHub retries it`
+        );
       }
     }
     if (reactivateErr) {
