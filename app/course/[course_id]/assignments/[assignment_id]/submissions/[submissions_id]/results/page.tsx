@@ -385,7 +385,16 @@ export default function GraderResults() {
       via === "manual" ||
       via === "pr" ||
       (via === "git" && (query.data.data.run_number ?? 0) === 0);
-    if (submissionCannotHaveResults || query.data.data.assignments?.has_autograder === false) {
+    // An Actions-backed submission still in flight (run_number > 0, no grader_results)
+    // must NOT be shown as manual grading just because the assignment's flag has since
+    // been turned off: the backend deliberately lets a workflow dispatched before the
+    // disable finish, so results are still coming. Only the channel check, which is
+    // per-submission, can rule results out.
+    const dispatchedActionsRunPending = (query.data.data.run_number ?? 0) > 0;
+    if (
+      submissionCannotHaveResults ||
+      (query.data.data.assignments?.has_autograder === false && !dispatchedActionsRunPending)
+    ) {
       return (
         <Container>
           <Box p={4} margin={{ base: "2", lg: "4" }}>

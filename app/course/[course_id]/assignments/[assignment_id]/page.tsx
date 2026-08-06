@@ -68,8 +68,14 @@ function autograderScoreLabel(
   if (via === "git" && (submission.run_number ?? 0) === 0) {
     return "N/A";
   }
-  // An Actions-backed submission with no results yet is either still running or
-  // belongs to an assignment with no autograder at all.
+  // An Actions-backed submission (run_number > 0) with no results yet is STILL RUNNING,
+  // whatever the assignment's current flag says. The backend deliberately lets a workflow
+  // dispatched before a disable finish, so this combination is legitimate — and labelling
+  // it N/A hid a live run and its results link until they arrived. The flag is only
+  // consulted for rows whose channel cannot be determined.
+  if ((submission.run_number ?? 0) > 0) {
+    return "In Progress";
+  }
   return assignmentHasNoAutograder ? "N/A" : "In Progress";
 }
 

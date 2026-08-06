@@ -357,9 +357,19 @@ async function createPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   payload: PushEvent,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
-  opts: { allowNotGradedSubmissions: boolean; permitEmptySubmissions: boolean; scope: Sentry.Scope }
+  opts: {
+    allowNotGradedSubmissions: boolean;
+    permitEmptySubmissions: boolean;
+    /**
+     * Record the submission but do not let it become active. Set for a delivery whose
+     * commit has already been superseded, so a late-arriving older push cannot demote
+     * the student's newer active submission.
+     */
+    insertInactive?: boolean;
+    scope: Sentry.Scope;
+  }
 ): Promise<void> {
-  const { allowNotGradedSubmissions, permitEmptySubmissions, scope } = opts;
+  const { allowNotGradedSubmissions, permitEmptySubmissions, insertInactive, scope } = opts;
   const headCommit = payload.head_commit;
   if (!headCommit) return; // guarded by caller, narrows the type
   const repoName = payload.repository.full_name;
@@ -512,6 +522,21 @@ async function createPushDirectSubmission(
     })
     .select("id")
     .single();
+  // The BEFORE-INSERT trigger owns is_active and always promotes the new row, so a
+  // superseded delivery has to be demoted right after the insert rather than inserted
+  // inactive. Then re-promote whatever is genuinely newest.
+  if (!insertError && inserted && insertInactive) {
+    const { error: demoteError } = await adminSupabase
+      .from("submissions")
+      .update({ is_active: false })
+      .eq("id", inserted.id);
+    if (demoteError) {
+      scope.setTag("demote_superseded_submission_failed", "true");
+      Sentry.captureException(demoteError, scope);
+    } else {
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+    }
+  }
   if (insertError) {
     // 23505 = unique_violation: concurrent re-delivery won the race. Treat as
     // a no-op so we don't force GitHub to retry the whole delivery.
@@ -1106,6 +1131,25 @@ async function handlePushToStudentRepo(
       console.log(`Skipping push-direct submission for ${repoName}@${payload.after}: repo is still being provisioned`);
       return;
     }
+    // A delivery for a superseded commit must not become the active submission. The
+    // submissions trigger assigns ordinals by INSERT order and demotes whatever was
+    // active, so an older push that arrives late (a retry after a transient ingestion
+    // failure, say) would otherwise roll the student's active submission and grading
+    // review back to stale code. Same test as the handout pointer: if the pushed sha is
+    // not the repo's current default-branch head, a newer push exists.
+    let studentRepoHeadSha: string | undefined;
+    try {
+      studentRepoHeadSha = await getDefaultBranchHeadSha(repoName, scope);
+    } catch (headErr) {
+      // Never block a submission on this check; fall through and treat the push as
+      // current, which is the behaviour that existed before it.
+      scope.setTag("student_repo_head_lookup_failed", "true");
+      Sentry.captureException(headErr, scope);
+    }
+    const isSupersededPush = !!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after;
+    if (isSupersededPush) {
+      scope.setTag("push_direct_superseded", "true");
+    }
     if (
       isHandoutSyncPush({
         headCommitMessage: payload.head_commit.message,
@@ -1145,6 +1189,8 @@ async function handlePushToStudentRepo(
 
     scope.setTag("push_direct_submission", "true");
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
+      // Recorded as history, but not promoted over the newer push that superseded it.
+      insertInactive: isSupersededPush,
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       scope
@@ -1514,21 +1560,31 @@ async function handlePushToTemplateRepo(
     scope?.setTag("template_head_lookup_failed", "true");
     Sentry.captureException(headErr, scope);
   }
-  if (currentHeadSha && pushedSha && currentHeadSha !== pushedSha) {
-    scope?.setTag("skipped_reason", "stale_template_push_delivery");
+  // Skip only the POINTER move, not the rest of this handler. Returning here also
+  // skipped the assignment_handout_commits and assignment_handout_file_hashes loops
+  // below, so an out-of-order delivery vanished from handout history AND never had its
+  // file hashes recorded — which lets an unchanged submission based on that revision
+  // evade empty-submission detection. History and hashes are per-revision and
+  // order-independent; only the "current head" pointer is not.
+  const isStaleDelivery = !!currentHeadSha && !!pushedSha && currentHeadSha !== pushedSha;
+  if (isStaleDelivery) {
+    scope?.setTag("stale_template_push_delivery", "true");
     console.log(
       `Not moving latest_template_sha for ${assignments[0].template_repo}: pushed ${pushedSha} is not the current ` +
-        `default-branch head ${currentHeadSha} (out-of-order delivery)`
+        `default-branch head ${currentHeadSha} (out-of-order delivery). Still recording its history and hashes.`
     );
-    return;
   }
   for (const assignment of assignments) {
-    const { error: assignmentUpdateError } = await adminSupabase
-      .from("assignments")
-      .update({
-        latest_template_sha: pushedSha
-      })
-      .eq("id", assignment.id);
+    // Guarded around the pointer write ONLY — the assignment_handout_commits upsert
+    // further down this same loop must still run for a stale delivery.
+    const { error: assignmentUpdateError } = isStaleDelivery
+      ? { error: null }
+      : await adminSupabase
+          .from("assignments")
+          .update({
+            latest_template_sha: pushedSha
+          })
+          .eq("id", assignment.id);
     if (assignmentUpdateError) {
       scope.setTag("error_source", "assignment_template_sha_update_failed");
       scope.setTag("error_context", "Failed to update assignment");

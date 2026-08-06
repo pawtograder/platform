@@ -256,6 +256,29 @@ export default function EditAssignment() {
               } catch (rollbackError) {
                 console.error("Failed to roll back the repository configuration after a sync failure", rollbackError);
               }
+              // autograder.workflow_sha lives on a different table and was already
+              // rewritten from the NEW handout's grade.yml by githubRepoConfigureWebhook
+              // before reconciliation ran. Restoring template_repo without it leaves the
+              // old handout paired with the new handout's hash, and every Actions run is
+              // then rejected for a workflow-sha mismatch. Re-derive it from the handout
+              // being restored rather than trying to remember the old value.
+              try {
+                if (queryData!.template_repo) {
+                  await githubRepoConfigureWebhook(
+                    {
+                      assignment_id: Number.parseInt(assignment_id as string),
+                      new_repo: queryData!.template_repo,
+                      watch_type: "template_repo"
+                    },
+                    supabase
+                  );
+                }
+              } catch (hashRollbackError) {
+                console.error(
+                  "Failed to restore the autograder workflow hash for the previous handout",
+                  hashRollbackError
+                );
+              }
             }
             const restoredSubmissionMode = modeChanged ? queryData!.submission_mode : values.submission_mode;
             const restoredRepoMode = modeChanged ? queryData!.repo_mode : values.repo_mode;
