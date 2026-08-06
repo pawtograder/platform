@@ -90,6 +90,15 @@ function matchesKnownHandoutSha(candidate: string, knownShas: (string | null | u
 export type HandoutSyncPushInputs = {
   /** `head_commit.message` of the push, if any. */
   headCommitMessage: string | null | undefined;
+  /**
+   * `payload.sender.type` — "Bot" for a push made with the GitHub App's installation token.
+   *
+   * This is the only signal that catches a `merge-upstream` whose result is a MERGE commit
+   * rather than a fast-forward: the repo head is then a brand-new sha that equals no handout
+   * revision, and `synced_repo_sha` is not written until the worker's API call returns, so a
+   * push delivered in between matches none of the shas below.
+   */
+  senderType: string | null | undefined;
   /** `payload.after` — the new head sha of the pushed ref. */
   afterSha: string | null | undefined;
   /** The handout's current head sha (`assignments.latest_template_sha`). */
@@ -111,7 +120,19 @@ export type HandoutSyncPushInputs = {
  * their own.
  */
 export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
-  const { headCommitMessage, afterSha } = inputs;
+  const { headCommitMessage, afterSha, senderType } = inputs;
+  // Route 0: the push was made by an app, not a person.
+  //
+  // Every instructor-driven sync runs on the GitHub App's installation token, so its pushes
+  // arrive with sender.type "Bot". This is checked FIRST because it is the only route that
+  // works when merge-upstream produces a merge commit: the resulting head is a new sha
+  // matching no handout revision, and the worker writes synced_repo_sha only after the API
+  // call returns, so a delivery in that gap fails every sha comparison below and read as
+  // student work — creating and activating a submission for a commit the student never made.
+  //
+  // Also excludes other bot pushes (a Dependabot bump, say), which is the behaviour we want:
+  // a submission should represent work the student pushed. They can push it themselves.
+  if (senderType === "Bot") return true;
   const knownShas = [inputs.latestTemplateSha, inputs.desiredHandoutSha, inputs.syncedHandoutSha, inputs.syncedRepoSha];
   // Every message-shaped marker has to name a handout revision this row knows about, not
   // merely something hex-shaped. See matchesKnownHandoutSha.

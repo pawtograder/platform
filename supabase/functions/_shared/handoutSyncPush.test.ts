@@ -12,6 +12,8 @@ import { assertEquals } from "jsr:@std/assert@^1";
 import { isHandoutSyncPush, type HandoutSyncPushInputs } from "./handoutSyncPush.ts";
 
 const STUDENT_SHA = "a".repeat(40);
+/** Filler so a fixture sha is a plausible 40 hex characters. */
+const SAFE_SUFFIX = "0".repeat(40);
 // A realistic sha whose 7-character abbreviation is what syncRepositoryToHandout puts in
 // the branch name, PR title and commit subject (`toSha.substring(0, 7)`). The markers below
 // use "abc1234" precisely because it abbreviates THIS sha: a hex-shaped token that matches
@@ -26,6 +28,8 @@ const UNKNOWN_SHA_7 = "deadbee";
 function inputs(overrides: Partial<HandoutSyncPushInputs> = {}): HandoutSyncPushInputs {
   return {
     headCommitMessage: "Finish part 1",
+    // A student push: a real user, not the app's installation token.
+    senderType: "User",
     afterSha: STUDENT_SHA,
     latestTemplateSha: HANDOUT_SHA,
     desiredHandoutSha: null,
@@ -223,10 +227,43 @@ Deno.test("short-prefix overlap with a handout sha is NOT enough -> not a sync",
   assertEquals(isHandoutSyncPush(inputs({ afterSha: HANDOUT_SHA_7 })), false);
 });
 
+// Route 0: the push was made by an app. This is the only route that catches a merge-upstream
+// whose result is a MERGE commit — the head is then a brand-new sha matching no handout
+// revision, and synced_repo_sha is not written until the worker's API call returns, so a
+// delivery in that gap fails every sha comparison.
+Deno.test("push from the app's installation token -> sync", () => {
+  assertEquals(
+    isHandoutSyncPush(
+      inputs({
+        senderType: "Bot",
+        // A merge commit from merge-upstream: unremarkable message, head matches no handout sha.
+        headCommitMessage: "Merge branch 'main' of github.com/org/handout",
+        afterSha: `beefbeef${SAFE_SUFFIX}`.slice(0, 40)
+      })
+    ),
+    true
+  );
+});
+
+// The mirror: the same unremarkable merge commit from a PERSON is student work.
+Deno.test("merge commit from a user with no known sha -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush(
+      inputs({
+        senderType: "User",
+        headCommitMessage: "Merge branch 'main' of github.com/org/handout",
+        afterSha: `beefbeef${SAFE_SUFFIX}`.slice(0, 40)
+      })
+    ),
+    false
+  );
+});
+
 Deno.test("null handout shas never match -> not a sync", () => {
   assertEquals(
     isHandoutSyncPush({
       headCommitMessage: "work",
+      senderType: "User",
       afterSha: STUDENT_SHA,
       latestTemplateSha: null,
       desiredHandoutSha: null,

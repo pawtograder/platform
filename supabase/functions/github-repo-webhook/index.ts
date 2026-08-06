@@ -282,13 +282,22 @@ async function createPushDirectSubmission(
   const isNotGraded = headCommit.message.toUpperCase().includes("#NOT-GRADED");
 
   // Idempotency: a re-delivered webhook must not create a duplicate submission
-  // for the same commit. (run_number/run_attempt are always 0 here, so
-  // repository+sha uniquely identifies this push-direct submission.)
+  // for the same commit.
+  //
+  // Scoped to run_number = run_attempt = 0, which is what push-direct ingestion writes. On
+  // (repository, sha) alone this also matched a HISTORICAL Actions-backed submission for the
+  // same commit — reachable when the autograder was disabled and a student reverts or
+  // force-pushes to a sha that was graded through Actions earlier. The unique index permits a
+  // distinct 0/0 row, so that submission is not a duplicate of this push at all: treating it as
+  // one skipped the hand-graded submission the student is now owed, or promoted a stale Actions
+  // result as though it were this push.
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
     .select("id, grading_review_id, is_active, is_not_graded")
     .eq("repository", repoName)
     .eq("sha", sha)
+    .eq("run_number", 0)
+    .eq("run_attempt", 0)
     .limit(1)
     .maybeSingle();
   if (existingErr) {
@@ -1372,6 +1381,7 @@ async function handlePushToStudentRepo(
     if (
       isHandoutSyncPush({
         headCommitMessage: payload.head_commit.message,
+        senderType: payload.sender?.type,
         afterSha: payload.after,
         latestTemplateSha: pushAssignment.latest_template_sha,
         desiredHandoutSha: studentRepo.desired_handout_sha,
