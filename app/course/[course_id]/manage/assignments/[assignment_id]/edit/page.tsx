@@ -371,8 +371,7 @@ export default function EditAssignment() {
                   .update(priorValues)
                   .eq("id", Number.parseInt(assignment_id as string));
                 for (const [column, written] of Object.entries(writtenValues)) {
-                  rollbackQuery =
-                    written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
+                  rollbackQuery = written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
                 }
                 const { data: rolledBack, error: rollbackDbError } = await rollbackQuery.select("id");
                 if (rollbackDbError) throw rollbackDbError;
