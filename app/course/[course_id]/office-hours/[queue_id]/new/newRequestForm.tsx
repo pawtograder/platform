@@ -1081,15 +1081,21 @@ export default function HelpRequestForm({
           )}
 
           <Fieldset.Content>
+            {/*
+              The heading is a Text, not the Field's label: a Field.Label points
+              at the same control the checkbox already labels, which duplicates
+              the label id and leaves the control with two labels.
+            */}
             <Field
-              label="Privacy "
               helperText={
                 selectedSubmissionId
                   ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
                   : "Private requests are only visible to course staff and associated students."
               }
-              optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
             >
+              <Text textStyle="sm" fontWeight="medium">
+                Privacy {selectedSubmissionId ? "(Required)" : "(Optional)"}
+              </Text>
               <Controller
                 name="is_private"
                 control={control}

@@ -1,6 +1,6 @@
 {
   "recordedAt": "2026-08-05T19:25:05.535Z",
-  "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
+  "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy \u2014 deleting a line is the proof a defect was fixed.",
   "entries": {
     "assignment-detail|dark|aria-valid-attr-value|incomplete": {
       "route": "assignment-detail",
@@ -9,7 +9,7 @@
       "kind": "incomplete",
       "nodes": 2,
       "impact": "critical",
-      "sample": "#popover\\:«rq»\\:trigger"
+      "sample": "#popover\\:\u00abrq\u00bb\\:trigger"
     },
     "assignment-detail|dark|color-contrast|incomplete": {
       "route": "assignment-detail",
@@ -27,7 +27,7 @@
       "kind": "incomplete",
       "nodes": 2,
       "impact": "critical",
-      "sample": "#popover\\:«rq»\\:trigger"
+      "sample": "#popover\\:\u00abrq\u00bb\\:trigger"
     },
     "assignment-detail|light|color-contrast|incomplete": {
       "route": "assignment-detail",
@@ -54,7 +54,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«ro»\\:trigger"
+      "sample": "#popover\\:\u00abro\u00bb\\:trigger"
     },
     "assignments|dark|color-contrast|incomplete": {
       "route": "assignments",
@@ -72,7 +72,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«ro»\\:trigger"
+      "sample": "#popover\\:\u00abro\u00bb\\:trigger"
     },
     "assignments|light|color-contrast|incomplete": {
       "route": "assignments",
@@ -108,7 +108,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«r10»\\:trigger"
+      "sample": "#popover\\:\u00abr10\u00bb\\:trigger"
     },
     "course-home|dark|color-contrast|incomplete": {
       "route": "course-home",
@@ -126,7 +126,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«r10»\\:trigger"
+      "sample": "#popover\\:\u00abr10\u00bb\\:trigger"
     },
     "course-home|light|color-contrast|incomplete": {
       "route": "course-home",
@@ -171,7 +171,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#radio-group\\:«ri»"
+      "sample": "#radio-group\\:\u00abri\u00bb"
     },
     "discussion-new|dark|color-contrast|incomplete": {
       "route": "discussion-new",
@@ -180,7 +180,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:\u00abri\u00bb\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|dark|label|violation": {
       "route": "discussion-new",
@@ -207,7 +207,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#radio-group\\:«ri»"
+      "sample": "#radio-group\\:\u00abri\u00bb"
     },
     "discussion-new|light|color-contrast|incomplete": {
       "route": "discussion-new",
@@ -216,7 +216,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:\u00abri\u00bb\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|light|label|violation": {
       "route": "discussion-new",
@@ -270,7 +270,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rf»\\:trigger"
+      "sample": "#popover\\:\u00abrf\u00bb\\:trigger"
     },
     "notifications|light|aria-valid-attr-value|incomplete": {
       "route": "notifications",
@@ -279,7 +279,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rf»\\:trigger"
+      "sample": "#popover\\:\u00abrf\u00bb\\:trigger"
     },
     "notifications|light|reflow-320|violation": {
       "route": "notifications",
@@ -315,7 +315,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "serious",
-      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
+      "sample": "#field\\:\\:\u00abrp\u00bb > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
     "office-hours-queue-new|dark|color-contrast|violation": {
       "route": "office-hours-queue-new",
@@ -325,24 +325,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-ap60qa > a[href$=\"discussion\"]"
-    },
-    "office-hours-queue-new|dark|duplicate-id-aria|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": ".chakra-field__label.css-65zcwe[for=\"«rt»\"]"
-    },
-    "office-hours-queue-new|dark|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«rt»"
     },
     "office-hours-queue-new|light|aria-command-name|violation": {
       "route": "office-hours-queue-new",
@@ -369,25 +351,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "serious",
-      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
-    },
-    "office-hours-queue-new|light|duplicate-id-aria|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": ".chakra-field__label.css-65zcwe[for=\"«rt»\"]"
-    },
-    "office-hours-queue-new|light|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«rt»"
+      "sample": "#field\\:\\:\u00abrp\u00bb > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
     "office-hours-queue-new|light|reflow-320|violation": {
       "route": "office-hours-queue-new",
@@ -468,7 +432,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-checks|dark|color-contrast|incomplete": {
       "route": "submission-checks",
@@ -479,24 +443,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-checks|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-checks",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-checks|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-checks",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-checks|light|aria-valid-attr-value|incomplete": {
       "route": "submission-checks",
       "scheme": "light",
@@ -504,7 +450,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-checks|light|color-contrast|incomplete": {
       "route": "submission-checks",
@@ -515,24 +461,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-checks|light|duplicate-id-aria|incomplete": {
-      "route": "submission-checks",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-checks|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-checks",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-deployments|dark|aria-valid-attr-value|incomplete": {
       "route": "submission-deployments",
       "scheme": "dark",
@@ -540,7 +468,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-deployments|dark|color-contrast|incomplete": {
       "route": "submission-deployments",
@@ -551,24 +479,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-deployments|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-deployments|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-deployments|light|aria-valid-attr-value|incomplete": {
       "route": "submission-deployments",
       "scheme": "light",
@@ -576,7 +486,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-deployments|light|color-contrast|incomplete": {
       "route": "submission-deployments",
@@ -586,24 +496,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-deployments|light|duplicate-id-aria|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-deployments|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
     },
     "submission-files|dark|aria-prohibited-attr|incomplete": {
       "route": "submission-files",
@@ -621,7 +513,7 @@
       "kind": "incomplete",
       "nodes": 6,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-files|dark|color-contrast|incomplete": {
       "route": "submission-files",
@@ -641,24 +533,6 @@
       "impact": "serious",
       "sample": ".mtk7:nth-child(2)"
     },
-    "submission-files|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r1d» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-files|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r1c»"
-    },
     "submission-files|light|aria-prohibited-attr|incomplete": {
       "route": "submission-files",
       "scheme": "light",
@@ -675,7 +549,7 @@
       "kind": "incomplete",
       "nodes": 6,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-files|light|color-contrast|incomplete": {
       "route": "submission-files",
@@ -686,24 +560,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-files|light|duplicate-id-aria|incomplete": {
-      "route": "submission-files",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r1d» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-files|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-files",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r1c»"
-    },
     "submission-grade|dark|aria-valid-attr-value|incomplete": {
       "route": "submission-grade",
       "scheme": "dark",
@@ -711,7 +567,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-grade|dark|color-contrast|incomplete": {
       "route": "submission-grade",
@@ -729,7 +585,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-grade|light|color-contrast|incomplete": {
       "route": "submission-grade",
@@ -747,7 +603,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-repo-analytics|dark|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
@@ -758,24 +614,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-repo-analytics|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-repo-analytics|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-repo-analytics|light|aria-valid-attr-value|incomplete": {
       "route": "submission-repo-analytics",
       "scheme": "light",
@@ -783,7 +621,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-repo-analytics|light|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
@@ -794,24 +632,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-repo-analytics|light|duplicate-id-aria|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-repo-analytics|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-results|dark|aria-valid-attr-value|incomplete": {
       "route": "submission-results",
       "scheme": "dark",
@@ -819,7 +639,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-results|dark|color-contrast|incomplete": {
       "route": "submission-results",
@@ -830,24 +650,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-results|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-results",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-results|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-results",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-results|light|aria-valid-attr-value|incomplete": {
       "route": "submission-results",
       "scheme": "light",
@@ -855,7 +657,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-results|light|color-contrast|incomplete": {
       "route": "submission-results",
@@ -866,24 +668,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-results|light|duplicate-id-aria|incomplete": {
-      "route": "submission-results",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-results|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-results",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-root|dark|aria-valid-attr-value|incomplete": {
       "route": "submission-root",
       "scheme": "dark",
@@ -891,7 +675,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-root|dark|color-contrast|incomplete": {
       "route": "submission-root",
@@ -902,24 +686,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-root|dark|duplicate-id-aria|incomplete": {
-      "route": "submission-root",
-      "scheme": "dark",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-root|dark|form-field-multiple-labels|incomplete": {
-      "route": "submission-root",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
-    },
     "submission-root|light|aria-valid-attr-value|incomplete": {
       "route": "submission-root",
       "scheme": "light",
@@ -927,7 +693,7 @@
       "kind": "incomplete",
       "nodes": 5,
       "impact": "critical",
-      "sample": "#popover\\:«rp»\\:trigger"
+      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-root|light|color-contrast|incomplete": {
       "route": "submission-root",
@@ -937,24 +703,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-root|light|duplicate-id-aria|incomplete": {
-      "route": "submission-root",
-      "scheme": "light",
-      "rule": "duplicate-id-aria",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "critical",
-      "sample": "#checkbox\\:«r12» > .chakra-checkbox__label.css-1td7ckk[data-part=\"label\"]"
-    },
-    "submission-root|light|form-field-multiple-labels|incomplete": {
-      "route": "submission-root",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 3,
-      "impact": "moderate",
-      "sample": "#«r11»"
     },
     "submissions-list|dark|color-contrast|incomplete": {
       "route": "submissions-list",
