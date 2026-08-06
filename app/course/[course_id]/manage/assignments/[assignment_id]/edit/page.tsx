@@ -105,6 +105,47 @@ export default function EditAssignment() {
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
         }
+        // Switching an assignment that HAS a handout to a no-repo mode has to clean up the handout
+        // BEFORE the pointer to it is discarded.
+        //
+        // The coercion above sets template_repo = null and has_autograder = false in the same save,
+        // and the workflow sync further down only runs `if (values.template_repo)` — so nothing ever
+        // ran for the old handout. Its student repositories are deliberately retained, they still
+        // contain grade.yml, and their pushes keep launching Actions runs that
+        // autograder-create-submission now rejects because the flag is false: persistent failing
+        // checks on repositories nobody is looking at any more.
+        //
+        // Order matters. The sync reads has_autograder from the database, so the flag is written
+        // first, on its own, and only then can the sync take the disable path for the repo that is
+        // about to be detached. If it fails, the flag is put back and the save is abandoned — that
+        // is better than proceeding, since proceeding is what strands the repositories.
+        if (isNoRepo && queryData?.template_repo && queryData?.has_autograder !== false) {
+          await updateAsync({
+            resource: "assignments",
+            id: Number.parseInt(assignment_id as string),
+            values: { has_autograder: false }
+          });
+          try {
+            await assignmentSyncAutograderWorkflow(
+              {
+                assignment_id: Number.parseInt(assignment_id as string),
+                class_id: Number.parseInt(course_id as string)
+              },
+              supabase
+            );
+          } catch (detachError) {
+            try {
+              await updateAsync({
+                resource: "assignments",
+                id: Number.parseInt(assignment_id as string),
+                values: { has_autograder: queryData.has_autograder }
+              });
+            } catch (rollbackError) {
+              console.error("Failed to roll back has_autograder after a detach-sync failure", rollbackError);
+            }
+            throw detachError;
+          }
+        }
         // Enabling the autograder from THIS form skips the grader-repo setup the
         // autograder page performs, so without a configured grader repo we would
         // happily restore grade.yml to the handout and leave has_autograder true —
@@ -318,12 +359,22 @@ export default function EditAssignment() {
                 for (const key of Object.keys(priorValues)) {
                   if (key in values) writtenValues[key] = (values as Record<string, unknown>)[key];
                 }
-                const { data: rolledBack, error: rollbackDbError } = await supabase
+                // Built with .eq()/.is() rather than .match(). postgrest-js renders every
+                // .match() entry as `col=eq.<value>`, so a null becomes the literal
+                // `col=eq.null` — which PostgREST rejects outright on a numeric column
+                // (22P02, HTTP 400) and matches nothing on a text one. This handler writes
+                // nulls on the ORDINARY path (`source_assignment_id` for every non-fork mode,
+                // `upstream_repo`/`pr_branch_convention` for every non-PR mode), so the
+                // conditional rollback below never applied to anything.
+                let rollbackQuery = supabase
                   .from("assignments")
                   .update(priorValues)
-                  .eq("id", Number.parseInt(assignment_id as string))
-                  .match(writtenValues)
-                  .select("id");
+                  .eq("id", Number.parseInt(assignment_id as string));
+                for (const [column, written] of Object.entries(writtenValues)) {
+                  rollbackQuery =
+                    written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
+                }
+                const { data: rolledBack, error: rollbackDbError } = await rollbackQuery.select("id");
                 if (rollbackDbError) throw rollbackDbError;
                 rollbackApplied = (rolledBack ?? []).length > 0;
                 if (!rollbackApplied) {
