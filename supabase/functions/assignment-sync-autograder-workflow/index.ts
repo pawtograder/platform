@@ -153,7 +153,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // has_autograder for another class that happens to point at the same
   // `owner/repo` handout.
   const foreignSharers = allSharers.filter((a) => a.class_id !== class_id);
-  const outOfStepForeign = foreignSharers.filter((a) => (a.has_autograder !== false) !== hasAutograder);
+  // A PR-mode assignment's EFFECTIVE setting is always false, whatever its row says —
+  // PR submissions never run Actions. Comparing against a stale `true` would make a
+  // foreign PR sharer look aligned while enabling, skipping the 403 below and letting
+  // the toggle proceed to rewrite a repo another class depends on.
+  const effectiveHasAutograder = (a: { has_autograder: boolean | null; submission_mode: string | null }) =>
+    a.submission_mode !== "pr" && a.has_autograder !== false;
+  const outOfStepForeign = foreignSharers.filter((a) => effectiveHasAutograder(a) !== hasAutograder);
   scope.setTag("template_repo_foreign_sharers", String(foreignSharers.length));
   if (outOfStepForeign.length > 0) {
     // We cannot authorize those assignments, and editing the shared repo would
@@ -179,7 +185,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // run that never completes. They keep their own correct value while the shared
   // handout's workflow follows this assignment.
   const inClassOutOfStep = allSharers.filter(
-    (a) => a.class_id === class_id && a.submission_mode !== "pr" && (a.has_autograder !== false) !== hasAutograder
+    (a) => a.class_id === class_id && a.submission_mode !== "pr" && effectiveHasAutograder(a) !== hasAutograder
   );
   const prSharers = allSharers.filter((a) => a.submission_mode === "pr");
   // Excluding PR sharers from the FLAG update is not sufficient when enabling: the
@@ -188,11 +194,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // rejects — failing checks for students on an assignment that legitimately has no
   // autograder. The repo cannot serve both modes, so refuse rather than half-apply.
   if (hasAutograder && prSharers.length > 0) {
+    // Name only the assignments this instructor is authorized for. `prSharers` is not
+    // class-scoped — it cannot be, since a foreign PR sharer is just as affected by the
+    // repo write — but leaking another class's assignment titles and ids to someone
+    // authorized only for `class_id` is an information disclosure. Foreign ones are
+    // reported as a bare count.
+    const inClassPr = prSharers.filter((a) => a.class_id === class_id);
+    const foreignPrCount = prSharers.length - inClassPr.length;
+    const named = inClassPr.map((a) => `"${a.title}" (#${a.id})`).join(", ");
+    const others =
+      foreignPrCount > 0
+        ? `${named ? " and " : ""}${foreignPrCount} assignment${foreignPrCount === 1 ? "" : "s"} in another class`
+        : "";
     throw new UserVisibleError(
-      `The handout ${templateRepo} is also used by ${prSharers.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, ` +
-        `which submit by pull request. Adding the grading workflow to that handout would give their forks a ` +
-        `workflow that cannot report results, so the autograder cannot be enabled while the handout is shared ` +
-        `with a pull-request assignment. Give this assignment its own handout repository first.`,
+      `The handout ${templateRepo} is also used by ${named || ""}${others}, which submit by pull request. ` +
+        `Adding the grading workflow to that handout would give their forks a workflow that cannot report ` +
+        `results, so the autograder cannot be enabled while the handout is shared with a pull-request ` +
+        `assignment. Give this assignment its own handout repository first.`,
       409
     );
   }
