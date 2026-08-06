@@ -711,7 +711,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         });
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
-        await adminSupabase
+        const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
@@ -722,6 +722,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        if (readyError) {
+          // Do NOT report success: the repo exists on GitHub but the row still reads
+          // is_github_ready=false, and the push-direct webhook guard skips unready
+          // repos — so student pushes would be acknowledged and discarded until the
+          // periodic reconciler repairs the row, with no replay of what was lost.
+          console.error(readyError);
+          Sentry.captureException(readyError, scope);
+          throw new UserVisibleError(
+            `Repository ${repoName} was created but could not be marked ready (${readyError.message}). ` +
+              `Please retry: pushes to it would not be recorded until this is fixed.`
+          );
+        }
 
         return new_repo_sha;
       } catch (e) {

@@ -123,6 +123,11 @@ export default function AutograderPage() {
       // saved — the worst case being unvalidated config left behind, since
       // validation is deliberately skipped when disabling.
       const priorAutograderRow = {
+        // `config` is captured too, because githubRepoConfigureWebhook(grader_solution)
+        // above already parsed the NEW grader repo's pawtograder.yml and persisted it.
+        // Restoring only grader_repo left that new config paired with the old repo while
+        // the UI reported nothing saved — a mismatch that then drives real grading.
+        config: query?.data?.data?.config ?? null,
         grader_repo: query?.data?.data?.grader_repo ?? null,
         max_submissions_count: query?.data?.data?.max_submissions_count ?? null,
         max_submissions_period_secs: query?.data?.data?.max_submissions_period_secs ?? null
@@ -137,7 +142,13 @@ export default function AutograderPage() {
       // save and fired a pointless rollback write.
       const sameLimit = (a: string | number | null, b: string | number | null) =>
         a === b || (a !== null && b !== null && Number(a) === Number(b));
+      // The configure-webhook call above rewrites `autograder.config` server-side
+      // whenever it runs, and `query` still holds the page-load value — so a change
+      // cannot be detected by comparing the two. Treat "we ran the validation" as
+      // "config may have been replaced" and roll it back on that basis.
+      const graderConfigMayHaveChanged = nextHasAutograder === true;
       const autograderRowChanged =
+        graderConfigMayHaveChanged ||
         priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
         !sameLimit(priorAutograderRow.max_submissions_count, nextAutograderRow.max_submissions_count) ||
         !sameLimit(priorAutograderRow.max_submissions_period_secs, nextAutograderRow.max_submissions_period_secs);

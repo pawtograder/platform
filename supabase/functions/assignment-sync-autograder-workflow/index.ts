@@ -360,8 +360,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         .update({ latest_template_sha: deleteCommitSha })
         .eq("template_repo", templateRepo);
       if (shaError) {
+        // Not survivable: while the pointer names the pre-delete revision, a student
+        // handout sync copies the live grade.yml back even though has_autograder is
+        // false. Reporting success here would leave that window open silently, so fail
+        // and let the caller roll the flag back.
         scope.setTag("pin_latest_template_sha_failed", "true");
         Sentry.captureException(shaError, scope);
+        throw new UserVisibleError(
+          `The autograder workflow was removed from ${templateRepo}, but the handout revision pointer could not ` +
+            `be updated (${shaError.message}). Student repositories could still re-sync the old workflow, so the ` +
+            `change was not completed — please try again.`,
+          502
+        );
       }
     }
 
@@ -518,8 +528,49 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .update({ latest_template_sha: restoreCommitSha })
       .eq("template_repo", templateRepo);
     if (shaError) {
+      // Symmetric to the disable path: without the pointer, nothing tells student
+      // repos there is a new handout revision to pull, so they never receive the
+      // restored workflow — see the sync below, which depends on it.
       scope.setTag("pin_latest_template_sha_failed", "true");
       Sentry.captureException(shaError, scope);
+      throw new UserVisibleError(
+        `The autograder workflow was restored to ${templateRepo}, but the handout revision pointer could not be ` +
+          `updated (${shaError.message}). Student repositories would never receive the workflow, so the change ` +
+          `was not completed — please try again.`,
+        502
+      );
+    }
+  }
+
+  // Push the new handout revision out to EXISTING student repos.
+  //
+  // Enabling only adds grade.yml to the handout. Until each student repo receives it,
+  // that repo has no workflow at its commits — but has_autograder is already true, so
+  // its pushes no longer take the direct-ingestion branch: a `#submit` push tries to
+  // dispatch a workflow that is not there, and an unmarked push records nothing at all.
+  // Student work would be silently lost for the whole window. queue_repository_syncs is
+  // the same mechanism a handout push uses, and it skips repos already at the target
+  // revision, so this is safe to call unconditionally.
+  //
+  // Best-effort: the workflow is live and hashed by now, so a queueing failure is not
+  // worth undoing a working toggle. Reported instead, and the periodic handout-sync
+  // path will still pick these repos up.
+  const { data: repoRows, error: repoRowsError } = await adminSupabase
+    .from("repositories")
+    .select("id")
+    .eq("assignment_id", assignment_id);
+  if (repoRowsError) {
+    scope.setTag("queue_repo_syncs_lookup_failed", "true");
+    Sentry.captureException(repoRowsError, scope);
+  } else if (repoRows && repoRows.length > 0) {
+    const { error: queueError } = await adminSupabase.rpc("queue_repository_syncs", {
+      p_repository_ids: repoRows.map((r) => r.id)
+    });
+    if (queueError) {
+      scope.setTag("queue_repo_syncs_failed", "true");
+      Sentry.captureException(queueError, scope);
+    } else {
+      scope.setTag("queued_repo_syncs", String(repoRows.length));
     }
   }
 
