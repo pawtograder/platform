@@ -25,6 +25,19 @@ global:
   # real overlay should declare this explicitly.
   environment: dev
 
+  # Which branch / PR / CI run produced this deploy. Purely informational: the edge functions stamp
+  # these onto every Sentry event (supabase/functions/_shared/SentryContext.ts) so a record in the
+  # Bugsink "Dev" project can be attributed at a glance instead of by reading a hostname out of a URL
+  # tag. Set per-deploy from CI (`--set global.deploy.branch=...`); every field is optional and an
+  # empty one is simply omitted, so local `helm template` runs and hand-rolled installs need none of
+  # it.
+  deploy:
+    branch: ""
+    pr: ""
+    runId: ""
+    runAttempt: ""
+    commit: ""
+
   # Public hostname users hit. Used to construct site URLs, OAuth redirects,
   # and the JWT issuer claim. MUST match an ingress entry below.
   hostname: pawtograder.example.com
