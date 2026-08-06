@@ -388,7 +388,13 @@ const ProfileChangesMenu = () => {
    * Removes extra files in user's avatar storage bucket.
    */
   const updateProfile = async () => {
-    removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
+    // Only clean up once both profiles are in hand: with either one missing, the
+    // "still in use" links are all we have to compare against, and passing a
+    // half-known pair would delete the other profile's avatar. See
+    // removeUnusedImages.
+    if (privateProfile?.data && publicProfile?.data) {
+      removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
+    }
     if (publicAvatarLink && publicProfile?.data) {
       const { error } = await supabase
         .from("profiles")
@@ -548,10 +554,12 @@ const ProfileChangesMenu = () => {
                       setPrivateAvatarLink(privateProfile?.data?.avatar_url ?? null);
                       setPublicAvatarLink(publicProfile?.data?.avatar_url ?? null);
                       setName(privateProfile?.data?.name ?? "");
-                      removeUnusedImages(
-                        privateProfile?.data?.avatar_url ?? null,
-                        publicProfile?.data?.avatar_url ?? null
-                      );
+                      // As in updateProfile: without both profiles loaded, the
+                      // avatars still in use are unknown and cleanup would take
+                      // the whole directory with it.
+                      if (privateProfile?.data && publicProfile?.data) {
+                        removeUnusedImages(privateProfile.data.avatar_url, publicProfile.data.avatar_url);
+                      }
                     }}
                   >
                     Cancel

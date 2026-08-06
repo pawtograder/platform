@@ -45,6 +45,23 @@ export function withMissingRowErrors(base: DataProvider): DataProvider {
   };
 }
 
+/** React Query's own default: three retries before the error surfaces. */
+const DEFAULT_QUERY_RETRIES = 3;
+
+/**
+ * React Query retry policy that skips retries for the 404 above.
+ *
+ * A missing or invisible row is deterministic — refetching it three times over
+ * several seconds of backoff produces the same `200 []`, and until the retries
+ * are exhausted `useOne` stays in its loading state instead of showing the
+ * not-found/empty branch. Everything else keeps the default retry behaviour.
+ */
+export function retryUnlessMissingRow(failureCount: number, error: unknown): boolean {
+  const statusCode = (error as { statusCode?: unknown } | null | undefined)?.statusCode;
+  if (statusCode === 404) return false;
+  return failureCount < DEFAULT_QUERY_RETRIES;
+}
+
 /** The app's refine data provider: Supabase, plus the `getOne` fix above. */
 export function createDataProvider(client: Parameters<typeof supabaseDataProvider>[0]): DataProvider {
   return withMissingRowErrors(supabaseDataProvider(client));

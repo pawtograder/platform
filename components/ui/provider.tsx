@@ -6,7 +6,7 @@ import { ChakraProvider } from "@chakra-ui/react";
 
 import { Refine } from "@refinedev/core";
 import { liveProvider } from "@refinedev/supabase";
-import { createDataProvider } from "@/lib/refineDataProvider";
+import { createDataProvider, retryUnlessMissingRow } from "@/lib/refineDataProvider";
 import { ColorModeProvider, type ColorModeProviderProps } from "./color-mode";
 
 const supabaseClient = createClient();
@@ -20,7 +20,12 @@ export function Provider(props: ColorModeProviderProps) {
       <Refine
         dataProvider={refineDataProvider}
         //notificationProvider={notificationProvider}
-        options={{ disableTelemetry: true }}
+        options={{
+          disableTelemetry: true,
+          // Refine merges this into its own query defaults (refetchOnWindowFocus
+          // off, keepPreviousData on).
+          reactQuery: { clientConfig: { defaultOptions: { queries: { retry: retryUnlessMissingRow } } } }
+        }}
         liveProvider={liveProvider(supabaseClient)}
       >
         <ColorModeProvider {...props} />

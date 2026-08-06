@@ -29,22 +29,36 @@ describe("installSessionUserRecovery", () => {
     reloadCalls += 1;
   };
 
-  /** Stub of the Supabase auth client: hands back the emitter for the test. */
+  /**
+   * Stub of the Supabase auth client: hands back the emitter for the test, and
+   * a `setSession` that changes what `getSession` reports *without* emitting —
+   * that silence is exactly the server-action sign-in the poll exists for.
+   */
   function fakeClient() {
-    let handler: ((event: string, session: { user: { id: string } } | null) => void) | undefined;
+    type Session = { user: { id: string } } | null;
+    let handler: ((event: string, session: Session) => void) | undefined;
+    let session: Session = null;
     const unsubscribe = jest.fn();
+    const sessionFor = (userId: string | null): Session => (userId === null ? null : { user: { id: userId } });
     const client = {
       auth: {
         onAuthStateChange: (cb: typeof handler) => {
           handler = cb;
           return { data: { subscription: { unsubscribe } } };
-        }
+        },
+        getSession: async () => ({ data: { session } })
       }
     };
     return {
       client: client as never,
       unsubscribe,
-      emit: (userId: string | null) => handler?.("SIGNED_IN", userId === null ? null : { user: { id: userId } })
+      setSession: (userId: string | null) => {
+        session = sessionFor(userId);
+      },
+      emit: (userId: string | null) => {
+        session = sessionFor(userId);
+        handler?.("SIGNED_IN", session);
+      }
     };
   }
 
@@ -79,9 +93,79 @@ describe("installSessionUserRecovery", () => {
     uninstall();
   });
 
-  it("unsubscribes on uninstall", () => {
-    const { client, unsubscribe } = fakeClient();
-    installSessionUserRecovery({ client, renderedUserId: "user-a", reload })();
-    expect(unsubscribe).toHaveBeenCalled();
+  it("still recovers when a second, different user takes over during the cooldown", () => {
+    const { client, emit } = fakeClient();
+    const uninstall = installSessionUserRecovery({ client, renderedUserId: "user-a", reload });
+
+    // A → B reloads. Before the reload lands, B → C: a mismatch we have never
+    // acted on, so the loop guard must not swallow it — otherwise the tab stays
+    // rendered for B while its requests authenticate as C.
+    emit("user-b");
+    emit("user-c");
+
+    expect(reloadCalls).toBe(2);
+
+    uninstall();
+  });
+
+  it("reloads when the session is swapped with no auth event, as a server action does", async () => {
+    jest.useFakeTimers();
+    try {
+      const { client, setSession } = fakeClient();
+      const uninstall = installSessionUserRecovery({
+        client,
+        renderedUserId: "user-a",
+        reload,
+        pollIntervalMs: 1000
+      });
+
+      setSession("user-b");
+      expect(reloadCalls).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(reloadCalls).toBe(1);
+
+      uninstall();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("does not poll a hidden tab — supabase-js re-reads the session when it comes back", async () => {
+    jest.useFakeTimers();
+    const visibility = jest.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const { client, setSession } = fakeClient();
+      const uninstall = installSessionUserRecovery({
+        client,
+        renderedUserId: "user-a",
+        reload,
+        pollIntervalMs: 1000
+      });
+
+      setSession("user-b");
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(reloadCalls).toBe(0);
+
+      uninstall();
+    } finally {
+      visibility.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it("unsubscribes and stops polling on uninstall", async () => {
+    jest.useFakeTimers();
+    try {
+      const { client, unsubscribe, setSession } = fakeClient();
+      installSessionUserRecovery({ client, renderedUserId: "user-a", reload, pollIntervalMs: 1000 })();
+      expect(unsubscribe).toHaveBeenCalled();
+
+      setSession("user-b");
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(reloadCalls).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

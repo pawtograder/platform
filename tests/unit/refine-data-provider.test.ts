@@ -1,5 +1,5 @@
 import type { DataProvider } from "@refinedev/core";
-import { withMissingRowErrors } from "@/lib/refineDataProvider";
+import { retryUnlessMissingRow, withMissingRowErrors } from "@/lib/refineDataProvider";
 
 /**
  * Minimal stand-in for the `@refinedev/supabase` provider: only `getOne` is
@@ -55,5 +55,26 @@ describe("withMissingRowErrors", () => {
 
     expect(provider.getList).toBe(base.getList);
     expect(provider.update).toBe(base.update);
+  });
+});
+
+describe("retryUnlessMissingRow", () => {
+  it("does not retry a missing row — the answer will not change, and the wait is user-visible", () => {
+    // Without this, React Query's default retries hold `useOne` in its loading
+    // state through several seconds of backoff before the not-found UI appears.
+    expect(retryUnlessMissingRow(0, Object.assign(new Error("no such row"), { statusCode: 404 }))).toBe(false);
+  });
+
+  it("keeps the default three retries for anything that might succeed later", () => {
+    const flaky = Object.assign(new Error("network"), { statusCode: 500 });
+
+    expect(retryUnlessMissingRow(0, flaky)).toBe(true);
+    expect(retryUnlessMissingRow(2, flaky)).toBe(true);
+    expect(retryUnlessMissingRow(3, flaky)).toBe(false);
+  });
+
+  it("retries errors that carry no status", () => {
+    expect(retryUnlessMissingRow(0, new Error("boom"))).toBe(true);
+    expect(retryUnlessMissingRow(0, undefined)).toBe(true);
   });
 });
