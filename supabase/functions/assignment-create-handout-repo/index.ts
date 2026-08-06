@@ -240,6 +240,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       strippedHandoutSha = await getDefaultBranchHeadSha(handoutFullName, scope);
       scope.setTag("recovered_stripped_handout_sha", String(!!strippedHandoutSha));
     }
+  } else {
+    // An AUTOGRADED handout needs the pointer just as much, and nothing else was setting it.
+    //
+    // The reasoning above applies whether or not grade.yml is stripped: every commit in this repo
+    // predates the `template_repo` write below, so the template-repo push webhook has no
+    // assignment to attribute it to and `latest_template_sha` stayed NULL for the whole life of a
+    // freshly created autograded assignment. That silently disabled the handout-hash seeding this
+    // flow now depends on — the call at the end of this function, the one in
+    // assignment-create-solution-repo, and the one in github-repo-configure-webhook all key off
+    // `latest_template_sha` and returned `no_commit_sha` — so empty-submission detection had
+    // nothing to compare against until an instructor happened to push to the handout.
+    //
+    // Best-effort: creation must not fail because a head lookup did, and the pointer is
+    // re-derivable from the next handout push.
+    try {
+      strippedHandoutSha = await getDefaultBranchHeadSha(handoutFullName, scope);
+      scope.setTag("resolved_handout_head_sha", String(!!strippedHandoutSha));
+    } catch (headErr) {
+      scope.setTag("resolve_handout_head_failed", "true");
+      Sentry.captureException(headErr, scope);
+    }
   }
 
   // Only persist the template_repo pointer after GitHub creation + permission
@@ -276,7 +297,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // creation. Leaving autograder.workflow_sha NULL is correct there, since the sha
   // check only runs on the Actions-driven submission path, which no longer exists.
   if (assignment.has_autograder !== false) {
-    await updateAutograderWorkflowHash(handoutFullName);
+    // Pinned to the same revision `latest_template_sha` now advertises, so the hash and the tree
+    // students receive describe one commit. An unqualified read would hash whatever the default
+    // branch holds at this instant, which a concurrent instructor push can already have moved.
+    await updateAutograderWorkflowHash(handoutFullName, strippedHandoutSha);
   }
 
   // Seed the handout's file hashes for the revision just pinned.

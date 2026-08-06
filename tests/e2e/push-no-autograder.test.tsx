@@ -599,9 +599,13 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
       assignment_slug: `e2e-pushdue-${SAFE_ID}`
     });
     assignmentId = a.id;
+    // max_late_tokens: 0 is load bearing. insertAssignment seeds 10 and createClass gives each
+    // student 10, with require_tokens_before_due_date false — so a push two days late is covered
+    // automatically and accepted, which is correct behaviour and not what this case is about.
+    // Zero the allowance so the deadline is the only thing under test.
     const { error: cfgErr } = await supabase
       .from("assignments")
-      .update({ submission_mode: "push", has_autograder: false })
+      .update({ submission_mode: "push", has_autograder: false, max_late_tokens: 0 })
       .eq("id", assignmentId);
     expect(cfgErr).toBeNull();
 
@@ -617,7 +621,7 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
     expect(repoErr).toBeNull();
   });
 
-  test("#submit push with a FUTURE commit timestamp on a past-due assignment creates NO submission", async () => {
+  test("#submit push with a FUTURE commit timestamp on a past-due assignment is rejected, not graded", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
     const sha = `f00dface${SAFE_ID}`.slice(0, 40);
@@ -632,8 +636,28 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
     expect(res.status, await res.text().catch(() => "")).toBe(200);
 
     await new Promise((r) => setTimeout(r, 1500));
-    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
+    // A late push is RECORDED as a visible rejection rather than dropped: the feature tells
+    // students every push is a submission, so one that produces nothing has to say why, and the
+    // only surface a student can read is a workflow_run_error attached to a submission they own.
+    // What must not happen is a gradeable one — so assert the shape (inactive, fileless, with an
+    // after_due_date error) rather than the absence of a row.
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, is_active")
+      .eq("repository", repoName)
+      .eq("sha", sha);
+    expect(subs ?? []).toHaveLength(1);
+    expect(subs![0].is_active).toBe(false);
+
+    const { data: files } = await supabase.from("submission_files").select("id").eq("submission_id", subs![0].id);
+    expect(files ?? []).toHaveLength(0);
+
+    const { data: errors } = await supabase
+      .from("workflow_run_error")
+      .select("name, data")
+      .eq("submission_id", subs![0].id);
+    expect(errors ?? []).toHaveLength(1);
+    expect((errors![0].data as { error_type?: string } | null)?.error_type).toBe("after_due_date");
   });
 });
 

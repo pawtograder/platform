@@ -194,11 +194,41 @@ export default function EditAssignment() {
             throw detachError;
           }
         }
+        // Submission-mode / upstream coupling (Option A): for PR mode the
+        // upstream repo IS the handout (template_repo), so keep them equal.
+        // When not PR, clear PR/upstream config so toggling back to push doesn't
+        // leave stale upstream values behind.
+        if (values.submission_mode === "pr") {
+          // PR submissions are ingested by the PR webhook and never produce
+          // grader_results, so the autograder flag must be false here — mirrors the
+          // create page and the backfill migration, both of which exclude PR mode.
+          values.has_autograder = false;
+          values.upstream_repo = values.template_repo ?? null;
+          // "branch_convention" identification is only meaningful with a non-empty regex; if it's
+          // blank, fall back to "base_branch" so we never persist an inconsistent PR config
+          // (branch_convention with no rule to match the submission PR).
+          const convention = (values.pr_branch_convention ?? "").trim();
+          values.pr_branch_convention = convention || null;
+          if (values.pr_identification === "branch_convention" && !convention) {
+            values.pr_identification = "base_branch";
+          }
+        } else {
+          values.upstream_repo = null;
+          values.pr_branch_convention = null;
+          values.require_pr_open = false;
+        }
         // Enabling the autograder from THIS form skips the grader-repo setup the
         // autograder page performs, so without a configured grader repo we would
         // happily restore grade.yml to the handout and leave has_autograder true —
         // and the next Actions submission would fail with "grader config not
         // found". Refuse and point at the page that can configure it.
+        //
+        // Placed AFTER the mode coercions above, so it tests the value that will actually be
+        // written. The shared form deliberately leaves `has_autograder` in the form state when
+        // the checkbox becomes disabled ("Shown as unchecked ... WITHOUT writing the form
+        // value"), so an instructor who ticks the box and then switches to PR or a no-repo mode
+        // still submits `true`. Running the guard first refused that whole save — dates, title,
+        // the mode change and all — over a flag those very coercions were about to clear.
         if (values.has_autograder === true && queryData?.has_autograder === false) {
           const { data: graderRow } = await supabase
             .from("autograder")
@@ -240,29 +270,6 @@ export default function EditAssignment() {
                 "Set it up on the assignment's Autograder page first, which creates and validates the grader repo."
             );
           }
-        }
-        // Submission-mode / upstream coupling (Option A): for PR mode the
-        // upstream repo IS the handout (template_repo), so keep them equal.
-        // When not PR, clear PR/upstream config so toggling back to push doesn't
-        // leave stale upstream values behind.
-        if (values.submission_mode === "pr") {
-          // PR submissions are ingested by the PR webhook and never produce
-          // grader_results, so the autograder flag must be false here — mirrors the
-          // create page and the backfill migration, both of which exclude PR mode.
-          values.has_autograder = false;
-          values.upstream_repo = values.template_repo ?? null;
-          // "branch_convention" identification is only meaningful with a non-empty regex; if it's
-          // blank, fall back to "base_branch" so we never persist an inconsistent PR config
-          // (branch_convention with no rule to match the submission PR).
-          const convention = (values.pr_branch_convention ?? "").trim();
-          values.pr_branch_convention = convention || null;
-          if (values.pr_identification === "branch_convention" && !convention) {
-            values.pr_identification = "base_branch";
-          }
-        } else {
-          values.upstream_repo = null;
-          values.pr_branch_convention = null;
-          values.require_pr_open = false;
         }
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
@@ -351,6 +358,21 @@ export default function EditAssignment() {
                     "The handout repository was updated, but the sync jobs for existing student " +
                     "repositories could not be queued. Sync them from the assignment's repositories " +
                     "page — until then they still have the previous autograder setup.",
+                  type: "warning"
+                });
+              }
+              const reconcileBlockedBy = syncResult?.reconcile_blocked_by ?? [];
+              if (reconcileBlockedBy.length > 0) {
+                // The reconcile declined to park the workflow because another in-class assignment
+                // still runs it. Not a save failure — everything else was written — but the
+                // instructor has to know, because the only fix is to split the handouts and
+                // nothing else in the UI reports it.
+                toaster.create({
+                  title: "Autograder workflow left in the shared handout",
+                  description:
+                    `${reconcileBlockedBy.map((a) => a.title).join(", ")} still use this handout repository and its ` +
+                    `autograder, so grade.yml was left in place. Students on this assignment will see a failing ` +
+                    `check on their pull requests until this assignment has its own handout repository.`,
                   type: "warning"
                 });
               }

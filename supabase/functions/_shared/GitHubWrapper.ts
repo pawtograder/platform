@@ -896,6 +896,20 @@ export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.S
     await recordE2eGithubCall("getDefaultBranchHeadSha", { repoName }, scope);
     return undefined;
   }
+  // An E2E repository name carries a per-run `--<suffix>` that exists only in our database;
+  // GitHub has the un-suffixed repo, which is why every clone goes through
+  // getRepoToCloneConsideringE2E. Answering "what is the head of the suffixed repo" is not
+  // possible and not meaningful: the head of the SHARED fixture repo says nothing about the fake
+  // sha an E2E push carries. Callers already treat `undefined` as "could not determine, assume
+  // current", which is the behaviour the E2E stub above relies on — but that stub is gated on
+  // PAWTOGRADER_GITHUB_STUB, a different flag from the E2E_MOCK_GITHUB / END_TO_END_SECRET setup
+  // the webhook-driven suites use, so without this the new pre-insert and supersede checks issued
+  // a real `GET /repos/...--<suffix>` that 404s, threw, and answered 500 for every push-direct
+  // delivery in the e2e stack.
+  if (repoName.startsWith(END_TO_END_REPO_PREFIX)) {
+    scope?.setTag("get_default_branch_head_skipped", "e2e_repo");
+    return undefined;
+  }
   const octokit = await getOctoKit(repoName, scope);
   if (!octokit) {
     throw new Error(`Get default branch head failed: No octokit found for ${repoName}`);

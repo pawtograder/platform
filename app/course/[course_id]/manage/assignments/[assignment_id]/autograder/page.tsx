@@ -291,12 +291,21 @@ export default function AutograderPage() {
             //
             // Written through supabase rather than refineCore.onFinish because only the former can
             // express the match condition.
-            const { data: rolledBack, error: rollbackDbError } = await supabase
+            //
+            // Built with .eq()/.is() rather than .match(), for the same reason as the assignment
+            // edit page's rollback: postgrest-js renders every .match() entry as `col=eq.<value>`,
+            // so a null becomes the literal `col=eq.null`, which PostgREST rejects with 22P02 /
+            // HTTP 400 on an integer column. Both submission limits are `values.x || null`, so a
+            // blank limit — the ordinary case — made this rollback fail outright, leaving the new
+            // grader_repo and the freshly parsed config persisted under a "Changes not saved" toast.
+            let rollbackQuery = supabase
               .from("autograder")
               .update(priorAutograderRow)
-              .eq("id", Number.parseInt(assignment_id as string))
-              .match(nextAutograderRow)
-              .select("id");
+              .eq("id", Number.parseInt(assignment_id as string));
+            for (const [column, written] of Object.entries(nextAutograderRow)) {
+              rollbackQuery = written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
+            }
+            const { data: rolledBack, error: rollbackDbError } = await rollbackQuery.select("id");
             if (rollbackDbError) throw rollbackDbError;
             if ((rolledBack ?? []).length === 0) {
               console.warn(

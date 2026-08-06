@@ -331,6 +331,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const inClassOutOfStep = allSharers.filter(
     (a) => a.class_id === class_id && a.submission_mode !== "pr" && effectiveHasAutograder(a) !== hasAutograder
   );
+  // A reconcile-only call must never take the workflow away from an assignment that still wants
+  // it. Unlike a real toggle, nothing here was explicitly requested: the caller fires this on
+  // ordinary saves of a PR assignment because it cannot tell from the client whether the handout
+  // still holds a live grade.yml. When the handout is shared with an in-class assignment that
+  // still has the autograder, parking the file would disable grading on THAT assignment as a side
+  // effect of editing this one's due date — `realignInClassSharers` would then flip its flag to
+  // match and queue its student repositories to have the workflow stripped.
+  //
+  // So stop before touching GitHub, and report which assignments are holding it. Left alone, the
+  // PR assignment's forks keep a workflow whose runs `autograder-create-submission` rejects, which
+  // is the same failing-check cost the enable direction refuses at the PR-sharer check below. That
+  // is the lesser harm — a wrong check on submissions that are ingested anyway, against silently
+  // ungrading a different assignment — but it needs an instructor to split the handouts, so the
+  // caller has to surface it rather than log and move on.
+  if (reconcile_only && inClassOutOfStep.length > 0) {
+    scope.setTag("reconcile_only_blocked_shared_handout", "true");
+    console.log(
+      `Reconcile-only sync for ${templateRepo}: refusing to park ${GRADE_WORKFLOW_PATH}, still required by ` +
+        inClassOutOfStep.map((a) => a.id).join(", ")
+    );
+    return {
+      action: "unchanged" as const,
+      has_autograder: false,
+      template_repo: templateRepo,
+      realigned_assignments: [],
+      unsynced_other_class_count: unsyncedOtherClassCount,
+      reconcile_blocked_by: inClassOutOfStep.map((a) => ({ id: a.id, title: a.title }))
+    };
+  }
   const prSharers = allSharers.filter((a) => a.submission_mode === "pr");
   // Excluding PR sharers from the FLAG update is not sufficient when enabling: the
   // shared handout is the upstream those PR students fork from, so writing grade.yml

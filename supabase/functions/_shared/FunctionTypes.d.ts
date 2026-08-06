@@ -482,6 +482,16 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * learn which assignments exist in another one.
    */
   unsynced_other_class_count?: number;
+  /**
+   * Set on a `reconcile_only` call that declined to park the handout's workflow because these
+   * in-class assignments still use it. Naming them is safe — they are in the caller's own class,
+   * unlike `unsynced_other_class_count`.
+   *
+   * The handout was NOT changed. Callers should tell the instructor, since the only resolution is
+   * to give one of the assignments its own handout repository; until then the pull-request
+   * assignment's forks keep a workflow that reports failing checks.
+   */
+  reconcile_blocked_by?: { id: number; title: string }[];
 };
 
 export type AutograderCreateReposForStudentRequest = {
