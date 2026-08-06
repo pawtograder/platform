@@ -15,6 +15,7 @@ import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 
 interface RepositoryData {
   id: number;
@@ -124,6 +125,7 @@ async function main() {
   // Initialize Sentry
   if (Deno.env.get("SENTRY_DSN")) {
     Sentry.init({
+      beforeSend: normalizeEventFingerprint,
       dsn: Deno.env.get("SENTRY_DSN"),
       tracesSampleRate: 1.0
     });

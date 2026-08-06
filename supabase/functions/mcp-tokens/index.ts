@@ -19,10 +19,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
+    beforeSend: normalizeEventFingerprint,
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA")
   });
@@ -36,6 +38,24 @@ const corsHeaders = {
 };
 
 const DEFAULT_EXPIRY_DAYS = 90;
+
+/**
+ * A dependency this request needed was unavailable — not a statement about the caller's permissions.
+ *
+ * The response status here is derived from the thrown message, so a lookup that merely *failed* used
+ * to land on the same branch as a lookup that came back empty: a 502 from PostgREST on the role query
+ * answered the user "MCP tokens are only available to instructors and graders", and a 502 from
+ * auth/v1/user answered "Unauthorized". Both are wrong and both are unactionable — the caller retries
+ * nothing because it was told the answer is no. Instructors saw this during e2e runs while Kong was
+ * returning 502s. Raising this instead maps to 503, which is true and which clients retry.
+ */
+class UpstreamUnavailableError extends Error {
+  constructor(operation: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`${operation} is temporarily unavailable: ${detail}`);
+    this.name = "UpstreamUnavailableError";
+  }
+}
 
 interface CreateTokenRequest {
   name: string;
@@ -67,6 +87,12 @@ async function authenticateUser(authHeader: string | null) {
     error
   } = await supabase.auth.getUser(token);
 
+  // Only an explicit 4xx from the auth server is a statement about this token. A 5xx, or a transport
+  // failure (no status at all), means we do not know whether the token is good — say so rather than
+  // rejecting a session that may well be valid.
+  if (error && (error.status === undefined || error.status >= 500)) {
+    throw new UpstreamUnavailableError("Authentication", error);
+  }
   if (error || !user) {
     throw new Error("Unauthorized");
   }
@@ -89,7 +115,11 @@ async function assertUserIsInstructorOrGrader(
     .in("role", ["instructor", "grader"])
     .limit(1);
 
-  if (error || !roles || roles.length === 0) {
+  // A failed query and an empty result are different answers: only the empty one means "not staff".
+  if (error) {
+    throw new UpstreamUnavailableError("Role lookup", error);
+  }
+  if (!roles || roles.length === 0) {
     throw new Error("MCP tokens are only available to instructors and graders");
   }
 }
@@ -308,11 +338,13 @@ Deno.serve(async (req) => {
 
     const message = error instanceof Error ? error.message : "Internal server error";
     const status =
-      message === "Unauthorized" || message === "Missing Authorization header"
-        ? 401
-        : message.includes("only available to")
-          ? 403
-          : 500;
+      error instanceof UpstreamUnavailableError
+        ? 503
+        : message === "Unauthorized" || message === "Missing Authorization header"
+          ? 401
+          : message.includes("only available to")
+            ? 403
+            : 500;
 
     return new Response(JSON.stringify({ error: message }), {
       status,

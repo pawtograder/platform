@@ -26,6 +26,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 
 export async function debugOneRow(studentPrivateProfileId: string, columnSlugFilter?: string) {
   if (columnSlugFilter?.trim()) {
@@ -202,6 +203,7 @@ const columnSlugFilter = args[1];
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
+    beforeSend: normalizeEventFingerprint,
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
     sendDefaultPii: true,

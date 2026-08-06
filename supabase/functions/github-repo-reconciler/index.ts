@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 
 /**
  * GitHub Repo Reconciler
@@ -17,6 +18,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
+    beforeSend: normalizeEventFingerprint,
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
