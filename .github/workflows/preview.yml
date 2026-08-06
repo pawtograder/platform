@@ -527,8 +527,17 @@ jobs:
           NAMESPACE: ${{ needs.meta.outputs.namespace }}
           HOSTNAME: ${{ needs.meta.outputs.hostname }}
           TAG: ${{ needs.meta.outputs.tag }}
+          # Stamped onto every edge-function Sentry event so a Bugsink record names the branch and PR
+          # it came from. Held in env: rather than templated into the run: block below — a branch name
+          # is attacker-influenceable and these flow into a shell command.
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEPLOY_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          # helm --set splits on commas and interprets dots as key nesting, so a branch name reaches it
+          # only after being reduced to a charset that cannot restructure the flag. Informational tag —
+          # dropping an odd character is preferable to a failed deploy.
+          SAFE_BRANCH=$(printf '%s' "$DEPLOY_BRANCH" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)
           # secrets.create=false: chart consumes the pawtograder-{jwt,
           # postgres,e2e,s3} Secrets created by the `secrets` job.
           # secrets.autogenerate=false: skip the in-cluster bootstrap Job
@@ -544,6 +553,11 @@ jobs:
             --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
+            --set-string global.deploy.branch="$SAFE_BRANCH" \
+            --set-string global.deploy.pr="$DEPLOY_PR" \
+            --set-string global.deploy.runId="$GITHUB_RUN_ID" \
+            --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
+            --set-string global.deploy.commit="$GITHUB_SHA" \
             --wait --wait-for-jobs --timeout 20m
 
       - name: Status snapshot on failure

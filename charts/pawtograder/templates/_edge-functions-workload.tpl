@@ -192,6 +192,40 @@ spec:
                   name: {{ $ctx.Values.secrets.names.jwt }}
                   key: JWT_SIGNING_JWK
                   optional: true
+            # Sentry identity, consumed by supabase/functions/_shared/SentryContext.ts. ENVIRONMENT was
+            # previously unset for edge functions, so Sentry labelled their events by whatever each
+            # Sentry.init happened to pass — the same deploy reported some events as "development" and
+            # others as "production". Bind it to the one value the chart already validates against.
+            - name: ENVIRONMENT
+              value: {{ $ctx.Values.global.environment | quote }}
+            - name: DEPLOY_KIND
+              value: {{ $ctx.Values.global.environment | quote }}
+            # The image tag is the closest thing to a build identity the chart knows (previews use
+            # pr-<n>-<short_sha>), so it doubles as the Sentry release when nothing more precise is set.
+            {{- with $ctx.Values.edgeFunctions.image.tag }}
+            - name: RELEASE_VERSION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $ctx.Values.global.deploy.branch }}
+            - name: DEPLOY_BRANCH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $ctx.Values.global.deploy.pr }}
+            - name: DEPLOY_PR
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $ctx.Values.global.deploy.runId }}
+            - name: DEPLOY_RUN_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $ctx.Values.global.deploy.runAttempt }}
+            - name: DEPLOY_RUN_ATTEMPT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $ctx.Values.global.deploy.commit }}
+            - name: GIT_COMMIT_SHA
+              value: {{ . | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
