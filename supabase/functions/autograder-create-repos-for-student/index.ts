@@ -605,11 +605,42 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             console.error(err);
             Sentry.captureException(err, scope);
           } else {
+            // Only promote a row whose repo is known to be FULLY created. This branch runs for
+            // an EXISTING is_github_ready=false row, and permission sync can succeed against a
+            // repository a previous attempt created but never finished — one whose contents or
+            // synced_repo_sha were never recorded. Marking that ready is worse than leaving it
+            // alone: is_github_ready=false is exactly what makes the reconciler requeue it, so
+            // promoting suppresses the only thing that would finish the job, while opening the
+            // repo to push-direct ingestion in its incomplete state. synced_repo_sha is written
+            // immediately after createRepo, so its presence is the signal that creation
+            // completed.
+            //
+            // Scoped by that column in the UPDATE itself rather than checked first, so a
+            // concurrent creation finishing in between cannot slip through the gap.
             const { data: readyRows, error: readyError } = await adminSupabase
               .from("repositories")
               .update({ is_github_ready: true })
               .eq("id", repoRowId)
+              .not("synced_repo_sha", "is", null)
               .select("id");
+            if (!readyError && (readyRows ?? []).length === 0) {
+              // Distinguishable from a failure: the row exists, it just is not finished. Leave
+              // it unready so the creation worker picks it up, and do NOT report an error to
+              // the student — nothing is wrong yet.
+              const { data: pendingRow } = await adminSupabase
+                .from("repositories")
+                .select("id, synced_repo_sha")
+                .eq("id", repoRowId)
+                .maybeSingle();
+              if (pendingRow && pendingRow.synced_repo_sha === null) {
+                scope?.setTag("repo_not_promoted_incomplete_creation", String(repoRowId));
+                console.log(
+                  `Not marking ${repoName} ready: creation has not completed (synced_repo_sha is null). ` +
+                    `Leaving it for the creation worker.`
+                );
+                return assignment;
+              }
+            }
             if (readyError || (readyRows ?? []).length === 0) {
               const failure =
                 readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`);

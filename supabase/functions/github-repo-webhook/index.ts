@@ -419,6 +419,42 @@ async function createPushDirectSubmission(
     return;
   }
 
+  // Re-verify that this commit is STILL the repo head, immediately before the insert.
+  //
+  // The caller already checked, but everything between that check and here — the due-date RPC,
+  // the grader config read, the profile lookup — is time in which push B can advance the branch
+  // and have its own handler insert first. This delivery would then insert afterwards and the
+  // BEFORE-INSERT trigger, which promotes by insertion order, would demote B and make the older
+  // commit active. Re-reading here narrows the window from "everything above" to the insert
+  // itself.
+  //
+  // Honest about the remainder: this does not serialize the two handlers, so a branch advance in
+  // the final milliseconds can still interleave. Closing that completely needs a lock the
+  // insert participates in (an RPC taking an advisory lock per repository), which is not worth
+  // adding speculatively — a wrong active submission is recoverable by pushing again, and the
+  // next push's delivery repairs it.
+  try {
+    const headBeforeInsert = await getDefaultBranchHeadSha(repoName, scope);
+    if (headBeforeInsert && headBeforeInsert !== sha) {
+      scope.setTag("push_direct_submission_skipped", "superseded_before_insert");
+      console.log(
+        `Skipping push-direct submission for ${repoName}@${sha}: the head advanced to ${headBeforeInsert} while ` +
+          `this delivery was being prepared`
+      );
+      return;
+    }
+  } catch (headErr) {
+    // Same reasoning as the caller's check: an unverifiable head must not be assumed current,
+    // because guessing wrong silently changes which commit is graded. GitHub redelivers.
+    scope.setTag("student_repo_head_recheck_failed", "true");
+    Sentry.captureException(headErr, scope);
+    throw new Error(
+      `Could not re-confirm that ${sha} is the current head of ${repoName} before recording it ` +
+        `(${headErr instanceof Error ? headErr.message : String(headErr)}); rejecting this delivery so GitHub ` +
+        `retries it`
+    );
+  }
+
   // Create the submission row. Column set mirrors the autograder insert so the
   // BEFORE-INSERT trigger (ordinal/is_active) and AFTER-INSERT hook (grading
   // review) run identically. Do NOT set ordinal/is_active/grading_review_id.
