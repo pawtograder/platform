@@ -127,7 +127,7 @@ export default function UnsubscribeThreadPage() {
         </Text>
         <Text color="green.800">You will no longer receive email notifications for replies to this post.</Text>
       </Box>
-      <Stack direction="row" gap="3" mb="6">
+      <Stack direction="row" gap="3" mb="6" wrap="wrap">
         <Button asChild>
           <Link href={`/course/${courseId}/discussion/${threadId}`}>View Post</Link>
         </Button>

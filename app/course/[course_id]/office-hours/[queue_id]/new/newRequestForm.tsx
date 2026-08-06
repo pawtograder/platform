@@ -905,7 +905,12 @@ export default function HelpRequestForm({
                       {...field}
                       placeholder="Describe your question or issue in detail..."
                       minHeight="200px"
-                      width="800px"
+                      // A fixed 800px here set the fieldset's min-content, so
+                      // every field in the form stayed 800px wide and the page
+                      // scrolled horizontally at 320px (WCAG 1.4.10). Cap the
+                      // comfortable typing width instead of demanding it.
+                      width="100%"
+                      maxWidth="800px"
                     />
                   );
                 }}

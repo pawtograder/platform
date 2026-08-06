@@ -126,7 +126,12 @@ export default function AssignmentPage() {
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
       >
-        <GridItem>
+        {/* minW=0: a grid item defaults to min-width:auto, so the column cannot
+            shrink below its widest content's min-content — here the submission
+            history table, which pinned the column at 383px and pushed the whole
+            page horizontal at 320px. The table scrolls in its own ResponsiveTable
+            wrapper instead (WCAG 1.4.10). */}
+        <GridItem minW={0}>
           <Flex width="100%" alignItems={"center"}>
             <Box>
               <Heading as="h1" size="lg">

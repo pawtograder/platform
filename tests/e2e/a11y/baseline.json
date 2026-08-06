@@ -20,15 +20,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "assignment-detail|light|reflow-320|violation": {
-      "route": "assignment-detail",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[assignment detail] no page-level horizontal scrolling at 320px (scrollWidth 394 vs clientWidth 320)"
-    },
     "assignments|dark|nested-interactive|violation": {
       "route": "assignments",
       "scheme": "dark",
@@ -46,15 +37,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "canvas-classes|light|main-landmark|violation": {
-      "route": "canvas-classes",
-      "scheme": "light",
-      "rule": "main-landmark",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[canvas classes] main landmark renders"
     },
     "course-home|dark|nested-interactive|violation": {
       "route": "course-home",
@@ -299,15 +281,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "notifications|light|reflow-320|violation": {
-      "route": "notifications",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[notifications] no page-level horizontal scrolling at 320px (scrollWidth 353 vs clientWidth 320)"
-    },
     "office-hours-queue-new|dark|aria-command-name|violation": {
       "route": "office-hours-queue-new",
       "scheme": "dark",
@@ -362,15 +335,6 @@
       "impact": "serious",
       "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
-    "office-hours-queue-new|light|reflow-320|violation": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[new help request] no page-level horizontal scrolling at 320px (scrollWidth 812 vs clientWidth 320)"
-    },
     "office-hours-request-in-queue|dark|form-field-multiple-labels|incomplete": {
       "route": "office-hours-request-in-queue",
       "scheme": "dark",
@@ -388,15 +352,6 @@
       "nodes": 1,
       "impact": "moderate",
       "sample": "#«r15»"
-    },
-    "office-hours-request-in-queue|light|reflow-320|violation": {
-      "route": "office-hours-request-in-queue",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[help request detail (in queue)] no page-level horizontal scrolling at 320px (scrollWidth 526 vs clientWidth 320)"
     },
     "office-hours-request|dark|form-field-multiple-labels|incomplete": {
       "route": "office-hours-request",
@@ -416,15 +371,6 @@
       "impact": "moderate",
       "sample": "#«r13»"
     },
-    "office-hours-request|light|reflow-320|violation": {
-      "route": "office-hours-request",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[help request detail (direct link)] no page-level horizontal scrolling at 320px (scrollWidth 526 vs clientWidth 320)"
-    },
     "polls|dark|nested-interactive|violation": {
       "route": "polls",
       "scheme": "dark",
@@ -443,15 +389,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "public-poll|light|main-landmark|violation": {
-      "route": "public-poll",
-      "scheme": "light",
-      "rule": "main-landmark",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[public poll] main landmark renders"
-    },
     "regrade-requests|dark|nested-interactive|violation": {
       "route": "regrade-requests",
       "scheme": "dark",
@@ -469,15 +406,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "sign-in|light|reflow-320|violation": {
-      "route": "sign-in",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[sign-in] no page-level horizontal scrolling at 320px (scrollWidth 323 vs clientWidth 320)"
     },
     "submission-checks|dark|color-contrast|incomplete": {
       "route": "submission-checks",
@@ -784,15 +712,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "unsubscribe-thread|light|reflow-320|violation": {
-      "route": "unsubscribe-thread",
-      "scheme": "light",
-      "rule": "reflow-320",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[unsubscribe (thread)] no page-level horizontal scrolling at 320px (scrollWidth 480 vs clientWidth 320)"
     }
   }
 }
