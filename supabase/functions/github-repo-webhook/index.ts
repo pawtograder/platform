@@ -867,11 +867,42 @@ async function reactivatePreviousSubmission(
       ? base.eq("assignment_group_id", studentRepo.assignment_group_id)
       : base.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
 
-    const { data: newest, error: newestErr } = await scoped
-      .order("ordinal", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Several candidates, not one. A push-direct submission rejected as oversized is
+    // RETAINED as an inactive history row (see deactivateRejectedSubmission), and it is
+    // gradeable-looking: is_not_graded is false, its grading review is intact, and it has
+    // the highest ordinal. Taking the top row alone therefore promoted a rejection —
+    // either violating submissions_one_active_* when the student's real submission was
+    // still active (throwing, so the webhook retried forever), or making code that was
+    // never ingested the active submission when nothing else was.
+    //
+    // A small window is enough: retained rejections are rare and only the newest few rows
+    // can be candidates. If every one of them is a rejection there is nothing to promote,
+    // which is the correct outcome anyway.
+    const { data: candidates, error: newestErr } = await scoped.order("ordinal", { ascending: false }).limit(20);
     if (newestErr) throw newestErr;
+    if (!candidates || candidates.length === 0) return;
+
+    // A retained rejection is identified by the oversized workflow_run_error attached to
+    // it. That row is what makes the retention student-visible, and it is written before
+    // the submission is deactivated, so its presence is a durable marker rather than a
+    // race.
+    const { data: rejectionErrors, error: rejectionErr } = await adminSupabase
+      .from("workflow_run_error")
+      .select("submission_id, data")
+      .in(
+        "submission_id",
+        candidates.map((c) => c.id)
+      );
+    if (rejectionErr) throw rejectionErr;
+    const rejectedIds = new Set(
+      (rejectionErrors ?? [])
+        .filter((e) => {
+          const errorType = (e.data as { error_type?: string } | null)?.error_type;
+          return errorType === "file_too_large" || errorType === "submission_too_large";
+        })
+        .map((e) => e.submission_id)
+    );
+    const newest = candidates.find((c) => !rejectedIds.has(c.id));
     // Nothing left to promote, or something is already active (the unique indexes
     // guarantee at most one, so leave it alone).
     if (!newest || newest.is_active) return;

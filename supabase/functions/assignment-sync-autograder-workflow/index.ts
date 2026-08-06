@@ -424,6 +424,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       throw e;
     }
 
+    /**
+     * Undo the repo edit AND the sharer realignment. Both pin failures below need it: a
+     * bare throw made the caller restore this assignment's flag to true while grade.yml
+     * stayed parked and the sharers stayed disabled — an assignment claiming an autograder
+     * with no runnable workflow, whose `#submit` pushes attempt a dispatch that is not
+     * there while also bypassing direct ingestion, losing the work. Never throws, so it
+     * cannot mask the failure that brought it here.
+     */
+    const rollBackDisable = async (): Promise<void> => {
+      if (moved) {
+        scope.setTag("disable_rollback", "true");
+        try {
+          await renameFileInRepo(
+            templateRepo,
+            DISABLED_GRADE_WORKFLOW_PATH,
+            GRADE_WORKFLOW_PATH,
+            "Roll back autograder workflow removal: the handout revision pointer could not be updated",
+            scope
+          );
+        } catch (rollbackError) {
+          scope.setTag("disable_rollback_failed", "true");
+          Sentry.captureException(rollbackError, scope);
+        }
+      }
+      await revertRealignedSharers(
+        realigned.map((a) => a.id),
+        "pin_failure_sharer_rollback"
+      );
+    };
+
     // Advertise the disable commit as the handout head. Repo-sync targets
     // latest_template_sha, so returning while assignments still point at the older
     // revision lets a sync that runs before the template-repo webhook copy the live
@@ -434,10 +464,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // reflects the repo. Repo-wide rather than class-scoped — the commit exists for
     // every sharer, and the 403 guard established that any foreign sharer already
     // agrees with this setting.
-    if (deleted && deleteCommitSha) {
+    //
+    // `deleted: false` still needs a pin. The edit flow reaches it when template_repo is
+    // replaced with a handout that never had grade.yml — nothing to move, but the
+    // assignment is still pointed at a commit in the OLD repository, so the syncs queued
+    // below would target a foreign revision and existing student repos would never receive
+    // the replacement handout. Resolve this repo's head in that case, exactly as the
+    // enable path's unchanged branch does.
+    let pinSha: string | undefined = deleted ? deleteCommitSha : undefined;
+    if (!pinSha) {
+      try {
+        pinSha = await getDefaultBranchHeadSha(templateRepo, scope);
+      } catch (headErr) {
+        scope.setTag("disable_head_lookup_failed", "true");
+        Sentry.captureException(headErr, scope);
+        await rollBackDisable();
+        throw new UserVisibleError(
+          `The autograder workflow is not present in ${templateRepo}, but its current revision could not be read ` +
+            `(${headErr instanceof Error ? headErr.message : String(headErr)}). Student repositories would have ` +
+            `been synced to the wrong revision, so the change was not completed — please try again.`,
+          502
+        );
+      }
+    }
+    // undefined only under the E2E GitHub stub, which has no repo to read.
+    if (pinSha) {
       const { error: shaError } = await adminSupabase
         .from("assignments")
-        .update({ latest_template_sha: deleteCommitSha })
+        .update({ latest_template_sha: pinSha })
         .eq("template_repo", templateRepo);
       if (shaError) {
         // Not survivable: while the pointer names the pre-delete revision, a student
@@ -446,31 +500,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // and let the caller roll the flag back.
         scope.setTag("pin_latest_template_sha_failed", "true");
         Sentry.captureException(shaError, scope);
-        // Undo the repo edit AND the sharer realignment before throwing, as the other
-        // failure branches do. Throwing bare made the caller restore this assignment's
-        // flag to true while grade.yml stayed parked and the sharers stayed disabled —
-        // an assignment claiming an autograder with no runnable workflow, whose
-        // `#submit` pushes attempt a dispatch that is not there while also bypassing
-        // direct ingestion, losing the work.
-        if (moved) {
-          scope.setTag("disable_rollback", "true");
-          try {
-            await renameFileInRepo(
-              templateRepo,
-              DISABLED_GRADE_WORKFLOW_PATH,
-              GRADE_WORKFLOW_PATH,
-              "Roll back autograder workflow removal: the handout revision pointer could not be updated",
-              scope
-            );
-          } catch (rollbackError) {
-            scope.setTag("disable_rollback_failed", "true");
-            Sentry.captureException(rollbackError, scope);
-          }
-        }
-        await revertRealignedSharers(
-          realigned.map((a) => a.id),
-          "pin_failure_sharer_rollback"
-        );
+        await rollBackDisable();
         throw new UserVisibleError(
           `The autograder workflow was removed from ${templateRepo}, but the handout revision pointer could not ` +
             `be updated (${shaError.message}). The change was rolled back — please try again.`,

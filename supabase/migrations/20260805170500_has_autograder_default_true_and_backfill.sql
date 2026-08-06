@@ -122,6 +122,32 @@ alter table public.assignments
 -- Enforce it at the database boundary instead, so no caller can get it wrong. Coerces
 -- rather than rejects: these combinations are legitimate, it is only the flag that cannot
 -- accompany them.
+-- Correct the rows that ALREADY violate the invariant the trigger below enforces.
+--
+-- Repository-backed PR assignments were stored with has_autograder = true: the creation
+-- form persisted `!isNoRepo`, and submission_mode was not a factor in that expression. The
+-- trigger only fires on INSERT or on an UPDATE that touches these columns, so without this
+-- the invariant would hold for every new assignment and be violated by every existing one —
+-- indefinitely, since nothing forces an update. Those rows keep grade.yml in their handout
+-- and keep admitting Actions-backed submissions for a mode that is defined not to have an
+-- autograder.
+--
+-- Safe in the direction that matters, unlike the backfill above: PR submissions are ingested
+-- by the PR webhook via ingest_pr_submission, never by Actions, so clearing the flag cannot
+-- lose a submission. Nor does it reroute anything — the push-direct path in
+-- github-repo-webhook requires submission_mode = 'push', so a PR assignment with the flag
+-- false does not start creating submissions from pushes. It also corrects the student view,
+-- which reads the flag to decide whether to show the manual-grading empty state instead of
+-- an autograder score.
+--
+-- no_submission/none are included for completeness. The form already stored false for them,
+-- so this is expected to be a no-op there; it exists so the invariant is true of the whole
+-- table and not merely of the rows the form created.
+update public.assignments
+set has_autograder = false
+where has_autograder is true
+  and (submission_mode = 'pr' or repo_mode in ('none', 'no_submission'));
+
 create or replace function public.assignments_coerce_has_autograder()
 returns trigger
 language plpgsql
