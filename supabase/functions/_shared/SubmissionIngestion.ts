@@ -53,6 +53,11 @@ const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_
 const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
 const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
+/**
+ * The same limit in MB, exported so the student-facing rejection message cannot drift from
+ * the limit actually enforced here — it used to hardcode "50 MB" in the webhook.
+ */
+export const MAX_FILE_SIZE_MB = MAX_FILE_SIZE / (1024 * 1024);
 
 // Binary file detection by extension. (SVG excluded — text-based XML, stored
 // inline for markdown image resolution.)

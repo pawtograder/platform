@@ -28,13 +28,15 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
+import { buildTooLargeErrorName } from "../_shared/tooLargeErrorName.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import {
   ingestSubmissionFilesFromRepo,
   SubmissionFileTooLargeError,
-  SubmissionTooLargeError
+  SubmissionTooLargeError,
+  MAX_FILE_SIZE_MB
 } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -420,6 +422,18 @@ async function createPushDirectSubmission(
   } else if (existing) {
     scope.setTag("push_direct_submission_skipped", "already_exists");
     console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
+    // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
+    // its grading review on purpose, so this branch is where a redelivery for that commit
+    // lands — and if the reactivation that should have followed the rejection failed
+    // transiently, the throw that asked for this redelivery could never repair anything: the
+    // check above reads the retained row as complete and returned here. The student's last
+    // valid submission then stayed inactive permanently.
+    //
+    // No exclusion is passed: reactivatePreviousSubmission already skips retained rejections
+    // and returns untouched when a submission is already active, so this is a no-op on an
+    // ordinary duplicate delivery and a repair on the one that needs it. It throws on
+    // failure, which correctly asks for another delivery.
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
     return;
   }
 
@@ -757,10 +771,30 @@ async function createPushDirectSubmission(
       // Naming the commit makes the key unique per push and tells the student which push
       // was rejected.
       const shortSha = sha.slice(0, 7);
+      // `name` is CHECK (length <= 500) — workflow_run_error_name_length, from
+      // 20250801174131. A deeply nested path pushed the file-too-large message past that,
+      // and because the message is deterministic, the upsert failed identically on every
+      // retry: the retained row was cleaned up each time and the student never received the
+      // rejection at all. buildTooLargeErrorName shortens the PATH rather than the sentence,
+      // from the middle, so the leading directories and the file name itself both survive —
+      // those are what identify the file to the student. It lives in _shared with tests
+      // because the invariant is a length bound, which is only meaningful if something checks
+      // it. The untruncated path is recorded in `data` below.
       const tooLargeMessage =
         ingestErr instanceof SubmissionFileTooLargeError
-          ? `Your submission at commit ${shortSha} was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
-          : `Your submission at commit ${shortSha} was not recorded: the repository is too large to process (${ingestErr.observedMb} MB, limit ${ingestErr.limitMb} MB). Remove large files — build output and caches are the usual cause — and push again.`;
+          ? buildTooLargeErrorName({
+              kind: "file_too_large",
+              shortSha,
+              fileName: ingestErr.fileName,
+              fileSize: ingestErr.fileSize,
+              perFileLimitMb: MAX_FILE_SIZE_MB
+            })
+          : buildTooLargeErrorName({
+              kind: "submission_too_large",
+              shortSha,
+              observedMb: ingestErr.observedMb,
+              limitMb: ingestErr.limitMb
+            });
       const { error: recordError } = await adminSupabase.from("workflow_run_error").upsert(
         {
           repository_id: studentRepo.id,
@@ -776,6 +810,11 @@ async function createPushDirectSubmission(
             repository_name: repoName,
             sha,
             error_type: ingestErr instanceof SubmissionFileTooLargeError ? "file_too_large" : "submission_too_large",
+            // The FULL path, since the one in `name` may have been shortened to fit the
+            // length constraint. `data` is jsonb with no such limit.
+            ...(ingestErr instanceof SubmissionFileTooLargeError
+              ? { file_name: ingestErr.fileName, file_size: ingestErr.fileSize }
+              : { observed_mb: ingestErr.observedMb, limit_mb: ingestErr.limitMb }),
             detected_at: new Date().toISOString()
           }
         },
