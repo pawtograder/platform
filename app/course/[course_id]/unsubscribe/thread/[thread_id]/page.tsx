@@ -96,7 +96,12 @@ export default function UnsubscribeThreadPage() {
   if (status === "error") {
     return (
       <Box maxW="600px" mx="auto" mt="50px" p="20px">
-        <Heading size="lg" mb="4" color="red.600">
+        {/* fg.error, not red.600: red.600 is 4.13:1 on the dark canvas (WCAG
+            1.4.3 wants 4.5:1) because a raw palette step does not follow the
+            color scheme. The token is red.700 / red.300 — 6.5:1 and 10.5:1.
+            The red.800 body text below sits on a red.50 box that stays light
+            in both schemes, so it is unaffected. */}
+        <Heading size="lg" mb="4" color="fg.error">
           Unsubscribe Error
         </Heading>
         <Box bg="red.50" borderColor="red.200" borderWidth="1px" borderRadius="md" p="15px" mb="4">

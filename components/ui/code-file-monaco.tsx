@@ -16,6 +16,7 @@ import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoEditor from "monaco-editor";
 import type { editor } from "monaco-editor";
 import { MonacoRubricContextMenu, RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "./monaco-a11y-theme";
 import { useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
 import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { AnnotationCommentDialog } from "./annotation-comment-dialog";
@@ -1142,8 +1143,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       // instanceId is a stable per-mount constant, so this still only runs cleanup on unmount.
     }, [instanceId]);
 
-    // Handle editor before mount (worker setup)
-    const handleEditorWillMount = useCallback(() => {
+    // Handle editor before mount (worker setup, AA syntax themes)
+    const handleEditorWillMount = useCallback((monaco: Monaco) => {
+      // Must happen before the editor asks for the theme by name, or Monaco
+      // falls back to its own vs/vs-dark and the corrected tokens never apply.
+      registerAccessibleMonacoThemes(monaco);
       if (typeof window !== "undefined") {
         window.MonacoEnvironment = {
           getWorker(_moduleId, label) {
@@ -1336,7 +1340,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           <Editor
             height="100%"
             width="100%"
-            theme={colorMode === "dark" ? "vs-dark" : "vs"}
+            theme={accessibleMonacoTheme(colorMode)}
             beforeMount={handleEditorWillMount}
             onMount={handleEditorDidMount}
             options={{
