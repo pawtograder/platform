@@ -315,6 +315,16 @@ export default function EditAssignment() {
           throw saveError;
         }
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
+        // The assignment is already saved at this point. Re-pointing the handout repo is a follow-up
+        // that reaches GitHub, so it can fail on its own (e.g. missing app credentials, a repo that
+        // no longer exists, GitHub being down) long after the edit succeeded. Reporting that as
+        // "Failed to update the assignment" sent instructors back to re-apply changes that had in
+        // fact persisted, so it is now reported as its own warning.
+        //
+        // A missing repo does not throw: for watch_type "template_repo" the edge function answers
+        // 200 with `{ message: "Repository not found" }`, and `invokeEdgeFunction` only throws on a
+        // transport error or an `error` key. So check the returned message too.
+        let webhookError: string | null = null;
         if (values.template_repo) {
           // Both GitHub-touching calls sit in ONE rollback scope. The row is already
           // saved by this point, so anything that throws here would otherwise leave
@@ -322,7 +332,7 @@ export default function EditAssignment() {
           // webhook-configure step runs first, so keeping it outside the try meant a
           // transient GitHub failure there skipped the rollback entirely.
           try {
-            await githubRepoConfigureWebhook(
+            const result = await githubRepoConfigureWebhook(
               {
                 assignment_id: Number.parseInt(assignment_id as string),
                 new_repo: values.template_repo,
@@ -330,6 +340,20 @@ export default function EditAssignment() {
               },
               supabase
             );
+            // Success returns nothing, so any message back is a soft failure: for
+            // watch_type "template_repo" a missing repository answers 200 with
+            // `{ message: "Repository not found" }` rather than throwing, and
+            // invokeEdgeFunction only throws on a transport error or an `error` key. Ignoring
+            // the return value let that pass silently and leave the workflow hash stale.
+            //
+            // RECORDED, not thrown. It does not produce the inconsistency the rollback below
+            // exists to prevent — the sync still runs, and the row still matches the handout
+            // it points at — and failing the whole save over it would send an instructor back
+            // to re-apply edits that did persist. Reported as its own warning after the
+            // success toast instead.
+            if (result?.message) {
+              webhookError = result.message;
+            }
             // The form exposes the autograder toggle, so keep the handout's grade.yml in
             // step with it (added when enabled, removed when disabled).
             //
@@ -571,6 +595,13 @@ export default function EditAssignment() {
           description: "The assignment has been successfully updated.",
           type: "success"
         });
+        if (webhookError) {
+          toaster.create({
+            title: "Could not re-point the handout repository",
+            description: `Your changes were saved, but the autograder workflow hash for ${values.template_repo} was not updated, so student submissions may be rejected with a workflow sha mismatch. Save this assignment again to retry: ${webhookError}`,
+            type: "warning"
+          });
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
         toaster.create({
