@@ -860,6 +860,103 @@ export async function writeFileToRepo(
  * strip `.github/workflows/grade.yml` from the handout of a no-autograder
  * assignment, so student repos generated from it never run a grading workflow.
  */
+/**
+ * Move a file within a repo in a SINGLE commit, via the Git trees API.
+ *
+ * The contents API can only touch one path per commit, so "park then delete" took two
+ * commits and left an intermediate revision on the default branch containing BOTH
+ * copies — i.e. still a runnable `.github/workflows/grade.yml`. The template-repo push
+ * webhook sets `latest_template_sha` from whichever delivery it processes, so an
+ * out-of-order pair could advertise that intermediate commit as the handout head, and a
+ * later student sync would reinstall the workflow on a no-autograder assignment.
+ * Correcting the pointer afterwards was a patch; one commit removes the bad revision
+ * entirely.
+ *
+ * Returns `{ moved: false }` when `fromPath` does not exist, so callers can treat it as
+ * "ensure moved" without a pre-check.
+ */
+export async function renameFileInRepo(
+  repoName: string,
+  fromPath: string,
+  toPath: string,
+  message: string,
+  scope?: Sentry.Scope
+): Promise<{ moved: boolean; commit_sha?: string }> {
+  scope?.setTag("github_operation", "rename_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", fromPath);
+
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("renameFileInRepo", { repoName, fromPath, toPath }, scope);
+    return { moved: true };
+  }
+
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Rename file in repo failed: No octokit found for ${repoName}`);
+  }
+  const [owner, repo] = repoName.split("/");
+
+  // Read the source blob first: absent means there is nothing to move.
+  let content: string;
+  try {
+    content = (await getFileFromRepo(repoName, fromPath, scope)).content;
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      console.log(`Not moving ${fromPath} in ${repoName}: file does not exist`);
+      return { moved: false };
+    }
+    throw error;
+  }
+
+  // Resolve the default branch and its head commit, rather than assuming "main".
+  const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const branch = repoData.default_branch;
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branch}`
+  });
+  const headSha = ref.object.sha;
+  const { data: headCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    owner,
+    repo,
+    commit_sha: headSha
+  });
+
+  // One tree carrying both halves of the move: the new path added, the old deleted
+  // (a null sha is the trees API's delete).
+  const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+    owner,
+    repo,
+    base_tree: headCommit.tree.sha,
+    tree: [
+      // `mode`/`type` are literal unions in the Octokit types, so they must not widen
+      // to `string`. A null sha is how the trees API expresses a delete.
+      { path: toPath, mode: "100644" as const, type: "blob" as const, content },
+      { path: fromPath, mode: "100644" as const, type: "blob" as const, sha: null }
+    ]
+  });
+
+  const { data: commit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
+    owner,
+    repo,
+    message,
+    tree: newTree.sha,
+    parents: [headSha]
+  });
+
+  await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branch}`,
+    sha: commit.sha
+  });
+
+  console.log(`Moved ${fromPath} -> ${toPath} in ${repoName} as ${commit.sha}`);
+  return { moved: true, commit_sha: commit.sha };
+}
+
 export async function deleteFileFromRepo(
   repoName: string,
   path: string,

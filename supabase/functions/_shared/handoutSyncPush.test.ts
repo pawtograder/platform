@@ -59,6 +59,13 @@ Deno.test("squash/rebase-merged sync replaying the sync commit message -> sync",
   assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: msg })), true);
 });
 
+// The commit-subject check requires the generated sha too, for the same reason the
+// branch check does: a student commit that happens to start with the same words must
+// keep its submission.
+Deno.test("student commit starting with the sync subject but no sha -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "Sync handout updates to latest starter" })), false);
+});
+
 Deno.test("squashed sync commit keeping only the PR title -> sync", () => {
   assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "[Instructor Update] Sync handout to abc1234" })), true);
 });

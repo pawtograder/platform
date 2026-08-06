@@ -46,6 +46,15 @@ export const SYNC_PR_TITLE_PREFIX = "[Instructor Update]";
  */
 export const SYNC_COMMIT_MESSAGE_PREFIX = "Sync handout updates to";
 
+/**
+ * The COMPLETE generated sync commit subject: the prefix followed by the abbreviated
+ * handout sha. Anchored and sha-qualified for the same reason as
+ * SYNC_BRANCH_NAME_RE — a bare prefix match classified an ordinary student commit
+ * like "Sync handout updates to latest starter" as instructor machinery, which on a
+ * repo-only assignment silently discards their submission.
+ */
+export const SYNC_COMMIT_SUBJECT_RE = /^Sync handout updates to [0-9a-f]{7,40}\b/;
+
 export type HandoutSyncPushInputs = {
   /** `head_commit.message` of the push, if any. */
   headCommitMessage: string | null | undefined;
@@ -80,7 +89,7 @@ export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
     // Squash or rebase: the sync commit's own message is replayed, and the sync PR has
     // exactly one commit so GitHub uses that commit's subject rather than the PR title.
     // Neither `sync-to-` nor the PR-title prefix appears anywhere in it.
-    if (headCommitMessage.split("\n").some((line) => line.trimStart().startsWith(SYNC_COMMIT_MESSAGE_PREFIX))) {
+    if (headCommitMessage.split("\n").some((line) => SYNC_COMMIT_SUBJECT_RE.test(line.trimStart()))) {
       return true;
     }
     // Merge-commit shape: "Merge pull request #N from <owner>/sync-to-<sha7>". Matched

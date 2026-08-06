@@ -213,15 +213,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // fail (there is no autograder to report to), showing students a red X. Strip
   // it here, after the repo exists — GitHub's create-from-template API copies the
   // whole tree, so there is no way to exclude it up front.
-  //
-  // updateAutograderWorkflowHash must be skipped in that case: it reads grade.yml
-  // and throws "File not found" when absent, which would fail the whole creation.
-  // Leaving autograder.workflow_sha NULL is correct, since the sha check only runs
-  // on the Actions-driven submission path, which no longer exists here.
+  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
   let strippedHandoutSha: string | undefined;
   if (assignment.has_autograder === false) {
     const { commit_sha } = await deleteFileFromRepo(
-      `${handoutRepoOrg}/${handoutRepoName}`,
+      handoutFullName,
       GRADE_WORKFLOW_PATH,
       "Remove autograder workflow: this assignment has no autograder",
       scope
@@ -232,8 +228,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // latest_template_sha null, which gives student syncs no target revision. We
     // persist it ourselves rather than relying on that delivery.
     strippedHandoutSha = commit_sha;
-  } else {
-    await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
   }
 
   // Only persist the template_repo pointer after GitHub creation + permission
@@ -242,8 +236,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // (students fork it and PR back to it), so point upstream_repo at the same
   // repo here — the github-repo-webhook PR ingestion matches upstream_repo
   // against the repo a PR targets, and handout == upstream must never drift.
-  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
-  await adminSupabase
+  //
+  // This has to happen BEFORE updateAutograderWorkflowHash below: that helper picks
+  // the autograder rows to write via `.eq("template_repo", repoName)`, so calling it
+  // first matched zero rows and silently left autograder.workflow_sha NULL — which
+  // autograder-create-submission then rejects as a "workflow sha mismatch" on the
+  // first real student run, and which the has_autograder backfill reads as "the
+  // autograder was never wired up".
+  const { error: pointerError } = await adminSupabase
     .from("assignments")
     .update({
       template_repo: handoutFullName,
@@ -251,6 +251,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
+  if (pointerError) {
+    // Reporting success here would leave the handout repo created but unreferenced:
+    // nothing points at it, and a retry cannot recover latest_template_sha because
+    // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
+    Sentry.captureException(pointerError, scope);
+    throw pointerError;
+  }
+
+  // updateAutograderWorkflowHash is skipped for a repo-only assignment: it reads
+  // grade.yml and throws "File not found" when absent, which would fail the whole
+  // creation. Leaving autograder.workflow_sha NULL is correct there, since the sha
+  // check only runs on the Actions-driven submission path, which no longer exists.
+  if (assignment.has_autograder !== false) {
+    await updateAutograderWorkflowHash(handoutFullName);
+  }
 
   return {
     repo_name: handoutRepoName,

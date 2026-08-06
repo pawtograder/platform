@@ -370,7 +370,7 @@ async function createPushDirectSubmission(
   // repository+sha uniquely identifies this push-direct submission.)
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
-    .select("id")
+    .select("id, submission_files(count)")
     .eq("repository", repoName)
     .eq("sha", sha)
     .limit(1)
@@ -379,7 +379,28 @@ async function createPushDirectSubmission(
     Sentry.captureException(existingErr, scope);
     throw existingErr;
   }
-  if (existing) {
+  // A surviving row from a run whose cleanup ALSO failed is incomplete, not a
+  // completed submission: returning here on redelivery meant ingestion and cleanup
+  // were never retried, so a fileless row could persist forever. Treat "row exists
+  // but has no files" as unfinished work and resume by removing it, so the rest of
+  // this function runs from a clean state.
+  const existingFileCount = (existing?.submission_files as unknown as { count: number }[] | undefined)?.[0]?.count ?? 0;
+  if (existing && existingFileCount === 0) {
+    scope.setTag("push_direct_incomplete_row_resumed", String(existing.id));
+    console.log(
+      `Found an incomplete push-direct submission ${existing.id} for ${repoName}@${sha} (no files); removing it and retrying`
+    );
+    const removed = await cleanupPushDirectSubmission(adminSupabase, existing.id, scope);
+    if (!removed) {
+      // Still cannot clear it — throw so GitHub retries rather than silently
+      // leaving the student with a permanently fileless submission.
+      throw new Error(
+        `Could not remove the incomplete push-direct submission ${existing.id} for ${repoName}@${sha}; ` +
+          `rejecting this delivery so GitHub retries it`
+      );
+    }
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, existing.id);
+  } else if (existing) {
     scope.setTag("push_direct_submission_skipped", "already_exists");
     console.log(`Push-direct submission already exists for ${repoName}@${sha} (id=${existing.id}); skipping`);
     return;
@@ -569,16 +590,22 @@ async function createPushDirectSubmission(
       isEmpty: ingestResult.isEmpty
     });
     scope.setTag("push_direct_empty_verdict", emptyVerdict);
-    const { error: emptyFlagError } = await adminSupabase
-      .from("submissions")
-      .update({ is_empty_submission: ingestResult.isEmpty ?? false })
-      .eq("id", submissionId);
-    if (emptyFlagError) {
-      // Throw rather than log-and-continue: the catch below deletes the partial
-      // submission and rethrows, so GitHub redelivers and we try again. Accepting
-      // it would leave a submission whose empty-state metadata was never recorded.
-      Sentry.captureException(emptyFlagError, scope);
-      throw emptyFlagError;
+    // Only when there is a verdict to record. `is_empty_submission` is NOT NULL
+    // DEFAULT false, so writing `false` for the no-verdict case (the common one on
+    // a repo-only assignment, which has no submissionFiles) rewrites the value the
+    // INSERT already stored - one round trip plus a full-row audit entry per push.
+    if (ingestResult.isEmpty !== null) {
+      const { error: emptyFlagError } = await adminSupabase
+        .from("submissions")
+        .update({ is_empty_submission: ingestResult.isEmpty })
+        .eq("id", submissionId);
+      if (emptyFlagError) {
+        // Throw rather than log-and-continue: the catch below deletes the partial
+        // submission and rethrows, so GitHub redelivers and we try again. Accepting
+        // it would leave a submission whose empty-state metadata was never recorded.
+        Sentry.captureException(emptyFlagError, scope);
+        throw emptyFlagError;
+      }
     }
     if (emptyVerdict !== "accept") {
       // "retry_unknown": the check ran and its handout-hash lookup failed after
@@ -637,20 +664,23 @@ async function createPushDirectSubmission(
         scope
       );
     }
-    if (reactivateErr) {
-      scope.setTag("push_direct_retry_reason", "reactivate_failed");
-      throw reactivateErr;
-    }
-    if (ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError) {
-      // Permanent (repo/file too big): record and stop — don't make GitHub retry
-      // a delivery that can never succeed.
+    const isTooLarge = ingestErr instanceof SubmissionTooLargeError || ingestErr instanceof SubmissionFileTooLargeError;
+    if (isTooLarge) {
+      // Permanent (repo/file too big): record it here, BEFORE the reactivation
+      // rethrow below. Recording after that rethrow meant an unrelated restoration
+      // failure suppressed the record entirely and turned a delivery that can never
+      // succeed into an unbounded retry loop that re-clones an oversized repo each
+      // time. The upsert is idempotent on (repository_id, run_number, run_attempt,
+      // name), so writing it before a retry is safe.
       scope.setTag("push_direct_submission_rejected", "too_large");
       Sentry.captureException(ingestErr, scope);
-      // Tell the STUDENT, not just Sentry. This path deliberately creates no Actions
-      // run and no check run, so without a durable record the push looks accepted:
-      // no failing check, nothing in submission history, and their work silently
-      // ungraded. workflow_run_error is the existing surface for exactly this (the
-      // results page reads it), so record it there with is_private=false.
+      // NOTE: this reaches INSTRUCTORS, not the student. workflow_run_error's student
+      // RLS branch requires submission_id IS NOT NULL and the only student-facing
+      // reader embeds it through `submissions`, but the submission was just deleted -
+      // so the row is written unattached and only the instructor error list shows it.
+      // Matches how autograder-create-submission records rejections whose submission
+      // is gone. The push-direct path has no check run, so there is still no
+      // student-visible surface for an oversized push; see issue #895 follow-up.
       const tooLargeMessage =
         ingestErr instanceof SubmissionFileTooLargeError
           ? `Your submission was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
@@ -679,6 +709,13 @@ async function createPushDirectSubmission(
         scope.setTag("too_large_record_failed", "true");
         Sentry.captureException(recordError, scope);
       }
+    }
+    if (reactivateErr) {
+      scope.setTag("push_direct_retry_reason", "reactivate_failed");
+      throw reactivateErr;
+    }
+    if (isTooLarge) {
+      // Stop here: don't make GitHub retry a delivery that can never succeed.
       return;
     }
     // Transient (clone/storage/db): rethrow so GitHub redelivers. Cleanup above
@@ -807,6 +844,79 @@ async function cleanupPushDirectSubmission(
 }
 
 type GitHubCommit = PushEvent["commits"][number];
+
+/**
+ * Record one pushed commit in `repository_check_runs`.
+ *
+ * These rows are the commit history the student and staff UIs read
+ * (`CommitHistoryDialog`, `staff-commit-history`), independently of whether any
+ * GitHub Actions run is ever attached to them - `check_run_id` stays null until
+ * one is. Shared by the Actions path and the push-direct path so a repo-only
+ * assignment still has a commit history.
+ *
+ * Idempotent: a row already present for this repo+sha is left alone, and a
+ * concurrent delivery losing the UNIQUE (repository_id, sha) race is a no-op.
+ */
+async function recordCommitCheckRun(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  commit: GitHubCommit,
+  pusherName: string,
+  scope: Sentry.Scope
+): Promise<void> {
+  const { data: existing, error: existingErr } = await adminSupabase
+    .from("repository_check_runs")
+    .select("id")
+    .eq("repository_id", studentRepo.id)
+    .eq("sha", commit.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingErr) {
+    console.error(existingErr);
+    scope.setTag("error_source", "repository_check_run_lookup_failed");
+    scope.setTag("error_context", "Error checking existing repository_check_runs");
+    Sentry.captureException(existingErr, scope);
+    throw existingErr;
+  }
+  if (existing && existing.id) {
+    return;
+  }
+
+  const status: ExtendedCheckRunStatus = {
+    created_at: new Date().toISOString(),
+    commit_author: commit.author.name,
+    commit_date: commit.timestamp,
+    created_by: "github push by " + pusherName
+  };
+  const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
+    repository_id: studentRepo.id,
+    check_run_id: null,
+    class_id: studentRepo.class_id,
+    assignment_group_id: studentRepo.assignment_group_id,
+    commit_message: commit.message,
+    sha: commit.id,
+    profile_id: studentRepo.profile_id,
+    status: status as unknown as Json
+  });
+  if (checkRunError) {
+    // 23505 = unique_violation. With UNIQUE (repository_id, sha) the
+    // SELECT-then-INSERT pattern above has a race window: concurrent webhook
+    // deliveries for the same commit can both pass the SELECT, then one wins
+    // the INSERT and the other returns 23505. Treat that as a no-op so we
+    // don't throw and force GitHub to retry the whole delivery.
+    if (checkRunError.code === "23505") {
+      scope.setTag("repository_check_run_insert_race", "true");
+      return;
+    }
+    console.error(checkRunError);
+    scope.setTag("error_source", "repository_check_run_insert_failed");
+    scope.setTag("error_context", "Could not create repository_check_run");
+    Sentry.captureException(checkRunError, scope);
+    throw checkRunError;
+  }
+}
+
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: PushEvent,
@@ -957,6 +1067,17 @@ async function handlePushToStudentRepo(
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       scope
     });
+    // Record the commit history too. This branch returns instead of falling through
+    // to the Actions path's loop, and that loop is what populates
+    // `repository_check_runs` - the table CommitHistoryDialog and staff-commit-history
+    // read. While the push-direct path required `#submit`, ordinary pushes still fell
+    // through and were recorded; now that every push takes this branch, skipping it
+    // would leave the commit history permanently empty on exactly the assignments
+    // this feature is for. No workflow is dispatched: that stays below, behind
+    // `#submit`, on the has_autograder=true path.
+    for (const commit of payload.commits) {
+      await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
+    }
     return;
   }
 
@@ -979,59 +1100,7 @@ async function handlePushToStudentRepo(
       );
     }
 
-    // Idempotency: if a row already exists for this repo+sha, skip
-    const { data: existing, error: existingErr } = await adminSupabase
-      .from("repository_check_runs")
-      .select("id")
-      .eq("repository_id", studentRepo.id)
-      .eq("sha", commit.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (existingErr) {
-      console.error(existingErr);
-      scope.setTag("error_source", "repository_check_run_lookup_failed");
-      scope.setTag("error_context", "Error checking existing repository_check_runs");
-      Sentry.captureException(existingErr, scope);
-      throw existingErr;
-    }
-
-    if (existing && existing.id) {
-      continue;
-    }
-
-    const status: ExtendedCheckRunStatus = {
-      created_at: new Date().toISOString(),
-      commit_author: commit.author.name,
-      commit_date: commit.timestamp,
-      created_by: "github push by " + payload.pusher.name
-    };
-    const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
-      repository_id: studentRepo.id,
-      check_run_id: null,
-      class_id: studentRepo.class_id,
-      assignment_group_id: studentRepo.assignment_group_id,
-      commit_message: commit.message,
-      sha: commit.id,
-      profile_id: studentRepo.profile_id,
-      status: status as unknown as Json
-    });
-    if (checkRunError) {
-      // 23505 = unique_violation. With UNIQUE (repository_id, sha) the
-      // SELECT-then-INSERT pattern above has a race window: concurrent webhook
-      // deliveries for the same commit can both pass the SELECT, then one wins
-      // the INSERT and the other returns 23505. Treat that as a no-op so we
-      // don't throw and force GitHub to retry the whole delivery.
-      if (checkRunError.code === "23505") {
-        scope.setTag("repository_check_run_insert_race", "true");
-        continue;
-      }
-      console.error(checkRunError);
-      scope.setTag("error_source", "repository_check_run_insert_failed");
-      scope.setTag("error_context", "Could not create repository_check_run");
-      Sentry.captureException(checkRunError, scope);
-      throw checkRunError;
-    }
+    await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
 
     // If the workflow file was deleted in this commit, skip triggering - the workflow would fail anyway
     const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
@@ -1118,14 +1187,19 @@ async function handlePushToGraderSolution(
 ) {
   tagScopeWithGenericPayload(scope, "push_to_grader_solution", payload);
   scope.setTag("autograders_count", autograders.length.toString());
-  scope.setTag("is_main_branch", (payload.ref === "refs/heads/main").toString());
+  // The repo's DEFAULT branch, not a hardcoded "main" - same fix as the student-repo
+  // and template-repo handlers. A grader/solution repo on `master` otherwise had every
+  // push ignored, so pawtograder.yml and latest_autograder_sha were never reconciled.
+  const graderDefaultBranch = payload.repository?.default_branch || "main";
+  scope.setTag("repo_default_branch", graderDefaultBranch);
+  scope.setTag("is_default_branch", (payload.ref === `refs/heads/${graderDefaultBranch}`).toString());
 
   const ref = payload.ref;
   const repoName = payload.repository.full_name;
   /*
-  If we pushed to main, then update the autograder config and latest_autograder_sha
+  If we pushed to the default branch, update the autograder config and latest_autograder_sha
   */
-  if (ref === "refs/heads/main") {
+  if (ref === `refs/heads/${graderDefaultBranch}`) {
     if (!payload.head_commit) {
       console.error("No head commit found in payload");
       scope.setTag("error_source", "no_head_commit");

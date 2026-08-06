@@ -66,16 +66,26 @@ export default function AutograderPage() {
   const savedForAssignmentId = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (query?.data?.data) {
-      reset(query.data.data);
-      const currentId = assignment_id as string;
-      // Re-seed on a new assignment, and also whenever the baseline is still unknown --
-      // leaving it undefined would silently skip the rollback below.
-      if (savedForAssignmentId.current !== currentId || savedHasAutograder.current === undefined) {
-        savedForAssignmentId.current = currentId;
-        savedHasAutograder.current = query.data.data.assignments?.has_autograder;
-      }
+    const data = query?.data?.data;
+    if (!data) return;
+    const currentId = assignment_id as string;
+    // Re-seed on a new assignment, and also whenever the baseline is still unknown --
+    // leaving it undefined would silently skip the rollback below.
+    const reseed = savedForAssignmentId.current !== currentId || savedHasAutograder.current === undefined;
+    if (reseed) {
+      savedForAssignmentId.current = currentId;
+      savedHasAutograder.current = data.assignments?.has_autograder;
+      reset(data);
+      return;
     }
+    // Once we know what is persisted, that value wins over the nested `assignments`
+    // payload. Saving writes the `assignments` resource but this form reads the
+    // `autograder` query, and `onFinish` on the autograder row kicks off a refetch
+    // BEFORE the flag is written — so the refetch lands carrying the pre-save flag.
+    // Letting `reset` apply it snapped the radio back to the old setting after a
+    // successful save, and the next save then wrote that stale value back to the DB
+    // and pushed grade.yml into the handout again.
+    reset({ ...data, assignments: { ...data.assignments, has_autograder: savedHasAutograder.current } });
   }, [query?.data?.data, reset, assignment_id]);
 
   const onSubmit = useCallback(
@@ -144,8 +154,19 @@ export default function AutograderPage() {
       // outside meant that failure skipped the rollback of the autograder row that was
       // already saved above — reporting "Changes not saved" while an unvalidated
       // grader_repo stayed persisted.
+      // Only when the flag actually changed, matching the edit page. The sync is
+      // idempotent in outcome but NOT in effect: it rewrites the handout repo, re-pins
+      // latest_template_sha for every assignment sharing it, and realigns the in-class
+      // sharers. Running it on every save meant an unrelated edit here — changing only a
+      // submission limit — could strip grade.yml from a shared handout and turn the
+      // autograder off on assignments the instructor never opened.
+      const autograderFlagChanged = priorHasAutograder === undefined || priorHasAutograder !== nextHasAutograder;
       try {
         await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
+        if (!autograderFlagChanged) {
+          savedHasAutograder.current = nextHasAutograder;
+          return;
+        }
         const syncResult = await assignmentSyncAutograderWorkflow(
           {
             assignment_id: Number.parseInt(assignment_id as string),

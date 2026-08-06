@@ -627,18 +627,22 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
   );
 
-  // Branch protection only makes sense when a repository is actually created.
-  const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
-  // Same for the autograder: it runs as a GitHub Actions workflow inside the
-  // student repo, so there is nowhere for it to run without one.
-  const autograderDisabled = repoMode === "none" || repoMode === "no_submission";
-  const hasAutograder = watch("has_autograder") !== false;
-  // Shown as unchecked while a no-repo mode is selected, WITHOUT writing the form value.
-  // Forcing the value to false in an effect was a one-way door: flipping repo_mode to
-  // 'none' and back left it false with the checkbox re-enabled and unchecked, silently
+  // Branch protection only makes sense when a repository is actually created, and
+  // the same is true of the autograder: it runs as a GitHub Actions workflow inside
+  // the student repo, so there is nowhere for it to run without one.
+  const noRepoMode = repoMode === "none" || repoMode === "no_submission";
+  const protectionDisabled = noRepoMode;
+  // PR submissions are ingested by the PR webhook and never produce grader_results,
+  // so PR mode cannot have an autograder either. Both save paths coerce the persisted
+  // value; mirroring it here keeps the checkbox and the fork-agreement warning below
+  // agreeing with what will actually be written.
+  const autograderDisabled = noRepoMode || watch("submission_mode") === "pr";
+  // Shown as unchecked while a no-repo or PR mode is selected, WITHOUT writing the form
+  // value. Forcing the value to false in an effect was a one-way door: flipping repo_mode
+  // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
   // turning a mode experiment into a repo-only assignment. Both save paths already coerce
-  // the persisted value for no-repo modes, so display is all that is needed here.
-  const autograderChecked = !autograderDisabled && hasAutograder;
+  // the persisted value, so display is all that is needed here.
+  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
   // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
   // student's source-assignment repo, so the two assignments share one handout
   // and cannot disagree about the autograder. Surface the clash here rather than
@@ -715,9 +719,11 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             Autograder
           </Text>
           <Text fontSize="sm" color="fg.muted" mb={3}>
-            {autograderDisabled
+            {noRepoMode
               ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
-              : "Whether student pushes are graded automatically by GitHub Actions."}
+              : autograderDisabled
+                ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
+                : "Whether student pushes are graded automatically by GitHub Actions."}
           </Text>
           <Fieldset.Content>
             <Field
@@ -733,8 +739,10 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 <Text fontSize="sm" color="fg.error" mb={2}>
                   This assignment forks from &quot;{selectedSource?.title}&quot;, so both share that assignment&apos;s
                   handout repository and must have the same autograder setting. &quot;{selectedSource?.title}&quot; has
-                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}, so this assignment
-                  must too. Saving will fail until they match.
+                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}
+                  {autograderDisabled
+                    ? ", and this assignment cannot have one in its current mode. Pick a different source assignment, or a repository configuration that gives this assignment its own handout."
+                    : ", so this assignment must too. Saving will fail until they match."}
                 </Text>
               )}
               <Controller
@@ -742,7 +750,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 control={control}
                 render={({ field }) => (
                   <Checkbox.Root
-                    checked={!autograderDisabled && field.value !== false}
+                    checked={autograderChecked}
                     disabled={autograderDisabled}
                     onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                   >

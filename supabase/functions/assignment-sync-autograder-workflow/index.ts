@@ -7,6 +7,7 @@ import {
   deleteFileFromRepo,
   getFileFromRepo,
   GRADE_WORKFLOW_PATH,
+  renameFileInRepo,
   updateAutograderWorkflowHash,
   writeFileToRepo
 } from "../_shared/GitHubWrapper.ts";
@@ -21,20 +22,6 @@ import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts"
  * losing an instructor's customizations.
  */
 const DISABLED_GRADE_WORKFLOW_PATH = `${GRADE_WORKFLOW_PATH}.disabled`;
-
-/** Blob sha of `path` in `repoName`, or null when the file does not exist. */
-async function getFileShaIfExists(
-  repoName: string,
-  path: string,
-  scope: Sentry.Scope
-): Promise<string | null | undefined> {
-  try {
-    return (await getFileFromRepo(repoName, path, scope)).sha;
-  } catch (e) {
-    if (e instanceof RequestError && e.status === 404) return null;
-    throw e;
-  }
-}
 
 /**
  * Bring the handout repo's grading workflow into line with
@@ -259,86 +246,48 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   if (!hasAutograder) {
-    // Park the workflow beside itself instead of just deleting it. Instructors
-    // customize grade.yml (runner labels, grading_server, extra steps), and the
-    // handout holds the only assignment-specific copy — a plain delete would lose
-    // it, and re-enabling would silently substitute the stock class template.
+    // Park the workflow rather than just deleting it: instructors customize grade.yml
+    // (runner labels, grading_server, extra steps) and the handout holds the only
+    // assignment-specific copy, so a plain delete would lose it and re-enabling would
+    // silently substitute the stock class template. GitHub only runs workflows matching
+    // `.github/workflows/*.yml`, so the `.disabled` suffix stops every Action while
+    // keeping the content readable in the repo.
     //
-    // GitHub only runs workflows matching `.github/workflows/*.yml`, so the
-    // `.disabled` suffix stops every Action while keeping the content readable and
-    // self-explanatory in the repo (and harmless if copied into student repos).
-    // Nothing to park (no grade.yml) is the normal case for a handout created
-    // repo-only; that's a 404 and we just proceed. Any OTHER failure must abort
-    // BEFORE the delete below — parking exists precisely so the delete is safe,
-    // so deleting anyway would destroy the customized workflow this is meant to
-    // protect. Better to fail the toggle and let the instructor retry.
-    let liveWorkflow: { content: string; sha?: string } | null = null;
+    // Done as ONE commit (a rename), not park-then-delete. Two commits left an
+    // intermediate revision on the default branch holding both copies — i.e. a still
+    // runnable grade.yml — and the template-repo push webhook sets latest_template_sha
+    // from whichever delivery it happens to process. An out-of-order pair could
+    // therefore advertise that intermediate commit as the handout head, and a later
+    // student sync would reinstall the workflow on a no-autograder assignment.
+    // Correcting the pointer afterwards was a patch; one commit removes the bad
+    // revision entirely, so there is nothing to point at.
+    let renameCommitSha: string | undefined;
+    let moved = false;
     try {
-      liveWorkflow = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
+      const result = await renameFileInRepo(
+        templateRepo,
+        GRADE_WORKFLOW_PATH,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        "Disable autograder workflow: this assignment has no autograder",
+        scope
+      );
+      moved = result.moved;
+      renameCommitSha = result.commit_sha;
     } catch (e) {
-      if (!(e instanceof RequestError && e.status === 404)) throw e;
+      scope.setTag("park_workflow_failed", "true");
+      Sentry.captureException(e, scope);
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new UserVisibleError(
+        `Could not move ${GRADE_WORKFLOW_PATH} out of the way in ${templateRepo}, so the autograder was left ` +
+          `enabled rather than risk losing a customized workflow. Please try again: ${msg}`,
+        502
+      );
     }
-
-    if (liveWorkflow) {
-      try {
-        await writeFileToRepo(
-          templateRepo,
-          DISABLED_GRADE_WORKFLOW_PATH,
-          liveWorkflow.content,
-          "Park autograder workflow: this assignment has no autograder",
-          // Overwrite an older parked copy if one is already there.
-          (await getFileShaIfExists(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope)) ?? undefined,
-          scope
-        );
-      } catch (e) {
-        scope.setTag("park_workflow_failed", "true");
-        Sentry.captureException(e, scope);
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new UserVisibleError(
-          `Could not preserve a copy of ${GRADE_WORKFLOW_PATH} from ${templateRepo}, so the autograder was left ` +
-            `enabled rather than risk losing a customized workflow. Please try again: ${msg}`,
-          502
-        );
-      }
-    }
-    scope.setTag("parked_workflow", String(!!liveWorkflow));
-
-    const { deleted, commit_sha: deleteCommitSha } = await deleteFileFromRepo(
-      templateRepo,
-      GRADE_WORKFLOW_PATH,
-      "Remove autograder workflow: this assignment has no autograder",
-      scope,
-      // Blob sha already in hand from the park read above, so skip the re-fetch.
-      liveWorkflow?.sha
-    );
-
-    // Parking and deleting are two commits, so there is an intermediate revision
-    // that still contains a runnable grade.yml. The template-repo push webhook
-    // sets `latest_template_sha` from whatever push it processes, and if those two
-    // deliveries are handled out of order it can settle on that intermediate
-    // commit — which later handout syncs would then copy into student repos,
-    // reinstating the workflow. Pin the advertised head to the DELETE commit so
-    // the published handout revision never contains a live workflow.
-    //
-    // (A single-commit park+delete via the Git tree API would remove the race
-    // entirely rather than correcting after it; this closes the harmful window
-    // without a new GitHub write path.)
-    //
-    // Not class-scoped, unlike the has_autograder realignment above. The repo edit already
-    // applies to every sharer, and the 403 guard established that any foreign sharer
-    // already agrees with the new setting — so this only records where the shared repo's
-    // head actually is now. Scoping it to this class left a foreign sharer advertising the
-    // pre-delete revision, whose sync would reinstall the workflow it just lost.
-    if (deleted && deleteCommitSha) {
-      const { error: shaError } = await adminSupabase
-        .from("assignments")
-        .update({ latest_template_sha: deleteCommitSha })
-        .eq("template_repo", templateRepo);
-      if (shaError) {
-        scope.setTag("pin_latest_template_sha_failed", "true");
-        Sentry.captureException(shaError, scope);
-      }
-    }
+    // `moved: false` means there was no grade.yml — the normal case for a handout
+    // created repo-only.
+    scope.setTag("parked_workflow", String(moved));
+    const deleted = moved;
+    const deleteCommitSha = renameCommitSha;
 
     // Same hazard as the restore path, mirrored: realignInClassSharers throws on
     // failure, and by now the live workflow is GONE. If that throw escaped, the
@@ -349,15 +298,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     try {
       realigned = await realignInClassSharers();
     } catch (e) {
-      if (deleted && liveWorkflow) {
+      if (moved) {
         scope.setTag("disable_rollback", "true");
         try {
-          const { commit_sha: rollbackCommitSha } = await writeFileToRepo(
+          // The reverse rename, also one commit. No need to hold the content in
+          // memory: the parked copy IS the content, so moving it back restores
+          // exactly what was there.
+          const { commit_sha: rollbackCommitSha } = await renameFileInRepo(
             templateRepo,
+            DISABLED_GRADE_WORKFLOW_PATH,
             GRADE_WORKFLOW_PATH,
-            liveWorkflow.content,
             "Roll back autograder workflow removal: disabling the autograder failed",
-            undefined,
             scope
           );
           // Move the advertised head off the delete commit as well. Leaving it there

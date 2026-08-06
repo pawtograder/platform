@@ -203,16 +203,32 @@ export default function EditAssignment() {
               }
             }
           } catch (syncError) {
-            const prior = queryData?.has_autograder;
-            if (prior !== undefined && prior !== values.has_autograder) {
+            // Clamp the restored value to what the row NOW allows. `onFinish` above has
+            // already committed the coerced fields, so restoring the raw prior flag onto
+            // a row that is now PR mode (or a no-repo mode) would recreate exactly the
+            // combination the coercions exist to prevent: a pr-mode assignment claiming
+            // an autograder, whose students' forks then run a grade.yml the Actions path
+            // rejects. Only a mode that can actually host an autograder gets `true` back.
+            const modeAllowsAutograder =
+              values.submission_mode !== "pr" && values.repo_mode !== "none" && values.repo_mode !== "no_submission";
+            const prior = queryData?.has_autograder === true && modeAllowsAutograder;
+            if (queryData?.has_autograder !== undefined && prior !== values.has_autograder) {
               // Awaited: a fire-and-forget rollback would let the error toast claim
               // the save failed while the row keeps the new flag, which is the exact
               // disagreement this rollback exists to prevent.
-              await updateAsync({
-                resource: "assignments",
-                id: Number.parseInt(assignment_id as string),
-                values: { has_autograder: prior }
-              });
+              //
+              // Guarded: an unhandled rejection here would replace `syncError`, so the
+              // instructor would be told why the ROLLBACK failed and never learn what
+              // actually went wrong.
+              try {
+                await updateAsync({
+                  resource: "assignments",
+                  id: Number.parseInt(assignment_id as string),
+                  values: { has_autograder: prior }
+                });
+              } catch (rollbackError) {
+                console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
+              }
             }
             throw syncError;
           }

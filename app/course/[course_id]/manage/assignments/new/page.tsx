@@ -75,12 +75,26 @@ export default function NewAssignmentPage() {
           }
           const wantsAutograder = !isNoRepo && !isPr && getValues("has_autograder") !== false;
           if ((source.has_autograder !== false) !== wantsAutograder) {
+            // Say WHY when the mode, not the checkbox, forces the mismatch. PR mode and
+            // the no-repo modes pin wantsAutograder to false, so against an autograded
+            // source neither checkbox state satisfies this test — telling the instructor
+            // to "make them match" would send them round a loop with no way out.
+            const modeForcesOff = isNoRepo || isPr;
             toaster.error({
               title: "Autograder setting must match the source assignment",
               description:
                 `This assignment forks from "${source.title}", so both share that assignment's handout ` +
                 `repository and must have the same autograder setting. "${source.title}" has the autograder ` +
-                `${source.has_autograder === false ? "disabled" : "enabled"}. Nothing was created.`
+                `${source.has_autograder === false ? "disabled" : "enabled"}. ` +
+                (modeForcesOff && source.has_autograder !== false
+                  ? isPr
+                    ? `This assignment submits by pull request, and those submissions are graded without GitHub Actions, ` +
+                      `so it cannot have an autograder. Choose a source assignment with the autograder disabled, or a ` +
+                      `repository configuration that gives this assignment its own handout. `
+                    : `This assignment has no student repository, so it cannot have an autograder. Choose a source ` +
+                      `assignment with the autograder disabled, or a repository configuration that creates repos. `
+                  : "") +
+                `Nothing was created.`
             });
             return;
           }

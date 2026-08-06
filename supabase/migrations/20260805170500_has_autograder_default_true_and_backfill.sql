@@ -21,8 +21,8 @@
 --      Evidence used (either is sufficient):
 --        - autograder.workflow_sha is set: grade.yml was hashed from the handout,
 --          which only happens while the autograder is wired up; or
---        - a submission exists from an Actions run (run_number > 0), i.e. the
---          workflow demonstrably graded this assignment.
+--        - a submission exists from an Actions run, i.e. the workflow
+--          demonstrably graded this assignment.
 --      Anything without that evidence keeps FALSE, which is the safe direction:
 --      a hand-graded assignment stays hand-graded.
 --   2. Flip the default to TRUE, matching the assignment form's default.
@@ -67,13 +67,22 @@ where a.has_autograder = false
       where g.id = a.id
         and g.workflow_sha is not null
     )
-    -- Evidence 2: an Actions-backed submission exists. run_number is 0 for
-    -- push-direct and upload submissions, so > 0 means a workflow really ran.
+    -- Evidence 2: an Actions-backed submission exists.
+    --
+    -- run_number > 0 alone is NOT enough. create_manual_submission_internal and
+    -- create_no_repo_submission_internal both insert run_number = ordinal, so an
+    -- instructor stub or a file upload carries run_number >= 1 despite no workflow
+    -- ever running - and since 20260707120000 a manual stub can be created for ANY
+    -- repo_mode, so one "grade anyway" placeholder on a deliberately hand-graded
+    -- assignment would otherwise flip it back to autograded. Restrict the evidence
+    -- to repo-pushed submissions (submitted_via null or 'git'); push-direct
+    -- submissions inside that set are excluded by run_number = 0.
     or exists (
       select 1
       from public.submissions s
       where s.assignment_id = a.id
         and s.run_number > 0
+        and (s.submitted_via is null or s.submitted_via = 'git')
     )
   );
 
