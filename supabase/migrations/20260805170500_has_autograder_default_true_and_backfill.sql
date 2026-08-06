@@ -104,3 +104,41 @@ where a.has_autograder = false
 
 alter table public.assignments
   alter column has_autograder set default true;
+
+-- The default above is unconditional, but `has_autograder = true` is only meaningful
+-- for a push-mode assignment that has a repository:
+--   - submission_mode = 'pr'  -> submissions are ingested by the PR webhook and never
+--     produce Actions results.
+--   - repo_mode in ('none','no_submission') -> there is no repository for a workflow
+--     to run in.
+--
+-- The assignment form coerces both, and so do the edit page and
+-- assignment-sync-autograder-workflow. But a column default cannot be conditional, and
+-- direct inserts (CLI, seeding, scripts) are exactly the paths this migration exists to
+-- accommodate — a PR-mode row inserted without the flag would land on TRUE, and
+-- assignment-create-handout-repo would then keep and hash grade.yml, handing PR students
+-- an Actions workflow.
+--
+-- Enforce it at the database boundary instead, so no caller can get it wrong. Coerces
+-- rather than rejects: these combinations are legitimate, it is only the flag that cannot
+-- accompany them.
+create or replace function public.assignments_coerce_has_autograder()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if new.has_autograder is true
+     and (new.submission_mode = 'pr' or new.repo_mode in ('none', 'no_submission')) then
+    new.has_autograder := false;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists assignments_coerce_has_autograder_trg on public.assignments;
+create trigger assignments_coerce_has_autograder_trg
+  before insert or update of has_autograder, submission_mode, repo_mode
+  on public.assignments
+  for each row
+  execute function public.assignments_coerce_has_autograder();

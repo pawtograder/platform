@@ -219,8 +219,39 @@ export default function EditAssignment() {
             // combination the coercions exist to prevent: a pr-mode assignment claiming
             // an autograder, whose students' forks then run a grade.yml the Actions path
             // rejects. Only a mode that can actually host an autograder gets `true` back.
+            // Restore the MODE too, not just the flag. A push -> PR conversion commits
+            // submission_mode, the upstream fields AND has_autograder=false in one
+            // onFinish; clamping the flag against the newly-saved PR mode then derived
+            // `prior = false` and restored nothing at all, leaving the assignment in PR
+            // mode with a live workflow still in its handout while the UI reported the
+            // update had failed. Rolling the mode back first makes the clamp evaluate
+            // against the mode being restored, so the flag can come back too.
+            const modeChanged =
+              queryData?.submission_mode !== undefined &&
+              (queryData.submission_mode !== values.submission_mode || queryData.repo_mode !== values.repo_mode);
+            if (modeChanged) {
+              try {
+                await updateAsync({
+                  resource: "assignments",
+                  id: Number.parseInt(assignment_id as string),
+                  values: {
+                    submission_mode: queryData!.submission_mode,
+                    repo_mode: queryData!.repo_mode,
+                    upstream_repo: queryData!.upstream_repo,
+                    upstream_base_branch: queryData!.upstream_base_branch,
+                    pr_identification: queryData!.pr_identification,
+                    pr_branch_convention: queryData!.pr_branch_convention,
+                    require_pr_open: queryData!.require_pr_open
+                  }
+                });
+              } catch (rollbackError) {
+                console.error("Failed to roll back the submission mode after a sync failure", rollbackError);
+              }
+            }
+            const restoredSubmissionMode = modeChanged ? queryData!.submission_mode : values.submission_mode;
+            const restoredRepoMode = modeChanged ? queryData!.repo_mode : values.repo_mode;
             const modeAllowsAutograder =
-              values.submission_mode !== "pr" && values.repo_mode !== "none" && values.repo_mode !== "no_submission";
+              restoredSubmissionMode !== "pr" && restoredRepoMode !== "none" && restoredRepoMode !== "no_submission";
             const prior = queryData?.has_autograder === true && modeAllowsAutograder;
             if (queryData?.has_autograder !== undefined && prior !== values.has_autograder) {
               // Awaited: a fire-and-forget rollback would let the error toast claim

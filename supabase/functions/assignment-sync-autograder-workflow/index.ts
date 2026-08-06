@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentSyncAutograderWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
 import { RequestError } from "npm:octokit";
@@ -43,6 +43,62 @@ const DISABLED_GRADE_WORKFLOW_PATH = `${GRADE_WORKFLOW_PATH}.disabled`;
  * keep their own copy of `grade.yml` until the existing handout-sync flow
  * (`sync_repo_to_handout`) carries the change downstream.
  */
+/**
+ * Push the current handout revision out to EXISTING student repos.
+ *
+ * Needed on BOTH toggle directions, and for the same underlying reason: the toggle only
+ * edits the handout, so until each student repo syncs it still has (or still lacks)
+ * grade.yml at its own commits.
+ *   - enabling: those repos have no workflow while has_autograder is already true, so a
+ *     `#submit` push dispatches something that is not there and an unmarked push records
+ *     nothing — student work is lost.
+ *   - disabling: those repos keep a live workflow, so every push still burns Actions
+ *     minutes and shows the failing check this whole feature exists to remove.
+ *
+ * `queue_repository_syncs` is the same mechanism a handout push uses and skips repos
+ * already at the target revision, so calling it unconditionally is safe. It MUST run on a
+ * user-scoped client: it opens with `if auth.uid() is null then raise exception` and so
+ * failed silently on the service-role client.
+ *
+ * Best-effort by design — the repo edit has already succeeded and is the thing the
+ * instructor asked for — but failures are captured, because the consequence is student
+ * pushes going unrecorded (or Actions still firing) until some later sync.
+ */
+async function queueHandoutSyncsForAssignments(
+  adminSupabase: SupabaseClient<Database>,
+  authHeader: string | null,
+  assignmentIds: number[],
+  scope: Sentry.Scope
+): Promise<void> {
+  const { data: repoRows, error: repoRowsError } = await adminSupabase
+    .from("repositories")
+    .select("id")
+    .in("assignment_id", assignmentIds);
+  if (repoRowsError) {
+    scope.setTag("queue_repo_syncs_lookup_failed", "true");
+    Sentry.captureException(repoRowsError, scope);
+    return;
+  }
+  if (!repoRows || repoRows.length === 0) return;
+  if (!authHeader) {
+    scope.setTag("queue_repo_syncs_skipped", "no_user_context");
+    console.log("Skipping repository sync queueing: no Authorization header to satisfy queue_repository_syncs");
+    return;
+  }
+  const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: { headers: { Authorization: authHeader } }
+  });
+  const { error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
+    p_repository_ids: repoRows.map((r) => r.id)
+  });
+  if (queueError) {
+    scope.setTag("queue_repo_syncs_failed", "true");
+    Sentry.captureException(queueError, scope);
+    return;
+  }
+  scope.setTag("queued_repo_syncs", String(repoRows.length));
+}
+
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentSyncAutograderWorkflowRequest;
   scope?.setTag("function", "assignment-sync-autograder-workflow");
@@ -375,6 +431,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
     }
 
+    // Same need as the enable path, opposite direction: existing student repos still
+    // carry the live grade.yml until they sync, so every push keeps burning Actions
+    // minutes and showing the failing check this feature exists to remove. Queue after
+    // pinning, so the syncs target the revision that no longer has the workflow.
+    await queueHandoutSyncsForAssignments(
+      adminSupabase,
+      req.headers.get("Authorization"),
+      [assignment_id, ...realigned.map((a) => a.id)],
+      scope
+    );
+
     return {
       action: deleted ? ("removed" as const) : ("unchanged" as const),
       has_autograder: false,
@@ -573,61 +640,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  // Push the new handout revision out to EXISTING student repos.
-  //
-  // Enabling only adds grade.yml to the handout. Until each student repo receives it,
-  // that repo has no workflow at its commits — but has_autograder is already true, so
-  // its pushes no longer take the direct-ingestion branch: a `#submit` push tries to
-  // dispatch a workflow that is not there, and an unmarked push records nothing at all.
-  // Student work would be silently lost for the whole window. queue_repository_syncs is
-  // the same mechanism a handout push uses, and it skips repos already at the target
-  // revision, so this is safe to call unconditionally.
-  //
-  // Best-effort: the workflow is live and hashed by now, so a queueing failure is not
-  // worth undoing a working toggle. Reported instead, and the periodic handout-sync
-  // path will still pick these repos up.
-  // Every assignment whose repos need the workflow: this one AND any sharer that
-  // realignInClassSharers just switched on. Queuing only this assignment left the
-  // sharers' repos workflow-free while their pushes had already stopped taking the
-  // direct-ingestion path.
-  const assignmentIdsToSync = [assignment_id, ...realignedOnRestore.map((a) => a.id)];
-  const { data: repoRows, error: repoRowsError } = await adminSupabase
-    .from("repositories")
-    .select("id")
-    .in("assignment_id", assignmentIdsToSync);
-  if (repoRowsError) {
-    scope.setTag("queue_repo_syncs_lookup_failed", "true");
-    Sentry.captureException(repoRowsError, scope);
-  } else if (repoRows && repoRows.length > 0) {
-    // MUST go through a user-scoped client: queue_repository_syncs opens with
-    // `if auth.uid() is null then raise exception 'Not authenticated'`
-    // (20260530120200_assignment-repo-config.sql:830), so calling it on the
-    // service-role client failed every time — and because this step is best-effort,
-    // that failure was swallowed and the sync silently never happened. Authorization
-    // was already established by assertUserIsInstructorOrServiceRole above; this
-    // client only supplies the auth.uid() the RPC insists on.
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      scope.setTag("queue_repo_syncs_skipped", "no_user_context");
-      console.log("Skipping repository sync queueing: no Authorization header to satisfy queue_repository_syncs");
-    } else {
-      const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-        global: { headers: { Authorization: authHeader } }
-      });
-      const { error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
-        p_repository_ids: repoRows.map((r) => r.id)
-      });
-      if (queueError) {
-        // Still non-fatal — the workflow is live and hashed, so not worth undoing a
-        // working toggle — but captured loudly, because the consequence is student
-        // pushes going unrecorded until another sync runs.
-        scope.setTag("queue_repo_syncs_failed", "true");
-        Sentry.captureException(queueError, scope);
-      } else {
-        scope.setTag("queued_repo_syncs", String(repoRows.length));
-      }
-    }
-  }
+  await queueHandoutSyncsForAssignments(
+    adminSupabase,
+    req.headers.get("Authorization"),
+    [assignment_id, ...realignedOnRestore.map((a) => a.id)],
+    scope
+  );
 
   // The autograder is live and hashed, so the toggle has succeeded. Clearing the
   // parked copy is tidy-up only: a leftover grade.yml.disabled runs nothing, so a

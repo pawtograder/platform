@@ -714,7 +714,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // push. A stamped trigger time is proof the dispatch predates the toggle, so let
         // those runs finish. Leftover-workflow runs on a repo that was never dispatched
         // to have no such row and are still rejected below.
-        const { data: dispatched } = await adminSupabase
+        const { data: dispatched, error: dispatchedError } = await adminSupabase
           .from("repository_check_runs")
           .select("id, status")
           .eq("repository_id", repoData.id)
@@ -722,6 +722,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
+        if (dispatchedError) {
+          // A transient failure here is indistinguishable from "no dispatch" if only
+          // `data` is read, and falling through means the terminal 400 below — losing a
+          // pre-toggle push that has no direct submission either. Throw so the run is
+          // retried instead of rejected on a guess.
+          Sentry.captureException(dispatchedError, scope);
+          throw new Error(
+            `Could not determine whether the workflow run for ${repository}@${sha} predates the autograder being ` +
+              `disabled: ${dispatchedError.message}`
+          );
+        }
         const triggeredAt = (dispatched?.status as { workflow_triggered_at?: string } | null)?.workflow_triggered_at;
         if (triggeredAt) {
           scope?.setTag("allowed_in_flight_dispatch", "true");
