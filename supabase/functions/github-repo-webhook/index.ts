@@ -18,6 +18,7 @@ import safeRegex from "npm:safe-regex@2";
 import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
+  getDefaultBranchHeadSha,
   getFileFromRepo,
   getOctoKit,
   triggerWorkflow,
@@ -1493,11 +1494,39 @@ async function handlePushToTemplateRepo(
       Sentry.captureException(err, scope);
     }
   }
+  // Only advertise a revision that IS the repo's current default-branch head.
+  //
+  // Push deliveries are asynchronous and can arrive out of order, and any operation
+  // taking two commits produces a pair that can race — the autograder disable rollback,
+  // for instance, renames the workflow back while the earlier removal commit is still in
+  // flight. Processing that stale delivery afterwards overwrote latest_template_sha with
+  // a revision the repo had already moved past, so a later student sync applied the wrong
+  // handout state: stripping grade.yml from an enabled assignment, or reinstating it on a
+  // disabled one. Earlier fixes corrected the pointer after the fact, one operation at a
+  // time; checking the head here rules out the whole class.
+  const pushedSha = payload.after || payload.head_commit?.id || payload.commits?.[0]?.id;
+  let currentHeadSha: string | undefined;
+  try {
+    currentHeadSha = await getDefaultBranchHeadSha(assignments[0].template_repo!, scope);
+  } catch (headErr) {
+    // Never block history on this check: fall through and trust the payload, which is
+    // exactly the behaviour that existed before it.
+    scope?.setTag("template_head_lookup_failed", "true");
+    Sentry.captureException(headErr, scope);
+  }
+  if (currentHeadSha && pushedSha && currentHeadSha !== pushedSha) {
+    scope?.setTag("skipped_reason", "stale_template_push_delivery");
+    console.log(
+      `Not moving latest_template_sha for ${assignments[0].template_repo}: pushed ${pushedSha} is not the current ` +
+        `default-branch head ${currentHeadSha} (out-of-order delivery)`
+    );
+    return;
+  }
   for (const assignment of assignments) {
     const { error: assignmentUpdateError } = await adminSupabase
       .from("assignments")
       .update({
-        latest_template_sha: payload.after || payload.head_commit?.id || payload.commits?.[0]?.id
+        latest_template_sha: pushedSha
       })
       .eq("id", assignment.id);
     if (assignmentUpdateError) {

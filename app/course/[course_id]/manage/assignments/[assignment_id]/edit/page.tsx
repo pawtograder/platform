@@ -226,9 +226,16 @@ export default function EditAssignment() {
             // mode with a live workflow still in its handout while the UI reported the
             // update had failed. Rolling the mode back first makes the clamp evaluate
             // against the mode being restored, so the flag can come back too.
+            // template_repo is restored alongside the modes. Reconciliation now runs on a
+            // handout change too, so a failure there (an incompatible shared handout, say)
+            // would otherwise leave the assignment attached to the NEW, unreconciled
+            // repository while the UI reported the update failed — and every retry would
+            // keep failing against that same repository.
             const modeChanged =
               queryData?.submission_mode !== undefined &&
-              (queryData.submission_mode !== values.submission_mode || queryData.repo_mode !== values.repo_mode);
+              (queryData.submission_mode !== values.submission_mode ||
+                queryData.repo_mode !== values.repo_mode ||
+                queryData.template_repo !== values.template_repo);
             if (modeChanged) {
               try {
                 await updateAsync({
@@ -237,6 +244,8 @@ export default function EditAssignment() {
                   values: {
                     submission_mode: queryData!.submission_mode,
                     repo_mode: queryData!.repo_mode,
+                    template_repo: queryData!.template_repo,
+                    latest_template_sha: queryData!.latest_template_sha,
                     upstream_repo: queryData!.upstream_repo,
                     upstream_base_branch: queryData!.upstream_base_branch,
                     pr_identification: queryData!.pr_identification,
@@ -245,7 +254,7 @@ export default function EditAssignment() {
                   }
                 });
               } catch (rollbackError) {
-                console.error("Failed to roll back the submission mode after a sync failure", rollbackError);
+                console.error("Failed to roll back the repository configuration after a sync failure", rollbackError);
               }
             }
             const restoredSubmissionMode = modeChanged ? queryData!.submission_mode : values.submission_mode;
