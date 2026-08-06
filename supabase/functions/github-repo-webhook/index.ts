@@ -24,7 +24,8 @@ import {
   triggerWorkflow,
   SecondaryRateLimitError,
   PrimaryRateLimitError,
-  END_TO_END_REPO_PREFIX
+  END_TO_END_REPO_PREFIX,
+  repoHasFileAtRef
 } from "../_shared/GitHubWrapper.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
@@ -277,10 +278,17 @@ async function createPushDirectSubmission(
      * it too.
      */
     lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+    /**
+     * The pusher is course staff pushing to a repository that is their own — the Instructor Test
+     * Assignment case. The Actions path exempts staff-triggered submissions from the deadline,
+     * token and empty-submission gates, and this path must do the same or a repo-only test
+     * assignment behaves differently from an autograded one for the same person.
+     */
+    actorIsStaffOwner?: boolean;
     scope: Sentry.Scope;
   }
 ): Promise<void> {
-  const { allowNotGradedSubmissions, permitEmptySubmissions, lateTokenPolicy, scope } = opts;
+  const { allowNotGradedSubmissions, permitEmptySubmissions, lateTokenPolicy, actorIsStaffOwner, scope } = opts;
   const headCommit = payload.head_commit;
   if (!headCommit) return; // guarded by caller, narrows the type
   const repoName = payload.repository.full_name;
@@ -332,7 +340,8 @@ async function createPushDirectSubmission(
   const pushTime = pushedAt && !Number.isNaN(pushedAt.getTime()) ? pushedAt : new Date();
   scope.setTag("push_time_source", pushedAt ? "github_pushed_at" : "receive_time");
   const finalDueDate = new Date(finalDueDateResult);
-  const isLate = pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
+  const isLate =
+    !actorIsStaffOwner && pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
   scope.setTag("push_direct_is_late", String(isLate));
   // Resolved ONCE, here, because both the force-push promotion below and the insert further down
   // have to give the same answer. When only the insert consulted the token policy, the same push
@@ -512,7 +521,10 @@ async function createPushDirectSubmission(
   // no reason to maintain a pawtograder.yml, so rejecting would silently discard every
   // push on the very assignments this path exists for. The instructor hand-grades these
   // submissions and can see an untouched repo for themselves.
-  const canDetectEmpty = emptyHashFilter !== null;
+  // Staff pushing to their own test repository are exempt, as they are on the Actions path: an
+  // instructor verifying the pipeline with an untouched clone should not be told their submission
+  // was empty.
+  const canDetectEmpty = emptyHashFilter !== null && !actorIsStaffOwner;
   if (!canDetectEmpty) {
     scope.setTag("push_direct_empty_check", "skipped_no_submission_files");
     console.log(
@@ -708,29 +720,59 @@ async function createPushDirectSubmission(
         `Rejecting push-direct submission for ${repoName}@${sha}: matches the handout and this assignment does ` +
           `not permit empty submissions`
       );
-      const removed = await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-      // Restore the previous submission whether or not cleanup finished. The insert
-      // already demoted it, so skipping this on a partial failure leaves the student
-      // with NO active submission — a worse outcome than the rejection itself.
-      // `excludeSubmissionId` keeps a surviving zombie row from being promoted.
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
-      if (!removed) {
-        // The rejected submission row is still there (inactive, with its grading review
-        // unlinked), so it needs manual cleanup. Surface it rather than returning 200 as
-        // though the rejection worked.
-        scope.setTag("push_direct_empty_cleanup_failed", "true");
-        Sentry.captureMessage(
-          `Failed to remove rejected empty push-direct submission ${submissionId} for ${repoName}@${sha}`,
-          scope
-        );
-        // Throw rather than return 200. cleanupPushDirectSubmission unlinks the grading
-        // review before deleting, so a partial failure leaves exactly the row shape the
-        // idempotency check at the top of this function reads as "resume me" — but only a
-        // redelivery ever re-runs that check, and a 200 gives GitHub no reason to send
-        // one. Acknowledging here would strand the row permanently.
-        scope.setTag("push_direct_retry_reason", "empty_cleanup_incomplete");
+      // RETAINED, not deleted — the same shape as an oversized rejection.
+      //
+      // Deleting it left the student with nothing: no submission, and no error either, because a
+      // workflow_run_error is only visible to a student when it is attached to a submission they
+      // can read (its RLS requires submission_id IS NOT NULL). So an automatic-submission feature
+      // silently discarded their push while the commit history showed an ordinary entry. The
+      // Actions path says "Empty submissions are not permitted"; this is how that message reaches
+      // a student when there is no Actions run to carry it.
+      //
+      // Inactive and fileless, so it cannot be graded, and the assignment page labels a submission
+      // with an attached error as "Error".
+      const errorName =
+        `Your submission at commit ${sha.slice(0, 7)} was not recorded: it is identical to the assignment's ` +
+        `starter code, and this assignment does not accept empty submissions. Make your changes and push again.`;
+      const { error: emptyRecordError } = await adminSupabase.from("workflow_run_error").upsert(
+        {
+          repository_id: studentRepo.id,
+          class_id: studentRepo.class_id,
+          submission_id: submissionId,
+          run_number: 0,
+          run_attempt: 0,
+          name: errorName,
+          is_private: false,
+          data: {
+            repository_name: repoName,
+            sha,
+            error_type: "empty_submission",
+            detected_at: new Date().toISOString()
+          }
+        },
+        { onConflict: "repository_id,run_number,run_attempt,name" }
+      );
+      if (emptyRecordError) {
+        // Without the explanation the retained row is a bare inactive submission — the silent
+        // state this change exists to remove. Fall back to deleting it so the student is not left
+        // with an unexplained row, then ask for a redelivery.
+        scope.setTag("empty_record_failed", "true");
+        Sentry.captureException(emptyRecordError, scope);
+        await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
+        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
         throw new Error(
-          `Rejected empty push-direct submission ${submissionId} for ${repoName}@${sha} could not be removed; ` +
+          `Could not record the empty-submission rejection for ${repoName}@${sha} (${emptyRecordError.message}); ` +
+            `rejecting this delivery so GitHub retries it`
+        );
+      }
+      // Strips the files and deactivates, leaving the review attached so the row stays visible.
+      const deactivated = await deactivateRejectedSubmission(adminSupabase, submissionId, scope);
+      // The insert demoted the student's previous submission; put it back.
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+      if (!deactivated) {
+        scope.setTag("push_direct_retry_reason", "empty_deactivation_incomplete");
+        throw new Error(
+          `Rejected empty push-direct submission ${submissionId} for ${repoName}@${sha} could not be deactivated; ` +
             `rejecting this delivery so GitHub retries it`
         );
       }
@@ -934,13 +976,14 @@ async function createPushDirectSubmission(
  * be a student whose account is not linked than a staff member, and dropping a student's
  * submission is the worse error.
  */
-async function isForeignStaffPush(
+async function resolvePusherStanding(
   adminSupabase: SupabaseClient<Database>,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
   pusherLogin: string | null | undefined,
   scope: Sentry.Scope
-): Promise<boolean> {
-  if (!pusherLogin) return false;
+): Promise<{ isForeignStaff: boolean; isOwnerStaff: boolean }> {
+  const notStaff = { isForeignStaff: false, isOwnerStaff: false };
+  if (!pusherLogin) return notStaff;
   const { data: user, error: userError } = await adminSupabase
     .from("users")
     .select("user_id")
@@ -949,7 +992,7 @@ async function isForeignStaffPush(
   if (userError) throw userError;
   if (!user) {
     scope.setTag("pusher_role", "unknown_github_login");
-    return false;
+    return notStaff;
   }
   const { data: role, error: roleError } = await adminSupabase
     .from("user_roles")
@@ -958,11 +1001,13 @@ async function isForeignStaffPush(
     .eq("class_id", studentRepo.class_id)
     .maybeSingle();
   if (roleError) throw roleError;
-  if (!role || (role.role !== "instructor" && role.role !== "grader")) return false;
+  if (!role || (role.role !== "instructor" && role.role !== "grader")) return notStaff;
   scope.setTag("pusher_role", role.role);
 
-  // Their own individual repo: a genuine submission.
-  if (studentRepo.profile_id && role.private_profile_id === studentRepo.profile_id) return false;
+  // Their own individual repo: a genuine submission, and a STAFF one.
+  if (studentRepo.profile_id && role.private_profile_id === studentRepo.profile_id) {
+    return { isForeignStaff: false, isOwnerStaff: true };
+  }
   // Their own group's repo: also genuine. Staff are not normally group members, so this is the
   // Instructor Test Assignment case again.
   if (studentRepo.assignment_group_id) {
@@ -973,9 +1018,9 @@ async function isForeignStaffPush(
       .eq("profile_id", role.private_profile_id)
       .maybeSingle();
     if (membershipError) throw membershipError;
-    if (membership) return false;
+    if (membership) return { isForeignStaff: false, isOwnerStaff: true };
   }
-  return true;
+  return { isForeignStaff: true, isOwnerStaff: false };
 }
 
 /**
@@ -996,7 +1041,7 @@ async function hasOversizedRejectionError(
   if (error) throw error;
   return (rejectionErrors ?? []).some((e) => {
     const errorType = (e.data as { error_type?: string } | null)?.error_type;
-    return errorType === "file_too_large" || errorType === "submission_too_large";
+    return REJECTION_ERROR_TYPES.has(errorType ?? "");
   });
 }
 
@@ -1136,6 +1181,16 @@ async function promoteSubmissionForCurrentHead(
   console.log(`Re-activated submission ${existing.id}: ${repoName} was force-pushed back to ${sha}`);
 }
 
+/**
+ * `data.error_type` values that mark a submission as REJECTED and retained for visibility only.
+ *
+ * Such a row is deliberately inactive and fileless, so it must never be promoted — not by the
+ * reactivation scan, and not by the force-push path. Kept as one set because three call sites test
+ * it and the empty-submission type was added after the first two, which is exactly how they would
+ * have drifted.
+ */
+const REJECTION_ERROR_TYPES = new Set(["file_too_large", "submission_too_large", "empty_submission"]);
+
 /** Page size for the paginated candidate scan in reactivatePreviousSubmission. */
 const PAGE_SIZE = 50;
 
@@ -1206,10 +1261,7 @@ async function reactivatePreviousSubmission(
       if (rejectionErr) throw rejectionErr;
       const rejectedIds = new Set(
         (rejectionErrors ?? [])
-          .filter((e) => {
-            const errorType = (e.data as { error_type?: string } | null)?.error_type;
-            return errorType === "file_too_large" || errorType === "submission_too_large";
-          })
+          .filter((e) => REJECTION_ERROR_TYPES.has((e.data as { error_type?: string } | null)?.error_type ?? ""))
           .map((e) => e.submission_id)
       );
       newest = candidates.find((c) => !rejectedIds.has(c.id));
@@ -1587,7 +1639,13 @@ async function handlePushToStudentRepo(
     // `maintain` on every student repo (syncRepoPermissions grants it), so a debugging or
     // assistance commit would otherwise replace the student's active gradebook entry — and after
     // the deadline it could spend the student's automatic late tokens on work they did not do.
-    if (await isForeignStaffPush(adminSupabase, studentRepo, payload.pusher?.name ?? payload.sender?.login, scope)) {
+    const pusherStanding = await resolvePusherStanding(
+      adminSupabase,
+      studentRepo,
+      payload.pusher?.name ?? payload.sender?.login,
+      scope
+    );
+    if (pusherStanding.isForeignStaff) {
       scope.setTag("skipped_reason", "staff_push_to_student_repo");
       console.log(
         `Skipping push-direct submission for ${repoName}@${payload.after}: pushed by course staff ` +
@@ -1672,6 +1730,11 @@ async function handlePushToStudentRepo(
         maxLateTokens: pushAssignment.max_late_tokens ?? 0,
         requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
       },
+      // Staff pushing to their OWN repository — the Instructor Test Assignment flow — keeps the
+      // bypasses the Actions path gives them. Losing that meant a no-autograder test assignment
+      // could reject an instructor's post-deadline or empty test push, and could even spend their
+      // late tokens on it.
+      actorIsStaffOwner: pusherStanding.isOwnerStaff,
       scope
     });
     // Record the commit history too. This branch returns instead of falling through
@@ -1716,6 +1779,44 @@ async function handlePushToStudentRepo(
     }
   }
   if (payload.head_commit.message.includes("#submit")) {
+    // Fall back to direct ingestion when this repository does not actually have the workflow yet.
+    //
+    // Enabling the autograder flips the flag immediately, but the sync only ENQUEUES
+    // sync_repo_to_handout jobs — installing grade.yml can take minutes, or wait on a sync PR
+    // someone has to merge. In that window this branch dispatched a workflow the repository does
+    // not contain, so the student's `#submit` push produced nothing at all: no Actions run to fail
+    // and no submission either, because the flag had already switched the push off the direct
+    // path. Checking the repository rather than the flag makes the submission path follow what is
+    // actually installed.
+    //
+    // One API read, on `#submit` pushes only. A failure to determine it falls through to the
+    // dispatch below, which is the pre-existing behaviour.
+    if (pushAssignment?.has_autograder !== false && pushRepoModeHasRepo && studentRepo.is_github_ready) {
+      let workflowInstalled: boolean | undefined;
+      try {
+        workflowInstalled = await repoHasFileAtRef(repoName, GRADER_WORKFLOW_PATH, payload.after, scope);
+      } catch (checkErr) {
+        scope?.setTag("submit_workflow_presence_check_failed", "true");
+        Sentry.captureException(checkErr, scope);
+      }
+      if (workflowInstalled === false) {
+        scope?.setTag("push_direct_fallback", "workflow_not_installed_yet");
+        console.log(
+          `${repoName} has no ${GRADER_WORKFLOW_PATH} at ${payload.after} yet, so ingesting this #submit push ` +
+            `directly instead of dispatching a workflow that is not there`
+        );
+        await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
+          allowNotGradedSubmissions: pushAssignment?.allow_not_graded_submissions ?? false,
+          permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
+          lateTokenPolicy: {
+            maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
+            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
+          },
+          scope
+        });
+        return;
+      }
+    }
     console.log(`Ref: ${payload.ref}`);
     //Create a submission for this commit
     // Find the head commit check run row to gate workflow triggering idempotently

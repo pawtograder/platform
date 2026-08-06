@@ -94,6 +94,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // creation) and nothing reads workflow_sha. Hashing would 404; the catch below
     // would swallow it, but skipping says why.
     console.log(`Skipping autograder workflow hash for ${new_repo}: assignment ${assignment_id} has no autograder`);
+    // Seed the handout's file hashes for this repository. Nothing else will: there is no
+    // grade.yml to rename, so the workflow sync makes no commit and no push webhook fires — the
+    // one path that otherwise records these rows. Without them the empty-submission check has
+    // nothing to compare against and an untouched copy of the replacement handout is accepted as
+    // student work, on exactly the assignments where every push is a submission.
+    const adminForSeed = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    const { data: adoptedHandout } = await adminForSeed
+      .from("assignments")
+      .select("template_repo, latest_template_sha, class_id")
+      .eq("id", assignment_id)
+      .maybeSingle();
+    if (adoptedHandout?.template_repo) {
+      const seedResult = await seedHandoutFileHashes({
+        adminSupabase: adminForSeed,
+        assignmentId: assignment_id,
+        classId: adoptedHandout.class_id,
+        templateRepo: adoptedHandout.template_repo,
+        // The pointer may not have caught up to the replacement yet, so fall back to the repo
+        // being attached — seedHandoutFileHashes resolves nothing when the sha is absent.
+        commitSha: adoptedHandout.latest_template_sha,
+        scope
+      });
+      if (!seedResult.seeded) {
+        console.log(`Not seeding handout file hashes for repo-only assignment ${assignment_id}: ${seedResult.reason}`);
+      }
+    }
   } else if (watch_type === "template_repo") {
     try {
       await updateAutograderWorkflowHash(new_repo);
