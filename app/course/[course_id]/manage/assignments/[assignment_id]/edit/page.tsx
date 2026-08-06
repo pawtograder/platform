@@ -221,82 +221,37 @@ export default function EditAssignment() {
               }
             }
           } catch (syncError) {
-            // Clamp the restored value to what the row NOW allows. `onFinish` above has
-            // already committed the coerced fields, so restoring the raw prior flag onto
-            // a row that is now PR mode (or a no-repo mode) would recreate exactly the
-            // combination the coercions exist to prevent: a pr-mode assignment claiming
-            // an autograder, whose students' forks then run a grade.yml the Actions path
-            // rejects. Only a mode that can actually host an autograder gets `true` back.
-            // Restore the MODE too, not just the flag. A push -> PR conversion commits
-            // submission_mode, the upstream fields AND has_autograder=false in one
-            // onFinish; clamping the flag against the newly-saved PR mode then derived
-            // `prior = false` and restored nothing at all, leaving the assignment in PR
-            // mode with a live workflow still in its handout while the UI reported the
-            // update had failed. Rolling the mode back first makes the clamp evaluate
-            // against the mode being restored, so the flag can come back too.
-            // template_repo is restored alongside the modes. Reconciliation now runs on a
-            // handout change too, so a failure there (an incompatible shared handout, say)
-            // would otherwise leave the assignment attached to the NEW, unreconciled
-            // repository while the UI reported the update failed — and every retry would
-            // keep failing against that same repository.
-            const modeChanged =
-              queryData?.submission_mode !== undefined &&
-              (queryData.submission_mode !== values.submission_mode ||
-                queryData.repo_mode !== values.repo_mode ||
-                queryData.template_repo !== values.template_repo);
-            if (modeChanged) {
-              try {
-                await updateAsync({
-                  resource: "assignments",
-                  id: Number.parseInt(assignment_id as string),
-                  values: {
-                    submission_mode: queryData!.submission_mode,
-                    repo_mode: queryData!.repo_mode,
-                    template_repo: queryData!.template_repo,
-                    latest_template_sha: queryData!.latest_template_sha,
-                    upstream_repo: queryData!.upstream_repo,
-                    upstream_base_branch: queryData!.upstream_base_branch,
-                    pr_identification: queryData!.pr_identification,
-                    pr_branch_convention: queryData!.pr_branch_convention,
-                    require_pr_open: queryData!.require_pr_open
-                  }
-                });
-              } catch (rollbackError) {
-                console.error("Failed to roll back the repository configuration after a sync failure", rollbackError);
-              }
-              // autograder.workflow_sha lives on a different table and was already
-              // rewritten from the NEW handout's grade.yml by githubRepoConfigureWebhook
-              // before reconciliation ran. Restoring template_repo without it leaves the
-              // old handout paired with the new handout's hash, and every Actions run is
-              // then rejected for a workflow-sha mismatch. Re-derive it from the handout
-              // being restored rather than trying to remember the old value.
-              try {
-                if (queryData!.template_repo) {
-                  await githubRepoConfigureWebhook(
-                    {
-                      assignment_id: Number.parseInt(assignment_id as string),
-                      new_repo: queryData!.template_repo,
-                      watch_type: "template_repo"
-                    },
-                    supabase
-                  );
-                }
-              } catch (hashRollbackError) {
-                console.error(
-                  "Failed to restore the autograder workflow hash for the previous handout",
-                  hashRollbackError
-                );
+            // Restore EVERY assignment field this save wrote, not a hand-picked subset.
+            //
+            // `onFinish(values)` above has already committed the whole form, so a save that
+            // changed a due date or a title ALONGSIDE the repository configuration used to
+            // leave those unrelated edits persisted while the toast said nothing had been
+            // saved. Deferring the row write until after the sync is not an option — the
+            // sync function reads has_autograder from the database — so the rollback has to
+            // be complete instead.
+            //
+            // Keyed off the submitted values, so it restores exactly the columns that were
+            // written and nothing else: a key absent from the loaded row (`eval_config` and
+            // the other self-review fields, which live on another table) is skipped, and no
+            // column is touched that this save did not already touch. `latest_template_sha`
+            // is added explicitly because the sync re-pins it server-side without it ever
+            // passing through the form.
+            //
+            // This also removes the flag clamp that used to live here. Restoring the whole
+            // prior row means the mode and the flag come back TOGETHER, and that row was
+            // already valid — the database trigger enforces the invariant — so there is no
+            // longer a newly-saved PR mode for a restored `true` to contradict.
+            const priorValues: Record<string, unknown> = {};
+            if (queryData) {
+              const loadedRow = queryData as unknown as Record<string, unknown>;
+              for (const key of [...Object.keys(values), "latest_template_sha"]) {
+                if (key in loadedRow) priorValues[key] = loadedRow[key];
               }
             }
-            const restoredSubmissionMode = modeChanged ? queryData!.submission_mode : values.submission_mode;
-            const restoredRepoMode = modeChanged ? queryData!.repo_mode : values.repo_mode;
-            const modeAllowsAutograder =
-              restoredSubmissionMode !== "pr" && restoredRepoMode !== "none" && restoredRepoMode !== "no_submission";
-            const prior = queryData?.has_autograder === true && modeAllowsAutograder;
-            if (queryData?.has_autograder !== undefined && prior !== values.has_autograder) {
-              // Awaited: a fire-and-forget rollback would let the error toast claim
-              // the save failed while the row keeps the new flag, which is the exact
-              // disagreement this rollback exists to prevent.
+            if (Object.keys(priorValues).length > 0) {
+              // Awaited: a fire-and-forget rollback would let the error toast claim the save
+              // failed while the row keeps the new values, which is the exact disagreement
+              // this rollback exists to prevent.
               //
               // Guarded: an unhandled rejection here would replace `syncError`, so the
               // instructor would be told why the ROLLBACK failed and never learn what
@@ -305,10 +260,38 @@ export default function EditAssignment() {
                 await updateAsync({
                   resource: "assignments",
                   id: Number.parseInt(assignment_id as string),
-                  values: { has_autograder: prior }
+                  values: priorValues
                 });
               } catch (rollbackError) {
-                console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
+                console.error("Failed to roll back the assignment after a sync failure", rollbackError);
+              }
+            }
+            // autograder.workflow_sha lives on a different table and was already rewritten
+            // from the NEW handout's grade.yml by githubRepoConfigureWebhook before
+            // reconciliation ran. Restoring template_repo without it leaves the old handout
+            // paired with the new handout's hash, and every Actions run is then rejected for
+            // a workflow-sha mismatch. Re-derive it from the handout being restored rather
+            // than trying to remember the old value.
+            // Recomputed rather than reused: the flag of the same name is scoped to the try
+            // block above. Same comparison — the handout the row was loaded with against the
+            // one this save committed.
+            const handoutWasReplaced =
+              queryData?.template_repo !== undefined && queryData.template_repo !== values.template_repo;
+            if (handoutWasReplaced && queryData?.template_repo) {
+              try {
+                await githubRepoConfigureWebhook(
+                  {
+                    assignment_id: Number.parseInt(assignment_id as string),
+                    new_repo: queryData.template_repo,
+                    watch_type: "template_repo"
+                  },
+                  supabase
+                );
+              } catch (hashRollbackError) {
+                console.error(
+                  "Failed to restore the autograder workflow hash for the previous handout",
+                  hashRollbackError
+                );
               }
             }
             throw syncError;

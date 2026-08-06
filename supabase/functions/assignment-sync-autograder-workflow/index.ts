@@ -656,16 +656,49 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   scope.setTag("restored_workflow_from", restoredFrom);
 
-  const { commit_sha: restoreCommitSha } = await writeFileToRepo(
-    templateRepo,
-    GRADE_WORKFLOW_PATH,
-    workflowContent,
-    restoredFrom === "parked"
-      ? "Restore autograder workflow from the parked copy: this assignment now has an autograder"
-      : "Restore autograder workflow from the class handout template: this assignment now has an autograder",
-    undefined,
-    scope
-  );
+  // Create-only (no blob sha), so GitHub rejects the write if the file appeared between the
+  // existence probe near the top of this branch and here — an instructor pushing their own
+  // grade.yml in that window. Propagating that rejection made the caller restore
+  // has_autograder=false while the concurrently created workflow stayed LIVE in the handout:
+  // the flag says no autograder, student pushes take direct ingestion, and handout syncs
+  // still distribute a runnable workflow. The file being present is the outcome this branch
+  // wanted, so adopt it instead of failing — the code below hashes and pins whatever the
+  // head now holds, which is exactly the reconciliation the "already present" branch does.
+  let restoreCommitSha: string | undefined;
+  // Whether the workflow now in the handout is OURS. The rollback below deletes grade.yml,
+  // which must never happen to a file an instructor pushed themselves.
+  let weWroteTheWorkflow = false;
+  try {
+    ({ commit_sha: restoreCommitSha } = await writeFileToRepo(
+      templateRepo,
+      GRADE_WORKFLOW_PATH,
+      workflowContent,
+      restoredFrom === "parked"
+        ? "Restore autograder workflow from the parked copy: this assignment now has an autograder"
+        : "Restore autograder workflow from the class handout template: this assignment now has an autograder",
+      undefined,
+      scope
+    ));
+    weWroteTheWorkflow = true;
+  } catch (writeErr) {
+    // 422 is what the contents API returns for "sha wasn't supplied and the file exists";
+    // 409 is the same collision reported as a conflict.
+    const isAlreadyExists = writeErr instanceof RequestError && (writeErr.status === 422 || writeErr.status === 409);
+    if (!isAlreadyExists) throw writeErr;
+    // Confirm it really is present rather than trusting the status code, so a 422 raised for
+    // any other reason still fails loudly.
+    try {
+      await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
+    } catch {
+      throw writeErr;
+    }
+    scope.setTag("restore_workflow_created_concurrently", "true");
+    console.log(
+      `${GRADE_WORKFLOW_PATH} appeared in ${templateRepo} while enabling the autograder; adopting the existing file`
+    );
+    // restoreCommitSha stays undefined: the commit is not ours. The head resolved below is
+    // what gets hashed and pinned, which is the revision that actually carries the file.
+  }
 
   // From here the handout has a RUNNABLE workflow. If anything below fails we
   // throw, and callers roll has_autograder back to false — which would leave a
@@ -697,6 +730,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     await updateAutograderWorkflowHash(templateRepo, hashedRevision);
     realignedOnRestore = await realignInClassSharers();
   } catch (e) {
+    // Only undo a write of OURS. When the file was created concurrently by an instructor and
+    // adopted above, deleting it here would destroy their commit — worse than the
+    // inconsistency the rollback exists to prevent, and not ours to decide. Their workflow
+    // stays; the caller still restores has_autograder=false, so the mismatch is recorded
+    // under this tag for someone to reconcile deliberately.
+    if (!weWroteTheWorkflow) {
+      scope.setTag("restore_rollback_skipped_foreign_workflow", "true");
+      Sentry.captureException(e, scope);
+      throw e;
+    }
     scope.setTag("restore_rollback", "true");
     try {
       await deleteFileFromRepo(
@@ -748,7 +791,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // propagating.
       scope.setTag("pin_latest_template_sha_failed", "true");
       Sentry.captureException(shaError, scope);
+      // Same restriction as the rollback above: never delete a grade.yml an instructor
+      // created concurrently and this run merely adopted.
       try {
+        if (!weWroteTheWorkflow) {
+          scope.setTag("restore_rollback_skipped_foreign_workflow", "true");
+          throw new Error("Not deleting a concurrently created grade.yml that this run did not write");
+        }
         await deleteFileFromRepo(
           templateRepo,
           GRADE_WORKFLOW_PATH,

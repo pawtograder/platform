@@ -105,6 +105,32 @@ where a.has_autograder = false
 alter table public.assignments
   alter column has_autograder set default true;
 
+-- Why TRUE and not "false until a grader repo exists", which is what the backfill above
+-- reasons for EXISTING rows:
+--
+--   * The two cases are not symmetric. For an existing row, `false` plus no grader_repo is
+--     evidence of how the assignment has actually been used. For a NEW row it is evidence of
+--     nothing: the AFTER INSERT trigger creates the autograder row blank, so grader_repo is
+--     null for every assignment at insert time, including the ones about to be configured.
+--     Defaulting on that would make "repo-only, hand-graded" the meaning of every freshly
+--     created repository assignment.
+--   * That is the ordinary sequence, not a corner case. tests/e2e/TestingUtils.ts
+--     `insertAssignment` — used by ~240 call sites — inserts a repo-bearing assignment
+--     WITHOUT this column and then exercises Actions grading, which is exactly the
+--     create-then-configure flow a CLI or script follows. With a FALSE default those
+--     assignments would have grade.yml stripped from their handout at creation and their
+--     Actions runs rejected as "no autograder".
+--   * The window this leaves — has_autograder true while grader_repo is still null — is
+--     PRE-EXISTING and unchanged by this PR. assignment-create-handout-repo has always
+--     written grade.yml, so an unconfigured assignment has always been able to dispatch a
+--     workflow that fails for want of a grader repo. Nothing here makes that worse; the
+--     flag only additionally decides whether grade.yml is stripped.
+--
+-- Every insert path in this repository sets the column explicitly anyway (the assignment
+-- form, supabase/seed.sql, scripts/SeedCourseAssignments.ts, and the CLI copy path, which
+-- carries the source assignment's value), so this default governs ad-hoc SQL and future
+-- callers only.
+
 -- The default above is unconditional, but `has_autograder = true` is only meaningful
 -- for a push-mode assignment that has a repository:
 --   - submission_mode = 'pr'  -> submissions are ingested by the PR webhook and never
