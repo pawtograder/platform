@@ -5,6 +5,7 @@ import "server-only";
  * Callers must pass the request-scoped cookie Supabase client.
  */
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type ManageAssignmentsOverviewRow = Database["public"]["Views"]["assignment_overview"]["Row"];
@@ -121,6 +122,12 @@ export type StudentDashboardBundle = {
     time_zone: string | null;
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
+    /**
+     * `classes.features` — read server-side so feature-gated dashboard content renders without a
+     * flash. Declared in its narrowed shape so consumers can hand it straight to
+     * `courseFeatureEnabled` instead of each re-asserting the row type.
+     */
+    features: CourseWithFeatures["features"] | null;
   } | null;
   courseError: string | null;
   assignments: unknown;
@@ -180,7 +187,7 @@ export async function fetchStudentDashboardBundle(
   ] = await Promise.all([
     supabase
       .from("classes")
-      .select("time_zone, office_hours_ics_url, events_ics_url, name")
+      .select("time_zone, office_hours_ics_url, events_ics_url, name, features")
       .eq("id", courseId)
       .single(),
     supabase
@@ -246,7 +253,9 @@ export async function fetchStudentDashboardBundle(
     : { data: null, error: null };
 
   return {
-    course: course ?? null,
+    // `classes.features` is typed `Json`; narrow it once here so dashboard consumers do not each
+    // repeat the assertion. `courseFeatureEffectiveEnabled` re-checks `Array.isArray` at runtime.
+    course: course ? { ...course, features: course.features as CourseWithFeatures["features"] | null } : null,
     courseError: courseError?.message ?? null,
     assignments: assignments ?? null,
     assignmentsError: assignmentsError?.message ?? null,
