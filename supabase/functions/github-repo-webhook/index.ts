@@ -1569,6 +1569,25 @@ async function handlePushToTemplateRepo(
   // template_repo, so filter rather than bail on the first one.
   const autogradedAssignments = assignments.filter((a) => a.has_autograder !== false);
   scope?.setTag("autograded_assignments_count", autogradedAssignments.length.toString());
+  // ONE head resolution, used for both the workflow read below and the pointer decision
+  // further down. Reading the workflow from the unqualified head and resolving the head
+  // separately let two interleaved deliveries split the pair: B's handler could pin B and
+  // store B's hash while A's handler was between its own read and its lookup, after which A
+  // overwrote workflow_sha with A's content, saw B as current, and correctly declined to move
+  // the pointer — leaving latest_template_sha on B with workflow_sha from A. Repos synced to B
+  // then had every Actions submission rejected for a hash mismatch. Resolving once means the
+  // handler that writes the hash is the same one that decides whether its revision is current.
+  let currentHeadSha: string | undefined;
+  if (assignments[0].template_repo) {
+    try {
+      currentHeadSha = await getDefaultBranchHeadSha(assignments[0].template_repo, scope);
+    } catch (headErr) {
+      // Never block history on this check: fall through and trust the payload, which is
+      // exactly the behaviour that existed before it.
+      scope?.setTag("template_head_lookup_failed", "true");
+      Sentry.captureException(headErr, scope);
+    }
+  }
   if (!assignments[0].template_repo) {
     Sentry.captureMessage("No matching assignment found", scope);
   } else if (autogradedAssignments.length === 0) {
@@ -1578,7 +1597,14 @@ async function handlePushToTemplateRepo(
     );
   } else {
     try {
-      const file = (await getFileFromRepo(assignments[0].template_repo!, GRADER_WORKFLOW_PATH)) as {
+      // Pinned to the head resolved above, so the hash written here describes the same
+      // revision the pointer decision uses.
+      const file = (await getFileFromRepo(
+        assignments[0].template_repo!,
+        GRADER_WORKFLOW_PATH,
+        scope,
+        currentHeadSha
+      )) as {
         content: string;
       };
       if (!file.content) {
@@ -1625,15 +1651,6 @@ async function handlePushToTemplateRepo(
   // disabled one. Earlier fixes corrected the pointer after the fact, one operation at a
   // time; checking the head here rules out the whole class.
   const pushedSha = payload.after || payload.head_commit?.id || payload.commits?.[0]?.id;
-  let currentHeadSha: string | undefined;
-  try {
-    currentHeadSha = await getDefaultBranchHeadSha(assignments[0].template_repo!, scope);
-  } catch (headErr) {
-    // Never block history on this check: fall through and trust the payload, which is
-    // exactly the behaviour that existed before it.
-    scope?.setTag("template_head_lookup_failed", "true");
-    Sentry.captureException(headErr, scope);
-  }
   // Skip only the POINTER move, not the rest of this handler. Returning here also
   // skipped the assignment_handout_commits and assignment_handout_file_hashes loops
   // below, so an out-of-order delivery vanished from handout history AND never had its

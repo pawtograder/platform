@@ -71,20 +71,36 @@ async function queueHandoutSyncsForAssignments(
   assignmentIds: number[],
   scope: Sentry.Scope
 ): Promise<{ queued: number; failed: boolean }> {
-  const { data: repoRows, error: repoRowsError } = await adminSupabase
-    .from("repositories")
-    .select("id")
-    .in("assignment_id", assignmentIds);
-  if (repoRowsError) {
-    // Same reasoning as the queue failure below: without the repository ids nothing was
-    // queued, so this is a failure to report, not to log.
-    scope.setTag("queue_repo_syncs_lookup_failed", "true");
-    Sentry.captureException(repoRowsError, scope);
-    return { queued: 0, failed: true };
+  // PAGINATED. Supabase caps a response at max_rows = 1000, so a single select silently
+  // returned only the first 1000 repositories — and it returns them without an error, so the
+  // toggle reported success while every repository past the cap kept the previous workflow
+  // state. A large course, or several same-class assignments sharing one handout, reaches that
+  // cap easily; after an enable those repositories never receive the workflow, so pushes to
+  // them go unrecorded.
+  const REPO_PAGE_SIZE = 1000;
+  const repoIds: number[] = [];
+  for (let offset = 0; ; offset += REPO_PAGE_SIZE) {
+    const { data: repoRows, error: repoRowsError } = await adminSupabase
+      .from("repositories")
+      .select("id")
+      .in("assignment_id", assignmentIds)
+      .order("id", { ascending: true })
+      .range(offset, offset + REPO_PAGE_SIZE - 1);
+    if (repoRowsError) {
+      // Same reasoning as the queue failure below: without the repository ids nothing was
+      // queued, so this is a failure to report, not to log. A partial page is still a
+      // failure — queueing only the repositories read so far would silently leave the rest.
+      scope.setTag("queue_repo_syncs_lookup_failed", "true");
+      Sentry.captureException(repoRowsError, scope);
+      return { queued: 0, failed: true };
+    }
+    if (!repoRows || repoRows.length === 0) break;
+    repoIds.push(...repoRows.map((r) => r.id));
+    if (repoRows.length < REPO_PAGE_SIZE) break;
   }
   // Nothing to sync is a success: an assignment whose repos have not been created yet gets
   // the current handout at creation time.
-  if (!repoRows || repoRows.length === 0) return { queued: 0, failed: false };
+  if (repoIds.length === 0) return { queued: 0, failed: false };
   if (!authHeader) {
     // queue_repository_syncs requires auth.uid(), so a service-role invocation genuinely
     // cannot queue. Report it rather than pretending: a caller with no user context still
@@ -96,8 +112,8 @@ async function queueHandoutSyncsForAssignments(
   const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: { headers: { Authorization: authHeader } }
   });
-  const { error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
-    p_repository_ids: repoRows.map((r) => r.id)
+  const { data: queueResult, error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
+    p_repository_ids: repoIds
   });
   if (queueError) {
     // Reported, not swallowed. The handout is correct by this point but existing student
@@ -115,8 +131,23 @@ async function queueHandoutSyncsForAssignments(
     Sentry.captureException(queueError, scope);
     return { queued: 0, failed: true };
   }
-  scope.setTag("queued_repo_syncs", String(repoRows.length));
-  return { queued: repoRows.length, failed: false };
+  // The RPC catches exceptions PER REPOSITORY and reports them in its own JSON payload —
+  // `error_count` and `errors` — which never reaches PostgREST's `error` field. Reading only
+  // that field meant a call where every single repository failed to queue still returned
+  // `failed: false`, so the UI showed no warning at all. Inspect the payload.
+  const summary = (queueResult ?? null) as { queued_count?: number; error_count?: number } | null;
+  const errorCount = summary?.error_count ?? 0;
+  const queuedCount = summary?.queued_count ?? repoIds.length;
+  if (errorCount > 0) {
+    scope.setTag("queue_repo_syncs_partial_failure", String(errorCount));
+    Sentry.captureMessage(
+      `queue_repository_syncs reported ${errorCount} per-repository error(s) for assignments ${assignmentIds.join(", ")}`,
+      scope
+    );
+    return { queued: queuedCount, failed: true };
+  }
+  scope.setTag("queued_repo_syncs", String(queuedCount));
+  return { queued: queuedCount, failed: false };
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -395,6 +426,48 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const deleted = moved;
     const deleteCommitSha = renameCommitSha;
 
+    /**
+     * Put the parked workflow back — unless a live one already exists.
+     *
+     * Both disable-rollback paths need this. The reverse rename bases its commit on the
+     * current head, so an instructor who pushed their own grade.yml after ours was parked
+     * would have it overwritten by the parked copy, and because that commit is a valid
+     * fast-forward, renameFileInRepo's retry protection cannot detect the loss. Their file
+     * already achieves what the rollback wants — a live workflow in the handout — so the
+     * correct action is to leave it and drop our parked copy instead.
+     *
+     * Returns the commit sha when a rename actually happened, so callers can re-pin the
+     * advertised head; undefined when there was nothing to do or someone else's file was kept.
+     */
+    const restoreParkedWorkflow = async (message: string): Promise<string | undefined> => {
+      const liveWorkflow = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope).catch((e) => {
+        if (e instanceof RequestError && e.status === 404) return null;
+        throw e;
+      });
+      if (liveWorkflow) {
+        scope.setTag("disable_rollback_workflow_recreated", "true");
+        console.log(
+          `Not restoring the parked workflow in ${templateRepo}: a live ${GRADE_WORKFLOW_PATH} already exists ` +
+            `(pushed while the disable was in flight), so the parked copy is removed instead`
+        );
+        await deleteFileFromRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          "Remove parked autograder workflow: a live workflow was restored by hand",
+          scope
+        );
+        return undefined;
+      }
+      const { commit_sha } = await renameFileInRepo(
+        templateRepo,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        GRADE_WORKFLOW_PATH,
+        message,
+        scope
+      );
+      return commit_sha;
+    };
+
     // Same hazard as the restore path, mirrored: realignInClassSharers throws on
     // failure, and by now the live workflow is GONE. If that throw escaped, the
     // caller would roll has_autograder back to true and the assignment would claim
@@ -407,15 +480,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (moved) {
         scope.setTag("disable_rollback", "true");
         try {
-          // The reverse rename, also one commit. No need to hold the content in
-          // memory: the parked copy IS the content, so moving it back restores
-          // exactly what was there.
-          const { commit_sha: rollbackCommitSha } = await renameFileInRepo(
-            templateRepo,
-            DISABLED_GRADE_WORKFLOW_PATH,
-            GRADE_WORKFLOW_PATH,
-            "Roll back autograder workflow removal: disabling the autograder failed",
-            scope
+          // One commit, and no need to hold the content in memory: the parked copy IS the
+          // content, so moving it back restores exactly what was there.
+          const rollbackCommitSha = await restoreParkedWorkflow(
+            "Roll back autograder workflow removal: disabling the autograder failed"
           );
           // Move the advertised head off the delete commit as well. Leaving it there
           // would have handout syncs strip grade.yml from student repos while the caller
@@ -455,12 +523,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (moved) {
         scope.setTag("disable_rollback", "true");
         try {
-          await renameFileInRepo(
-            templateRepo,
-            DISABLED_GRADE_WORKFLOW_PATH,
-            GRADE_WORKFLOW_PATH,
-            "Roll back autograder workflow removal: the handout revision pointer could not be updated",
-            scope
+          await restoreParkedWorkflow(
+            "Roll back autograder workflow removal: the handout revision pointer could not be updated"
           );
         } catch (rollbackError) {
           scope.setTag("disable_rollback_failed", "true");

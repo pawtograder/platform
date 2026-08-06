@@ -975,12 +975,31 @@ export async function renameFileInRepo(
     });
     const headSha = ref.object.sha;
 
-    // Absent at this commit means there is nothing to move.
+    // Absent at this commit means there is nothing to move — but "nothing to move" is a
+    // CLAIM ABOUT THE HEAD, so confirm the head has not moved before reporting it. The disable
+    // flow treats `moved: false` as "the workflow is already gone", then resolves and pins the
+    // current head; if an instructor pushed a new grade.yml between this read and the return,
+    // that pinned revision contains a live workflow while the assignment is recorded as having
+    // no autograder. Re-reading the ref turns the race into a retry, mirroring what the
+    // file-present path does when its ref update is rejected.
     let content: string;
     try {
       content = (await getFileFromRepo(repoName, fromPath, scope, headSha)).content;
     } catch (error) {
       if (error instanceof RequestError && error.status === 404) {
+        const { data: recheck } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner,
+          repo,
+          ref: `heads/${branch}`
+        });
+        if (recheck.object.sha !== headSha && attempt < MAX_ATTEMPTS) {
+          scope?.setTag("rename_file_absent_recheck_retry", String(attempt));
+          console.log(
+            `${fromPath} was absent at ${headSha} in ${repoName}, but the branch has moved to ` +
+              `${recheck.object.sha}; retrying before reporting it missing`
+          );
+          continue;
+        }
         console.log(`Not moving ${fromPath} in ${repoName}: file does not exist at ${headSha}`);
         return { moved: false };
       }
