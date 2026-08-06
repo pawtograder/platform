@@ -127,6 +127,9 @@ export default function EditAssignment() {
         // alone: B's own repositories still need the workflow, and A's retained repositories can be
         // cleaned up from B or by hand.
         let handoutIsShared = false;
+        // Set once the pre-detach cleanup below has actually taken effect in GitHub, so the row
+        // write further down knows it has something to undo if IT fails.
+        let preDetachCleanupApplied = false;
         if (isNoRepo && queryData?.template_repo) {
           const { data: sharers, error: sharersError } = await supabase
             .from("assignments")
@@ -193,6 +196,7 @@ export default function EditAssignment() {
             }
             throw detachError;
           }
+          preDetachCleanupApplied = true;
         }
         // Submission-mode / upstream coupling (Option A): for PR mode the
         // upstream repo IS the handout (template_repo), so keep them equal.
@@ -271,7 +275,45 @@ export default function EditAssignment() {
             );
           }
         }
-        await form.refineCore.onFinish(values);
+        try {
+          await form.refineCore.onFinish(values);
+        } catch (saveError) {
+          // Compensate the pre-detach cleanup, which is the one step already committed to GitHub
+          // by the time this row write runs. Without this the outer catch reports "Failed to
+          // update the assignment" over an assignment that is STILL attached to its handout in
+          // its old repository mode, but whose autograder is off, whose grade.yml has been parked
+          // and whose student repositories are being stripped of the workflow — the very
+          // half-detached state the cleanup's own rollback exists to prevent, reached through the
+          // row write instead of the sync.
+          //
+          // Same order as the forward path, for the same reason: the sync reads has_autograder
+          // from the database, so the flag goes back first and only then can the sync take the
+          // enable path and restore grade.yml. Both are logged rather than thrown — replacing
+          // `saveError` would tell the instructor why the UNDO failed instead of why the save did.
+          if (preDetachCleanupApplied && queryData) {
+            try {
+              await updateAsync({
+                resource: "assignments",
+                id: Number.parseInt(assignment_id as string),
+                values: { has_autograder: queryData.has_autograder }
+              });
+              await assignmentSyncAutograderWorkflow(
+                {
+                  assignment_id: Number.parseInt(assignment_id as string),
+                  class_id: Number.parseInt(course_id as string)
+                },
+                supabase
+              );
+            } catch (rollbackError) {
+              console.error(
+                "Failed to restore the autograder workflow after the assignment row write failed; the assignment " +
+                  "is still attached to its handout but its grade.yml may remain parked",
+                rollbackError
+              );
+            }
+          }
+          throw saveError;
+        }
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {
           // Both GitHub-touching calls sit in ONE rollback scope. The row is already

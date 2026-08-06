@@ -513,6 +513,24 @@ async function createPushDirectSubmission(
         return;
       }
       await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, repoName, sha, scope);
+      // Promotion is allowed to REFUSE — a retained rejection or an is_not_graded row is not
+      // something to make active — and a refusal leaves the same hole the late branch above
+      // repairs. A retained oversized or empty rejection is deactivated but keeps its grading
+      // review, so a redelivery for that commit lands HERE, not in the duplicate branch below
+      // whose comment describes this case: the row is inactive, so this branch claims it first.
+      // If the reactivation that should have followed the original rejection failed transiently,
+      // the throw that asked for this redelivery could never repair anything — promotion declines
+      // on the rejection marker and this returned 200, leaving the student with no active
+      // submission at all, permanently.
+      //
+      // Deliberately NO excludeSubmissionId, unlike the late branch above. The probe honours the
+      // exclusion, so passing this row would hide the submission promotion just made active and
+      // send the search on to promote a second one — the very 23505 the probe was added to stop.
+      // Omitting it makes the probe see the successful promotion and return untouched, and both
+      // reasons promotion can refuse are already filtered out of the candidate search: a retained
+      // rejection by the workflow_run_error marker, an is_not_graded row by the query itself. So
+      // this row can never be what gets promoted here.
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
       return;
     } else if (existingRejectionType) {
       // A rejected row that is STILL ACTIVE is a failed deactivation, not a duplicate.
@@ -533,16 +551,17 @@ async function createPushDirectSubmission(
       }
       return;
     } else {
-      // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
-      // its grading review on purpose, so this branch is where a redelivery for that commit
-      // lands — and if the reactivation that should have followed the rejection failed
-      // transiently, the throw that asked for this redelivery could never repair anything: the
-      // check above reads the retained row as complete and returned here. The student's last
-      // valid submission then stayed inactive permanently.
+      // An ordinary duplicate delivery: the row is complete, active and carries no rejection
+      // marker, so there is nothing to redo. Retained rejections do NOT reach here — they are
+      // deactivated, which the is_active branch above claims first, and a failed deactivation
+      // leaves them active but marked, which the branch above that claims. Both repair
+      // themselves.
       //
-      // No exclusion is passed: reactivatePreviousSubmission already skips retained rejections
-      // and returns untouched when a submission is already active, so this is a no-op on an
-      // ordinary duplicate delivery and a repair on the one that needs it. It throws on
+      // Still worth the check before returning, because "active" was read from the row this
+      // delivery matched, not from the student's submission set as a whole: a demotion that
+      // outlived its promotion leaves nothing active at all. No exclusion is passed, since this
+      // row is a legitimate candidate. reactivatePreviousSubmission returns untouched when
+      // something is already active, so this is a no-op on the normal path, and it throws on
       // failure, which correctly asks for another delivery.
       await reactivatePreviousSubmission(adminSupabase, studentRepo, scope);
       return;

@@ -170,6 +170,10 @@ export default function AutograderPage() {
       // submission limit — could strip grade.yml from a shared handout and turn the
       // autograder off on assignments the instructor never opened.
       const autograderFlagChanged = priorHasAutograder === undefined || priorHasAutograder !== nextHasAutograder;
+      // Whether the autograder row actually received `nextAutograderRow`. The rollback below
+      // matches on those values, which is only a valid identity for the row when the write landed
+      // — see the two cases spelled out there.
+      let autograderRowWriteLanded = false;
       try {
         // Inside the try, like the flag write below and for the same reason: when the
         // autograder stays enabled, githubRepoConfigureWebhook above has ALREADY parsed the
@@ -178,6 +182,7 @@ export default function AutograderPage() {
         // saved" while grading ran on the new config paired with the old grader_repo and
         // limits — exactly the mismatch priorAutograderRow.config exists to undo.
         await refineCore.onFinish(nextAutograderRow);
+        autograderRowWriteLanded = true;
         await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
         if (!autograderFlagChanged) {
           savedHasAutograder.current = nextHasAutograder;
@@ -280,7 +285,20 @@ export default function AutograderPage() {
             console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
           }
         }
-        if (autograderRowChanged) {
+        // Two failure shapes reach this handler and they need different rollbacks.
+        //
+        // If the row write LANDED, the row holds nextAutograderRow and a later step failed:
+        // restore the whole snapshot, matched on what was written.
+        //
+        // If the row write itself failed, the row still holds the OLD grader_repo and limits —
+        // but `config` was already replaced server-side by githubRepoConfigureWebhook above, and
+        // that is the one thing left to undo. Matching on nextAutograderRow here selects zero
+        // rows, so the restore silently did nothing and the NEW grader repo's parsed config
+        // stayed paired with the OLD grader_repo, under a "Changes not saved" toast — a
+        // combination that then drives real grading. So restore `config` alone, matched on the
+        // row still holding the values this page loaded.
+        const configOnlyRollback = !autograderRowWriteLanded;
+        if (autograderRowChanged && (autograderRowWriteLanded || graderConfigMayHaveChanged)) {
           try {
             // CONDITIONAL, like the assignment edit page's rollback. The GitHub work above takes
             // seconds, which is long enough for a second instructor to save this same page — and
@@ -298,19 +316,34 @@ export default function AutograderPage() {
             // HTTP 400 on an integer column. Both submission limits are `values.x || null`, so a
             // blank limit — the ordinary case — made this rollback fail outright, leaving the new
             // grader_repo and the freshly parsed config persisted under a "Changes not saved" toast.
+            //
+            // `config` is never part of the match, only ever of the update: it is jsonb, its
+            // pre-save value is the page-load snapshot rather than anything this save wrote, and
+            // comparing jsonb for equality through PostgREST is not something to rely on anyway.
+            const rollbackValues = configOnlyRollback ? { config: priorAutograderRow.config } : priorAutograderRow;
+            const matchColumns: Record<string, string | number | null> = configOnlyRollback
+              ? {
+                  grader_repo: priorAutograderRow.grader_repo,
+                  max_submissions_count: priorAutograderRow.max_submissions_count,
+                  max_submissions_period_secs: priorAutograderRow.max_submissions_period_secs
+                }
+              : nextAutograderRow;
             let rollbackQuery = supabase
               .from("autograder")
-              .update(priorAutograderRow)
+              .update(rollbackValues)
               .eq("id", Number.parseInt(assignment_id as string));
-            for (const [column, written] of Object.entries(nextAutograderRow)) {
-              rollbackQuery = written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
+            for (const [column, expected] of Object.entries(matchColumns)) {
+              rollbackQuery = expected === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, expected);
             }
             const { data: rolledBack, error: rollbackDbError } = await rollbackQuery.select("id");
             if (rollbackDbError) throw rollbackDbError;
             if ((rolledBack ?? []).length === 0) {
               console.warn(
-                "Not rolling back the autograder row: it no longer holds the values this save wrote, so another " +
-                  "save has superseded it."
+                configOnlyRollback
+                  ? "Not restoring the autograder config: the row no longer holds the values this page loaded, so " +
+                      "another save has superseded it."
+                  : "Not rolling back the autograder row: it no longer holds the values this save wrote, so another " +
+                      "save has superseded it."
               );
             }
           } catch (rollbackError) {

@@ -10,7 +10,11 @@ import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
-import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import {
+  seedHandoutFileHashes,
+  computeHandoutFileHashesForCommit,
+  HandoutHashCaches
+} from "../_shared/handoutFileHashes.ts";
 
 /**
  * Webhook events the Pawtograder GitHub App must subscribe to.
@@ -149,40 +153,53 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log("Getting autograder config from repo", new_repo);
     const graderConfig = await getFileFromRepo(new_repo, "pawtograder.yml");
     const asObj = (await parse(graderConfig.content)) as Json;
-    const { error } = await supabase
-      .from("autograder")
-      .update({
-        config: asObj
-      })
-      .eq("id", autograder.id)
-      .single();
-    if (error) {
-      return {
-        message: "Error updating autograder config"
-      };
-    }
-    // The config that just landed is what names `submissionFiles`, so this is the first moment
-    // the handout's file hashes CAN be computed for a new assignment —
+
+    // The config names `submissionFiles`, so it is what the handout's file hashes are computed
+    // over — and this is the first moment they CAN be computed for a new assignment, since
     // assignment-create-handout-repo runs before it and finds no globs to hash. Without these
     // rows the ingestion path has nothing to compare against and reads an untouched starter
     // repo as real work, which on a repo-only assignment makes the student's first unchanged
-    // push their active submission. Idempotent on (assignment_id, sha), and reports rather
-    // than throwing: the rows are re-derivable and the next handout push recomputes them.
+    // push their active submission.
+    //
+    // Every GitHub read happens HERE, before the config row is written, and the rows are then
+    // written immediately after it. The rehash used to run after the config write, one revision
+    // at a time, each with its own GitHub round trips: for the whole of that rebuild the live
+    // config named the NEW globs while the recorded hashes were still computed from the OLD
+    // ones, so a student push landing in it was filtered with one file set and compared against
+    // a hash of a different one. No match, and an untouched starter tree was accepted as real
+    // work and left active. Reordering alone does not fix that — the new globs are exactly what
+    // the new hashes must be computed from, so the hashes cannot precede the config unless the
+    // globs are taken from the parsed yml rather than re-read from the row, which is why
+    // computeHandoutFileHashesForCommit is called directly instead of seedHandoutFileHashes
+    // (which reads `autograder.config` back out of the database).
+    //
+    // What is left is one round trip between the two writes rather than a repository walk per
+    // revision. Closing it completely needs both writes in one transaction, which PostgREST
+    // cannot express.
+    //
+    // SERVICE ROLE, not the JWT-scoped client above. assignment_handout_file_hashes has only
+    // an "instructors read" policy (20260114180000), so an authenticated upsert is rejected
+    // by RLS — and seedHandoutFileHashes reported rather than throwing, so that rejection
+    // turned into a silent `{ seeded: false }`. The hashes then stayed on the OLD globs after
+    // an instructor edited submissionFiles, which is exactly when they need recomputing.
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
     const { data: handoutTarget } = await supabase
       .from("assignments")
       .select("template_repo, latest_template_sha, class_id")
       .eq("id", assignment_id)
       .maybeSingle();
-    if (handoutTarget?.template_repo) {
-      // SERVICE ROLE, not the JWT-scoped client above. assignment_handout_file_hashes has only
-      // an "instructors read" policy (20260114180000), so an authenticated upsert is rejected
-      // by RLS — and seedHandoutFileHashes reports rather than throwing, so that rejection
-      // turned into a silent `{ seeded: false }`. The hashes then stayed on the OLD globs after
-      // an instructor edited submissionFiles, which is exactly when they need recomputing.
-      const adminSupabase = createClient<Database>(
-        Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-      );
+    const newConfig = asObj as unknown as PawtograderConfig | null;
+    // Same derivation as seedHandoutFileHashes: with no globs there is no comparable file set,
+    // which is also how the ingestion path decides it cannot detect emptiness. Leave the
+    // recorded rows alone in that case rather than replacing them with hashes of nothing.
+    const expectedFiles = newConfig?.submissionFiles
+      ? [...(newConfig.submissionFiles.files || []), ...(newConfig.submissionFiles.testFiles || [])]
+      : [];
+    const rehashedRows: Database["public"]["Tables"]["assignment_handout_file_hashes"]["Insert"][] = [];
+    if (handoutTarget?.template_repo && expectedFiles.length > 0) {
       // Recompute EVERY recorded revision, not just the current head. The empty-submission check
       // compares a pushed tree against the stored hash for the revision that repository is on, and
       // student repositories sit on older handout revisions all the time. Reseeding only the latest
@@ -199,21 +216,73 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           ...(handoutTarget.latest_template_sha ? [handoutTarget.latest_template_sha] : [])
         ])
       ];
+      // Shared across revisions: consecutive handout commits differ in a file or two, so the blob
+      // hashes dominate and re-fetching them per revision is what made this walk long enough to
+      // matter in the first place.
+      const caches: HandoutHashCaches = { commitTree: new Map(), blobHash: new Map() };
       for (const revisionSha of revisionsToHash) {
-        const revisionResult = await seedHandoutFileHashes({
-          adminSupabase,
-          assignmentId: assignment_id,
-          classId: handoutTarget.class_id,
-          templateRepo: handoutTarget.template_repo,
-          commitSha: revisionSha,
-          scope
-        });
-        if (!revisionResult.seeded) {
+        try {
+          const { file_hashes, combined_hash } = await computeHandoutFileHashesForCommit({
+            templateRepo: handoutTarget.template_repo,
+            commitSha: revisionSha,
+            expectedFiles,
+            scope,
+            caches
+          });
+          rehashedRows.push({
+            assignment_id,
+            sha: revisionSha,
+            combined_hash,
+            file_hashes,
+            class_id: handoutTarget.class_id
+          });
+        } catch (e) {
+          // Per revision, and reported rather than thrown, keeping seedHandoutFileHashes'
+          // contract: a deleted or unreachable commit must not fail the instructor's config
+          // save, and the rows are re-derivable from the next handout push. The revisions that
+          // DID hash still go in — dropping them all would leave more rows on the old globs.
+          scope?.setTag("rehash_handout_revision_failed", revisionSha);
+          Sentry.captureException(e, scope);
           console.log(
             `Not rehashing handout revision ${revisionSha} for assignment ${assignment_id} after the grader config: ` +
-              `${revisionResult.reason}`
+              `${e instanceof Error ? e.message : String(e)}`
           );
         }
+      }
+    } else if (handoutTarget?.template_repo) {
+      console.log(
+        `Not rehashing handout revisions for assignment ${assignment_id}: the grader config names no submissionFiles`
+      );
+    }
+
+    const { error } = await supabase
+      .from("autograder")
+      .update({
+        config: asObj
+      })
+      .eq("id", autograder.id)
+      .single();
+    if (error) {
+      return {
+        message: "Error updating autograder config"
+      };
+    }
+    if (rehashedRows.length > 0) {
+      // ONE statement for every revision, so the recorded set flips from old globs to new in a
+      // single commit instead of drifting through a half-rehashed state. Idempotent on
+      // (assignment_id, sha).
+      const { error: rehashError } = await adminSupabase
+        .from("assignment_handout_file_hashes")
+        .upsert(rehashedRows, { onConflict: "assignment_id,sha" });
+      if (rehashError) {
+        // Reported, not thrown: the config is already saved and rejecting the request now would
+        // tell the instructor their yml did not land when it did. The rows stay on the old globs
+        // until the next handout push recomputes them.
+        scope?.setTag("rehash_handout_upsert_failed", "true");
+        Sentry.captureException(rehashError, scope);
+        console.log(
+          `Failed to record rehashed handout revisions for assignment ${assignment_id}: ${rehashError.message}`
+        );
       }
     }
   } else {
