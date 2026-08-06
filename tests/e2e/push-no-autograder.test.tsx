@@ -406,13 +406,19 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
   test("push to a repo still being provisioned creates NO submission", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
+    const sha = `55555555${SAFE_ID}`.slice(0, 40);
+    // synced_repo_sha is what IDENTIFIES the starter-template push, and it has to match the
+    // commit being delivered. Repository creation records the head it produced there, and the
+    // handler drops an unready push only when the two agree — an unready repo pushing anything
+    // ELSE is student work that arrived before the readiness flag was written, and discarding it
+    // silently is what the sibling test below now guards against. Setting only is_github_ready
+    // here described a provisioning push the handler had no way to recognise.
     const { error: notReadyErr } = await supabase
       .from("repositories")
-      .update({ is_github_ready: false })
+      .update({ is_github_ready: false, synced_repo_sha: sha })
       .eq("id", repoId);
     expect(notReadyErr).toBeNull();
 
-    const sha = `55555555${SAFE_ID}`.slice(0, 40);
     try {
       const res = await deliverPush(
         makePushDetail(repoName, sha, "Initial commit from template"),
@@ -426,7 +432,43 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     } finally {
       // Restored even on failure: leaving the repo unready would make the next test's
       // "no submission" assertion pass for the wrong reason.
-      await supabase.from("repositories").update({ is_github_ready: true }).eq("id", repoId);
+      await supabase.from("repositories").update({ is_github_ready: true, synced_repo_sha: null }).eq("id", repoId);
+    }
+  });
+
+  // The other half of the unready case. Readiness can also be false because the database
+  // write failed after GitHub was already set up: the repository works, the student can
+  // push to it, and acknowledging those deliveries discarded their work permanently. Such a
+  // push must be REFUSED so GitHub redelivers it once the flag is repaired.
+  test("push to an unready repo that is not the starter commit is retried, not dropped", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const provisioningSha = `66666666${SAFE_ID}`.slice(0, 40);
+    const studentSha = `77777777${SAFE_ID}`.slice(0, 40);
+    const { error: notReadyErr } = await supabase
+      .from("repositories")
+      .update({ is_github_ready: false, synced_repo_sha: provisioningSha })
+      .eq("id", repoId);
+    expect(notReadyErr).toBeNull();
+
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, studentSha, "Real student work"),
+        `e2e-push-${SAFE_ID}-7b`
+      );
+      // Non-2xx is the whole point: it is what makes GitHub redeliver. Asserted as "not
+      // acknowledged" rather than a specific code, since the handler signals it by throwing.
+      expect(res.status, await res.text().catch(() => "")).not.toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase
+        .from("submissions")
+        .select("id")
+        .eq("repository", repoName)
+        .eq("sha", studentSha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      await supabase.from("repositories").update({ is_github_ready: true, synced_repo_sha: null }).eq("id", repoId);
     }
   });
 
