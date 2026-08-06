@@ -720,12 +720,22 @@ export async function removePushWebhook(repoName: string, webhookId: number, sco
 /** Path of the autograder's GitHub Actions workflow inside a handout/student repo. */
 export const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
-export async function updateAutograderWorkflowHash(repoName: string) {
+export async function updateAutograderWorkflowHash(
+  repoName: string,
+  /**
+   * Exact commit to hash the workflow at. Omit for the default branch's current head.
+   * Pass a sha when the caller also pins `latest_template_sha`: hashing the unqualified
+   * head while pinning a different revision let a concurrent instructor push record the
+   * NEW workflow's hash against the OLD tree that students receive, so their Actions
+   * submissions failed the hash check until another push repaired both values.
+   */
+  ref?: string
+) {
   if (isGithubStubEnabled()) {
-    await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName });
+    await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
   }
-  const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH)) as { content: string };
+  const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH, undefined, ref)) as { content: string };
   const hash = createHash("sha256");
   if (!file.content) {
     throw new Error("File not found");

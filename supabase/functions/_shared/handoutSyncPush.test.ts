@@ -12,7 +12,16 @@ import { assertEquals } from "jsr:@std/assert@^1";
 import { isHandoutSyncPush, type HandoutSyncPushInputs } from "./handoutSyncPush.ts";
 
 const STUDENT_SHA = "a".repeat(40);
-const HANDOUT_SHA = "b".repeat(40);
+// A realistic sha whose 7-character abbreviation is what syncRepositoryToHandout puts in
+// the branch name, PR title and commit subject (`toSha.substring(0, 7)`). The markers below
+// use "abc1234" precisely because it abbreviates THIS sha: a hex-shaped token that matches
+// no known handout revision must not be treated as instructor machinery.
+const HANDOUT_SHA = "abc1234" + "0".repeat(33);
+const HANDOUT_SHA_7 = HANDOUT_SHA.slice(0, 7);
+// A second handout revision, for the fixtures whose marker names a different one.
+const OTHER_HANDOUT_SHA = "9f8e7d6" + "1".repeat(33);
+// Hex-shaped but not an abbreviation of any handout sha these inputs carry.
+const UNKNOWN_SHA_7 = "deadbee";
 
 function inputs(overrides: Partial<HandoutSyncPushInputs> = {}): HandoutSyncPushInputs {
   return {
@@ -42,7 +51,10 @@ Deno.test("GitHub auto-merge commit for a sync-to-* PR -> sync", () => {
 
 Deno.test("merge commit naming the sync branch without the PR title -> sync", () => {
   assertEquals(
-    isHandoutSyncPush({ ...inputs(), headCommitMessage: "Merge pull request #3 from org/sync-to-9f8e7d6" }),
+    isHandoutSyncPush({
+      ...inputs({ desiredHandoutSha: OTHER_HANDOUT_SHA }),
+      headCommitMessage: "Merge pull request #3 from org/sync-to-9f8e7d6"
+    }),
     true
   );
 });
@@ -110,7 +122,77 @@ Deno.test("student branch named sync-to-tests -> not a sync", () => {
 // ...but the real thing, whose suffix is an abbreviated sha, still matches.
 Deno.test("real sync branch merge (sync-to-<sha7>) -> sync", () => {
   assertEquals(
-    isHandoutSyncPush(inputs({ headCommitMessage: "Merge pull request #12 from org/sync-to-9f8e7d6" })),
+    isHandoutSyncPush(
+      inputs({
+        headCommitMessage: "Merge pull request #12 from org/sync-to-9f8e7d6",
+        desiredHandoutSha: OTHER_HANDOUT_SHA
+      })
+    ),
+    true
+  );
+});
+
+// The hole every matcher shared: "7-40 hex characters" is a SHAPE, not an identity. A
+// student commit body can contain one, and each of the three message shapes below was
+// enough on its own to classify their push as instructor machinery and drop it. The marker
+// must abbreviate a handout revision this row actually knows about.
+Deno.test("sync commit subject naming an unknown sha -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: `Sync handout updates to ${UNKNOWN_SHA_7}` })), false);
+});
+
+Deno.test("sync PR title naming an unknown sha -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush(inputs({ headCommitMessage: `[Instructor Update] Sync handout to ${UNKNOWN_SHA_7}` })),
+    false
+  );
+});
+
+Deno.test("merge of a sync-to-<sha7> branch naming an unknown sha -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush(inputs({ headCommitMessage: `Merge pull request #7 from org/sync-to-${UNKNOWN_SHA_7}` })),
+    false
+  );
+});
+
+// Any of the four recorded revisions is a legitimate target: desired_handout_sha is the one
+// in flight, synced_handout_sha the one already reached.
+Deno.test("marker abbreviating synced_handout_sha -> sync", () => {
+  assertEquals(
+    isHandoutSyncPush(
+      inputs({
+        headCommitMessage: `Sync handout updates to ${OTHER_HANDOUT_SHA.slice(0, 7)}`,
+        latestTemplateSha: null,
+        syncedHandoutSha: OTHER_HANDOUT_SHA
+      })
+    ),
+    true
+  );
+});
+
+// The worker abbreviates to 7, but a full sha is still a valid abbreviation of itself.
+Deno.test("marker carrying the full 40-character handout sha -> sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: `Sync handout updates to ${HANDOUT_SHA}` })), true);
+});
+
+// The generated subject is exactly "Sync handout updates to <sha7>" and nothing else, so a
+// student sentence that merely opens that way keeps its submission even when it does quote
+// a real handout sha.
+Deno.test("student prose continuing past a real sha -> not a sync", () => {
+  assertEquals(
+    isHandoutSyncPush(inputs({ headCommitMessage: `Sync handout updates to ${HANDOUT_SHA_7} broke my tests` })),
+    false
+  );
+});
+
+// Case-insensitive: git prints lowercase, but a stored sha is not guaranteed to be.
+Deno.test("marker in a different case than the stored sha -> sync", () => {
+  assertEquals(
+    isHandoutSyncPush(
+      inputs({
+        headCommitMessage: `Sync handout updates to ${HANDOUT_SHA_7.toUpperCase()}`,
+        latestTemplateSha: HANDOUT_SHA
+      })
+    ),
     true
   );
 });
@@ -136,8 +218,9 @@ Deno.test("head equals repositories.synced_repo_sha (merge commit of a prior syn
 });
 
 Deno.test("short-prefix overlap with a handout sha is NOT enough -> not a sync", () => {
-  // Guards against the truncated-SHA false positives this codebase has hit before.
-  assertEquals(isHandoutSyncPush(inputs({ afterSha: HANDOUT_SHA.slice(0, 7) })), false);
+  // Route 2 has no generated marker to anchor a prefix against, so it stays full-equality
+  // only. Guards against the truncated-SHA false positives this codebase has hit before.
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: HANDOUT_SHA_7 })), false);
 });
 
 Deno.test("null handout shas never match -> not a sync", () => {

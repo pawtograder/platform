@@ -678,8 +678,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // the caller set has_autograder=false — precisely the state this comment says
   // must not happen.
   let realignedOnRestore: { id: number; title: string }[] = [];
+  // ONE revision for both the workflow hash and the pointer below. The hash used to be read
+  // from the unqualified default-branch head while the pointer named restoreCommitSha, so an
+  // instructor push landing between the restore commit and here recorded the NEW workflow's
+  // hash while students were sent the OLD tree — every Actions submission then failed the
+  // hash check until another handout push happened to repair both values. Resolving once and
+  // using that sha for both keeps them describing the same tree by construction.
+  let hashedRevision: string | undefined;
   try {
-    await updateAutograderWorkflowHash(templateRepo);
+    hashedRevision = await getDefaultBranchHeadSha(templateRepo, scope);
+    if (hashedRevision && restoreCommitSha && hashedRevision !== restoreCommitSha) {
+      // Someone pushed after our restore commit. Their commit is a descendant, so it still
+      // carries the restored workflow; hashing and pinning THEIR head is both consistent and
+      // forward, where pinning ours would have moved the pointer backwards over the value
+      // their push's own webhook writes.
+      scope.setTag("restore_head_advanced", "true");
+    }
+    await updateAutograderWorkflowHash(templateRepo, hashedRevision);
     realignedOnRestore = await realignInClassSharers();
   } catch (e) {
     scope.setTag("restore_rollback", "true");
@@ -712,10 +727,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // pointer at the older, workflow-free revision is the safe direction.
   // Not class-scoped, for the same reason as the delete-commit pin above: the repo edit
   // reached every sharer, so every sharer's advertised head must follow it.
-  if (restoreCommitSha) {
+  // The revision hashed above, so the two always agree. Falls back to the restore commit
+  // only when the head could not be resolved (the E2E GitHub stub returns undefined), which
+  // is also the pre-existing behaviour.
+  const restorePinSha = hashedRevision ?? restoreCommitSha;
+  if (restorePinSha) {
     const { error: shaError } = await adminSupabase
       .from("assignments")
-      .update({ latest_template_sha: restoreCommitSha })
+      .update({ latest_template_sha: restorePinSha })
       .eq("template_repo", templateRepo);
     if (shaError) {
       // Symmetric to the disable path: without the pointer, nothing tells student repos

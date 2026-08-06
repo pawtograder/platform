@@ -839,6 +839,9 @@ async function createPushDirectSubmission(
  * previous good work disappears from the gradebook and review flows until they
  * push again.
  */
+/** Page size for the paginated candidate scan in reactivatePreviousSubmission. */
+const PAGE_SIZE = 50;
+
 async function reactivatePreviousSubmission(
   adminSupabase: SupabaseClient<Database>,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
@@ -850,22 +853,27 @@ async function reactivatePreviousSubmission(
   excludeSubmissionId?: number
 ): Promise<void> {
   try {
-    let base = adminSupabase
-      .from("submissions")
-      .select("id, is_active, ordinal")
-      .eq("assignment_id", studentRepo.assignment_id)
-      // #NOT-GRADED rows are deliberately left inactive by the insert trigger, so
-      // promoting one would activate a submission the student asked not to be
-      // graded. Only ever restore a gradeable submission.
-      .eq("is_not_graded", false);
-    if (excludeSubmissionId !== undefined) {
-      base = base.neq("id", excludeSubmissionId);
-    }
-    // Scope to the same submitter the unique indexes key on: the group when this
-    // is a group repo, otherwise the individual (group id explicitly NULL).
-    const scoped = studentRepo.assignment_group_id
-      ? base.eq("assignment_group_id", studentRepo.assignment_group_id)
-      : base.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+    // Built fresh per page rather than once: a postgrest builder is mutable and returns
+    // itself, so reusing one across the paginated loop below would accumulate modifiers.
+    const candidatePage = (offset: number) => {
+      let base = adminSupabase
+        .from("submissions")
+        .select("id, is_active, ordinal")
+        .eq("assignment_id", studentRepo.assignment_id)
+        // #NOT-GRADED rows are deliberately left inactive by the insert trigger, so
+        // promoting one would activate a submission the student asked not to be
+        // graded. Only ever restore a gradeable submission.
+        .eq("is_not_graded", false);
+      if (excludeSubmissionId !== undefined) {
+        base = base.neq("id", excludeSubmissionId);
+      }
+      // Scope to the same submitter the unique indexes key on: the group when this
+      // is a group repo, otherwise the individual (group id explicitly NULL).
+      const scoped = studentRepo.assignment_group_id
+        ? base.eq("assignment_group_id", studentRepo.assignment_group_id)
+        : base.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+      return scoped.order("ordinal", { ascending: false }).range(offset, offset + PAGE_SIZE - 1);
+    };
 
     // Several candidates, not one. A push-direct submission rejected as oversized is
     // RETAINED as an inactive history row (see deactivateRejectedSubmission), and it is
@@ -875,34 +883,42 @@ async function reactivatePreviousSubmission(
     // still active (throwing, so the webhook retried forever), or making code that was
     // never ingested the active submission when nothing else was.
     //
-    // A small window is enough: retained rejections are rare and only the newest few rows
-    // can be candidates. If every one of them is a rejection there is nothing to promote,
-    // which is the correct outcome anyway.
-    const { data: candidates, error: newestErr } = await scoped.order("ordinal", { ascending: false }).limit(20);
-    if (newestErr) throw newestErr;
-    if (!candidates || candidates.length === 0) return;
+    // Paginated, NOT a fixed window. A first attempt took the newest 20 rows and gave up
+    // if all of them were rejections — but a student who accumulates 20 oversized
+    // rejections above an older valid submission would then have that submission demoted
+    // by the 21st rejected push and never restored, so their last good work disappears
+    // from the gradebook while still existing. Walk backwards until a promotable row is
+    // found or the rows run out.
+    let newest: { id: number; is_active: boolean | null; ordinal: number } | undefined;
+    for (let offset = 0; newest === undefined; offset += PAGE_SIZE) {
+      const { data: candidates, error: newestErr } = await candidatePage(offset);
+      if (newestErr) throw newestErr;
+      if (!candidates || candidates.length === 0) return;
 
-    // A retained rejection is identified by the oversized workflow_run_error attached to
-    // it. That row is what makes the retention student-visible, and it is written before
-    // the submission is deactivated, so its presence is a durable marker rather than a
-    // race.
-    const { data: rejectionErrors, error: rejectionErr } = await adminSupabase
-      .from("workflow_run_error")
-      .select("submission_id, data")
-      .in(
-        "submission_id",
-        candidates.map((c) => c.id)
+      // A retained rejection is identified by the oversized workflow_run_error attached to
+      // it. That row is what makes the retention student-visible, and it is written before
+      // the submission is deactivated, so its presence is a durable marker rather than a
+      // race.
+      const { data: rejectionErrors, error: rejectionErr } = await adminSupabase
+        .from("workflow_run_error")
+        .select("submission_id, data")
+        .in(
+          "submission_id",
+          candidates.map((c) => c.id)
+        );
+      if (rejectionErr) throw rejectionErr;
+      const rejectedIds = new Set(
+        (rejectionErrors ?? [])
+          .filter((e) => {
+            const errorType = (e.data as { error_type?: string } | null)?.error_type;
+            return errorType === "file_too_large" || errorType === "submission_too_large";
+          })
+          .map((e) => e.submission_id)
       );
-    if (rejectionErr) throw rejectionErr;
-    const rejectedIds = new Set(
-      (rejectionErrors ?? [])
-        .filter((e) => {
-          const errorType = (e.data as { error_type?: string } | null)?.error_type;
-          return errorType === "file_too_large" || errorType === "submission_too_large";
-        })
-        .map((e) => e.submission_id)
-    );
-    const newest = candidates.find((c) => !rejectedIds.has(c.id));
+      newest = candidates.find((c) => !rejectedIds.has(c.id));
+      // A short page is the last page: every row was a rejection and there are no more.
+      if (newest === undefined && candidates.length < PAGE_SIZE) return;
+    }
     // Nothing left to promote, or something is already active (the unique indexes
     // guarantee at most one, so leave it alone).
     if (!newest || newest.is_active) return;
@@ -1236,6 +1252,22 @@ async function handlePushToStudentRepo(
   // old `repositories` rows behind, and a later push to one of those would
   // otherwise be recorded as a git submission for an upload-only assignment.
   const pushRepoModeHasRepo = pushAssignment?.repo_mode !== "none" && pushAssignment?.repo_mode !== "no_submission";
+  // A mode with no repository must skip the ACTIONS path below as well, not just the
+  // push-direct branch. Guarding only the branch meant a `#submit` push to one of those
+  // leftover repos fell through, dispatched its stale grade.yml and stamped
+  // workflow_triggered_at — which autograder-create-submission reads as a pre-disable
+  // in-flight dispatch and therefore admits, producing an Actions-backed submission for an
+  // assignment that has neither a repository nor an autograder. `pushAssignment` null (no
+  // matching assignment) is left alone: that is a different case with its own handling
+  // below.
+  if (pushAssignment && !pushRepoModeHasRepo) {
+    scope.setTag("skipped_reason", "assignment_repo_mode_has_no_repo");
+    console.log(
+      `Skipping push handling for ${repoName}@${payload.after}: assignment ${pushAssignment.id} is ` +
+        `repo_mode=${pushAssignment.repo_mode}, so this repository is a leftover from a previous mode`
+    );
+    return;
+  }
   if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false && pushRepoModeHasRepo) {
     // Only the default branch is a submission. Without the `#submit` marker this path
     // has no other filter, so a push to a scratch branch or a `git push --tags` would

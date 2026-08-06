@@ -32,7 +32,7 @@ export const SYNC_BRANCH_PREFIX = "sync-to-";
  * suffix — and a word boundary before it — is what separates instructor machinery
  * from a student branch that merely starts with the same words.
  */
-export const SYNC_BRANCH_NAME_RE = /(?:^|[\s/])sync-to-[0-9a-f]{7,40}\b/;
+export const SYNC_BRANCH_NAME_RE = /(?:^|[\s/])sync-to-([0-9a-fA-F]{7,40})\b/;
 
 /** Title prefix used by `syncRepositoryToHandout` for its sync PRs. */
 export const SYNC_PR_TITLE_PREFIX = "[Instructor Update]";
@@ -44,7 +44,7 @@ export const SYNC_PR_TITLE_PREFIX = "[Instructor Update]";
  * `[Instructor Update]` as machinery, discarding their submission on a repo-only
  * assignment.
  */
-export const SYNC_PR_TITLE_RE = /^\[Instructor Update\] Sync handout to [0-9a-f]{7,40}\b/;
+export const SYNC_PR_TITLE_RE = /^\[Instructor Update\] Sync handout to ([0-9a-fA-F]{7,40})\s*$/;
 
 /**
  * Subject prefix of the COMMIT `syncRepositoryToHandout` creates on the sync branch
@@ -62,7 +62,30 @@ export const SYNC_COMMIT_MESSAGE_PREFIX = "Sync handout updates to";
  * like "Sync handout updates to latest starter" as instructor machinery, which on a
  * repo-only assignment silently discards their submission.
  */
-export const SYNC_COMMIT_SUBJECT_RE = /^Sync handout updates to [0-9a-f]{7,40}\b/;
+export const SYNC_COMMIT_SUBJECT_RE = /^Sync handout updates to ([0-9a-fA-F]{7,40})\s*$/;
+
+/**
+ * Is `candidate` the abbreviation of a handout revision we actually know about?
+ *
+ * Hex-shaped alone was not enough. `syncRepositoryToHandout` writes
+ * `toSha.substring(0, 7)`, so the marker is always a PREFIX of a sha this row already
+ * carries — but the matchers only required "7-40 hex characters", which a student commit
+ * body like "Sync handout updates to deadbee" satisfies. That push was then classified as
+ * instructor machinery and silently dropped instead of becoming their submission.
+ *
+ * Uppercase hex is accepted in the marker (the class is `[0-9a-fA-F]`, rather than an `i`
+ * flag that would also loosen the surrounding prose) because the worker abbreviates
+ * whatever the stored sha's case is.
+ *
+ * Anchored at position 0 of a known sha and at least 7 characters long, which is what
+ * makes this a legitimate abbreviation check rather than the loose substring matching that
+ * has produced truncated-sha false positives elsewhere in this codebase. Compared
+ * case-insensitively because git prints lowercase but stored shas are not guaranteed to be.
+ */
+function matchesKnownHandoutSha(candidate: string, knownShas: (string | null | undefined)[]): boolean {
+  const needle = candidate.toLowerCase();
+  return knownShas.some((sha) => !!sha && sha.length >= needle.length && sha.toLowerCase().startsWith(needle));
+}
 
 export type HandoutSyncPushInputs = {
   /** `head_commit.message` of the push, if any. */
@@ -89,6 +112,13 @@ export type HandoutSyncPushInputs = {
  */
 export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
   const { headCommitMessage, afterSha } = inputs;
+  const knownShas = [inputs.latestTemplateSha, inputs.desiredHandoutSha, inputs.syncedHandoutSha, inputs.syncedRepoSha];
+  // Every message-shaped marker has to name a handout revision this row knows about, not
+  // merely something hex-shaped. See matchesKnownHandoutSha.
+  const namesKnownHandout = (line: string, re: RegExp): boolean => {
+    const m = re.exec(line);
+    return m ? matchesKnownHandoutSha(m[1], knownShas) : false;
+  };
 
   // Route 1: the sync PR landing on the default branch. Three shapes, because the merge
   // method is not ours to choose: the worker requests `merge_method: "merge"`, but that is
@@ -98,7 +128,7 @@ export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
     // Squash or rebase: the sync commit's own message is replayed, and the sync PR has
     // exactly one commit so GitHub uses that commit's subject rather than the PR title.
     // Neither `sync-to-` nor the PR-title prefix appears anywhere in it.
-    if (headCommitMessage.split("\n").some((line) => SYNC_COMMIT_SUBJECT_RE.test(line.trimStart()))) {
+    if (headCommitMessage.split("\n").some((line) => namesKnownHandout(line.trim(), SYNC_COMMIT_SUBJECT_RE))) {
       return true;
     }
     // Merge-commit shape: "Merge pull request #N from <owner>/sync-to-<sha7>". Matched
@@ -107,23 +137,22 @@ export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
     // keeps a student branch called e.g. `sync-to-tests` from being mistaken for
     // instructor machinery. On a repo-only assignment that push IS the submission, so a
     // false positive here silently discards their work.
-    if (/merge pull request/i.test(headCommitMessage) && SYNC_BRANCH_NAME_RE.test(headCommitMessage)) {
+    if (/merge pull request/i.test(headCommitMessage) && namesKnownHandout(headCommitMessage, SYNC_BRANCH_NAME_RE)) {
       return true;
     }
     // Squash-merged sync PR: the commit message is the PR title, so the prefix is at
     // the START of a line. Anchored deliberately — a bare `includes` matched anywhere in
     // the message, so a student writing "fixing what [Instructor Update] broke" had that
     // push silently discarded instead of recorded as their submission.
-    if (headCommitMessage.split("\n").some((line) => SYNC_PR_TITLE_RE.test(line.trimStart()))) {
+    if (headCommitMessage.split("\n").some((line) => namesKnownHandout(line.trim(), SYNC_PR_TITLE_RE))) {
       return true;
     }
   }
 
   // Route 2: fork fast-forward — the repo head IS a handout sha we know about.
   if (!afterSha) return false;
-  const syncShas = [inputs.latestTemplateSha, inputs.desiredHandoutSha, inputs.syncedHandoutSha, inputs.syncedRepoSha];
-  // Full-SHA equality only. Short-prefix matching has caused truncated-SHA
-  // false positives elsewhere in this codebase, and a false positive here means
-  // dropping a real submission.
-  return syncShas.some((sha) => !!sha && sha === afterSha);
+  // Full-SHA equality only. Unlike the abbreviation check above, there is no generated
+  // marker here to anchor a prefix against, so a short match would be guesswork — and a
+  // false positive means dropping a real submission.
+  return knownShas.some((sha) => !!sha && sha === afterSha);
 }

@@ -611,10 +611,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .eq("id", repoRowId)
               .select("id");
             if (readyError || (readyRows ?? []).length === 0) {
-              console.error(readyError ?? `No repositories row matched id=${repoRowId} when marking it ready`);
-              Sentry.captureException(
-                readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`),
-                scope
+              const failure =
+                readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`);
+              console.error(failure);
+              Sentry.captureException(failure, scope);
+              // Propagate, as the newly-created branch does. This branch is reached after
+              // permissions have just been repaired on an EXISTING is_github_ready=false
+              // row, so logging alone reported success while the row stayed unready — and
+              // the push-direct guard then acknowledged and discarded every push to it
+              // until a reconciler run, with no replay of what was lost. Throwing lands in
+              // the catch below, which keeps the row unready for the reconciler and tells
+              // the student to retry.
+              throw new Error(
+                `${repoName} could not be marked ready (${failure.message}); pushes to it would not be recorded`
               );
             }
           }
