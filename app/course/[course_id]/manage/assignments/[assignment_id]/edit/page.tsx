@@ -294,19 +294,42 @@ export default function EditAssignment() {
               }
             }
             if (Object.keys(priorValues).length > 0) {
-              // Awaited: a fire-and-forget rollback would let the error toast claim the save
-              // failed while the row keeps the new values, which is the exact disagreement
-              // this rollback exists to prevent.
+              // CONDITIONAL on the row still holding what this save wrote.
               //
-              // Guarded: an unhandled rejection here would replace `syncError`, so the
-              // instructor would be told why the ROLLBACK failed and never learn what
-              // actually went wrong.
+              // The GitHub work above takes seconds, which is long enough for a second
+              // instructor to save the same assignment. An unconditional restore of this page's
+              // load-time snapshot would then erase their title, dates, repository settings or
+              // latest_template_sha — undoing a save that succeeded in order to undo one that
+              // failed.
+              //
+              // Matching on the values this save committed makes it all-or-nothing: if anything
+              // has changed since, no rows match and nothing is clobbered. That is the right
+              // direction to fail — the instructor sees "not saved" over a row someone else
+              // owns, rather than silently losing that person's work — and it is logged so the
+              // case is visible.
+              //
+              // Awaited, because a fire-and-forget rollback would let the error toast claim the
+              // save failed while the row keeps the new values. Guarded, because an unhandled
+              // rejection here would replace `syncError` and the instructor would learn why the
+              // ROLLBACK failed instead of what actually went wrong.
               try {
-                await updateAsync({
-                  resource: "assignments",
-                  id: Number.parseInt(assignment_id as string),
-                  values: priorValues
-                });
+                const writtenValues: Record<string, unknown> = {};
+                for (const key of Object.keys(priorValues)) {
+                  if (key in values) writtenValues[key] = (values as Record<string, unknown>)[key];
+                }
+                const { data: rolledBack, error: rollbackDbError } = await supabase
+                  .from("assignments")
+                  .update(priorValues)
+                  .eq("id", Number.parseInt(assignment_id as string))
+                  .match(writtenValues)
+                  .select("id");
+                if (rollbackDbError) throw rollbackDbError;
+                if ((rolledBack ?? []).length === 0) {
+                  console.warn(
+                    "Not rolling back the assignment: it no longer holds the values this save wrote, so another " +
+                      "save has superseded it."
+                  );
+                }
               } catch (rollbackError) {
                 console.error("Failed to roll back the assignment after a sync failure", rollbackError);
               }

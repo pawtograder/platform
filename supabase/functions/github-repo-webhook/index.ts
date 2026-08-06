@@ -271,16 +271,59 @@ async function createPushDirectSubmission(
   opts: {
     allowNotGradedSubmissions: boolean;
     permitEmptySubmissions: boolean;
+    /**
+     * The assignment's automatic late-token policy, applied to a late push exactly as the
+     * Actions path applies it. It belongs to the assignment, so a repo-only assignment honours
+     * it too.
+     */
+    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
     scope: Sentry.Scope;
   }
 ): Promise<void> {
-  const { allowNotGradedSubmissions, permitEmptySubmissions, scope } = opts;
+  const { allowNotGradedSubmissions, permitEmptySubmissions, lateTokenPolicy, scope } = opts;
   const headCommit = payload.head_commit;
   if (!headCommit) return; // guarded by caller, narrows the type
   const repoName = payload.repository.full_name;
   const sha = headCommit.id;
   const isNotGraded = headCommit.message.toUpperCase().includes("#NOT-GRADED");
 
+  // Resolve a profile id for the due-date calculation. For group repos use any
+  // member's profile (mirrors the autograder fallback).
+  let profileId = studentRepo.profile_id;
+  if (!profileId && studentRepo.assignment_group_id) {
+    const { data: member } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("profile_id")
+      .eq("assignment_group_id", studentRepo.assignment_group_id)
+      .limit(1)
+      .maybeSingle();
+    if (member) profileId = member.profile_id;
+  }
+
+  // Due-date gate (uses the same RPC the autograder uses).
+  const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
+    assignment_id_param: studentRepo.assignment_id,
+    // No resolvable profile (e.g. a group repo with no matched member): pass null, not a
+    // bogus UUID — Postgres rejects a non-UUID string, whereas null already falls back to the
+    // assignment's due_date via calculate_effective_due_date. The generated RPC type marks
+    // this param required, but the underlying SQL `uuid` parameter is nullable, so narrow it.
+    student_profile_id_param: (profileId || null) as string,
+    assignment_group_id_param: studentRepo.assignment_group_id || undefined
+  });
+  if (dueDateError) {
+    Sentry.captureException(dueDateError, scope);
+    throw dueDateError;
+  }
+  const pushTime = new Date();
+  const finalDueDate = new Date(finalDueDateResult);
+  const isLate = pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
+  scope.setTag("push_direct_is_late", String(isLate));
+  // Computed BEFORE the idempotency branch, because the force-push promotion below needs the
+  // same deadline test that new submissions get: promoting an earlier commit changes which
+  // submission is graded, so a post-deadline force-push must not do it when a post-deadline
+  // push cannot create one. The gate that SKIPS a late push stays further down, where it only
+  // affects a new insert — a redelivery arriving after the deadline still has to be able to
+  // repair the active-submission state.
   // Idempotency: a re-delivered webhook must not create a duplicate submission
   // for the same commit.
   //
@@ -343,7 +386,38 @@ async function createPushDirectSubmission(
     // The caller has verified that this sha IS the current head, which is exactly what makes
     // promotion correct here rather than a guess.
     if (existing.is_active === false) {
+      // Subject to the SAME deadline as a new submission. Promoting an earlier commit changes
+      // which submission is graded, so a force-push after the cutoff must not do it when a
+      // post-deadline push cannot create one — otherwise the deadline is enforced against new
+      // work but not against reverting to old work.
+      if (isLate) {
+        scope.setTag("force_push_promote_skipped", "after_due_date");
+        console.log(
+          `Not promoting submission ${existing.id} for ${repoName}@${sha}: the force-push arrived after the due date`
+        );
+        return;
+      }
       await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, repoName, sha, scope);
+      return;
+    }
+    // A rejected oversized row that is STILL ACTIVE is a failed deactivation, not a duplicate.
+    // deactivateRejectedSubmission writes the workflow_run_error first and only then deactivates,
+    // so an outage between the two leaves the row active with its review intact — which every
+    // check below reads as a completed submission, so the redelivery the caller asked for
+    // returned without retrying anything and a rejected push stayed the graded submission
+    // indefinitely. Retry the deactivation here; the error row is the durable marker that makes
+    // this recognisable.
+    if (await hasOversizedRejectionError(adminSupabase, existing.id)) {
+      scope.setTag("push_direct_retry_failed_deactivation", String(existing.id));
+      console.log(`Retrying the deactivation of rejected oversized submission ${existing.id} for ${repoName}@${sha}`);
+      const deactivated = await deactivateRejectedSubmission(adminSupabase, existing.id, scope);
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, existing.id);
+      if (!deactivated) {
+        throw new Error(
+          `Rejected oversized submission ${existing.id} for ${repoName}@${sha} is still active and could not be ` +
+            `deactivated; rejecting this delivery so GitHub retries it`
+        );
+      }
       return;
     }
     // Before returning, make sure SOMETHING is active. A retained oversized rejection keeps
@@ -401,43 +475,31 @@ async function createPushDirectSubmission(
     );
   }
 
-  // Resolve a profile id for the due-date calculation. For group repos use any
-  // member's profile (mirrors the autograder fallback).
-  let profileId = studentRepo.profile_id;
-  if (!profileId && studentRepo.assignment_group_id) {
-    const { data: member } = await adminSupabase
-      .from("assignment_groups_members")
-      .select("profile_id")
-      .eq("assignment_group_id", studentRepo.assignment_group_id)
-      .limit(1)
-      .maybeSingle();
-    if (member) profileId = member.profile_id;
-  }
-
-  // Due-date gate (uses the same RPC the autograder uses).
-  const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
-    assignment_id_param: studentRepo.assignment_id,
-    // No resolvable profile (e.g. a group repo with no matched member): pass null, not a
-    // bogus UUID — Postgres rejects a non-UUID string, whereas null already falls back to the
-    // assignment's due_date via calculate_effective_due_date. The generated RPC type marks
-    // this param required, but the underlying SQL `uuid` parameter is nullable, so narrow it.
-    student_profile_id_param: (profileId || null) as string,
-    assignment_group_id_param: studentRepo.assignment_group_id || undefined
-  });
-  if (dueDateError) {
-    Sentry.captureException(dueDateError, scope);
-    throw dueDateError;
-  }
-  // Gate on the webhook *receive* time, NOT head_commit.timestamp: the commit
-  // timestamp is student-controllable (`git commit --date=...`), so a backdated
-  // commit pushed after the deadline must not slip through. This matches the
-  // autograder path, which gates on the check-run created_at (server time).
-  const pushTime = new Date();
-  const finalDueDate = new Date(finalDueDateResult);
-  if (pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions)) {
-    scope.setTag("push_direct_submission_skipped", "after_due_date");
-    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
-    return;
+  // The deadline decision, using the values computed above. Gated on the webhook *receive*
+  // time, NOT head_commit.timestamp: the commit timestamp is student-controllable
+  // (`git commit --date=...`), so a backdated commit pushed after the deadline must not slip
+  // through. This matches the autograder path, which gates on the check-run created_at.
+  if (isLate) {
+    // Mirror the Actions path before rejecting: when the course allows late tokens to be spent
+    // automatically (require_tokens_before_due_date = false), that policy belongs to the
+    // assignment, not to the autograder. Skipping the push outright meant turning the
+    // autograder off silently turned off automatic late tokens too, so a student with tokens
+    // available had their on-time-by-policy push discarded.
+    const extended = await applyAutomaticLateTokens({
+      adminSupabase,
+      studentRepo,
+      profileId,
+      pushTime,
+      finalDueDate,
+      lateTokenPolicy,
+      scope
+    });
+    if (!extended) {
+      scope.setTag("push_direct_submission_skipped", "after_due_date");
+      console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
+      return;
+    }
+    scope.setTag("push_direct_late_token_applied", "true");
   }
 
   // Re-verify that this commit is STILL the repo head, immediately before the insert.
@@ -825,6 +887,82 @@ async function createPushDirectSubmission(
  *
  * Demotes before promoting, since submissions_one_active_* permits only one active row.
  */
+/**
+ * Does this submission carry the oversized-rejection marker?
+ *
+ * deactivateRejectedSubmission writes that workflow_run_error BEFORE deactivating, which is what
+ * makes it a durable signal rather than a race: a row with the marker was rejected, whatever
+ * state the rest of the cleanup reached.
+ */
+async function hasOversizedRejectionError(
+  adminSupabase: SupabaseClient<Database>,
+  submissionId: number
+): Promise<boolean> {
+  const { data: rejectionErrors, error } = await adminSupabase
+    .from("workflow_run_error")
+    .select("submission_id, data")
+    .eq("submission_id", submissionId);
+  if (error) throw error;
+  return (rejectionErrors ?? []).some((e) => {
+    const errorType = (e.data as { error_type?: string } | null)?.error_type;
+    return errorType === "file_too_large" || errorType === "submission_too_large";
+  });
+}
+
+/**
+ * Spend late tokens automatically for a push that arrived after the deadline, mirroring the
+ * Actions path. Returns true when the deadline has been extended and the push may proceed.
+ *
+ * The policy belongs to the ASSIGNMENT (require_tokens_before_due_date = false plus a non-zero
+ * token allowance), not to the autograder, so a repo-only assignment has to honour it too.
+ *
+ * Safe on redelivery: apply_late_token_extension returns success without spending anything once
+ * the extension it would grant already covers the deadline.
+ */
+async function applyAutomaticLateTokens(params: {
+  adminSupabase: SupabaseClient<Database>;
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"];
+  profileId: string | null;
+  pushTime: Date;
+  finalDueDate: Date;
+  lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+  scope: Sentry.Scope;
+}): Promise<boolean> {
+  const { adminSupabase, studentRepo, profileId, pushTime, finalDueDate, lateTokenPolicy, scope } = params;
+  if (lateTokenPolicy.requireTokensBeforeDueDate || lateTokenPolicy.maxLateTokens <= 0) return false;
+  // No resolvable profile means no token balance to spend against.
+  if (!profileId) {
+    scope.setTag("late_token_skipped", "no_profile");
+    return false;
+  }
+  // Same arithmetic as the Actions path: whole days of extension, at least one.
+  const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
+  const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
+  const tokensNeeded = Math.ceil(hoursLate / 24);
+  const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
+    p_assignment_id: studentRepo.assignment_id,
+    // Both params are nullable in SQL — exactly one of them is set, depending on whether this
+    // is a group submission — but the generated RPC types mark them required, the same mismatch
+    // the calculate_final_due_date call above narrows.
+    p_student_id: (studentRepo.assignment_group_id ? null : profileId) as string,
+    p_assignment_group_id: (studentRepo.assignment_group_id ?? null) as number,
+    p_class_id: studentRepo.class_id,
+    p_creator_id: profileId,
+    p_hours_late: tokensNeeded * 24,
+    p_tokens_needed: tokensNeeded
+  });
+  if (rpcError) {
+    // Throw rather than treat it as "no tokens": that would discard a push the policy entitles
+    // the student to submit, with nothing to detect it. GitHub redelivers.
+    scope.setTag("late_token_rpc_failed", "true");
+    Sentry.captureException(rpcError, scope);
+    throw rpcError;
+  }
+  const applied = (result as { success?: boolean } | null)?.success === true;
+  if (!applied) scope.setTag("late_token_insufficient", "true");
+  return applied;
+}
+
 async function promoteSubmissionForCurrentHead(
   adminSupabase: SupabaseClient<Database>,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
@@ -837,16 +975,7 @@ async function promoteSubmissionForCurrentHead(
     scope.setTag("force_push_promote_skipped", "is_not_graded");
     return;
   }
-  const { data: rejectionErrors, error: rejectionErr } = await adminSupabase
-    .from("workflow_run_error")
-    .select("submission_id, data")
-    .eq("submission_id", existing.id);
-  if (rejectionErr) throw rejectionErr;
-  const wasRejected = (rejectionErrors ?? []).some((e) => {
-    const errorType = (e.data as { error_type?: string } | null)?.error_type;
-    return errorType === "file_too_large" || errorType === "submission_too_large";
-  });
-  if (wasRejected) {
+  if (await hasOversizedRejectionError(adminSupabase, existing.id)) {
     scope.setTag("force_push_promote_skipped", "retained_rejection");
     return;
   }
@@ -1206,7 +1335,7 @@ async function handlePushToStudentRepo(
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
     .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha"
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date"
     )
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
@@ -1399,6 +1528,10 @@ async function handlePushToStudentRepo(
     await createPushDirectSubmission(adminSupabase, payload, studentRepo, {
       allowNotGradedSubmissions: pushAssignment.allow_not_graded_submissions ?? false,
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
+      lateTokenPolicy: {
+        maxLateTokens: pushAssignment.max_late_tokens ?? 0,
+        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
+      },
       scope
     });
     // Record the commit history too. This branch returns instead of falling through
