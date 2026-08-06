@@ -5,9 +5,14 @@ import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // E2E for the push-mode zero-runner submission path (P0 of the PR-submission
 // epic). For a push-mode assignment with has_autograder=false, EVERY push must
-// create a submission DIRECTLY from the github-repo-webhook handler — no
-// repository_check_run, no grade.yml dispatch, no workflow_events — and ingest
-// the repo's files via the shared SubmissionIngestion core.
+// create a submission DIRECTLY from the github-repo-webhook handler — no grade.yml
+// dispatch and no workflow_events — and ingest the repo's files via the shared
+// SubmissionIngestion core.
+//
+// "Zero-runner" is about GitHub work, not about recording nothing: the path DOES
+// write a repository_check_runs row per commit, because that table doubles as the
+// commit history the UI reads. Those rows carry check_run_id = null, which is how a
+// history entry is distinguished from a real dispatched check run.
 //
 // Note the `#submit` marker is NOT required on this path (#895): with no
 // autograder there is no workflow to conserve, so a push is a submission on its
@@ -211,10 +216,18 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
       .single();
     expect(subWithReview!.grading_review_id).not.toBeNull();
 
-    // Zero-runner: NO repository_check_run and NO workflow_events / grade.yml
-    // dispatch were created for this repo.
-    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
-    expect(checkRuns ?? []).toHaveLength(0);
+    // Zero-runner means no GitHub work was dispatched — NOT that nothing was
+    // recorded. repository_check_runs doubles as the commit-history table that
+    // CommitHistoryDialog reads, so the push-direct path deliberately writes a row per
+    // commit; without it the history would be permanently empty on exactly the
+    // assignments this feature serves. What must be absent is any real dispatch:
+    // check_run_id stays null (no GitHub check run) and no workflow_events exist.
+    const { data: checkRuns } = await supabase
+      .from("repository_check_runs")
+      .select("id, check_run_id")
+      .eq("repository_id", repoId);
+    expect((checkRuns ?? []).length).toBeGreaterThan(0);
+    expect((checkRuns ?? []).every((c) => c.check_run_id === null)).toBe(true);
 
     const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
     expect(wfEvents ?? []).toHaveLength(0);
@@ -260,9 +273,13 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     const { data: files } = await supabase.from("submission_files").select("name").eq("submission_id", subs![0].id);
     expect(files!.some((f) => f.name === "Main.java")).toBe(true);
 
-    // Still zero-runner: no check run and no grade.yml dispatch.
-    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
-    expect(checkRuns ?? []).toHaveLength(0);
+    // Still zero-runner: commit history is recorded (check_run_id null), but nothing
+    // is dispatched to GitHub.
+    const { data: checkRuns } = await supabase
+      .from("repository_check_runs")
+      .select("id, check_run_id")
+      .eq("repository_id", repoId);
+    expect((checkRuns ?? []).every((c) => c.check_run_id === null)).toBe(true);
     const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
     expect(wfEvents ?? []).toHaveLength(0);
   });

@@ -852,6 +852,20 @@ async function deactivateRejectedSubmission(
   } catch (e) {
     scope.setTag("deactivate_rejected_submission_failed", "true");
     Sentry.captureException(e, scope);
+    // Leave the row in the INCOMPLETE state so a redelivery retries it. Keeping
+    // grading_review_id populated is right only once the row is safely inactive; if we
+    // failed before that, the row is still ACTIVE and would read as a complete
+    // submission — so the redelivery would return early and an oversized push could
+    // stay the student's active submission indefinitely. Nulling the review is exactly
+    // the marker the idempotency pre-check looks for.
+    const { error: markErr } = await adminSupabase
+      .from("submissions")
+      .update({ grading_review_id: null, is_active: false })
+      .eq("id", submissionId);
+    if (markErr) {
+      scope.setTag("mark_rejected_submission_incomplete_failed", "true");
+      Sentry.captureException(markErr, scope);
+    }
     return false;
   }
 }
