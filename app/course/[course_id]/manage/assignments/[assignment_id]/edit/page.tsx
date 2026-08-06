@@ -18,8 +18,6 @@ export default function EditAssignment() {
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
   });
-  const { data } = useOne<Assignment>({ resource: "assignments", id: assignment_id as string });
-
   const { reset, refineCore } = form;
   const queryData = refineCore.query?.data?.data;
   const { mutate: update } = useUpdate();
@@ -30,36 +28,46 @@ export default function EditAssignment() {
     }
   }, [queryData, reset]);
 
-  const { data: selfReviewSetting } = useOne<SelfReviewSettings>({
+  const selfReviewSettingId = queryData?.self_review_setting_id;
+  const { data: selfReviewSetting, isFetched: selfReviewSettingFetched } = useOne<SelfReviewSettings>({
     resource: "assignment_self_review_settings",
-    id: queryData?.self_review_setting_id
+    id: selfReviewSettingId,
+    queryOptions: { enabled: selfReviewSettingId !== undefined }
   });
   useEffect(() => {
-    if (queryData) {
-      form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
-      form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
-      form.setValue("allow_early", selfReviewSetting?.data.allow_early);
-      form.setValue("self_review_release_at", selfReviewSetting?.data.release_at ?? null);
+    // Wait for the settings query to settle before seeding these fields: the
+    // form renders while it is still in flight, and writing the "no settings"
+    // fallbacks (base_only, null offsets, cleared release time) in the meantime
+    // would silently disable an assignment's self review if the user saved
+    // before the real values arrived.
+    if (queryData && selfReviewSettingFetched) {
+      form.setValue("eval_config", selfReviewSetting?.data?.enabled ? "use_eval" : "base_only");
+      form.setValue("deadline_offset", selfReviewSetting?.data?.deadline_offset);
+      form.setValue("allow_early", selfReviewSetting?.data?.allow_early);
+      form.setValue("self_review_release_at", selfReviewSetting?.data?.release_at ?? null);
     }
   }, [
     queryData,
     form,
-    selfReviewSetting?.data.allow_early,
-    selfReviewSetting?.data.deadline_offset,
-    selfReviewSetting?.data.enabled,
-    selfReviewSetting?.data.release_at
+    selfReviewSettingFetched,
+    selfReviewSetting?.data?.allow_early,
+    selfReviewSetting?.data?.deadline_offset,
+    selfReviewSetting?.data?.enabled,
+    selfReviewSetting?.data?.release_at
   ]);
 
   const onFinish = useCallback(
     async (values: FieldValues) => {
       try {
         const supabase = createClient();
-        if (values) {
+        // Without the id from the loaded assignment there is no row to write to;
+        // sending `id: undefined` would just make the update fail server-side.
+        if (values && selfReviewSettingId !== undefined) {
           const isEnabled = values.eval_config == "use_eval";
           update(
             {
               resource: "assignment_self_review_settings",
-              id: data?.data.self_review_setting_id,
+              id: selfReviewSettingId,
               values: {
                 enabled: isEnabled,
                 deadline_offset: isEnabled ? values.deadline_offset : null,
@@ -139,7 +147,7 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
+    [form.refineCore, assignment_id, course_id, selfReviewSettingId, update]
   );
 
   if (form.refineCore.query?.error) {
