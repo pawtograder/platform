@@ -6,6 +6,7 @@ import type { DiscussionThreadNotification, Notification, NotificationEnvelope }
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -15,11 +16,10 @@ declare const EdgeRuntime: {
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     debug: Deno.env.get("SENTRY_DEBUG") === "true",
     sendDefaultPii: true,
-    environment: Deno.env.get("ENVIRONMENT") || "development",
     integrations: [],
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]

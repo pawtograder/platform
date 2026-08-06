@@ -67,6 +67,21 @@ Deno.test("assertAuthLookupSucceeded: a 5xx from the auth server raises 503", ()
   assertEquals((e as UserVisibleError).status, 503);
 });
 
+Deno.test("assertAuthLookupSucceeded: AuthRetryableFetchError's status 0 raises 503", () => {
+  // @supabase/auth-js reports DNS/connection/CORS failures as AuthRetryableFetchError with `status: 0`.
+  // A `< 500` test would have accepted that as a real answer and returned 401 — exactly the
+  // misclassification this guard exists to prevent.
+  const e = assertThrows(() => assertAuthLookupSucceeded({ status: 0, message: "Failed to fetch" }), UserVisibleError);
+  assertEquals((e as UserVisibleError).status, 503);
+});
+
+Deno.test("assertAuthLookupSucceeded: a 3xx or 5xx is not a statement about the token", () => {
+  for (const status of [301, 500, 502, 504]) {
+    const e = assertThrows(() => assertAuthLookupSucceeded({ status, message: "upstream" }), UserVisibleError);
+    assertEquals((e as UserVisibleError).status, 503);
+  }
+});
+
 Deno.test("assertAuthLookupSucceeded: a transport failure with no status raises 503", () => {
   // AuthRetryableFetchError and friends: we never reached the auth server, so we know nothing.
   const e = assertThrows(() => assertAuthLookupSucceeded({ message: "error sending request" }), UserVisibleError);

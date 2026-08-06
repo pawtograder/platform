@@ -35,6 +35,7 @@ import { getOctoKit, createBranchProtectionRuleset } from "../_shared/GitHubWrap
 import { RequestError } from "https://esm.sh/octokit?dts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
 
 interface AssignmentData {
   id: number;
@@ -300,6 +301,7 @@ async function main(): Promise<void> {
   if (Deno.env.get("SENTRY_DSN")) {
     Sentry.init({
       beforeSend: normalizeEventFingerprint,
+      ...sentryIdentity(),
       dsn: Deno.env.get("SENTRY_DSN"),
       tracesSampleRate: 1.0
     });

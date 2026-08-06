@@ -37,6 +37,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -121,10 +122,9 @@ interface WebhookStatus {
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
-    environment: Deno.env.get("ENVIRONMENT") || "development",
     integrations: [],
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]

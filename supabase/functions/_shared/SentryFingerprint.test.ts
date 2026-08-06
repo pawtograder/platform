@@ -116,6 +116,81 @@ Deno.test("fingerprint keys on type and the innermost in-app frame", () => {
   assert(fp[2].includes("<repo>"), fp[2]);
 });
 
+Deno.test("HTTP status codes survive normalization so 404 and 500 stay separate", () => {
+  // GitHubSyncHelpers: `Failed to download '${path}' from ${repo}: ${response.status}`. Same frame and
+  // same message shape, but a missing file and an upstream fault need different fixes.
+  const download = (status: number) =>
+    normalizeErrorMessage(`Failed to download 'src/Main.java' from pawtograder-playground/handout: ${status}`);
+  assert(download(404) !== download(500));
+  assert(download(404).includes("<status:404>"), download(404));
+  // React error codes benefit the same way.
+  assert(
+    normalizeErrorMessage("Minified React error #418; visit https://react.dev/errors/418") !==
+      normalizeErrorMessage("Minified React error #423; visit https://react.dev/errors/423")
+  );
+});
+
+Deno.test("status-shaped digits inside stack traces are still collapsed", () => {
+  // The rule is positional on purpose: chunk names and line numbers land in the 4xx/5xx range too, and
+  // preserving those would split one group across every build.
+  assertEquals(
+    normalizeErrorMessage("TypeError: fetch failed\n    at async b (/app/.next/server/chunks/476.js:54:21071)"),
+    normalizeErrorMessage("TypeError: fetch failed\n    at async b (/app/.next/server/chunks/512.js:54:33258)")
+  );
+  // And a two-digit count is not a status code.
+  assertEquals(
+    normalizeErrorMessage("pgmq read_ct=10 exceeded max=10"),
+    normalizeErrorMessage("pgmq read_ct=13 exceeded max=10")
+  );
+});
+
+Deno.test("linked errors fingerprint on the captured wrapper, not its first child", () => {
+  // Sentry's LinkedErrors prepends the cause chain, so the captured exception is LAST. Verified against
+  // a real Dev event: values = [Error, AggregateError] for a captured AggregateError.
+  // Shape taken from the real "Could not resolve the current head" events: the wrapper carries the repo
+  // and the child is whatever octokit threw, with a different type and a different innermost frame.
+  const linked = (repo: string, childType: string, childFn: string): FingerprintableEvent => ({
+    exception: {
+      values: [
+        {
+          type: childType,
+          value: "Not Found - https://docs.github.com/rest/repos/repos#get-a-repository",
+          stacktrace: {
+            frames: [{ filename: "/x/functions/_shared/GitHubWrapper.ts", function: childFn, in_app: true }]
+          }
+        },
+        {
+          type: "AggregateError",
+          value: `Could not resolve the current head of pawtograder-playground/${repo}; rejecting this delivery`,
+          stacktrace: {
+            frames: [{ filename: "/x/functions/github-repo-webhook/index.ts", function: "onPush", in_app: true }]
+          }
+        }
+      ]
+    }
+  });
+  const a = fingerprintForEvent(linked("test-e2e-student-repo--msh98vk8kvtq7w", "HttpError", "getRepo"))!;
+  const b = fingerprintForEvent(linked("test-e2e-student-repo--mshhaeuua6ryje", "RequestError", "resolveHead"))!;
+  // Keyed on the captured wrapper, so neither the repo nor a differing child splits the group.
+  assertEquals(a, b);
+  assertEquals(a[0], "AggregateError");
+  assertEquals(a[1], "github-repo-webhook/index.ts:onPush");
+});
+
+Deno.test("a stable wrapper message keeps default grouping even when a child varies", () => {
+  // Bugsink's own default grouping already keys on the captured exception, so there is nothing to
+  // correct here — and forcing a fingerprint would detach the issue from its history.
+  const linked = (childFile: string): FingerprintableEvent => ({
+    exception: {
+      values: [
+        { type: "Error", value: `Failed to insert text submission file "${childFile}"` },
+        { type: "AggregateError", value: "An invalid response was received from the upstream server" }
+      ]
+    }
+  });
+  assertEquals(fingerprintForEvent(linked("Main.java")), null);
+});
+
 Deno.test("normalizeEventFingerprint stamps the event in place and returns it", () => {
   const event: FingerprintableEvent = { message: "queue length 42 exceeded" };
   assertEquals(normalizeEventFingerprint(event), event);

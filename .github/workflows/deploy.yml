@@ -90,6 +90,13 @@ jobs:
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Sentry identity for this run. Without these, edge-function events in the Bugsink "Dev"
+          # project carry no release, no branch and no PR — the CI run was only recoverable by reading
+          # the compose project name out of the `URL` tag, and only on events from functions that set
+          # it. Consumed by _shared/SentryContext.ts. Quoted through env: rather than interpolated into
+          # the heredoc so a branch name cannot inject shell.
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEPLOY_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           cat > .env.local <<EOF
@@ -113,6 +120,12 @@ jobs:
           UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
           UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
           SENTRY_DSN=${SENTRY_DSN}
+          DEPLOY_KIND=e2e-local
+          DEPLOY_BRANCH=${DEPLOY_BRANCH}
+          DEPLOY_PR=${DEPLOY_PR}
+          DEPLOY_RUN_ID=${GITHUB_RUN_ID}
+          DEPLOY_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}
+          GIT_COMMIT_SHA=${GITHUB_SHA}
           EOF
           # Single-line escaped PEM — supabase functions serve --env-file does
           # not support multi-line quoted values; .env.local.staging uses the

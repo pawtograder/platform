@@ -20,13 +20,15 @@ import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { describeCause } from "../_shared/ErrorDetail.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     beforeSend: normalizeEventFingerprint,
-    dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA")
+    ...sentryIdentity(),
+    dsn: Deno.env.get("SENTRY_DSN")!
   });
 }
 
@@ -51,9 +53,11 @@ const DEFAULT_EXPIRY_DAYS = 90;
  */
 class UpstreamUnavailableError extends Error {
   constructor(operation: string, cause: unknown) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`${operation} is temporarily unavailable: ${detail}`);
+    super(`${operation} is temporarily unavailable: ${describeCause(cause)}`);
     this.name = "UpstreamUnavailableError";
+    // Retained so the Sentry event keeps the PostgREST code/details/hint, which is what actually
+    // identifies the outage; the message alone only says "invalid response from upstream server".
+    this.cause = cause;
   }
 }
 
@@ -87,10 +91,11 @@ async function authenticateUser(authHeader: string | null) {
     error
   } = await supabase.auth.getUser(token);
 
-  // Only an explicit 4xx from the auth server is a statement about this token. A 5xx, or a transport
-  // failure (no status at all), means we do not know whether the token is good — say so rather than
-  // rejecting a session that may well be valid.
-  if (error && (error.status === undefined || error.status >= 500)) {
+  // Only an explicit 4xx from the auth server is a statement about this token. Anything else — a 5xx,
+  // or a transport failure, which @supabase/auth-js reports as AuthRetryableFetchError with `status: 0`
+  // — means we do not know whether the token is good, so say that rather than rejecting a session that
+  // may well be valid.
+  if (error && !(error.status !== undefined && error.status >= 400 && error.status < 500)) {
     throw new UpstreamUnavailableError("Authentication", error);
   }
   if (error || !user) {

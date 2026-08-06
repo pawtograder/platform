@@ -4,11 +4,12 @@ import { UserVisibleError } from "./HandlerUtils.ts";
 import * as Sentry from "npm:@sentry/deno";
 import Bottleneck from "npm:bottleneck@2.19.5";
 import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
+import { sentryIdentity } from "./SentryContext.ts";
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
     integrations: [],
     tracesSampleRate: 0,

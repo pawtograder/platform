@@ -59,15 +59,40 @@ export function normalizeErrorMessage(message: string): string {
       .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/gi, "<sha>")
       // opaque per-run ids: base36-ish tokens that mix letters and digits (msh98vk8kvtq7w, abcd1soci792v5f)
       .replace(/\b(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{8,}\b/gi, "<id>")
-      // anything numeric left over: ids, counts, ports, timestamps
-      .replace(/\d+/g, "<n>")
+      // 4xx/5xx codes carry meaning the catch-all below would erase: GitHubSyncHelpers throws
+      // `Failed to download '<path>' from <repo>: ${response.status}`, and a 404 (missing file) needs
+      // to stay separate from a 500 (upstream fault) — same frame, same message shape, different fix.
+      // Deliberately positional rather than a bare range match: the same digits occur inside embedded
+      // stack traces (`chunks/476.js`, `26_fetch.js:485:11`), where preserving them would SPLIT groups
+      // across builds. So a code counts only as a free-standing token — not touching `.`, `:`, `/`, or
+      // another digit on either side.
+      .replace(/(^|[\s#([])([45]\d{2})(?=$|[\s),;\]]|\.(?:\s|$))/g, "$1<status:$2>")
+      // anything numeric left over: ids, counts, ports, timestamps. The status tokens just written
+      // lead the alternation so their digits survive this pass instead of collapsing to <status:<n>>.
+      .replace(/<status:\d{3}>|\d+/g, (m) => (m.startsWith("<status:") ? m : "<n>"))
       .trim()
   );
 }
 
+/**
+ * The exception that was actually captured.
+ *
+ * Sentry's LinkedErrors integration prepends the `cause` chain and `AggregateError.errors`, so the
+ * captured wrapper is the LAST entry, not the first. Confirmed against a real event in the Dev project:
+ * `values = [Error, AggregateError]` for a captured AggregateError, and Bugsink's own `calculated_type`
+ * for that issue is `AggregateError`. Keying on `values[0]` would fingerprint the child instead — which
+ * both splits aggregate failures whose first child varies and risks merging a wrapper with a directly
+ * captured child error. Using the last entry also aligns our fingerprint's type with the type Bugsink
+ * displays.
+ */
+function capturedException(event: FingerprintableEvent) {
+  const values = event.exception?.values;
+  return values?.length ? values[values.length - 1] : undefined;
+}
+
 /** Innermost in-app frame, as a stable `file:function` key. Falls back to the innermost frame. */
 function topFrameKey(event: FingerprintableEvent): string | null {
-  const frames = event.exception?.values?.[0]?.stacktrace?.frames;
+  const frames = capturedException(event)?.stacktrace?.frames;
   if (!frames?.length) return null;
   // Sentry orders frames outermost-first, so the innermost is last.
   const frame = [...frames].reverse().find((f) => f.in_app) ?? frames[frames.length - 1];
@@ -76,7 +101,7 @@ function topFrameKey(event: FingerprintableEvent): string | null {
 }
 
 function eventMessage(event: FingerprintableEvent): string {
-  const exc = event.exception?.values?.[0];
+  const exc = capturedException(event);
   if (exc?.value) return exc.value;
   if (typeof event.message === "string") return event.message;
   if (event.message) return event.message.formatted ?? event.message.message ?? "";
@@ -96,7 +121,7 @@ export function fingerprintForEvent(event: FingerprintableEvent): string[] | nul
   if (!message) return null;
   const normalized = normalizeErrorMessage(message);
   if (normalized === message.trim()) return null;
-  const type = event.exception?.values?.[0]?.type ?? "message";
+  const type = capturedException(event)?.type ?? "message";
   const frame = topFrameKey(event);
   return frame ? [type, frame, normalized] : [type, normalized];
 }

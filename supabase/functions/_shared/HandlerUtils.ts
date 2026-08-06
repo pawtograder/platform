@@ -3,12 +3,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
 import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
+import { sentryIdentity } from "./SentryContext.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
     integrations: [],
     tracesSampleRate: 0,
@@ -184,10 +185,17 @@ export function assertRoleLookupSucceeded(error: { code?: string; message: strin
   throw new UserVisibleError(`${operation} is temporarily unavailable: ${error.message}`, 503);
 }
 
-/** Same, for the auth server. Only an explicit 4xx is a statement about the token. */
+/**
+ * Same, for the auth server. Only an explicit 4xx is a statement about the token.
+ *
+ * Note the range check rather than `< 500`: `@supabase/auth-js` reports a transport failure (DNS,
+ * connection refused, CORS) as an `AuthRetryableFetchError` carrying `status: 0`, so a naive "below
+ * 500 means the auth server answered" test would classify exactly the outage this guard exists to
+ * catch as a 401. Anything that is not a 4xx — 0, absent, 3xx, 5xx — means we never got an answer.
+ */
 export function assertAuthLookupSucceeded(error: { status?: number; message: string } | null | undefined): void {
   if (!error) return;
-  if (error.status !== undefined && error.status < 500) return;
+  if (error.status !== undefined && error.status >= 400 && error.status < 500) return;
   throw new UserVisibleError(`Authentication is temporarily unavailable: ${error.message}`, 503);
 }
 
