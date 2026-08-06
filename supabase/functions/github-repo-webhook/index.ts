@@ -314,7 +314,23 @@ async function createPushDirectSubmission(
     Sentry.captureException(dueDateError, scope);
     throw dueDateError;
   }
-  const pushTime = new Date();
+  // GitHub's OWN push timestamp, not our receive time.
+  //
+  // `repository.pushed_at` is set server-side by GitHub when the push lands and is identical in
+  // every redelivery of that push, whereas `new Date()` changes on each attempt: an on-time push
+  // whose first delivery threw transiently came back after the deadline and was then treated as
+  // late — silently skipped, or spending late tokens the student should not have needed. It is
+  // also not student-controllable, which is the property that ruled out head_commit.timestamp
+  // (`git commit --date=...`). Falls back to now when absent, which is the previous behaviour.
+  const pushedAtRaw = payload.repository?.pushed_at;
+  const pushedAt =
+    typeof pushedAtRaw === "number"
+      ? new Date(pushedAtRaw * 1000)
+      : typeof pushedAtRaw === "string"
+        ? new Date(pushedAtRaw)
+        : null;
+  const pushTime = pushedAt && !Number.isNaN(pushedAt.getTime()) ? pushedAt : new Date();
+  scope.setTag("push_time_source", pushedAt ? "github_pushed_at" : "receive_time");
   const finalDueDate = new Date(finalDueDateResult);
   const isLate = pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
   scope.setTag("push_direct_is_late", String(isLate));
@@ -888,6 +904,66 @@ async function createPushDirectSubmission(
  * Demotes before promoting, since submissions_one_active_* permits only one active row.
  */
 /**
+ * Is this push from course staff acting on a repository that is not their own?
+ *
+ * syncRepoPermissions grants instructors and graders `maintain` on every student repository, so
+ * staff CAN push to one — to debug, or to help a student. Recording that as the student's
+ * submission replaces their active gradebook entry with someone else's commit, and after the
+ * deadline it can spend the student's automatic late tokens.
+ *
+ * Deliberately narrow: it excludes staff pushing to SOMEONE ELSE's repo. Staff pushing to their
+ * own repository is a real submission — the Instructor Test Assignment flow provisions exactly
+ * that, so treating every staff push as foreign would break it.
+ *
+ * Returns false when the pusher cannot be resolved. An unknown GitHub login is far more likely to
+ * be a student whose account is not linked than a staff member, and dropping a student's
+ * submission is the worse error.
+ */
+async function isForeignStaffPush(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  pusherLogin: string | null | undefined,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  if (!pusherLogin) return false;
+  const { data: user, error: userError } = await adminSupabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", pusherLogin)
+    .maybeSingle();
+  if (userError) throw userError;
+  if (!user) {
+    scope.setTag("pusher_role", "unknown_github_login");
+    return false;
+  }
+  const { data: role, error: roleError } = await adminSupabase
+    .from("user_roles")
+    .select("role, private_profile_id")
+    .eq("user_id", user.user_id)
+    .eq("class_id", studentRepo.class_id)
+    .maybeSingle();
+  if (roleError) throw roleError;
+  if (!role || (role.role !== "instructor" && role.role !== "grader")) return false;
+  scope.setTag("pusher_role", role.role);
+
+  // Their own individual repo: a genuine submission.
+  if (studentRepo.profile_id && role.private_profile_id === studentRepo.profile_id) return false;
+  // Their own group's repo: also genuine. Staff are not normally group members, so this is the
+  // Instructor Test Assignment case again.
+  if (studentRepo.assignment_group_id) {
+    const { data: membership, error: membershipError } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("id")
+      .eq("assignment_group_id", studentRepo.assignment_group_id)
+      .eq("profile_id", role.private_profile_id)
+      .maybeSingle();
+    if (membershipError) throw membershipError;
+    if (membership) return false;
+  }
+  return true;
+}
+
+/**
  * Does this submission carry the oversized-rejection marker?
  *
  * deactivateRejectedSubmission writes that workflow_run_error BEFORE deactivating, which is what
@@ -1456,6 +1532,19 @@ async function handlePushToStudentRepo(
       );
     }
 
+    // Course staff pushing to a student's repository is not the student's submission. They hold
+    // `maintain` on every student repo (syncRepoPermissions grants it), so a debugging or
+    // assistance commit would otherwise replace the student's active gradebook entry — and after
+    // the deadline it could spend the student's automatic late tokens on work they did not do.
+    if (await isForeignStaffPush(adminSupabase, studentRepo, payload.pusher?.name ?? payload.sender?.login, scope)) {
+      scope.setTag("skipped_reason", "staff_push_to_student_repo");
+      console.log(
+        `Skipping push-direct submission for ${repoName}@${payload.after}: pushed by course staff ` +
+          `(${payload.pusher?.name ?? payload.sender?.login}) to a repository that is not theirs`
+      );
+      return;
+    }
+
     // A delivery for a superseded commit must not be recorded at all. The submissions trigger
     // assigns ordinals by INSERT order and demotes whatever was active, so an older push that
     // arrives late (a retry after a transient ingestion failure, say) would otherwise roll the
@@ -1732,6 +1821,34 @@ async function handlePushToGraderSolution(
         })
       );
       scope?.setTag("updated_autograders_count", autograders.length.toString());
+      // The config that just changed is what names submissionFiles, so the handout hashes were
+      // computed with the OLD globs. Ingestion would then filter with the new globs and compare
+      // against hashes built from the old ones, which is a comparison between two different file
+      // sets — an untouched starter repo reads as real work, and on a repo-only assignment that
+      // makes it the student's active submission. This is the same seeding the create and
+      // configure-webhook flows do; an instructor editing pawtograder.yml through RepoFileEditor
+      // arrives here instead of either of those.
+      for (const autograder of autograders) {
+        const { data: handoutTarget } = await adminSupabase
+          .from("assignments")
+          .select("template_repo, latest_template_sha, class_id")
+          .eq("id", autograder.id)
+          .maybeSingle();
+        if (!handoutTarget?.template_repo) continue;
+        const seedResult = await seedHandoutFileHashes({
+          adminSupabase,
+          assignmentId: autograder.id,
+          classId: handoutTarget.class_id,
+          templateRepo: handoutTarget.template_repo,
+          commitSha: handoutTarget.latest_template_sha,
+          scope
+        });
+        if (!seedResult.seeded) {
+          console.log(
+            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+          );
+        }
+      }
     } catch (err) {
       // Don't fail the whole webhook if pawtograder.yml is missing/malformed —
       // log it and continue so we still update the latest_autograder_sha below.

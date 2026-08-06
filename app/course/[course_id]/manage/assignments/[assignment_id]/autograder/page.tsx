@@ -265,7 +265,28 @@ export default function AutograderPage() {
         }
         if (autograderRowChanged) {
           try {
-            await refineCore.onFinish(priorAutograderRow);
+            // CONDITIONAL, like the assignment edit page's rollback. The GitHub work above takes
+            // seconds, which is long enough for a second instructor to save this same page — and
+            // restoring this page's load-time snapshot over their successful change to the grader
+            // repository or the submission limits would undo a save that worked in order to undo
+            // one that failed. Matching on what THIS save wrote makes it all-or-nothing: if
+            // anything has changed since, no rows match and nothing is clobbered.
+            //
+            // Written through supabase rather than refineCore.onFinish because only the former can
+            // express the match condition.
+            const { data: rolledBack, error: rollbackDbError } = await supabase
+              .from("autograder")
+              .update(priorAutograderRow)
+              .eq("id", Number.parseInt(assignment_id as string))
+              .match(nextAutograderRow)
+              .select("id");
+            if (rollbackDbError) throw rollbackDbError;
+            if ((rolledBack ?? []).length === 0) {
+              console.warn(
+                "Not rolling back the autograder row: it no longer holds the values this save wrote, so another " +
+                  "save has superseded it."
+              );
+            }
           } catch (rollbackError) {
             // Surface the original failure, but don't hide a failed rollback: the
             // row now holds values the instructor was told did not save.
