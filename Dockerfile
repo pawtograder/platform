@@ -42,11 +42,20 @@ ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
 ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
 ARG SENTRY_RELEASE=""
 # Source map upload target. Set SENTRY_URL to a self-hosted Bugsink base URL to
-# upload there instead of sentry.io; leave empty to skip upload entirely. The
-# auth token is NOT an ARG — it arrives as a BuildKit secret below.
+# upload there; leave empty to skip upload entirely. sentry.io is never a valid
+# target — a token without a URL is an error, not a silent upload to the SaaS
+# endpoint. The auth token is NOT an ARG — it arrives as a BuildKit secret below.
 ARG SENTRY_URL=""
 ARG SENTRY_ORG=""
 ARG SENTRY_PROJECT=""
+# Cache key for the build layer that performs the upload. BuildKit deliberately
+# leaves secret *contents* out of the cache key, and both image workflows import
+# and export layer caches, so a build of the same commit that ran before the
+# token was wired can otherwise be replayed from cache — reusing the layer and
+# skipping the upload permanently. Any non-secret value that changes when the
+# upload configuration changes works (a token fingerprint, the CI run id);
+# builds that mount sentry_auth_token are required to pass one.
+ARG SENTRY_UPLOAD_ID=""
 ARG SUPABASE_URL=""
 
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
@@ -66,6 +75,7 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     SENTRY_URL=$SENTRY_URL \
     SENTRY_ORG=$SENTRY_ORG \
     SENTRY_PROJECT=$SENTRY_PROJECT \
+    SENTRY_UPLOAD_ID=$SENTRY_UPLOAD_ID \
     SUPABASE_URL=$SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_OUTPUT_STANDALONE=true
@@ -85,9 +95,24 @@ RUN --mount=type=secret,id=sentry_auth_token \
     [ -n "${SENTRY_ORG:-}" ] || unset SENTRY_ORG; \
     [ -n "${SENTRY_PROJECT:-}" ] || unset SENTRY_PROJECT; \
     if [ -s /run/secrets/sentry_auth_token ]; then \
+      if [ -z "${SENTRY_URL:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without SENTRY_URL. The bundler" >&2; \
+        echo "       plugin treats a missing URL as sentry.io, so this would ship" >&2; \
+        echo "       private source maps to the SaaS endpoint. Pass the Bugsink base" >&2; \
+        echo "       URL as SENTRY_URL, or drop the secret to skip the upload." >&2; \
+        exit 1; \
+      fi; \
+      if [ -z "${SENTRY_UPLOAD_ID:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without SENTRY_UPLOAD_ID. Secret" >&2; \
+        echo "       contents are not part of the BuildKit cache key, so this layer" >&2; \
+        echo "       could be served from a cached build that skipped the upload." >&2; \
+        echo "       Pass any non-secret value that changes with the upload config" >&2; \
+        echo "       (a token fingerprint, the CI run id) as SENTRY_UPLOAD_ID." >&2; \
+        exit 1; \
+      fi; \
       SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)"; \
       export SENTRY_AUTH_TOKEN; \
-      echo "sentry: uploading source maps to ${SENTRY_URL:-sentry.io} (project ${SENTRY_PROJECT:-pawtograder-web})"; \
+      echo "sentry: uploading source maps to $SENTRY_URL (project ${SENTRY_PROJECT:-pawtograder-web}, upload id $SENTRY_UPLOAD_ID)"; \
     else \
       echo "sentry: no auth token supplied, skipping source map upload"; \
     fi; \

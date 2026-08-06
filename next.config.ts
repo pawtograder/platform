@@ -216,4 +216,19 @@ const sentryConfig = {
   disableLogger: true
 };
 
-export default hasSentryDsn && !disableSentryBundlingPlugin ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
+const sentryPluginEnabled = hasSentryDsn && !disableSentryBundlingPlugin;
+
+// The only symbolication target is the self-hosted Bugsink named by SENTRY_URL;
+// there is no sentry.io account. The bundler plugin normalizes a nullish URL to
+// https://sentry.io, so a token without a URL would upload private source maps
+// to a third party. Fail the build instead. The Dockerfile checks this too, to
+// fail before spending a build, but the guard belongs here as well because the
+// upload runs for any `npm run build`, not just the containerized one.
+if (sentryPluginEnabled && !disableSentrySourcemaps && !!process.env.SENTRY_AUTH_TOKEN && !process.env.SENTRY_URL) {
+  throw new Error(
+    "SENTRY_AUTH_TOKEN is set but SENTRY_URL is empty: refusing to upload source maps to sentry.io. " +
+      "Set SENTRY_URL to the Bugsink base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
+  );
+}
+
+export default sentryPluginEnabled ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
