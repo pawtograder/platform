@@ -548,8 +548,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .update({ is_github_ready: true })
               .eq("id", dbRepo!.id);
             if (readyError) {
+              // Propagate, as the individual-repo branch does. Logging alone let this
+              // callback return and the whole function report is_ok, while the row stayed
+              // is_github_ready=false — so the push-direct guard acknowledged and
+              // discarded every group push until the reconciler repaired it, with no
+              // replay of what was lost.
               console.error(readyError);
               Sentry.captureException(readyError, scope);
+              throw new UserVisibleError(
+                `Group repository ${repoName} was created but could not be marked ready ` +
+                  `(${readyError.message}). Please retry: pushes to it would not be recorded until this is fixed.`
+              );
             }
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);

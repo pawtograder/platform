@@ -706,16 +706,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // backfill + default flip in 20260805170500 means FALSE now genuinely means
       // "the instructor turned the autograder off".
       if (repoData.assignments.has_autograder === false) {
-        scope?.setTag("rejected_reason", "assignment_has_no_autograder");
-        throw new UserVisibleError(
-          "This assignment does not use an autograder, so this grading workflow run was ignored. " +
-            "Your push was recorded as a submission directly — there is nothing else to do. " +
-            "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
-            "handout (which no longer has one) to stop these runs.",
-          // Expected terminal condition, not a server fault: 400 so the action does
-          // not retry (UserVisibleError defaults to 500).
-          400
-        );
+        // ...unless this run was DISPATCHED while the autograder was still on. The push
+        // webhook records a check run and stamps workflow_triggered_at when it dispatches
+        // grade.yml, and it creates no direct submission on that path — so if an
+        // instructor disables the autograder while an Actions job is already in flight,
+        // rejecting it here loses the student's work entirely: nothing else recorded that
+        // push. A stamped trigger time is proof the dispatch predates the toggle, so let
+        // those runs finish. Leftover-workflow runs on a repo that was never dispatched
+        // to have no such row and are still rejected below.
+        const { data: dispatched } = await adminSupabase
+          .from("repository_check_runs")
+          .select("id, status")
+          .eq("repository_id", repoData.id)
+          .eq("sha", sha)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const triggeredAt = (dispatched?.status as { workflow_triggered_at?: string } | null)?.workflow_triggered_at;
+        if (triggeredAt) {
+          scope?.setTag("allowed_in_flight_dispatch", "true");
+          console.log(
+            `Allowing in-flight workflow run for ${repository}@${sha}: dispatched at ${triggeredAt}, before the ` +
+              `autograder was disabled`
+          );
+        } else {
+          scope?.setTag("rejected_reason", "assignment_has_no_autograder");
+          throw new UserVisibleError(
+            "This assignment does not use an autograder, so this grading workflow run was ignored. " +
+              "Your push was recorded as a submission directly — there is nothing else to do. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            // Expected terminal condition, not a server fault: 400 so the action does
+            // not retry (UserVisibleError defaults to 500).
+            400
+          );
+        }
       }
       // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (

@@ -528,15 +528,46 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .update({ latest_template_sha: restoreCommitSha })
       .eq("template_repo", templateRepo);
     if (shaError) {
-      // Symmetric to the disable path: without the pointer, nothing tells student
-      // repos there is a new handout revision to pull, so they never receive the
-      // restored workflow — see the sync below, which depends on it.
+      // Symmetric to the disable path: without the pointer, nothing tells student repos
+      // there is a new handout revision to pull, so they never receive the restored
+      // workflow.
+      //
+      // This sits OUTSIDE the restore-rollback guard above, so throwing bare would let
+      // the callers reset this assignment's flag to false while the live workflow stayed
+      // in the handout and the realigned sharers stayed enabled — pushes taking the
+      // direct-ingestion path while a stale Actions run also fired. Undo both before
+      // propagating.
       scope.setTag("pin_latest_template_sha_failed", "true");
       Sentry.captureException(shaError, scope);
+      try {
+        await deleteFileFromRepo(
+          templateRepo,
+          GRADE_WORKFLOW_PATH,
+          "Roll back autograder workflow restore: the handout revision pointer could not be updated",
+          scope
+        );
+      } catch (rollbackError) {
+        scope.setTag("pin_failure_workflow_rollback_failed", "true");
+        Sentry.captureException(rollbackError, scope);
+      }
+      if (realignedOnRestore.length > 0) {
+        const { error: revertError } = await adminSupabase
+          .from("assignments")
+          .update({ has_autograder: !hasAutograder })
+          .eq("class_id", class_id)
+          .in(
+            "id",
+            realignedOnRestore.map((a) => a.id)
+          );
+        if (revertError) {
+          scope.setTag("pin_failure_sharer_rollback_failed", "true");
+          Sentry.captureException(revertError, scope);
+        }
+      }
       throw new UserVisibleError(
         `The autograder workflow was restored to ${templateRepo}, but the handout revision pointer could not be ` +
           `updated (${shaError.message}). Student repositories would never receive the workflow, so the change ` +
-          `was not completed — please try again.`,
+          `was rolled back — please try again.`,
         502
       );
     }
@@ -555,22 +586,46 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // Best-effort: the workflow is live and hashed by now, so a queueing failure is not
   // worth undoing a working toggle. Reported instead, and the periodic handout-sync
   // path will still pick these repos up.
+  // Every assignment whose repos need the workflow: this one AND any sharer that
+  // realignInClassSharers just switched on. Queuing only this assignment left the
+  // sharers' repos workflow-free while their pushes had already stopped taking the
+  // direct-ingestion path.
+  const assignmentIdsToSync = [assignment_id, ...realignedOnRestore.map((a) => a.id)];
   const { data: repoRows, error: repoRowsError } = await adminSupabase
     .from("repositories")
     .select("id")
-    .eq("assignment_id", assignment_id);
+    .in("assignment_id", assignmentIdsToSync);
   if (repoRowsError) {
     scope.setTag("queue_repo_syncs_lookup_failed", "true");
     Sentry.captureException(repoRowsError, scope);
   } else if (repoRows && repoRows.length > 0) {
-    const { error: queueError } = await adminSupabase.rpc("queue_repository_syncs", {
-      p_repository_ids: repoRows.map((r) => r.id)
-    });
-    if (queueError) {
-      scope.setTag("queue_repo_syncs_failed", "true");
-      Sentry.captureException(queueError, scope);
+    // MUST go through a user-scoped client: queue_repository_syncs opens with
+    // `if auth.uid() is null then raise exception 'Not authenticated'`
+    // (20260530120200_assignment-repo-config.sql:830), so calling it on the
+    // service-role client failed every time — and because this step is best-effort,
+    // that failure was swallowed and the sync silently never happened. Authorization
+    // was already established by assertUserIsInstructorOrServiceRole above; this
+    // client only supplies the auth.uid() the RPC insists on.
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      scope.setTag("queue_repo_syncs_skipped", "no_user_context");
+      console.log("Skipping repository sync queueing: no Authorization header to satisfy queue_repository_syncs");
     } else {
-      scope.setTag("queued_repo_syncs", String(repoRows.length));
+      const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } }
+      });
+      const { error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
+        p_repository_ids: repoRows.map((r) => r.id)
+      });
+      if (queueError) {
+        // Still non-fatal — the workflow is live and hashed, so not worth undoing a
+        // working toggle — but captured loudly, because the consequence is student
+        // pushes going unrecorded until another sync runs.
+        scope.setTag("queue_repo_syncs_failed", "true");
+        Sentry.captureException(queueError, scope);
+      } else {
+        scope.setTag("queued_repo_syncs", String(repoRows.length));
+      }
     }
   }
 

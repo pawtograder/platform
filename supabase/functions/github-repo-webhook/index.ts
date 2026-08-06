@@ -837,7 +837,12 @@ async function deactivateRejectedSubmission(
       .eq("is_binary", true);
     const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
     if (keys.length > 0) {
-      await adminSupabase.storage.from("submission-files").remove(keys);
+      // Check the result and abort BEFORE deleting the rows, as
+      // cleanupPushDirectSubmission does. The submission_files rows are the only record
+      // of these storage keys, so removing them after a failed storage delete orphans
+      // the blobs permanently with nothing left to find them by.
+      const { error: storageErr } = await adminSupabase.storage.from("submission-files").remove(keys);
+      if (storageErr) throw storageErr;
     }
     const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
     if (filesErr) throw filesErr;
