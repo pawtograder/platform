@@ -456,6 +456,19 @@ jobs:
   # deploy — helm install/upgrade against ripley
   # --------------------------------------------------------------------------
   deploy:
+    env:
+      # Raise the client-side API throttle for every helm call in this job
+      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
+      #
+      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
+      # default of 5 req/s. The initial apply spends the burst, then everything
+      # after it (notably --wait/--wait-for-jobs polling every resource in the
+      # release) crawls at 5 req/s until the operation context expires:
+      #   UPGRADE FAILED: client rate limiter Wait returned an error
+      # That error is the client queueing behind its own limiter, not the API
+      # server rejecting anything, so the fix is on this side.
+      HELM_QPS: "50"
+      HELM_BURST_LIMIT: "300"
     needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: pawtograder-ci
@@ -580,6 +593,19 @@ jobs:
   # destroy — helm uninstall + namespace delete on PR close (or manual)
   # --------------------------------------------------------------------------
   destroy:
+    env:
+      # Raise the client-side API throttle for every helm call in this job
+      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
+      #
+      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
+      # default of 5 req/s. The initial apply spends the burst, then everything
+      # after it (notably --wait/--wait-for-jobs polling every resource in the
+      # release) crawls at 5 req/s until the operation context expires:
+      #   UPGRADE FAILED: client rate limiter Wait returned an error
+      # That error is the client queueing behind its own limiter, not the API
+      # server rejecting anything, so the fix is on this side.
+      HELM_QPS: "50"
+      HELM_BURST_LIMIT: "300"
     needs: meta
     if: needs.meta.outputs.mode == 'destroy'
     runs-on: pawtograder-ci

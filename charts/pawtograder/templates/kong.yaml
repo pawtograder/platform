@@ -140,9 +140,31 @@ spec:
             - sh
             - -c
             - |
-              set -e
-              apk add --no-cache gettext >/dev/null
-              envsubst < /template/kong.yml > /rendered/kong.yml
+              set -eu
+              # Substitute with busybox sed rather than `apk add gettext` +
+              # envsubst. The template has exactly two placeholders, so pulling
+              # a package off the internet on every pod start bought nothing —
+              # and it made pod startup depend on dl-cdn.alpinelinux.org being
+              # resolvable, which it is not on every network (Northeastern's
+              # resolver returns no answer for it). When that lookup fails the
+              # init container crash-loops, no new kong pod can start, and
+              # `helm upgrade --wait` blocks until it times out with an error
+              # that looks nothing like the cause.
+              #
+              # `|` is a safe sed delimiter here: both values are JWTs
+              # (base64url + dots), so they cannot contain `|`, `&` or `\`.
+              test -n "$SUPABASE_ANON_KEY"
+              test -n "$SUPABASE_SERVICE_KEY"
+              sed -e "s|\$SUPABASE_ANON_KEY|${SUPABASE_ANON_KEY}|g" \
+                  -e "s|\$SUPABASE_SERVICE_KEY|${SUPABASE_SERVICE_KEY}|g" \
+                  /template/kong.yml > /rendered/kong.yml
+              # Fail loudly rather than starting kong with a literal
+              # "$SUPABASE_..." string where a credential should be.
+              if grep -q '\$SUPABASE_' /rendered/kong.yml; then
+                echo "[render] ERROR: unsubstituted placeholder remains" >&2
+                grep -n '\$SUPABASE_' /rendered/kong.yml >&2
+                exit 1
+              fi
               echo "[render] /rendered/kong.yml ready ($(wc -l </rendered/kong.yml) lines)"
           env:
             - name: SUPABASE_ANON_KEY
