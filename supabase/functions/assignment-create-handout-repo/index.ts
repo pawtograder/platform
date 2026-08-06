@@ -15,6 +15,7 @@ import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandl
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -276,6 +277,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // check only runs on the Actions-driven submission path, which no longer exists.
   if (assignment.has_autograder !== false) {
     await updateAutograderWorkflowHash(handoutFullName);
+  }
+
+  // Seed the handout's file hashes for the revision just pinned.
+  //
+  // Those rows are what let an ingested submission be recognised as "the student pushed
+  // nothing of their own", and only the template-repo push webhook used to write them — which
+  // never fires for a handout created here, because our commits land BEFORE template_repo
+  // exists, so the webhook has no assignment to attribute them to. Without them the ingestion
+  // path compares against nothing and treats an untouched starter repo as real work: on a
+  // repo-only assignment, where every push is a submission, the student's first unchanged push
+  // becomes their active submission even with empty submissions prohibited.
+  //
+  // Best-effort BY CONSTRUCTION, unlike most steps in this PR: the rows are re-derivable from
+  // GitHub, the next handout push recomputes them, and a failure is visible in Sentry — so
+  // failing handout creation over them would be the worse trade. It is also a no-op for a
+  // brand-new assignment whose autograder config has not been read yet (no submissionFiles to
+  // hash), which is why github-repo-configure-webhook seeds again once that config lands.
+  const seedResult = await seedHandoutFileHashes({
+    adminSupabase,
+    assignmentId: assignment_id,
+    classId: assignment.class_id,
+    templateRepo: handoutFullName,
+    commitSha: strippedHandoutSha,
+    scope
+  });
+  scope.setTag("handout_hashes_seeded", String(seedResult.seeded));
+  if (!seedResult.seeded) {
+    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${seedResult.reason}`);
   }
 
   return {

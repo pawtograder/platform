@@ -51,12 +51,22 @@ function autograderScoreLabel(
     grader_results?: { score?: number | null; max_score?: number | null; errors?: unknown } | null;
     submitted_via?: string | null;
     run_number?: number | null;
+    workflow_run_error?: unknown;
   },
   assignmentHasNoAutograder: boolean
 ): string {
   const results = submission.grader_results;
   if (results) {
     return results.errors ? "Error" : `${results.score}/${results.max_score}`;
+  }
+  // A retained rejection: the push-direct path keeps an oversized submission as an inactive
+  // history row and attaches a student-visible workflow_run_error explaining why nothing was
+  // graded. That error row is the ONLY record of the rejection — the submission itself looks
+  // ordinary — so without this the newest history entry read as a successful hand-graded
+  // submission and the student had no way to learn their push was refused.
+  const runErrors = submission.workflow_run_error;
+  if (Array.isArray(runErrors) ? runErrors.length > 0 : !!runErrors) {
+    return "Error";
   }
   // Channels that never produce grader results: an upload, a manual entry, a PR
   // submission, or a push-direct submission (run_number 0 — no Actions run backs
@@ -111,8 +121,11 @@ export default function AssignmentPage() {
   const { data: submissionsData, refetch: refetchSubmissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
+      // workflow_run_error is embedded because a push-direct submission rejected as oversized
+      // is deliberately RETAINED with the error attached — that error row is the only record
+      // of the rejection, so without it the row reads as an ordinary hand-graded submission.
       select:
-        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)",
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*), workflow_run_error(*)",
       order: "created_at, { ascending: false }"
     },
     pagination: {

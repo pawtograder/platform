@@ -28,6 +28,11 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
+import {
+  computeHandoutFileHashesForCommit,
+  seedHandoutFileHashes,
+  type HandoutHashCaches
+} from "../_shared/handoutFileHashes.ts";
 import { buildTooLargeErrorName } from "../_shared/tooLargeErrorName.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
@@ -147,102 +152,6 @@ function pushTouchedFile(payload: PushEvent, path: string): boolean {
     return true;
   }
   return payload.commits.some((c) => c.modified.includes(path) || c.added.includes(path) || c.removed.includes(path));
-}
-
-function sha256Hex(buf: Uint8Array): string {
-  const hash = createHash("sha256");
-  hash.update(buf);
-  return hash.digest("hex");
-}
-
-function computeCombinedHashFromFileHashes(file_hashes: Record<string, string>): string {
-  const combinedInput = Object.keys(file_hashes)
-    .sort()
-    .map((name) => `${name}\0${file_hashes[name]}\n`)
-    .join("");
-  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
-}
-
-/** Cache key for commit+tree (templateRepo, commitSha). */
-const commitTreeCacheKey = (templateRepo: string, commitSha: string) => `${templateRepo}:${commitSha}`;
-
-/** Cache key for blob hash (owner, repo, blobSha). */
-const blobCacheKey = (owner: string, repo: string, blobSha: string) => `${owner}:${repo}:${blobSha}`;
-
-/** Per-webhook caches to avoid duplicate GitHub API calls across assignments sharing a template repo. */
-type HandoutHashCaches = {
-  commitTree: Map<string, { treeSha: string; tree: { path?: string; sha?: string; type?: string }[] }>;
-  blobHash: Map<string, string>;
-};
-
-async function computeHandoutFileHashesForCommit(params: {
-  templateRepo: string;
-  commitSha: string;
-  expectedFiles: string[];
-  scope: Sentry.Scope;
-  caches?: HandoutHashCaches;
-}): Promise<{ file_hashes: Record<string, string>; combined_hash: string }> {
-  const { templateRepo, commitSha, expectedFiles, scope, caches } = params;
-  const octokit = await getOctoKit(templateRepo, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${templateRepo}`);
-  }
-  const [owner, repo] = templateRepo.split("/");
-
-  const ctKey = commitTreeCacheKey(templateRepo, commitSha);
-  let treeSha: string;
-  let tree: { path?: string; sha?: string; type?: string }[];
-
-  if (caches?.commitTree?.has(ctKey)) {
-    const cached = caches.commitTree.get(ctKey)!;
-    treeSha = cached.treeSha;
-    tree = cached.tree;
-  } else {
-    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
-      owner,
-      repo,
-      commit_sha: commitSha
-    });
-    treeSha = commit.tree.sha;
-
-    const { data: treeData } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-      owner,
-      repo,
-      tree_sha: treeSha,
-      recursive: "true"
-    });
-    tree = treeData.tree || [];
-
-    caches?.commitTree?.set(ctKey, { treeSha, tree });
-  }
-
-  const wantedPaths = tree
-    .filter((item) => item.type === "blob" && !!item.path && !!item.sha)
-    .map((item) => ({ path: item.path!, sha: item.sha! }))
-    .filter(({ path }) => expectedFiles.some((pattern) => micromatch.isMatch(path, pattern)));
-
-  const file_hashes: Record<string, string> = {};
-  for (const { path, sha } of wantedPaths) {
-    const bKey = blobCacheKey(owner, repo, sha);
-    let hash: string | undefined = caches?.blobHash?.get(bKey);
-    if (hash === undefined) {
-      const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
-        owner,
-        repo,
-        file_sha: sha
-      });
-      if (blob.encoding !== "base64") {
-        throw new Error(`Unexpected blob encoding for ${path}: ${blob.encoding}`);
-      }
-      const bytes = Buffer.from(blob.content, "base64");
-      hash = sha256Hex(bytes);
-      caches?.blobHash?.set(bKey, hash);
-    }
-    file_hashes[path] = hash;
-  }
-
-  const combined_hash = computeCombinedHashFromFileHashes(file_hashes);
-  return { file_hashes, combined_hash };
 }
 
 // Extend CheckRunStatus locally to track idempotent step markers without using 'any'
@@ -1801,48 +1710,18 @@ async function handlePushToTemplateRepo(
   };
 
   for (const assignment of assignments) {
-    try {
-      const { data: graderConfig, error: graderConfigError } = await adminSupabase
-        .from("autograder")
-        .select("config")
-        .eq("id", assignment.id)
-        .maybeSingle();
-      if (graderConfigError) {
-        Sentry.captureException(graderConfigError, scope);
-        continue;
-      }
-      const pawtograderConfig = (graderConfig?.config as unknown as PawtograderConfig) || null;
-      const expectedFiles = pawtograderConfig?.submissionFiles
-        ? [...(pawtograderConfig.submissionFiles.files || []), ...(pawtograderConfig.submissionFiles.testFiles || [])]
-        : [];
-      if (!assignment.template_repo || expectedFiles.length === 0) {
-        continue;
-      }
-
-      const { file_hashes, combined_hash } = await computeHandoutFileHashesForCommit({
-        templateRepo: assignment.template_repo,
-        commitSha,
-        expectedFiles,
-        scope,
-        caches: handoutHashCaches
-      });
-
-      const { error: upsertError } = await adminSupabase.from("assignment_handout_file_hashes").upsert(
-        {
-          assignment_id: assignment.id,
-          sha: commitSha,
-          combined_hash,
-          file_hashes,
-          class_id: assignment.class_id
-        },
-        { onConflict: "assignment_id,sha" }
-      );
-      if (upsertError) {
-        Sentry.captureException(upsertError, scope);
-      }
-    } catch (e) {
-      Sentry.captureException(e, scope);
-    }
+    // Same helper the handout-creation and grader-config flows use, so all three record
+    // identical rows. It reports rather than throwing, and the caches make repeated calls
+    // across assignments sharing a template repo cost one GitHub round trip.
+    await seedHandoutFileHashes({
+      adminSupabase,
+      assignmentId: assignment.id,
+      classId: assignment.class_id,
+      templateRepo: assignment.template_repo,
+      commitSha,
+      scope,
+      caches: handoutHashCaches
+    });
   }
 }
 

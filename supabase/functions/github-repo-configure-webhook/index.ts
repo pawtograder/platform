@@ -10,6 +10,7 @@ import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 
 /**
  * Webhook events the Pawtograder GitHub App must subscribe to.
@@ -122,6 +123,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       return {
         message: "Error updating autograder config"
       };
+    }
+    // The config that just landed is what names `submissionFiles`, so this is the first moment
+    // the handout's file hashes CAN be computed for a new assignment —
+    // assignment-create-handout-repo runs before it and finds no globs to hash. Without these
+    // rows the ingestion path has nothing to compare against and reads an untouched starter
+    // repo as real work, which on a repo-only assignment makes the student's first unchanged
+    // push their active submission. Idempotent on (assignment_id, sha), and reports rather
+    // than throwing: the rows are re-derivable and the next handout push recomputes them.
+    const { data: handoutTarget } = await supabase
+      .from("assignments")
+      .select("template_repo, latest_template_sha, class_id")
+      .eq("id", assignment_id)
+      .maybeSingle();
+    if (handoutTarget?.template_repo) {
+      const seedResult = await seedHandoutFileHashes({
+        adminSupabase: supabase,
+        assignmentId: assignment_id,
+        classId: handoutTarget.class_id,
+        templateRepo: handoutTarget.template_repo,
+        commitSha: handoutTarget.latest_template_sha,
+        scope
+      });
+      if (!seedResult.seeded) {
+        console.log(
+          `Not seeding handout file hashes for assignment ${assignment_id} after the grader config: ${seedResult.reason}`
+        );
+      }
     }
   } else {
     return {

@@ -771,26 +771,47 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // concurrent runs on one commit and is bounded by the run itself; what matters
             // here is closing the unbounded re-run window.
             //
-            // A failed claim does NOT reject the run: the alternative is discarding a
-            // genuine pre-toggle push that has no direct submission either, which is worse
-            // than leaving the re-run window open for this one commit. Tagged so it is
-            // visible rather than silent.
-            const { error: claimError } = await adminSupabase
-              .from("repository_check_runs")
-              .update({
-                status: {
-                  ...dispatchedStatus,
-                  autograder_disabled_exception: {
-                    run_id: decoded.run_id,
-                    run_attempt: decoded.run_attempt,
-                    claimed_at: new Date().toISOString()
-                  }
-                } as unknown as Json
-              })
-              .eq("id", dispatched.id);
+            // Retried, then FAILED CLOSED. The first version logged and continued, which left
+            // workflow_triggered_at present with no claim — so the very re-run window the
+            // claim exists to close stayed open for this commit, and the mechanism failed
+            // open on its own write.
+            //
+            // I had reasoned that rejecting was worse because it discards a pre-toggle push
+            // with no direct submission behind it. That undervalued the other side: an
+            // unclaimed exception admits a LATER re-run, and because the trigger promotes the
+            // newest submission, that duplicate becomes the ACTIVE one — silently replacing
+            // whatever the instructor was grading. A rejection, by contrast, is visible: the
+            // run fails, and since the assignment is now has_autograder=false the student's
+            // next push is recorded directly by the webhook.
+            const claimStatus = {
+              ...dispatchedStatus,
+              autograder_disabled_exception: {
+                run_id: decoded.run_id,
+                run_attempt: decoded.run_attempt,
+                claimed_at: new Date().toISOString()
+              }
+            } as unknown as Json;
+            // Two extra attempts, because the common failure here is a statement timeout or a
+            // momentarily exhausted pool rather than anything about this row.
+            let claimError: { message: string } | null = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              const { error } = await adminSupabase
+                .from("repository_check_runs")
+                .update({ status: claimStatus })
+                .eq("id", dispatched.id);
+              claimError = error;
+              if (!error) break;
+              scope?.setTag("disable_exception_claim_retry", String(attempt));
+              if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+            }
             if (claimError) {
               scope?.setTag("disable_exception_claim_failed", "true");
               Sentry.captureException(claimError, scope);
+              throw new Error(
+                `Could not record that this run is the in-flight dispatch for ${repository}@${sha} ` +
+                  `(${claimError.message}); rejecting it so the run can be retried rather than leaving the ` +
+                  `post-disable re-run window open`
+              );
             }
           }
         } else {
