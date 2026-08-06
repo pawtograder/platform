@@ -1381,6 +1381,13 @@ export function RubricCriteria({
                 setSelectedCheck(rubricChecks?.find((check) => check.id.toString() === value.value));
               }}
             >
+              {/* RadioGroup.Root always points aria-labelledby at its Label part, so leaving the
+                  part out both dangles the reference and leaves the group unnamed. The visible
+                  "Checks" heading above sits outside the Root, and a page shows one group per
+                  criteria, so name it after the criteria rather than repeating "Checks". The
+                  options group in RubricCheckGlobal solves the same problem the other way, with an
+                  explicit aria-labelledby onto its visible check name. */}
+              <RadioGroup.Label srOnly>{criteria.name} checks</RadioGroup.Label>
               {rubricChecks?.map((check, index) => (
                 <RubricCheck
                   key={`check-${check.id}-${index}`}

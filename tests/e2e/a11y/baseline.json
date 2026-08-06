@@ -1,16 +1,7 @@
 {
   "recordedAt": "2026-08-05T19:25:05.535Z",
-  "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy \u2014 deleting a line is the proof a defect was fixed.",
+  "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
   "entries": {
-    "assignment-detail|dark|aria-valid-attr-value|incomplete": {
-      "route": "assignment-detail",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 2,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrq\u00bb\\:trigger"
-    },
     "assignment-detail|dark|color-contrast|incomplete": {
       "route": "assignment-detail",
       "scheme": "dark",
@@ -19,15 +10,6 @@
       "nodes": 2,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "assignment-detail|light|aria-valid-attr-value|incomplete": {
-      "route": "assignment-detail",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 2,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrq\u00bb\\:trigger"
     },
     "assignment-detail|light|color-contrast|incomplete": {
       "route": "assignment-detail",
@@ -47,15 +29,6 @@
       "impact": "serious",
       "sample": "[assignment detail] no page-level horizontal scrolling at 320px (scrollWidth 394 vs clientWidth 320)"
     },
-    "assignments|dark|aria-valid-attr-value|incomplete": {
-      "route": "assignments",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abro\u00bb\\:trigger"
-    },
     "assignments|dark|color-contrast|incomplete": {
       "route": "assignments",
       "scheme": "dark",
@@ -64,15 +37,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": "span[data-visual-test=\"transparent\"]"
-    },
-    "assignments|light|aria-valid-attr-value|incomplete": {
-      "route": "assignments",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abro\u00bb\\:trigger"
     },
     "assignments|light|color-contrast|incomplete": {
       "route": "assignments",
@@ -101,15 +65,6 @@
       "impact": "serious",
       "sample": "[canvas classes] main landmark visible at 320px"
     },
-    "course-home|dark|aria-valid-attr-value|incomplete": {
-      "route": "course-home",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abr10\u00bb\\:trigger"
-    },
     "course-home|dark|color-contrast|incomplete": {
       "route": "course-home",
       "scheme": "dark",
@@ -118,15 +73,6 @@
       "nodes": 3,
       "impact": "serious",
       "sample": "span[data-visual-placeholder=\"date\"]"
-    },
-    "course-home|light|aria-valid-attr-value|incomplete": {
-      "route": "course-home",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abr10\u00bb\\:trigger"
     },
     "course-home|light|color-contrast|incomplete": {
       "route": "course-home",
@@ -164,15 +110,6 @@
       "impact": "serious",
       "sample": "p[data-visual-test=\"transparent\"]"
     },
-    "discussion-new|dark|aria-valid-attr-value|incomplete": {
-      "route": "discussion-new",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#radio-group\\:\u00abri\u00bb"
-    },
     "discussion-new|dark|color-contrast|incomplete": {
       "route": "discussion-new",
       "scheme": "dark",
@@ -180,7 +117,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:\u00abri\u00bb\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|dark|label|violation": {
       "route": "discussion-new",
@@ -200,15 +137,6 @@
       "impact": "serious",
       "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
     },
-    "discussion-new|light|aria-valid-attr-value|incomplete": {
-      "route": "discussion-new",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#radio-group\\:\u00abri\u00bb"
-    },
     "discussion-new|light|color-contrast|incomplete": {
       "route": "discussion-new",
       "scheme": "light",
@@ -216,7 +144,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:\u00abri\u00bb\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
+      "sample": "#radio-group\\:«ri»\\:radio\\:2333 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|light|label|violation": {
       "route": "discussion-new",
@@ -263,24 +191,6 @@
       "impact": "serious",
       "sample": "[discussion thread] <title> includes the product name (\"Pawtograder\")"
     },
-    "notifications|dark|aria-valid-attr-value|incomplete": {
-      "route": "notifications",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrf\u00bb\\:trigger"
-    },
-    "notifications|light|aria-valid-attr-value|incomplete": {
-      "route": "notifications",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrf\u00bb\\:trigger"
-    },
     "notifications|light|reflow-320|violation": {
       "route": "notifications",
       "scheme": "light",
@@ -315,7 +225,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "serious",
-      "sample": "#field\\:\\:\u00abrp\u00bb > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
+      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
     "office-hours-queue-new|dark|color-contrast|violation": {
       "route": "office-hours-queue-new",
@@ -351,7 +261,7 @@
       "kind": "incomplete",
       "nodes": 1,
       "impact": "serious",
-      "sample": "#field\\:\\:\u00abrp\u00bb > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
+      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
     "office-hours-queue-new|light|reflow-320|violation": {
       "route": "office-hours-queue-new",
@@ -425,15 +335,6 @@
       "impact": "serious",
       "sample": ".css-10d65bq"
     },
-    "submission-checks|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-checks",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-checks|dark|color-contrast|incomplete": {
       "route": "submission-checks",
       "scheme": "dark",
@@ -442,15 +343,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-checks|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-checks",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-checks|light|color-contrast|incomplete": {
       "route": "submission-checks",
@@ -461,15 +353,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-deployments|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-deployments|dark|color-contrast|incomplete": {
       "route": "submission-deployments",
       "scheme": "dark",
@@ -478,15 +361,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-deployments|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-deployments|light|color-contrast|incomplete": {
       "route": "submission-deployments",
@@ -505,15 +379,6 @@
       "nodes": 2,
       "impact": "serious",
       "sample": ".css-dj5smh"
-    },
-    "submission-files|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 6,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-files|dark|color-contrast|incomplete": {
       "route": "submission-files",
@@ -542,15 +407,6 @@
       "impact": "serious",
       "sample": ".css-dj5smh"
     },
-    "submission-files|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-files",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 6,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-files|light|color-contrast|incomplete": {
       "route": "submission-files",
       "scheme": "light",
@@ -559,15 +415,6 @@
       "nodes": 8,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-grade|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-grade",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-grade|dark|color-contrast|incomplete": {
       "route": "submission-grade",
@@ -578,15 +425,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-grade|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-grade",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-grade|light|color-contrast|incomplete": {
       "route": "submission-grade",
       "scheme": "light",
@@ -595,15 +433,6 @@
       "nodes": 5,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-repo-analytics|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-repo-analytics|dark|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
@@ -614,15 +443,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-repo-analytics|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-repo-analytics|light|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
       "scheme": "light",
@@ -631,15 +451,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-results|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-results",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-results|dark|color-contrast|incomplete": {
       "route": "submission-results",
@@ -650,15 +461,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-results|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-results",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-results|light|color-contrast|incomplete": {
       "route": "submission-results",
       "scheme": "light",
@@ -668,15 +470,6 @@
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
     },
-    "submission-root|dark|aria-valid-attr-value|incomplete": {
-      "route": "submission-root",
-      "scheme": "dark",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
-    },
     "submission-root|dark|color-contrast|incomplete": {
       "route": "submission-root",
       "scheme": "dark",
@@ -685,15 +478,6 @@
       "nodes": 4,
       "impact": "serious",
       "sample": ".css-31l7gp > span[data-visual-placeholder=\"date\"][data-visual-test=\"transparent\"]"
-    },
-    "submission-root|light|aria-valid-attr-value|incomplete": {
-      "route": "submission-root",
-      "scheme": "light",
-      "rule": "aria-valid-attr-value",
-      "kind": "incomplete",
-      "nodes": 5,
-      "impact": "critical",
-      "sample": "#popover\\:\u00abrp\u00bb\\:trigger"
     },
     "submission-root|light|color-contrast|incomplete": {
       "route": "submission-root",

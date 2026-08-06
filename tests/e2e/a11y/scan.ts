@@ -120,6 +120,89 @@ async function assertThemeApplied(page: Page, scheme: ColorScheme): Promise<void
   }
 }
 
+/** Shape of the parts of an axe result this module reads. */
+type AxeCheck = { id?: string; data?: unknown };
+type AxeNode = { target?: unknown[]; all?: AxeCheck[]; any?: AxeCheck[]; none?: AxeCheck[] };
+type AxeResult = { id?: string; impact?: string | null; nodes?: AxeNode[] };
+type AxeResults = { violations?: unknown[]; incomplete?: unknown[] };
+
+/**
+ * `aria-valid-attr-value` never *fails* an element that carries `aria-controls`
+ * next to `aria-haspopup` — it declines to judge it. axe's own message says so:
+ * "Unable to determine if aria-controls referenced ID exists on the page while
+ * using aria-haspopup". The rule's pre-check bails as soon as `aria-haspopup`
+ * is present, without ever looking the id up, because popup content is
+ * commonly rendered lazily.
+ *
+ * Every Chakra popover, menu and dialog trigger emits that exact pair (zag sets
+ * `aria-haspopup` and `aria-controls` together on all three), so the rule fires
+ * on nearly every route in the sweep and tells us nothing about whether any
+ * reference is actually broken.
+ *
+ * Baselining that would record scanner indecision as app debt. Decide it
+ * instead: look the ids up in the live page. A node whose references all
+ * resolve is dropped; one that genuinely dangles stays a finding, which is the
+ * signal the rule exists to give. Nodes flagged for any other reason
+ * (`noId`, `idrefs`, `empty`, `ariaCurrent`) are untouched.
+ */
+const CONTROLS_WITHIN_POPUP = "controlsWithinPopup";
+
+/**
+ * Ids referenced by a node's undecided `aria-controls`, or `null` if the node
+ * was flagged for some other reason and must be left alone.
+ */
+export function popupControlIdrefs(node: AxeNode): string[] | null {
+  for (const check of node.all ?? []) {
+    if (check.id !== "aria-valid-attr-value") continue;
+    const data = check.data as { messageKey?: string; needsReview?: string } | undefined;
+    if (data?.messageKey !== CONTROLS_WITHIN_POPUP) continue;
+    // needsReview is rendered as `aria-controls="id1 id2"`.
+    const value = /^aria-controls="(.*)"$/.exec(data.needsReview ?? "")?.[1] ?? "";
+    return value.split(/\s+/).filter(Boolean);
+  }
+  return null;
+}
+
+/**
+ * Drop the nodes whose undecided `aria-controls` references all resolve, using
+ * `exists` to test one id. Returns the surviving nodes.
+ */
+export function withoutResolvedPopupControls(nodes: AxeNode[], exists: (id: string) => boolean): AxeNode[] {
+  return nodes.filter((node) => {
+    const idrefs = popupControlIdrefs(node);
+    if (idrefs === null) return true;
+    // An empty aria-controls resolves to nothing — keep it.
+    if (idrefs.length === 0) return true;
+    return !idrefs.every(exists);
+  });
+}
+
+/**
+ * Apply {@link withoutResolvedPopupControls} to an axe run against `page`,
+ * resolving the ids in the page the results came from.
+ */
+async function decideUndecidedPopupControls(page: Page, results: AxeResults): Promise<AxeResults> {
+  const bucket = (results.incomplete ?? []) as AxeResult[];
+  const target = bucket.find((r) => r.id === "aria-valid-attr-value");
+  if (!target?.nodes?.length) return results;
+
+  const idrefs = new Set<string>();
+  for (const node of target.nodes) for (const id of popupControlIdrefs(node) ?? []) idrefs.add(id);
+  if (idrefs.size === 0) return results;
+
+  const present = new Set(
+    await page.evaluate((ids: string[]) => ids.filter((id) => document.getElementById(id) !== null), [...idrefs])
+  );
+  const kept = withoutResolvedPopupControls(target.nodes, (id) => present.has(id));
+  if (kept.length === target.nodes.length) return results;
+
+  const incomplete =
+    kept.length > 0
+      ? bucket.map((r) => (r === target ? { ...target, nodes: kept } : r))
+      : bucket.filter((r) => r !== target);
+  return { ...results, incomplete };
+}
+
 function toFindings(
   results: { violations?: unknown[]; incomplete?: unknown[] },
   kind: "violation" | "incomplete"
@@ -153,7 +236,10 @@ export async function collectFindings(page: Page, colorScheme: ColorScheme): Pro
     });
   await freezeAnimations(page);
   try {
-    const tagged = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(WCAG_TAGS).analyze();
+    const tagged = await decideUndecidedPopupControls(
+      page,
+      await new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(WCAG_TAGS).analyze()
+    );
     // withRules REPLACES the tag filter, so best-practice rules need their own pass.
     const extra = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
       .withRules(EXTRA_RULES)
