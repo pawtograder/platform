@@ -25,6 +25,22 @@
 --          demonstrably graded this assignment.
 --      Anything without that evidence keeps FALSE, which is the safe direction:
 --      a hand-graded assignment stays hand-graded.
+--
+--      ACCEPTED LIMITATION — do not "fix" this without asking. The evidence above is
+--      HISTORICAL, not a statement of current intent. Disabling the autograder has
+--      only ever changed has_autograder; it never cleared workflow_sha, past
+--      submissions, or the workflow file. So an assignment that once ran Actions and
+--      was later deliberately disabled looks identical to one that was never
+--      configured, and this backfill WILL re-enable it.
+--
+--      That is a deliberate choice, not an oversight: pre-#895 `false` is genuinely
+--      ambiguous (old column default vs. instructor opt-out) and nothing in the
+--      schema distinguishes them, so either direction misclassifies somebody. Keeping
+--      existing autograders working was judged the better error, since an instructor
+--      who had opted out can simply disable again, whereas silently rerouting a
+--      working autograded assignment to the push-direct path breaks grading with no
+--      obvious cause. Revisit only if someone wants to add an explicit
+--      "autograder_disabled_at" style column to record intent.
 --   2. Flip the default to TRUE, matching the assignment form's default.
 --
 -- Deliberately NOT touched:
