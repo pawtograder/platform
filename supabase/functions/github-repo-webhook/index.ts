@@ -540,8 +540,28 @@ async function createPushDirectSubmission(
   if (stillLate) {
     // The token policy was already applied (or found insufficient, or refused because the student
     // finalized early) when `stillLate` was resolved above.
-    scope.setTag("push_direct_submission_skipped", "after_due_date");
-    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
+    //
+    // Recorded, not silently dropped. This feature tells students that every push is a
+    // submission, so a push that produces nothing has to say why — and the only surface a student
+    // can read is a workflow_run_error attached to a submission they own (its RLS requires
+    // submission_id IS NOT NULL). The Actions path has a run to carry that message; this path has
+    // to make somewhere to put it, so it records a rejected submission: fileless, inactive, and
+    // ungradeable, exactly like the empty and oversized rejections.
+    scope.setTag("push_direct_submission_rejected", "after_due_date");
+    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
+    await recordRejectedPush({
+      adminSupabase,
+      studentRepo,
+      repoName,
+      sha,
+      isNotGraded,
+      errorType: "after_due_date",
+      errorName:
+        `Your submission at commit ${sha.slice(0, 7)} was not recorded: it was pushed after the deadline for this ` +
+        `assignment${lateTokenPolicy.maxLateTokens > 0 ? " and you have no late tokens left to cover it" : ""}. ` +
+        `Contact your instructor if you believe this is wrong.`,
+      scope
+    });
     return;
   }
 
@@ -1046,6 +1066,91 @@ async function hasOversizedRejectionError(
 }
 
 /**
+ * Record a push that was refused before ingestion as a visible, ungradeable submission.
+ *
+ * Used for the deadline rejection, which has no submission of its own to attach an explanation to:
+ * a workflow_run_error is only readable by the student when `submission_id IS NOT NULL`, so
+ * returning early left the push looking accepted — no submission, no error, and a commit-history
+ * entry indistinguishable from a successful one.
+ *
+ * The row is inserted with no files, its explanation attached, then deactivated, and the
+ * submission the insert demoted is restored. Failures propagate: a row without its explanation is
+ * the silent state this exists to remove, so that case deletes the row and asks for a redelivery.
+ */
+async function recordRejectedPush(params: {
+  adminSupabase: SupabaseClient<Database>;
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"];
+  repoName: string;
+  sha: string;
+  isNotGraded: boolean;
+  errorType: string;
+  errorName: string;
+  scope: Sentry.Scope;
+}): Promise<void> {
+  const { adminSupabase, studentRepo, repoName, sha, isNotGraded, errorType, errorName, scope } = params;
+  const { data: inserted, error: insertError } = await adminSupabase
+    .from("submissions")
+    .insert({
+      profile_id: studentRepo.profile_id,
+      assignment_group_id: studentRepo.assignment_group_id,
+      assignment_id: studentRepo.assignment_id,
+      repository: repoName,
+      repository_id: studentRepo.id,
+      sha,
+      run_number: 0,
+      run_attempt: 0,
+      class_id: studentRepo.class_id,
+      submitted_via: "git",
+      is_not_graded: isNotGraded
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    // 23505: a row for this commit already exists, so the rejection is already recorded (or this
+    // is a redelivery). 23514: the student has since joined a group, and the group repo's push
+    // owns submissions now. Neither is worth a retry.
+    if (insertError.code === "23505" || insertError.code === "23514") {
+      scope.setTag("rejected_push_insert_skipped", insertError.code);
+      return;
+    }
+    Sentry.captureException(insertError, scope);
+    throw insertError;
+  }
+  const { error: recordError } = await adminSupabase.from("workflow_run_error").upsert(
+    {
+      repository_id: studentRepo.id,
+      class_id: studentRepo.class_id,
+      submission_id: inserted.id,
+      run_number: 0,
+      run_attempt: 0,
+      name: errorName,
+      is_private: false,
+      data: { repository_name: repoName, sha, error_type: errorType, detected_at: new Date().toISOString() }
+    },
+    { onConflict: "repository_id,run_number,run_attempt,name" }
+  );
+  if (recordError) {
+    scope.setTag("rejected_push_record_failed", "true");
+    Sentry.captureException(recordError, scope);
+    await cleanupPushDirectSubmission(adminSupabase, inserted.id, scope);
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+    throw new Error(
+      `Could not record the rejection for ${repoName}@${sha} (${recordError.message}); rejecting this delivery so ` +
+        `GitHub retries it`
+    );
+  }
+  const deactivated = await deactivateRejectedSubmission(adminSupabase, inserted.id, scope);
+  // The insert demoted whatever was active; the rejected row must not inherit that place.
+  await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+  if (!deactivated) {
+    throw new Error(
+      `Rejected submission ${inserted.id} for ${repoName}@${sha} could not be deactivated; rejecting this delivery ` +
+        `so GitHub retries it`
+    );
+  }
+}
+
+/**
  * Has this student (or group) finalized their submission early?
  *
  * Early finalization is recorded as a NEGATIVE due-date exception, which is itself what makes a
@@ -1189,7 +1294,7 @@ async function promoteSubmissionForCurrentHead(
  * it and the empty-submission type was added after the first two, which is exactly how they would
  * have drifted.
  */
-const REJECTION_ERROR_TYPES = new Set(["file_too_large", "submission_too_large", "empty_submission"]);
+const REJECTION_ERROR_TYPES = new Set(["file_too_large", "submission_too_large", "empty_submission", "after_due_date"]);
 
 /** Page size for the paginated candidate scan in reactivatePreviousSubmission. */
 const PAGE_SIZE = 50;
