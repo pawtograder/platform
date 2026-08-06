@@ -102,6 +102,14 @@ RUN --mount=type=secret,id=sentry_auth_token \
         echo "       URL as SENTRY_URL, or drop the secret to skip the upload." >&2; \
         exit 1; \
       fi; \
+      if [ -z "${NEXT_PUBLIC_BUGSINK_DSN:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without NEXT_PUBLIC_BUGSINK_DSN." >&2; \
+        echo "       The DSN is what enables the bundler plugin that performs the" >&2; \
+        echo "       upload, so without it this build would report an upload and" >&2; \
+        echo "       send nothing. It is also what makes the app report the errors" >&2; \
+        echo "       the maps would symbolicate." >&2; \
+        exit 1; \
+      fi; \
       if [ -z "${SENTRY_UPLOAD_ID:-}" ]; then \
         echo "ERROR: sentry_auth_token was supplied without SENTRY_UPLOAD_ID. Secret" >&2; \
         echo "       contents are not part of the BuildKit cache key, so this layer" >&2; \

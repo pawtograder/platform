@@ -353,6 +353,7 @@ the build is given somewhere to send them:
 ```sh
 docker build \
   --build-arg NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://staging.pawtograder.net \
+  --build-arg NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN \
   --build-arg SENTRY_URL=https://bugsink.example.edu \
   --build-arg SENTRY_PROJECT=pawtograder-web \
   --build-arg SENTRY_UPLOAD_ID=$(date +%s) \
@@ -362,6 +363,11 @@ docker build \
 
 - **`sentry_auth_token`** is a BuildKit secret, never a build-arg, so it stays out
   of the image layers and `docker history`. Create it in the Bugsink UI.
+- **`NEXT_PUBLIC_BUGSINK_DSN`** is what enables the bundler plugin that does the
+  upload, so it is required here even though it is otherwise about runtime error
+  reporting. Without it there are no reported errors to symbolicate, so a token
+  without a DSN is a misconfiguration and fails the build rather than reporting an
+  upload that never happens.
 - **`SENTRY_URL`** — your Bugsink base URL. Required whenever the token is
   present: the bundler plugin reads a missing URL as sentry.io, so the build
   fails rather than shipping your source maps to a third party.

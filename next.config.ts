@@ -218,17 +218,32 @@ const sentryConfig = {
 
 const sentryPluginEnabled = hasSentryDsn && !disableSentryBundlingPlugin;
 
-// The only symbolication target is the self-hosted Bugsink named by SENTRY_URL;
-// there is no sentry.io account. The bundler plugin normalizes a nullish URL to
-// https://sentry.io, so a token without a URL would upload private source maps
-// to a third party. Fail the build instead. The Dockerfile checks this too, to
-// fail before spending a build, but the guard belongs here as well because the
-// upload runs for any `npm run build`, not just the containerized one.
-if (sentryPluginEnabled && !disableSentrySourcemaps && !!process.env.SENTRY_AUTH_TOKEN && !process.env.SENTRY_URL) {
-  throw new Error(
-    "SENTRY_AUTH_TOKEN is set but SENTRY_URL is empty: refusing to upload source maps to sentry.io. " +
-      "Set SENTRY_URL to the Bugsink base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
-  );
+// An auth token means this build intends to upload source maps, so anything that
+// would quietly turn the upload into a no-op is an error. A build that reports
+// "uploading" and then ships minified stack traces is the exact failure this
+// change exists to remove. The Dockerfile pre-checks the same conditions to fail
+// before spending a build, but the guards belong here too: the upload runs for
+// any `npm run build`, not only the containerized one.
+if (process.env.SENTRY_AUTH_TOKEN && !disableSentrySourcemaps) {
+  // The only symbolication target is the self-hosted Bugsink named by SENTRY_URL;
+  // there is no sentry.io account. The bundler plugin normalizes a nullish URL to
+  // https://sentry.io, so a token without a URL hands private maps to a third party.
+  if (!process.env.SENTRY_URL) {
+    throw new Error(
+      "SENTRY_AUTH_TOKEN is set but SENTRY_URL is empty: refusing to upload source maps to sentry.io. " +
+        "Set SENTRY_URL to the Bugsink base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
+    );
+  }
+  // `withSentryConfig` is what installs the uploader, and the DSN is what turns it
+  // on. Without the DSN nothing uploads — and nothing reports errors either, so
+  // there would be no minified trace to symbolicate in the first place.
+  if (!sentryPluginEnabled) {
+    throw new Error(
+      "SENTRY_AUTH_TOKEN is set but the Sentry bundler plugin is disabled " +
+        `(${hasSentryDsn ? "NEXT_DISABLE_SENTRY=1" : "NEXT_PUBLIC_BUGSINK_DSN is empty"}), so no source maps ` +
+        "would be uploaded. Pass the DSN the app reports errors to, or unset SENTRY_AUTH_TOKEN to skip the upload."
+    );
+  }
 }
 
 export default sentryPluginEnabled ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
