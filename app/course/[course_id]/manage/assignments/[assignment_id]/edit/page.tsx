@@ -205,6 +205,35 @@ export default function EditAssignment() {
             .select("grader_repo")
             .eq("id", Number.parseInt(assignment_id as string))
             .maybeSingle();
+          if (graderRow?.grader_repo) {
+            // A non-null pointer is not evidence the repository still works. It can have been
+            // deleted, made inaccessible, or had its pawtograder.yml removed or broken since it was
+            // set — and this form, unlike the Autograder page, never read it. Enabling on the
+            // pointer alone restored grade.yml to the handout and reported success, after which
+            // every student Actions run failed while loading the grader repository or its config.
+            //
+            // githubRepoConfigureWebhook is the same validation the Autograder page performs: it
+            // reads pawtograder.yml and stores it, so a broken repository fails HERE, before the
+            // handout is touched, and a valid one leaves the config refreshed.
+            try {
+              await githubRepoConfigureWebhook(
+                {
+                  assignment_id: Number.parseInt(assignment_id as string),
+                  new_repo: graderRow.grader_repo,
+                  watch_type: "grader_solution"
+                },
+                supabase
+              );
+            } catch (graderValidationError) {
+              const detail =
+                graderValidationError instanceof Error ? graderValidationError.message : String(graderValidationError);
+              throw new Error(
+                `The autograder could not be enabled: its grader repository ${graderRow.grader_repo} could not be ` +
+                  `read (${detail}). Check that the repository still exists and contains a valid pawtograder.yml, ` +
+                  `or set it up again on the assignment's Autograder page.`
+              );
+            }
+          }
           if (!graderRow?.grader_repo) {
             throw new Error(
               "This assignment has no grader repository configured, so the autograder cannot be enabled here. " +
