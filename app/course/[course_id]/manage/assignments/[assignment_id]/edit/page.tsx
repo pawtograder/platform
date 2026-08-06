@@ -119,20 +119,68 @@ export default function EditAssignment() {
         // first, on its own, and only then can the sync take the disable path for the repo that is
         // about to be detached. If it fails, the flag is put back and the save is abandoned — that
         // is better than proceeding, since proceeding is what strands the repositories.
-        if (isNoRepo && queryData?.template_repo && queryData?.has_autograder !== false) {
+        // Only when this handout is NOT shared. The sync operates on the REPOSITORY: it removes
+        // grade.yml and realigns every same-class assignment using that repo to match. For a shared
+        // handout that means detaching assignment A would silently disable grading on assignment B,
+        // which is still attached and still expects it — a far worse outcome than the stale-workflow
+        // problem this cleanup exists to solve. When the handout is shared, say so and leave it
+        // alone: B's own repositories still need the workflow, and A's retained repositories can be
+        // cleaned up from B or by hand.
+        let handoutIsShared = false;
+        if (isNoRepo && queryData?.template_repo) {
+          const { data: sharers, error: sharersError } = await supabase
+            .from("assignments")
+            .select("id")
+            .eq("template_repo", queryData.template_repo)
+            .neq("id", Number.parseInt(assignment_id as string))
+            .limit(1);
+          if (sharersError) {
+            // Fail closed: without knowing whether the handout is shared, running the cleanup risks
+            // disabling another assignment's autograder.
+            throw new Error(
+              `Could not determine whether ${queryData.template_repo} is shared with another assignment ` +
+                `(${sharersError.message}); the repository configuration was not changed.`
+            );
+          }
+          handoutIsShared = (sharers ?? []).length > 0;
+          if (handoutIsShared) {
+            toaster.create({
+              title: "Handout repository is shared",
+              description:
+                `${queryData.template_repo} is also used by another assignment, so its autograder workflow was left ` +
+                `in place. This assignment's existing student repositories keep their copy of grade.yml — remove it ` +
+                `from them by hand if their failing checks are a problem.`,
+              type: "warning"
+            });
+          }
+        }
+        if (isNoRepo && !handoutIsShared && queryData?.template_repo && queryData?.has_autograder !== false) {
           await updateAsync({
             resource: "assignments",
             id: Number.parseInt(assignment_id as string),
             values: { has_autograder: false }
           });
           try {
-            await assignmentSyncAutograderWorkflow(
+            const detachSync = await assignmentSyncAutograderWorkflow(
               {
                 assignment_id: Number.parseInt(assignment_id as string),
                 class_id: Number.parseInt(course_id as string)
               },
               supabase
             );
+            // A reported queue failure BLOCKS the detach. The sync deliberately resolves
+            // successfully in that case so an instructor is not stopped from toggling, but here the
+            // consequence is different: proceeding writes template_repo = null, and after that the
+            // retained repositories still carry a live grade.yml with no handout left to sync them
+            // from — the normal way to repair it is gone. Better to fail the save while the
+            // repository configuration is still intact and can be retried.
+            if (detachSync?.repo_sync_queue_failed) {
+              throw new Error(
+                "The existing student repositories could not be queued to remove the autograder workflow, so the " +
+                  "assignment was left attached to its handout. Please try again — detaching now would leave those " +
+                  "repositories with a workflow and no handout to sync them from."
+              );
+            }
           } catch (detachError) {
             try {
               await updateAsync({
