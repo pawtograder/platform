@@ -293,6 +293,7 @@ export default function EditAssignment() {
                 if (key in loadedRow) priorValues[key] = loadedRow[key];
               }
             }
+            let rollbackApplied = false;
             if (Object.keys(priorValues).length > 0) {
               // CONDITIONAL on the row still holding what this save wrote.
               //
@@ -324,7 +325,8 @@ export default function EditAssignment() {
                   .match(writtenValues)
                   .select("id");
                 if (rollbackDbError) throw rollbackDbError;
-                if ((rolledBack ?? []).length === 0) {
+                rollbackApplied = (rolledBack ?? []).length > 0;
+                if (!rollbackApplied) {
                   console.warn(
                     "Not rolling back the assignment: it no longer holds the values this save wrote, so another " +
                       "save has superseded it."
@@ -345,7 +347,12 @@ export default function EditAssignment() {
             // one this save committed.
             const handoutWasReplaced =
               queryData?.template_repo !== undefined && queryData.template_repo !== values.template_repo;
-            if (handoutWasReplaced && queryData?.template_repo) {
+            // Only when the row rollback actually took effect. Re-deriving the hash from the OLD
+            // handout after the rollback lost the race would leave the assignment another
+            // instructor just saved pointing at its NEWER handout while carrying this handout's
+            // workflow hash — and every Actions submission is then rejected for a mismatch. The
+            // restore only makes sense paired with the template_repo it restored.
+            if (rollbackApplied && handoutWasReplaced && queryData?.template_repo) {
               try {
                 await githubRepoConfigureWebhook(
                   {

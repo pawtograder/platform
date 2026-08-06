@@ -10,7 +10,8 @@ import {
   GRADE_WORKFLOW_PATH,
   renameFileInRepo,
   updateAutograderWorkflowHash,
-  writeFileToRepo
+  writeFileToRepo,
+  RenameDestinationExistsError
 } from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
@@ -510,14 +511,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
         return undefined;
       }
-      const { commit_sha } = await renameFileInRepo(
-        templateRepo,
-        DISABLED_GRADE_WORKFLOW_PATH,
-        GRADE_WORKFLOW_PATH,
-        message,
-        scope
-      );
-      return commit_sha;
+      try {
+        const { commit_sha } = await renameFileInRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          GRADE_WORKFLOW_PATH,
+          message,
+          scope,
+          // The preflight above is a separate API call, so it cannot rule out a grade.yml created
+          // in between. This makes the condition part of the commit the rename actually builds,
+          // which is the only place it can be enforced.
+          true
+        );
+        return commit_sha;
+      } catch (renameError) {
+        if (!(renameError instanceof RenameDestinationExistsError)) throw renameError;
+        // Same outcome as the preflight branch: their file already achieves what the rollback
+        // wanted, so keep it and drop our parked copy.
+        scope.setTag("disable_rollback_workflow_recreated", "race");
+        console.log(
+          `${GRADE_WORKFLOW_PATH} appeared in ${templateRepo} while the rollback was in flight; keeping it and ` +
+            `removing the parked copy`
+        );
+        await deleteFileFromRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          "Remove parked autograder workflow: a live workflow was restored by hand",
+          scope
+        );
+        return undefined;
+      }
     };
 
     // Same hazard as the restore path, mirrored: realignInClassSharers throws on

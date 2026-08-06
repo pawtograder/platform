@@ -925,12 +925,34 @@ export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.S
  * Returns `{ moved: false }` when `fromPath` does not exist, so callers can treat it as
  * "ensure moved" without a pre-check.
  */
+/** Thrown by renameFileInRepo when `refuseIfDestinationExists` is set and `toPath` is present. */
+export class RenameDestinationExistsError extends Error {
+  constructor(repoName: string, toPath: string, atSha: string) {
+    super(`${toPath} already exists in ${repoName} at ${atSha}; refusing to overwrite it`);
+    this.name = "RenameDestinationExistsError";
+  }
+}
+
 export async function renameFileInRepo(
   repoName: string,
   fromPath: string,
   toPath: string,
   message: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  /**
+   * Refuse the move if `toPath` already exists at the exact commit the new tree is built on.
+   *
+   * Set by the restore direction of the autograder toggle. Its caller checks for a live
+   * grade.yml first, but that check is a separate API call — a TOCTOU window in which an
+   * instructor can create the file, after which this function would build its tree from the
+   * newer head and overwrite their workflow with the parked copy, as a perfectly valid
+   * fast-forward that nothing rejects. Enforcing the condition at the head the commit is
+   * actually based on is what closes the window; the caller then handles the conflict.
+   *
+   * Not the default: the disable direction deliberately overwrites a stale parked copy from an
+   * earlier cycle.
+   */
+  refuseIfDestinationExists?: boolean
 ): Promise<{ moved: boolean; commit_sha?: string }> {
   scope?.setTag("github_operation", "rename_file");
   scope?.setTag("repository", repoName);
@@ -1016,6 +1038,20 @@ export async function renameFileInRepo(
         return { moved: false };
       }
       throw error;
+    }
+
+    if (refuseIfDestinationExists) {
+      let destinationExists = false;
+      try {
+        await getFileFromRepo(repoName, toPath, scope, headSha);
+        destinationExists = true;
+      } catch (error) {
+        if (!(error instanceof RequestError && error.status === 404)) throw error;
+      }
+      if (destinationExists) {
+        scope?.setTag("rename_destination_exists", "true");
+        throw new RenameDestinationExistsError(repoName, toPath, headSha);
+      }
     }
 
     const { data: headCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {

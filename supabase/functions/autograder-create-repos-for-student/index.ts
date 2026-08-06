@@ -522,10 +522,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               creation_method: strategy.creationMethod,
               branch_protection: branchProtectionFromAssignment(assignment)
             });
-            await adminSupabase
-              .from("repositories")
-              .update({ synced_repo_sha: headSha || null })
-              .eq("id", dbRepo!.id);
             // Sync permissions and mark ready HERE. This branch returns below without
             // reaching the existing-repo sync further down, so deferring the flag to
             // that point left every newly created group repo at is_github_ready=false
@@ -543,9 +539,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 .map((m) => m.user_roles.users.github_username!),
               scope
             );
+            // ONE checked write for both fields. They were two writes, and the first was
+            // unchecked: if it failed transiently the row still became ready, so the reconciler —
+            // which only requeues unready rows — would never revisit it, leaving synced_repo_sha
+            // null and later handout syncs with no repo-side merge base. Readiness must not be
+            // able to outlive the sha it is supposed to accompany.
             const { error: readyError } = await adminSupabase
               .from("repositories")
-              .update({ is_github_ready: true })
+              .update({ synced_repo_sha: headSha || null, is_github_ready: true })
               .eq("id", dbRepo!.id);
             if (readyError) {
               // Propagate, as the individual-repo branch does. Logging alone let this

@@ -334,6 +334,36 @@ async function createPushDirectSubmission(
   const finalDueDate = new Date(finalDueDateResult);
   const isLate = pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
   scope.setTag("push_direct_is_late", String(isLate));
+  // Resolved ONCE, here, because both the force-push promotion below and the insert further down
+  // have to give the same answer. When only the insert consulted the token policy, the same push
+  // was accepted with a new sha and refused as a revert — the deadline effectively meant something
+  // different depending on which commit the student pushed.
+  //
+  // hasFinalizedEarly is checked FIRST, mirroring the Actions path: a student who finalized early
+  // has a NEGATIVE due-date exception, which is what makes this push late, and
+  // apply_late_token_extension would happily add a positive extension that offsets it and report
+  // success. Spending their tokens to undo their own finalization — and to activate a submission
+  // after the one their self-review is tied to — is not something the token policy is for.
+  let stillLate = isLate;
+  if (isLate) {
+    if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
+      scope.setTag("push_direct_finalized_early", "true");
+    } else {
+      const extended = await applyAutomaticLateTokens({
+        adminSupabase,
+        studentRepo,
+        profileId,
+        pushTime,
+        finalDueDate,
+        lateTokenPolicy,
+        scope
+      });
+      if (extended) {
+        stillLate = false;
+        scope.setTag("push_direct_late_token_applied", "true");
+      }
+    }
+  }
   // Computed BEFORE the idempotency branch, because the force-push promotion below needs the
   // same deadline test that new submissions get: promoting an earlier commit changes which
   // submission is graded, so a post-deadline force-push must not do it when a post-deadline
@@ -406,7 +436,7 @@ async function createPushDirectSubmission(
       // which submission is graded, so a force-push after the cutoff must not do it when a
       // post-deadline push cannot create one — otherwise the deadline is enforced against new
       // work but not against reverting to old work.
-      if (isLate) {
+      if (stillLate) {
         scope.setTag("force_push_promote_skipped", "after_due_date");
         console.log(
           `Not promoting submission ${existing.id} for ${repoName}@${sha}: the force-push arrived after the due date`
@@ -495,27 +525,12 @@ async function createPushDirectSubmission(
   // time, NOT head_commit.timestamp: the commit timestamp is student-controllable
   // (`git commit --date=...`), so a backdated commit pushed after the deadline must not slip
   // through. This matches the autograder path, which gates on the check-run created_at.
-  if (isLate) {
-    // Mirror the Actions path before rejecting: when the course allows late tokens to be spent
-    // automatically (require_tokens_before_due_date = false), that policy belongs to the
-    // assignment, not to the autograder. Skipping the push outright meant turning the
-    // autograder off silently turned off automatic late tokens too, so a student with tokens
-    // available had their on-time-by-policy push discarded.
-    const extended = await applyAutomaticLateTokens({
-      adminSupabase,
-      studentRepo,
-      profileId,
-      pushTime,
-      finalDueDate,
-      lateTokenPolicy,
-      scope
-    });
-    if (!extended) {
-      scope.setTag("push_direct_submission_skipped", "after_due_date");
-      console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
-      return;
-    }
-    scope.setTag("push_direct_late_token_applied", "true");
+  if (stillLate) {
+    // The token policy was already applied (or found insufficient, or refused because the student
+    // finalized early) when `stillLate` was resolved above.
+    scope.setTag("push_direct_submission_skipped", "after_due_date");
+    console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; skipping`);
+    return;
   }
 
   // Re-verify that this commit is STILL the repo head, immediately before the insert.
@@ -983,6 +998,42 @@ async function hasOversizedRejectionError(
     const errorType = (e.data as { error_type?: string } | null)?.error_type;
     return errorType === "file_too_large" || errorType === "submission_too_large";
   });
+}
+
+/**
+ * Has this student (or group) finalized their submission early?
+ *
+ * Early finalization is recorded as a NEGATIVE due-date exception, which is itself what makes a
+ * later push late. The Actions path checks for it before touching late tokens, and this path must
+ * too: apply_late_token_extension would otherwise grant a positive extension that offsets the
+ * finalization and report success, spending the student's tokens to undo their own decision and
+ * activating a submission later than the one their self-review is attached to.
+ */
+async function hasFinalizedEarly(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
+  scope: Sentry.Scope
+): Promise<boolean> {
+  let query = adminSupabase
+    .from("assignment_due_date_exceptions")
+    .select("hours, minutes")
+    .eq("assignment_id", studentRepo.assignment_id);
+  if (studentRepo.assignment_group_id) {
+    query = query.eq("assignment_group_id", studentRepo.assignment_group_id);
+  } else if (studentRepo.profile_id) {
+    query = query.eq("student_id", studentRepo.profile_id);
+  } else {
+    // Neither owner resolvable: no exception can be attributed, so nothing to find.
+    return false;
+  }
+  const { data: exceptions, error } = await query.limit(1000);
+  if (error) {
+    // Throw rather than assume "not finalized": guessing wrong spends the student's tokens and
+    // overrides a finalization they chose. GitHub redelivers.
+    Sentry.captureException(error, scope);
+    throw error;
+  }
+  return (exceptions ?? []).some((e) => (e.hours ?? 0) < 0 || (e.minutes ?? 0) < 0);
 }
 
 /**
