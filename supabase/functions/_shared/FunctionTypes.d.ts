@@ -431,6 +431,21 @@ export type AssignmentCreateSolutionRepoResponse = {
 export type AssignmentSyncAutograderWorkflowRequest = {
   assignment_id: number;
   class_id: number;
+  /**
+   * Reconcile the handout with the flag, without doing anything if it already agrees.
+   *
+   * Set by callers that suspect the repository disagrees with `has_autograder` but cannot tell
+   * from the database — the case being assignments the PR-mode backfill in
+   * 20260805170500 flipped to `false` while their handout still holds a live `grade.yml`. A
+   * migration cannot edit GitHub, so those handouts are reconciled the next time someone saves
+   * the assignment.
+   *
+   * The difference from an ordinary call: when there turns out to be nothing to change, this
+   * skips the revision re-pin and the repository-sync queueing rather than performing them for
+   * no reason. Without that, a caller which cannot detect the disagreement would have to run
+   * those side effects on every save forever.
+   */
+  reconcile_only?: boolean;
 };
 
 export type AssignmentSyncAutograderWorkflowResponse = {

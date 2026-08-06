@@ -195,11 +195,30 @@ export default function EditAssignment() {
               queryData?.template_repo !== undefined && queryData.template_repo !== values.template_repo;
             const needsWorkflowSync = autograderFlagChanged || templateRepoChanged;
             const isDisabling = values.has_autograder === false;
-            if (needsWorkflowSync && (isDisabling || values.submission_mode !== "pr")) {
+            // Reconcile a PR-mode handout that may still hold a live grade.yml.
+            //
+            // The 20260805170500 backfill flips existing repository-backed PR assignments to
+            // has_autograder=false, but a migration cannot edit GitHub — so their handout, and
+            // the student forks made from it, keep the workflow. Nothing else would ever remove
+            // it: the flag no longer CHANGES on later saves, so the guard above skips the sync
+            // forever, and the enable direction is refused for PR mode, so an instructor cannot
+            // toggle it off and on to force the cleanup either.
+            //
+            // Sent as reconcile_only, because this page cannot tell whether the handout actually
+            // disagrees — that answer lives in GitHub. The sync returns immediately when there is
+            // nothing to park, so an assignment whose handout is already correct pays one API
+            // read per save rather than a re-pin and a repository-sync queue.
+            const needsPrWorkflowReconcile =
+              !needsWorkflowSync &&
+              values.submission_mode === "pr" &&
+              values.has_autograder === false &&
+              !!values.template_repo;
+            if ((needsWorkflowSync && (isDisabling || values.submission_mode !== "pr")) || needsPrWorkflowReconcile) {
               const syncResult = await assignmentSyncAutograderWorkflow(
                 {
                   assignment_id: Number.parseInt(assignment_id as string),
-                  class_id: Number.parseInt(course_id as string)
+                  class_id: Number.parseInt(course_id as string),
+                  reconcile_only: needsPrWorkflowReconcile
                 },
                 supabase
               );

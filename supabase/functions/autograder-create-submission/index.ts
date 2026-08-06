@@ -591,7 +591,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignments(class_id, due_date, has_autograder, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
+      "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
     .maybeSingle();
@@ -814,6 +814,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               );
             }
           }
+        } else if (repoData.assignments.submission_mode === "pr") {
+          // A PR-mode assignment is a special case of "no autograder", and it must not fail.
+          //
+          // The 20260805170500 backfill flips existing repository-backed PR assignments to
+          // has_autograder=false, but a migration cannot edit GitHub — so their handout and the
+          // student forks made from it still contain grade.yml until an instructor saves the
+          // assignment (which now reconciles it). Rejecting those runs with an error would put a
+          // red X on every student's PR in the meantime, for a workflow that is not theirs and
+          // whose absence changes nothing: their submissions are ingested from the pull request
+          // itself, not from Actions.
+          //
+          // So exit successfully having done nothing. The run is a no-op, not a failure.
+          scope?.setTag("skipped_reason", "pr_mode_leftover_workflow");
+          console.log(
+            `Ignoring leftover grading workflow run for ${repository}@${sha}: assignment ` +
+              `${repoData.assignment_id} submits by pull request, so Actions results are not used`
+          );
+          // Returned in the shape the handout-repo case already uses. That is the one response
+          // this function has which the action treats as TERMINAL-but-not-failed, which is
+          // exactly what is needed: no submission, no error, no red X.
+          return {
+            grader_url: "",
+            grader_sha: "",
+            handout_notice: {
+              message:
+                "This assignment is submitted by pull request, so its grading workflow does not run. Your " +
+                "submission is taken from the pull request itself — there is nothing to do here. Instructor: this " +
+                "repository still has a leftover .github/workflows/grade.yml; saving the assignment removes it from " +
+                "the handout.",
+              assignments: []
+            }
+          };
         } else {
           scope?.setTag("rejected_reason", "assignment_has_no_autograder");
           throw new UserVisibleError(

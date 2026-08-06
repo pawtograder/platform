@@ -151,10 +151,11 @@ async function queueHandoutSyncsForAssignments(
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, class_id } = (await req.json()) as AssignmentSyncAutograderWorkflowRequest;
+  const { assignment_id, class_id, reconcile_only } = (await req.json()) as AssignmentSyncAutograderWorkflowRequest;
   scope?.setTag("function", "assignment-sync-autograder-workflow");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
+  scope?.setTag("reconcile_only", String(reconcile_only === true));
 
   await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
 
@@ -458,6 +459,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // `moved: false` means there was no grade.yml — the normal case for a handout
     // created repo-only.
     scope.setTag("parked_workflow", String(moved));
+    // A reconcile-only call with nothing to park has found the handout already correct, so it
+    // stops here rather than re-pinning the revision and queueing every student repository.
+    // Those side effects are appropriate for a real toggle; performing them on every save of an
+    // assignment whose handout is already fine would be pure churn — and this call exists
+    // precisely because its caller cannot tell in advance which case it is in.
+    if (reconcile_only && !moved) {
+      scope.setTag("reconcile_only_noop", "true");
+      console.log(`Reconcile-only sync for ${templateRepo}: no live ${GRADE_WORKFLOW_PATH} to park, nothing to do`);
+      return {
+        action: "unchanged" as const,
+        has_autograder: false,
+        template_repo: templateRepo,
+        realigned_assignments: [],
+        unsynced_other_class_count: unsyncedOtherClassCount
+      };
+    }
     const deleted = moved;
     const deleteCommitSha = renameCommitSha;
 
