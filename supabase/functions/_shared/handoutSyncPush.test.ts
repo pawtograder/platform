@@ -216,9 +216,18 @@ Deno.test("head equals repositories.synced_handout_sha -> sync", () => {
   assertEquals(isHandoutSyncPush(inputs({ afterSha: synced, syncedHandoutSha: synced })), true);
 });
 
-Deno.test("head equals repositories.synced_repo_sha (merge commit of a prior sync) -> sync", () => {
+// synced_repo_sha is the REPOSITORY-side result of the last sync. On a merge-based sync that commit
+// contains the student's own work, so matching it classified a student's force-push back to that
+// state as machinery and left a newer commit active while the head had moved. The automated
+// delivery that produced it is identified by its bot sender instead.
+Deno.test("student push whose head equals synced_repo_sha -> NOT a sync", () => {
   const mergeSha = "e".repeat(40);
-  assertEquals(isHandoutSyncPush(inputs({ afterSha: mergeSha, syncedRepoSha: mergeSha })), true);
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: mergeSha, syncedRepoSha: mergeSha, senderType: "User" })), false);
+});
+
+Deno.test("the sync that produced synced_repo_sha is still recognised, by its sender", () => {
+  const mergeSha = "e".repeat(40);
+  assertEquals(isHandoutSyncPush(inputs({ afterSha: mergeSha, syncedRepoSha: mergeSha, senderType: "Bot" })), true);
 });
 
 Deno.test("short-prefix overlap with a handout sha is NOT enough -> not a sync", () => {

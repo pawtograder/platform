@@ -183,18 +183,37 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         Deno.env.get("SUPABASE_URL")!,
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
       );
-      const seedResult = await seedHandoutFileHashes({
-        adminSupabase,
-        assignmentId: assignment_id,
-        classId: handoutTarget.class_id,
-        templateRepo: handoutTarget.template_repo,
-        commitSha: handoutTarget.latest_template_sha,
-        scope
-      });
-      if (!seedResult.seeded) {
-        console.log(
-          `Not seeding handout file hashes for assignment ${assignment_id} after the grader config: ${seedResult.reason}`
-        );
+      // Recompute EVERY recorded revision, not just the current head. The empty-submission check
+      // compares a pushed tree against the stored hash for the revision that repository is on, and
+      // student repositories sit on older handout revisions all the time. Reseeding only the latest
+      // left those rows hashed with the OLD globs while the incoming tree is filtered with the new
+      // ones — a comparison between two different file sets, which accepts an untouched starter tree
+      // as real work.
+      const { data: recordedRevisions } = await adminSupabase
+        .from("assignment_handout_file_hashes")
+        .select("sha")
+        .eq("assignment_id", assignment_id);
+      const revisionsToHash = [
+        ...new Set([
+          ...(recordedRevisions ?? []).map((r) => r.sha),
+          ...(handoutTarget.latest_template_sha ? [handoutTarget.latest_template_sha] : [])
+        ])
+      ];
+      for (const revisionSha of revisionsToHash) {
+        const revisionResult = await seedHandoutFileHashes({
+          adminSupabase,
+          assignmentId: assignment_id,
+          classId: handoutTarget.class_id,
+          templateRepo: handoutTarget.template_repo,
+          commitSha: revisionSha,
+          scope
+        });
+        if (!revisionResult.seeded) {
+          console.log(
+            `Not rehashing handout revision ${revisionSha} for assignment ${assignment_id} after the grader config: ` +
+              `${revisionResult.reason}`
+          );
+        }
       }
     }
   } else {

@@ -299,6 +299,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // false flag rejects. The toggle fixes the handout for everyone and leaves only their repo
   // sync lagging, so refusing would leave both classes broken instead of one.
   const unsyncedOtherClassCount = foreignSharers.length;
+  // Everything in THIS class that uses the handout. These are the repositories this caller is
+  // authorized to queue, and ALL of them are affected by a change to the shared repository —
+  // including sharers that already had the requested flag, and PR-mode sharers, which `realigned`
+  // deliberately excludes. Queueing only the realigned ones left those repositories running the
+  // leftover Action and showing failing checks until someone opened each assignment separately.
+  const inClassSharerIds = allSharers.filter((a) => a.class_id === class_id).map((a) => a.id);
   if (outOfStepForeign.length > 0) {
     // We cannot authorize those assignments, and editing the shared repo would
     // change grading for them anyway. Refuse rather than reach outside the class.
@@ -674,7 +680,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const disableQueue = await queueHandoutSyncsForAssignments(
       adminSupabase,
       req.headers.get("Authorization"),
-      [assignment_id, ...realigned.map((a) => a.id)],
+      [assignment_id, ...inClassSharerIds],
       scope
     );
 
@@ -774,7 +780,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const unchangedQueue = await queueHandoutSyncsForAssignments(
       adminSupabase,
       req.headers.get("Authorization"),
-      [assignment_id, ...realigned.map((a) => a.id)],
+      [assignment_id, ...inClassSharerIds],
       scope
     );
 
@@ -1006,7 +1012,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const restoreQueue = await queueHandoutSyncsForAssignments(
     adminSupabase,
     req.headers.get("Authorization"),
-    [assignment_id, ...realignedOnRestore.map((a) => a.id)],
+    [assignment_id, ...inClassSharerIds],
     scope
   );
 

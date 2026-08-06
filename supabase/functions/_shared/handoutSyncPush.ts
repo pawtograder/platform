@@ -107,7 +107,14 @@ export type HandoutSyncPushInputs = {
   desiredHandoutSha: string | null | undefined;
   /** Handout sha this repo last reached (`repositories.synced_handout_sha`). */
   syncedHandoutSha: string | null | undefined;
-  /** Repo-side sha the last sync produced (`repositories.synced_repo_sha`). */
+  /**
+   * Repo-side sha the last sync produced (`repositories.synced_repo_sha`).
+   *
+   * Deliberately NOT used for classification: on a merge-based sync it is a commit containing the
+   * student's own work, so matching it treated a student's force-push back to that state as
+   * machinery. Kept in the input type because callers already pass it and it documents what is
+   * available; the bot-sender route covers the automated delivery.
+   */
   syncedRepoSha: string | null | undefined;
 };
 
@@ -133,7 +140,12 @@ export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
   // Also excludes other bot pushes (a Dependabot bump, say), which is the behaviour we want:
   // a submission should represent work the student pushed. They can push it themselves.
   if (senderType === "Bot") return true;
-  const knownShas = [inputs.latestTemplateSha, inputs.desiredHandoutSha, inputs.syncedHandoutSha, inputs.syncedRepoSha];
+  // HANDOUT revisions only. `syncedRepoSha` is the repository-side result of the last sync, which
+  // for a merge-based sync is a commit containing all of the student's own work — so a student who
+  // later pushes something else and then force-pushes back to it was being classified as machinery,
+  // leaving the newer commit active while the repository head had moved. The automated delivery
+  // that produced that commit is already identified by its bot sender, so nothing needs it here.
+  const knownShas = [inputs.latestTemplateSha, inputs.desiredHandoutSha, inputs.syncedHandoutSha];
   // Every message-shaped marker has to name a handout revision this row knows about, not
   // merely something hex-shaped. See matchesKnownHandoutSha.
   const namesKnownHandout = (line: string, re: RegExp): boolean => {
