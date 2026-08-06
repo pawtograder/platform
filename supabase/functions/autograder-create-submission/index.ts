@@ -733,13 +733,66 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               `disabled: ${dispatchedError.message}`
           );
         }
-        const triggeredAt = (dispatched?.status as { workflow_triggered_at?: string } | null)?.workflow_triggered_at;
+        const dispatchedStatus = (dispatched?.status ?? null) as CheckRunStatus | null;
+        const triggeredAt = dispatchedStatus?.workflow_triggered_at;
+        // The exception belongs to ONE in-flight run, not to the commit. Keyed on the sha
+        // alone it never expired: `workflow_triggered_at` stays stamped forever, so
+        // re-running that workflow days after the toggle (same sha and run number, new
+        // attempt) was admitted too — and while a student repo still carries a leftover
+        // grade.yml, GitHub's "Re-run jobs" button was therefore enough to run grading the
+        // instructor had turned off and add another Actions-backed submission.
+        //
+        // So claim it: the first run to use the exception records its identity, and
+        // afterwards only that same run/attempt is honored. Same-run retries (a transient
+        // failure inside this function) still pass, since they carry the same identity.
+        const claim = dispatchedStatus?.autograder_disabled_exception;
+        const claimedByThisRun = claim
+          ? claim.run_id === decoded.run_id && claim.run_attempt === decoded.run_attempt
+          : false;
+        if (triggeredAt && claim && !claimedByThisRun) {
+          scope?.setTag("rejected_reason", "disable_exception_already_claimed");
+          throw new UserVisibleError(
+            "This assignment no longer uses an autograder. The grading run that was already in flight when it was " +
+              "turned off has already been recorded, so this re-run was ignored. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            400
+          );
+        }
         if (triggeredAt) {
           scope?.setTag("allowed_in_flight_dispatch", "true");
           console.log(
             `Allowing in-flight workflow run for ${repository}@${sha}: dispatched at ${triggeredAt}, before the ` +
               `autograder was disabled`
           );
+          if (!claim && dispatched) {
+            // Claiming is read-then-write rather than atomic, so two runs starting at the
+            // same instant could both claim. That is the pre-existing behaviour for
+            // concurrent runs on one commit and is bounded by the run itself; what matters
+            // here is closing the unbounded re-run window.
+            //
+            // A failed claim does NOT reject the run: the alternative is discarding a
+            // genuine pre-toggle push that has no direct submission either, which is worse
+            // than leaving the re-run window open for this one commit. Tagged so it is
+            // visible rather than silent.
+            const { error: claimError } = await adminSupabase
+              .from("repository_check_runs")
+              .update({
+                status: {
+                  ...dispatchedStatus,
+                  autograder_disabled_exception: {
+                    run_id: decoded.run_id,
+                    run_attempt: decoded.run_attempt,
+                    claimed_at: new Date().toISOString()
+                  }
+                } as unknown as Json
+              })
+              .eq("id", dispatched.id);
+            if (claimError) {
+              scope?.setTag("disable_exception_claim_failed", "true");
+              Sentry.captureException(claimError, scope);
+            }
+          }
         } else {
           scope?.setTag("rejected_reason", "assignment_has_no_autograder");
           throw new UserVisibleError(

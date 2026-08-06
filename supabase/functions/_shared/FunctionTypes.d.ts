@@ -378,6 +378,17 @@ export type CheckRunStatus = {
   requested_at?: string;
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
+  /**
+   * Records which workflow run was allowed through the "dispatched before the autograder
+   * was disabled" exception in autograder-create-submission. The exception is a property of
+   * one in-flight run, not of the commit, so it is claimed once and then only honored for
+   * the run that claimed it.
+   */
+  autograder_disabled_exception?: {
+    run_id: string;
+    run_attempt: string;
+    claimed_at: string;
+  };
 };
 
 export type AssignmentGroupInstructorCreateRequest = {

@@ -152,8 +152,6 @@ export default function AutograderPage() {
         priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
         !sameLimit(priorAutograderRow.max_submissions_count, nextAutograderRow.max_submissions_count) ||
         !sameLimit(priorAutograderRow.max_submissions_period_secs, nextAutograderRow.max_submissions_period_secs);
-      await refineCore.onFinish(nextAutograderRow);
-
       // The flag and the handout's grade.yml must agree, and the sync reads the
       // flag from the DB — so the flag has to be written first. That leaves a
       // window where the sync can fail (shared-handout conflict, GitHub rejects
@@ -173,6 +171,13 @@ export default function AutograderPage() {
       // autograder off on assignments the instructor never opened.
       const autograderFlagChanged = priorHasAutograder === undefined || priorHasAutograder !== nextHasAutograder;
       try {
+        // Inside the try, like the flag write below and for the same reason: when the
+        // autograder stays enabled, githubRepoConfigureWebhook above has ALREADY parsed the
+        // selected grader repo and persisted its pawtograder.yml into autograder.config. A
+        // failure of this save outside the rollback scope therefore reported "Changes not
+        // saved" while grading ran on the new config paired with the old grader_repo and
+        // limits — exactly the mismatch priorAutograderRow.config exists to undo.
+        await refineCore.onFinish(nextAutograderRow);
         await mutateAssignment({ values: { has_autograder: nextHasAutograder } });
         if (!autograderFlagChanged) {
           savedHasAutograder.current = nextHasAutograder;
