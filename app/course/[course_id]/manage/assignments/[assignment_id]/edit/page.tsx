@@ -371,6 +371,9 @@ export default function EditAssignment() {
                   .update(priorValues)
                   .eq("id", Number.parseInt(assignment_id as string));
                 for (const [column, written] of Object.entries(writtenValues)) {
+                  // `undefined` is not a value PostgREST can be asked about, and it means this save
+                  // carried no opinion about the column, so it constrains nothing.
+                  if (written === undefined) continue;
                   rollbackQuery = written === null ? rollbackQuery.is(column, null) : rollbackQuery.eq(column, written);
                 }
                 const { data: rolledBack, error: rollbackDbError } = await rollbackQuery.select("id");
