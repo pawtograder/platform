@@ -38,6 +38,15 @@ export const SYNC_BRANCH_NAME_RE = /(?:^|[\s/])sync-to-[0-9a-f]{7,40}\b/;
 export const SYNC_PR_TITLE_PREFIX = "[Instructor Update]";
 
 /**
+ * The COMPLETE generated sync PR title: `[Instructor Update] Sync handout to <sha7>`.
+ * Sha-qualified for the same reason as the branch and commit-subject matchers — the
+ * bare prefix classified any student commit message containing a line starting with
+ * `[Instructor Update]` as machinery, discarding their submission on a repo-only
+ * assignment.
+ */
+export const SYNC_PR_TITLE_RE = /^\[Instructor Update\] Sync handout to [0-9a-f]{7,40}\b/;
+
+/**
  * Subject prefix of the COMMIT `syncRepositoryToHandout` creates on the sync branch
  * (`Sync handout updates to <sha7>`). Distinct from the PR title, and the only marker that
  * survives a squash or rebase merge: those replay the commit's own message, not the PR
@@ -105,7 +114,7 @@ export function isHandoutSyncPush(inputs: HandoutSyncPushInputs): boolean {
     // the START of a line. Anchored deliberately — a bare `includes` matched anywhere in
     // the message, so a student writing "fixing what [Instructor Update] broke" had that
     // push silently discarded instead of recorded as their submission.
-    if (headCommitMessage.split("\n").some((line) => line.trimStart().startsWith(SYNC_PR_TITLE_PREFIX))) {
+    if (headCommitMessage.split("\n").some((line) => SYNC_PR_TITLE_RE.test(line.trimStart()))) {
       return true;
     }
   }

@@ -861,6 +861,35 @@ export async function writeFileToRepo(
  * assignment, so student repos generated from it never run a grading workflow.
  */
 /**
+ * Current head commit sha of a repo's DEFAULT branch (not necessarily "main").
+ *
+ * Used to recover a handout revision when an idempotent step reports it had nothing to
+ * do — e.g. a retry of handout creation finds grade.yml already deleted, so the delete
+ * returns no commit sha, yet the assignment still needs a `latest_template_sha` to give
+ * student syncs a target.
+ */
+export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.Scope): Promise<string | undefined> {
+  scope?.setTag("github_operation", "get_default_branch_head");
+  scope?.setTag("repository", repoName);
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("getDefaultBranchHeadSha", { repoName }, scope);
+    return undefined;
+  }
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Get default branch head failed: No octokit found for ${repoName}`);
+  }
+  const [owner, repo] = repoName.split("/");
+  const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${repoData.default_branch}`
+  });
+  return ref.object.sha;
+}
+
+/**
  * Move a file within a repo in a SINGLE commit, via the Git trees API.
  *
  * The contents API can only touch one path per commit, so "park then delete" took two

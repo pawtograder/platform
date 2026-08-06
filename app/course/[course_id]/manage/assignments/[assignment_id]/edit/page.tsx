@@ -176,8 +176,18 @@ export default function EditAssignment() {
             // reason.) The sync itself refuses to ENABLE on a PR-mode assignment.
             const autograderFlagChanged =
               queryData?.has_autograder !== undefined && queryData.has_autograder !== values.has_autograder;
+            // A NEW handout also needs reconciling even when the flag did not move. On a
+            // has_autograder=false assignment the freshly selected repo may carry the
+            // stock grade.yml, and githubRepoConfigureWebhook skips workflow handling for
+            // a disabled assignment — so student repos and handout syncs would inherit a
+            // live workflow while pushes simultaneously take the direct-submission path,
+            // producing rejected runs. This is a real repo change, not the unrelated edit
+            // the flag-only guard exists to ignore.
+            const templateRepoChanged =
+              queryData?.template_repo !== undefined && queryData.template_repo !== values.template_repo;
+            const needsWorkflowSync = autograderFlagChanged || templateRepoChanged;
             const isDisabling = values.has_autograder === false;
-            if (autograderFlagChanged && (isDisabling || values.submission_mode !== "pr")) {
+            if (needsWorkflowSync && (isDisabling || values.submission_mode !== "pr")) {
               const syncResult = await assignmentSyncAutograderWorkflow(
                 {
                   assignment_id: Number.parseInt(assignment_id as string),

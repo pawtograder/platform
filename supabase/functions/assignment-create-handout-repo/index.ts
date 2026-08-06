@@ -5,6 +5,7 @@ import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.t
 import {
   createRepo,
   deleteFileFromRepo,
+  getDefaultBranchHeadSha,
   GRADE_WORKFLOW_PATH,
   syncRepoPermissions,
   updateAutograderWorkflowHash
@@ -216,7 +217,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
   let strippedHandoutSha: string | undefined;
   if (assignment.has_autograder === false) {
-    const { commit_sha } = await deleteFileFromRepo(
+    const { deleted, commit_sha } = await deleteFileFromRepo(
       handoutFullName,
       GRADE_WORKFLOW_PATH,
       "Remove autograder workflow: this assignment has no autograder",
@@ -228,6 +229,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // latest_template_sha null, which gives student syncs no target revision. We
     // persist it ourselves rather than relying on that delivery.
     strippedHandoutSha = commit_sha;
+    // `deleted: false` means grade.yml was already gone — the shape a RETRY takes when
+    // the delete succeeded but the pointer update below then failed. Without this the
+    // retry would save template_repo with no latest_template_sha at all, and the
+    // original deletion webhook may already have been acknowledged while no assignment
+    // referenced the repo, so nothing would ever record it. Resolve the current head
+    // instead of relying on a commit we cannot re-create.
+    if (!deleted) {
+      strippedHandoutSha = await getDefaultBranchHeadSha(handoutFullName, scope);
+      scope.setTag("recovered_stripped_handout_sha", String(!!strippedHandoutSha));
+    }
   }
 
   // Only persist the template_repo pointer after GitHub creation + permission

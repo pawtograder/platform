@@ -74,12 +74,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // whose Actions runs then get rejected, showing PR students failing checks.
   // Treat PR mode as authoritative over the flag rather than the reverse.
   const isPrMode = assignment.submission_mode === "pr";
-  const hasAutograder = !isPrMode && assignment.has_autograder !== false;
+  // No-repo modes cannot host an autograder either: it runs as a GitHub Actions
+  // workflow inside the student repo. The create/edit forms coerce this, but the
+  // autograder page's Enabled radio is always reachable, so the flag can still arrive
+  // true — and the !templateRepo return below would then report the autograder as
+  // enabled with nowhere for it to run. repo_mode was already fetched and tagged here;
+  // it just was not part of the decision.
+  const isNoRepoMode = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission";
+  const hasAutograder = !isPrMode && !isNoRepoMode && assignment.has_autograder !== false;
   const templateRepo = assignment.template_repo;
   scope.setTag("has_autograder", String(hasAutograder));
   scope.setTag("submission_mode", assignment.submission_mode ?? "push");
   scope.setTag("repo_mode", assignment.repo_mode);
-  if (isPrMode && assignment.has_autograder !== false) {
+  if ((isPrMode || isNoRepoMode) && assignment.has_autograder !== false) {
     // Correct the row so the webhook and UI stop disagreeing with the mode, then
     // continue down the disable path below to strip any workflow already present.
     const { error: coerceError } = await adminSupabase
@@ -91,7 +98,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       Sentry.captureException(coerceError, scope);
       throw coerceError;
     }
-    scope.setTag("coerced_pr_mode_autograder_off", "true");
+    scope.setTag("coerced_autograder_off", isPrMode ? "pr_mode" : "no_repo_mode");
   }
 
   // No handout repo (upload-only / no-submission assignments, or a handout whose

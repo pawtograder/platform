@@ -70,6 +70,12 @@ Deno.test("squashed sync commit keeping only the PR title -> sync", () => {
   assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "[Instructor Update] Sync handout to abc1234" })), true);
 });
 
+// The title matcher is sha-qualified too, so a student commit that merely opens with
+// the marker keeps its submission.
+Deno.test("student commit starting with [Instructor Update] but no sync title -> not a sync", () => {
+  assertEquals(isHandoutSyncPush(inputs({ headCommitMessage: "[Instructor Update] said to refactor this" })), false);
+});
+
 // The title check is anchored to the start of a line, so a student mentioning the phrase
 // mid-sentence keeps their submission. A bare substring test dropped it silently.
 Deno.test("student message mentioning the sync PR title mid-sentence -> not a sync", () => {
