@@ -1786,15 +1786,34 @@ async function handlePushToStudentRepo(
       }
       return;
     }
-    // The `repositories` row is inserted BEFORE createRepo runs, so GitHub's
-    // initial branch push for a freshly generated repo can arrive while the row
-    // is still is_github_ready=false. That push is the starter template, not
-    // student work — recording it would make the handout the student's active
-    // submission before they have written a line.
+    // An unready row means one of two very different things, and treating them alike lost work.
+    //
+    // The `repositories` row is inserted BEFORE createRepo runs, so GitHub's initial branch push
+    // for a freshly generated repo arrives while the row is still is_github_ready=false. That push
+    // is the starter template, not student work, and recording it would make the handout the
+    // student's active submission before they have written a line — so it is acknowledged and
+    // dropped. It is identifiable: creation records the head it produced in synced_repo_sha.
+    //
+    // But readiness can also be false because the DATABASE write failed after GitHub was already
+    // set up — the repository works and the student can push to it, and the reconciler will repair
+    // the flag shortly. Acknowledging those pushes discarded them permanently, so none of the
+    // student's work between the failure and the repair became a submission. Those are thrown, so
+    // GitHub redelivers until the flag is repaired.
     if (!studentRepo.is_github_ready) {
-      scope.setTag("skipped_reason", "repo_not_github_ready");
-      console.log(`Skipping push-direct submission for ${repoName}@${payload.after}: repo is still being provisioned`);
-      return;
+      const isProvisioningPush = !!studentRepo.synced_repo_sha && studentRepo.synced_repo_sha === payload.after;
+      if (isProvisioningPush) {
+        scope.setTag("skipped_reason", "repo_provisioning_push");
+        console.log(
+          `Skipping push-direct submission for ${repoName}@${payload.after}: this is the starter-template push from ` +
+            `repository creation`
+        );
+        return;
+      }
+      scope.setTag("push_direct_retry_reason", "repo_not_github_ready");
+      throw new Error(
+        `${repoName} is not marked ready yet, but ${payload.after} is not the starter-template commit either, so ` +
+          `this is student work; rejecting this delivery so GitHub retries it once provisioning is recorded`
+      );
     }
     // BEFORE the first GitHub call on this path. This branch clones the repo zipball and now
     // also resolves the repo head below, so it must respect the same circuit breaker as the
