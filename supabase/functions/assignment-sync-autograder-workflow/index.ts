@@ -5,6 +5,7 @@ import { AssignmentSyncAutograderWorkflowRequest } from "../_shared/FunctionType
 import { RequestError } from "npm:octokit";
 import {
   deleteFileFromRepo,
+  getDefaultBranchHeadSha,
   getFileFromRepo,
   GRADE_WORKFLOW_PATH,
   renameFileInRepo,
@@ -422,10 +423,44 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // and let the caller roll the flag back.
         scope.setTag("pin_latest_template_sha_failed", "true");
         Sentry.captureException(shaError, scope);
+        // Undo the repo edit AND the sharer realignment before throwing, as the other
+        // failure branches do. Throwing bare made the caller restore this assignment's
+        // flag to true while grade.yml stayed parked and the sharers stayed disabled —
+        // an assignment claiming an autograder with no runnable workflow, whose
+        // `#submit` pushes attempt a dispatch that is not there while also bypassing
+        // direct ingestion, losing the work.
+        if (moved) {
+          scope.setTag("disable_rollback", "true");
+          try {
+            await renameFileInRepo(
+              templateRepo,
+              DISABLED_GRADE_WORKFLOW_PATH,
+              GRADE_WORKFLOW_PATH,
+              "Roll back autograder workflow removal: the handout revision pointer could not be updated",
+              scope
+            );
+          } catch (rollbackError) {
+            scope.setTag("disable_rollback_failed", "true");
+            Sentry.captureException(rollbackError, scope);
+          }
+        }
+        if (realigned.length > 0) {
+          const { error: revertError } = await adminSupabase
+            .from("assignments")
+            .update({ has_autograder: !hasAutograder })
+            .eq("class_id", class_id)
+            .in(
+              "id",
+              realigned.map((a) => a.id)
+            );
+          if (revertError) {
+            scope.setTag("pin_failure_sharer_rollback_failed", "true");
+            Sentry.captureException(revertError, scope);
+          }
+        }
         throw new UserVisibleError(
           `The autograder workflow was removed from ${templateRepo}, but the handout revision pointer could not ` +
-            `be updated (${shaError.message}). Student repositories could still re-sync the old workflow, so the ` +
-            `change was not completed — please try again.`,
+            `be updated (${shaError.message}). The change was rolled back — please try again.`,
           502
         );
       }
@@ -492,6 +527,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
       throw e;
     }
+
+    // No workflow file was written, but the assignment may still be pointing at the
+    // WRONG revision: the edit flow reaches this branch when template_repo is replaced
+    // with a handout that already has grade.yml, in which case latest_template_sha is
+    // still a commit from the OLD repo and existing student repos still hold the old
+    // workflow. Resolve this repo's head, pin it, and queue the syncs — the same three
+    // steps the file-writing paths do, just without a write of our own.
+    const unchangedHeadSha = await getDefaultBranchHeadSha(templateRepo, scope).catch((headErr) => {
+      scope.setTag("unchanged_head_lookup_failed", "true");
+      Sentry.captureException(headErr, scope);
+      return undefined;
+    });
+    if (unchangedHeadSha) {
+      const { error: shaError } = await adminSupabase
+        .from("assignments")
+        .update({ latest_template_sha: unchangedHeadSha })
+        .eq("template_repo", templateRepo);
+      if (shaError) {
+        scope.setTag("pin_latest_template_sha_failed", "true");
+        Sentry.captureException(shaError, scope);
+      }
+    }
+    await queueHandoutSyncsForAssignments(
+      adminSupabase,
+      req.headers.get("Authorization"),
+      [assignment_id, ...realigned.map((a) => a.id)],
+      scope
+    );
+
     return {
       action: "unchanged" as const,
       has_autograder: true,

@@ -706,6 +706,11 @@ async function createPushDirectSubmission(
       Sentry.captureException(ingestErr, scope);
     }
     if (!removed) {
+      // Returning 200 here gave GitHub no reason to redeliver, so the incomplete row
+      // stayed forever — with the oversized error recorded unattached and therefore
+      // invisible to the student. The incomplete marker is only useful if something
+      // comes back for it, so force a retry. Deferred until after the error recording
+      // below so the explanation is written first.
       scope.setTag("push_direct_cleanup_failed", "true");
       Sentry.captureMessage(
         `Failed to remove partial push-direct submission ${submissionId} for ${repoName}@${sha}`,
@@ -724,10 +729,18 @@ async function createPushDirectSubmission(
       // Attached to the retained submission, which is what makes it student-visible:
       // workflow_run_error's student RLS branch requires submission_id IS NOT NULL and
       // the student-facing reader embeds it through `submissions`.
+      // The commit is part of the message deliberately. The upsert key is
+      // (repository_id, run_number, run_attempt, name) and every push-direct submission
+      // uses 0/0, so two oversized pushes with the same message — same filename, same
+      // size — collided: the second upsert moved the single row's submission_id to the
+      // newer submission and left the earlier rejection in history with no explanation.
+      // Naming the commit makes the key unique per push and tells the student which push
+      // was rejected.
+      const shortSha = sha.slice(0, 7);
       const tooLargeMessage =
         ingestErr instanceof SubmissionFileTooLargeError
-          ? `Your submission was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
-          : `Your submission was not recorded: the repository is too large to process (${ingestErr.observedMb} MB, limit ${ingestErr.limitMb} MB). Remove large files — build output and caches are the usual cause — and push again.`;
+          ? `Your submission at commit ${shortSha} was not recorded: the file "${ingestErr.fileName}" is ${(ingestErr.fileSize / (1024 * 1024)).toFixed(1)} MB, over the 50 MB per-file limit. Remove or shrink it and push again.`
+          : `Your submission at commit ${shortSha} was not recorded: the repository is too large to process (${ingestErr.observedMb} MB, limit ${ingestErr.limitMb} MB). Remove large files — build output and caches are the usual cause — and push again.`;
       const { error: recordError } = await adminSupabase.from("workflow_run_error").upsert(
         {
           repository_id: studentRepo.id,
@@ -771,6 +784,17 @@ async function createPushDirectSubmission(
     if (reactivateErr) {
       scope.setTag("push_direct_retry_reason", "reactivate_failed");
       throw reactivateErr;
+    }
+    if (!removed) {
+      // The row is neither properly retained (too_large) nor removed (everything else),
+      // so it is in a state nothing else will come back for. The explanation has been
+      // recorded above where applicable; now force the redelivery that the incomplete
+      // marker exists to be repaired by.
+      scope.setTag("push_direct_retry_reason", "cleanup_incomplete");
+      throw new Error(
+        `Push-direct submission ${submissionId} for ${repoName}@${sha} could not be cleaned up or retained; ` +
+          `rejecting this delivery so GitHub retries it`
+      );
     }
     if (isTooLarge) {
       // Stop here: don't make GitHub retry a delivery that can never succeed.
@@ -874,11 +898,16 @@ async function deactivateRejectedSubmission(
   scope: Sentry.Scope
 ): Promise<boolean> {
   try {
-    const { data: bins } = await adminSupabase
+    const { data: bins, error: binsErr } = await adminSupabase
       .from("submission_files")
       .select("storage_key")
       .eq("submission_id", submissionId)
       .eq("is_binary", true);
+    // Destructuring only `data` turned a failed lookup into `bins === null`, which then
+    // skipped storage removal and deleted the rows anyway — orphaning blobs whose keys
+    // those rows were the only record of. Checking the removal result is not enough if
+    // the lookup that produced the keys is unchecked.
+    if (binsErr) throw binsErr;
     const keys = (bins ?? []).map((b) => b.storage_key).filter((k): k is string => !!k);
     if (keys.length > 0) {
       // Check the result and abort BEFORE deleting the rows, as
