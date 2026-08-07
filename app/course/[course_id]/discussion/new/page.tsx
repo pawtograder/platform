@@ -406,6 +406,9 @@ export default function NewDiscussionThread() {
                         value={field.value}
                         enableFilePicker={true}
                         disabled={formBusy}
+                        // Matches the visible "Description" label above: the
+                        // editor's textarea cannot be the target of that label.
+                        ariaLabel="Description"
                       />
                     );
                   }}

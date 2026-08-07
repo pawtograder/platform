@@ -83,15 +83,6 @@
       "impact": "serious",
       "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
-    "discussion-new|dark|label|violation": {
-      "route": "discussion-new",
-      "scheme": "dark",
-      "rule": "label",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "textarea"
-    },
     "discussion-new|dark|nested-interactive|violation": {
       "route": "discussion-new",
       "scheme": "dark",
@@ -100,15 +91,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "discussion-new|dark|svg-img-alt|violation": {
-      "route": "discussion-new",
-      "scheme": "dark",
-      "rule": "svg-img-alt",
-      "kind": "violation",
-      "nodes": 9,
-      "impact": "serious",
-      "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
     },
     "discussion-new|light|color-contrast|incomplete": {
       "route": "discussion-new",
@@ -119,15 +101,6 @@
       "impact": "serious",
       "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
-    "discussion-new|light|label|violation": {
-      "route": "discussion-new",
-      "scheme": "light",
-      "rule": "label",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "critical",
-      "sample": "textarea"
-    },
     "discussion-new|light|nested-interactive|violation": {
       "route": "discussion-new",
       "scheme": "light",
@@ -136,15 +109,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "discussion-new|light|svg-img-alt|violation": {
-      "route": "discussion-new",
-      "scheme": "light",
-      "rule": "svg-img-alt",
-      "kind": "violation",
-      "nodes": 9,
-      "impact": "serious",
-      "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
     },
     "discussion-thread|dark|nested-interactive|violation": {
       "route": "discussion-thread",
