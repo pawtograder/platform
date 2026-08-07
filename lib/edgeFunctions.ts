@@ -655,6 +655,16 @@ export async function assignmentCreateSolutionRepo(
     { body: params }
   );
 }
+export async function assignmentSyncAutograderWorkflow(
+  params: FunctionTypes.AssignmentSyncAutograderWorkflowRequest,
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<FunctionTypes.AssignmentSyncAutograderWorkflowResponse>(
+    supabase,
+    "assignment-sync-autograder-workflow",
+    { body: params }
+  );
+}
 export async function resendOrgInvitation(
   params: { course_id: number; user_id: string },
   supabase: SupabaseClient<Database>

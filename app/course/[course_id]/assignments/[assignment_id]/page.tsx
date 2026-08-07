@@ -33,6 +33,62 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 
+/**
+ * Autograder-score label for one row of the submission history.
+ *
+ * Decided per submission rather than from the assignment's current
+ * `has_autograder`, because that flag is mutable while submissions are
+ * historical. Keying only off the flag mislabels history in both directions:
+ * turning the autograder off would hide real scores from earlier Actions-backed
+ * submissions as "N/A", and turning it back on would leave earlier push-direct
+ * submissions stuck at "In Progress" forever.
+ *
+ * Order matters: real results always win, then channels that never run the
+ * autograder, and only then the assignment-level fallback.
+ */
+function autograderScoreLabel(
+  submission: {
+    grader_results?: { score?: number | null; max_score?: number | null; errors?: unknown } | null;
+    submitted_via?: string | null;
+    run_number?: number | null;
+    workflow_run_error?: unknown;
+  },
+  assignmentHasNoAutograder: boolean
+): string {
+  const results = submission.grader_results;
+  if (results) {
+    return results.errors ? "Error" : `${results.score}/${results.max_score}`;
+  }
+  // A retained rejection: the push-direct path keeps an oversized submission as an inactive
+  // history row and attaches a student-visible workflow_run_error explaining why nothing was
+  // graded. That error row is the ONLY record of the rejection — the submission itself looks
+  // ordinary — so without this the newest history entry read as a successful hand-graded
+  // submission and the student had no way to learn their push was refused.
+  const runErrors = submission.workflow_run_error;
+  if (Array.isArray(runErrors) ? runErrors.length > 0 : !!runErrors) {
+    return "Error";
+  }
+  // Channels that never produce grader results: an upload, a manual entry, a PR
+  // submission, or a push-direct submission (run_number 0 — no Actions run backs
+  // it). These are "N/A" no matter what the assignment flag currently says.
+  const via = submission.submitted_via;
+  if (via === "upload" || via === "manual" || via === "pr") {
+    return "N/A";
+  }
+  if (via === "git" && (submission.run_number ?? 0) === 0) {
+    return "N/A";
+  }
+  // An Actions-backed submission (run_number > 0) with no results yet is STILL RUNNING,
+  // whatever the assignment's current flag says. The backend deliberately lets a workflow
+  // dispatched before a disable finish, so this combination is legitimate — and labelling
+  // it N/A hid a live run and its results link until they arrived. The flag is only
+  // consulted for rows whose channel cannot be determined.
+  if ((submission.run_number ?? 0) > 0) {
+    return "In Progress";
+  }
+  return assignmentHasNoAutograder ? "N/A" : "In Progress";
+}
+
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { private_profile_id, isReadOnly } = useClassProfiles();
@@ -65,8 +121,11 @@ export default function AssignmentPage() {
   const { data: submissionsData, refetch: refetchSubmissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
+      // workflow_run_error is embedded because a push-direct submission rejected as oversized
+      // is deliberately RETAINED with the error attached — that error row is the only record
+      // of the rejection, so without it the row reads as an ordinary hand-graded submission.
       select:
-        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)",
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*), workflow_run_error(*)",
       order: "created_at, { ascending: false }"
     },
     pagination: {
@@ -115,9 +174,15 @@ export default function AssignmentPage() {
   }
   // No-repo / no-submission / PR-mode assignments have no autograder by
   // convention, so an autograder score is not meaningful — show "N/A" instead
-  // of progress/score.
+  // of progress/score. `has_autograder === false` covers repo-only assignments
+  // (#895), whose push submissions never get grader_results — without it the
+  // score column would sit at "In Progress" forever.
   const isPrMode = assignment.submission_mode === "pr";
-  const noAutograder = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission" || isPrMode;
+  const noAutograder =
+    assignment.has_autograder === false ||
+    assignment.repo_mode === "none" ||
+    assignment.repo_mode === "no_submission" ||
+    isPrMode;
   return (
     <Box p={4}>
       <LinkAccount />
@@ -199,7 +264,12 @@ export default function AssignmentPage() {
           {enrollment?.role === "student" && (
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
-          {submissionsPeriod && maxSubmissions ? (
+          {/* Submission limits throttle autograder runs, so they are meaningless
+              without an autograder — and the `autograder` row is auto-created with
+              a default 5-per-24h limit for EVERY assignment. Showing this banner on
+              a repo-only assignment would promise that extra pushes "will be
+              ignored" when in fact every push becomes a gradeable submission. */}
+          {submissionsPeriod && maxSubmissions && !noAutograder ? (
             <Box w="100%" maxW="4xl" data-visual-test="removed">
               <Alert.Root
                 status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}
@@ -284,13 +354,7 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {noAutograder
-                        ? "N/A"
-                        : !submission.grader_results
-                          ? "In Progress"
-                          : submission.grader_results && submission.grader_results.errors
-                            ? "Error"
-                            : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                      {autograderScoreLabel(submission, noAutograder)}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>

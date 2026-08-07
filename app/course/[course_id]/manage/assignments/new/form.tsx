@@ -615,8 +615,32 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
   );
 
-  // Branch protection only makes sense when a repository is actually created.
-  const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
+  // Branch protection only makes sense when a repository is actually created, and
+  // the same is true of the autograder: it runs as a GitHub Actions workflow inside
+  // the student repo, so there is nowhere for it to run without one.
+  const noRepoMode = repoMode === "none" || repoMode === "no_submission";
+  const protectionDisabled = noRepoMode;
+  // PR submissions are ingested by the PR webhook and never produce grader_results,
+  // so PR mode cannot have an autograder either. Both save paths coerce the persisted
+  // value; mirroring it here keeps the checkbox and the fork-agreement warning below
+  // agreeing with what will actually be written.
+  const autograderDisabled = noRepoMode || watch("submission_mode") === "pr";
+  // Shown as unchecked while a no-repo or PR mode is selected, WITHOUT writing the form
+  // value. Forcing the value to false in an effect was a one-way door: flipping repo_mode
+  // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
+  // turning a mode experiment into a repo-only assignment. Both save paths already coerce
+  // the persisted value, so display is all that is needed here.
+  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
+  // student's source-assignment repo, so the two assignments share one handout
+  // and cannot disagree about the autograder. Surface the clash here rather than
+  // letting assignment-create-handout-repo reject the save.
+  const sourceAssignmentId = watch("source_assignment_id");
+  const selectedSource =
+    repoMode === "fork_from_prior_assignment" && sourceAssignmentId
+      ? eligibleSourceAssignments?.find((a) => a.id === Number(sourceAssignmentId))
+      : undefined;
+  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== autograderChecked;
 
   return (
     <CardRoot>
@@ -678,6 +702,57 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             </Field>
           </Fieldset.Content>
         )}
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={autograderDisabled ? "fg.subtle" : "fg.default"}>
+            Autograder
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {noRepoMode
+              ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
+              : autograderDisabled
+                ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
+                : "Whether student pushes are graded automatically by GitHub Actions."}
+          </Text>
+          <Fieldset.Content>
+            <Field
+              helperText={
+                autograderDisabled
+                  ? undefined
+                  : autograderChecked
+                    ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
+                    : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
+              }
+            >
+              {forkAutograderMismatch && (
+                <Text fontSize="sm" color="fg.error" mb={2}>
+                  This assignment forks from &quot;{selectedSource?.title}&quot;, so both share that assignment&apos;s
+                  handout repository and must have the same autograder setting. &quot;{selectedSource?.title}&quot; has
+                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}
+                  {autograderDisabled
+                    ? ", and this assignment cannot have one in its current mode. Pick a different source assignment, or a repository configuration that gives this assignment its own handout."
+                    : ", so this assignment must too. Saving will fail until they match."}
+                </Text>
+              )}
+              <Controller
+                name="has_autograder"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={autograderChecked}
+                    disabled={autograderDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        </Box>
         <Box mt={3}>
           <Text fontWeight="medium" mb={1} color={protectionDisabled ? "fg.subtle" : "fg.default"}>
             Branch Protection

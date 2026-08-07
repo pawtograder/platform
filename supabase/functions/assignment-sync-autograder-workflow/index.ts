@@ -1,0 +1,1080 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import * as Sentry from "npm:@sentry/deno";
+import { AssignmentSyncAutograderWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
+import { RequestError } from "npm:octokit";
+import {
+  deleteFileFromRepo,
+  getDefaultBranchHeadSha,
+  getFileFromRepo,
+  GRADE_WORKFLOW_PATH,
+  renameFileInRepo,
+  updateAutograderWorkflowHash,
+  writeFileToRepo,
+  RenameDestinationExistsError
+} from "../_shared/GitHubWrapper.ts";
+import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
+import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+
+/**
+ * Where the live workflow is parked while the autograder is off. GitHub only runs
+ * workflows matching `.github/workflows/*.yml`, so this suffix disables it without
+ * losing an instructor's customizations.
+ */
+const DISABLED_GRADE_WORKFLOW_PATH = `${GRADE_WORKFLOW_PATH}.disabled`;
+
+/**
+ * Bring the handout repo's grading workflow into line with
+ * `assignments.has_autograder`, so an instructor can turn the autograder on or
+ * off on an assignment that already exists (issue #895).
+ *
+ * - autograder OFF -> park `.github/workflows/grade.yml` as `grade.yml.disabled`
+ *   and delete the live file, so student repos generated from the handout run no
+ *   GitHub Actions but the (possibly customized) content survives.
+ * - autograder ON  -> restore `grade.yml` from the parked copy when there is one,
+ *   otherwise from the class's configured handout template, and repopulate
+ *   `autograder.workflow_sha` (submissions are rejected with a "workflow sha
+ *   mismatch" while it is NULL).
+ *
+ * Idempotent: safe to call when the handout already matches the flag, which is
+ * why callers can invoke it unconditionally rather than tracking the prior value.
+ *
+ * Note this only touches the HANDOUT. Student repos created before the toggle
+ * keep their own copy of `grade.yml` until the existing handout-sync flow
+ * (`sync_repo_to_handout`) carries the change downstream.
+ */
+/**
+ * Push the current handout revision out to EXISTING student repos.
+ *
+ * Needed on BOTH toggle directions, and for the same underlying reason: the toggle only
+ * edits the handout, so until each student repo syncs it still has (or still lacks)
+ * grade.yml at its own commits.
+ *   - enabling: those repos have no workflow while has_autograder is already true, so a
+ *     `#submit` push dispatches something that is not there and an unmarked push records
+ *     nothing — student work is lost.
+ *   - disabling: those repos keep a live workflow, so every push still burns Actions
+ *     minutes and shows the failing check this whole feature exists to remove.
+ *
+ * `queue_repository_syncs` is the same mechanism a handout push uses and skips repos
+ * already at the target revision, so calling it unconditionally is safe. It MUST run on a
+ * user-scoped client: it opens with `if auth.uid() is null then raise exception` and so
+ * failed silently on the service-role client.
+ *
+ * Best-effort by design — the repo edit has already succeeded and is the thing the
+ * instructor asked for — but failures are captured, because the consequence is student
+ * pushes going unrecorded (or Actions still firing) until some later sync.
+ */
+async function queueHandoutSyncsForAssignments(
+  adminSupabase: SupabaseClient<Database>,
+  authHeader: string | null,
+  assignmentIds: number[],
+  scope: Sentry.Scope
+): Promise<{ queued: number; failed: boolean }> {
+  // PAGINATED. Supabase caps a response at max_rows = 1000, so a single select silently
+  // returned only the first 1000 repositories — and it returns them without an error, so the
+  // toggle reported success while every repository past the cap kept the previous workflow
+  // state. A large course, or several same-class assignments sharing one handout, reaches that
+  // cap easily; after an enable those repositories never receive the workflow, so pushes to
+  // them go unrecorded.
+  const REPO_PAGE_SIZE = 1000;
+  const repoIds: number[] = [];
+  for (let offset = 0; ; offset += REPO_PAGE_SIZE) {
+    const { data: repoRows, error: repoRowsError } = await adminSupabase
+      .from("repositories")
+      .select("id")
+      .in("assignment_id", assignmentIds)
+      .order("id", { ascending: true })
+      .range(offset, offset + REPO_PAGE_SIZE - 1);
+    if (repoRowsError) {
+      // Same reasoning as the queue failure below: without the repository ids nothing was
+      // queued, so this is a failure to report, not to log. A partial page is still a
+      // failure — queueing only the repositories read so far would silently leave the rest.
+      scope.setTag("queue_repo_syncs_lookup_failed", "true");
+      Sentry.captureException(repoRowsError, scope);
+      return { queued: 0, failed: true };
+    }
+    if (!repoRows || repoRows.length === 0) break;
+    repoIds.push(...repoRows.map((r) => r.id));
+    if (repoRows.length < REPO_PAGE_SIZE) break;
+  }
+  // Nothing to sync is a success: an assignment whose repos have not been created yet gets
+  // the current handout at creation time.
+  if (repoIds.length === 0) return { queued: 0, failed: false };
+  if (!authHeader) {
+    // queue_repository_syncs requires auth.uid(), so a service-role invocation genuinely
+    // cannot queue. Report it rather than pretending: a caller with no user context still
+    // needs to know the repositories were left alone.
+    scope.setTag("queue_repo_syncs_skipped", "no_user_context");
+    console.log("Skipping repository sync queueing: no Authorization header to satisfy queue_repository_syncs");
+    return { queued: 0, failed: true };
+  }
+  const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: { headers: { Authorization: authHeader } }
+  });
+  const { data: queueResult, error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
+    p_repository_ids: repoIds
+  });
+  if (queueError) {
+    // Reported, not swallowed. The handout is correct by this point but existing student
+    // repositories are not: after an enable, `#submit` cannot run a workflow their repo does
+    // not have yet AND ordinary pushes no longer take the direct-ingestion path, so their
+    // submissions simply go unrecorded until someone syncs. Returning success over that left
+    // nothing to detect it.
+    //
+    // Not a throw: the workflow change itself succeeded, and undoing it (plus the sharer
+    // realignment and the revision pin) to report a queueing failure would make enabling the
+    // autograder impossible whenever this RPC is unavailable — and every step of that unwind
+    // can fail too. A manual handout sync is a real, documented instructor action, so the
+    // honest outcome is to hand the instructor exactly that.
+    scope.setTag("queue_repo_syncs_failed", "true");
+    Sentry.captureException(queueError, scope);
+    return { queued: 0, failed: true };
+  }
+  // The RPC catches exceptions PER REPOSITORY and reports them in its own JSON payload —
+  // `error_count` and `errors` — which never reaches PostgREST's `error` field. Reading only
+  // that field meant a call where every single repository failed to queue still returned
+  // `failed: false`, so the UI showed no warning at all. Inspect the payload.
+  const summary = (queueResult ?? null) as { queued_count?: number; error_count?: number } | null;
+  const errorCount = summary?.error_count ?? 0;
+  const queuedCount = summary?.queued_count ?? repoIds.length;
+  if (errorCount > 0) {
+    scope.setTag("queue_repo_syncs_partial_failure", String(errorCount));
+    Sentry.captureMessage(
+      `queue_repository_syncs reported ${errorCount} per-repository error(s) for assignments ${assignmentIds.join(", ")}`,
+      scope
+    );
+    return { queued: queuedCount, failed: true };
+  }
+  scope.setTag("queued_repo_syncs", String(queuedCount));
+  return { queued: queuedCount, failed: false };
+}
+
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  const { assignment_id, class_id, reconcile_only } = (await req.json()) as AssignmentSyncAutograderWorkflowRequest;
+  scope?.setTag("function", "assignment-sync-autograder-workflow");
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("class_id", class_id.toString());
+  scope?.setTag("reconcile_only", String(reconcile_only === true));
+
+  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  const { data: assignment } = await adminSupabase
+    .from("assignments")
+    .select("id, slug, title, has_autograder, submission_mode, template_repo, repo_mode, classes(slug,github_org)")
+    .eq("id", assignment_id)
+    .eq("class_id", class_id)
+    .single();
+
+  if (!assignment) {
+    throw new UserVisibleError("Assignment not found", 400);
+  }
+
+  // PR-mode assignments never have an autograder: their submissions are ingested by
+  // the PR webhook and produce no Actions results. The create/edit paths coerce the
+  // flag, but the autograder page's Enabled radio can still set it, and trusting a
+  // stale `true` here would restore grade.yml into the upstream students fork from —
+  // whose Actions runs then get rejected, showing PR students failing checks.
+  // Treat PR mode as authoritative over the flag rather than the reverse.
+  const isPrMode = assignment.submission_mode === "pr";
+  // No-repo modes cannot host an autograder either: it runs as a GitHub Actions
+  // workflow inside the student repo. The create/edit forms coerce this, but the
+  // autograder page's Enabled radio is always reachable, so the flag can still arrive
+  // true — and the !templateRepo return below would then report the autograder as
+  // enabled with nowhere for it to run. repo_mode was already fetched and tagged here;
+  // it just was not part of the decision.
+  const isNoRepoMode = assignment.repo_mode === "none" || assignment.repo_mode === "no_submission";
+  const hasAutograder = !isPrMode && !isNoRepoMode && assignment.has_autograder !== false;
+  const templateRepo = assignment.template_repo;
+  scope.setTag("has_autograder", String(hasAutograder));
+  scope.setTag("submission_mode", assignment.submission_mode ?? "push");
+  scope.setTag("repo_mode", assignment.repo_mode);
+  if ((isPrMode || isNoRepoMode) && assignment.has_autograder !== false) {
+    // Correct the row so the webhook and UI stop disagreeing with the mode, then
+    // continue down the disable path below to strip any workflow already present.
+    const { error: coerceError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: false })
+      .eq("id", assignment_id)
+      .eq("class_id", class_id);
+    if (coerceError) {
+      Sentry.captureException(coerceError, scope);
+      throw coerceError;
+    }
+    scope.setTag("coerced_autograder_off", isPrMode ? "pr_mode" : "no_repo_mode");
+  }
+
+  // No handout repo (upload-only / no-submission assignments, or a handout whose
+  // creation has not completed yet) means there is no workflow file to manage.
+  if (!templateRepo) {
+    return { action: "unchanged" as const, has_autograder: hasAutograder, template_repo: null };
+  }
+  scope.setTag("template_repo", templateRepo);
+
+  // E2E fixtures must never hit real GitHub.
+  if (
+    shouldSkipRealGithubForE2eFixture({
+      org: templateRepo.split("/")[0],
+      courseSlug: assignment.classes?.slug ?? null,
+      repoName: templateRepo.split("/")[1]
+    })
+  ) {
+    return { action: "unchanged" as const, has_autograder: hasAutograder, template_repo: templateRepo };
+  }
+
+  // A handout repo can be pointed at by more than one assignment: fork-from-prior
+  // checkpoints inherit the SOURCE assignment's template_repo verbatim, and an
+  // instructor can point two assignments at one handout. The workflow file is a
+  // property of that shared repo, so the sharers cannot disagree about it.
+  //
+  // The UI toggles one assignment at a time, so by the time we run, only THIS
+  // assignment carries the new value. Rejecting on any difference would therefore
+  // make a shared handout permanently un-toggleable — there is no order of
+  // single-assignment saves that ever converges. Instead, bring the whole sharing
+  // set to the value the instructor just chose, then write the repo once.
+  // PAGINATED, and this one is not merely about completeness: the sharer set feeds the
+  // foreign-class conflict check, so a max_rows = 1000 truncation — which arrives with no
+  // error — could hide the very assignment whose class this instructor has no authority over,
+  // letting the toggle edit a handout another class depends on. It also feeds the realignment,
+  // the sync queue and the warning count, so a truncated page leaves sharers on the wrong
+  // submission path.
+  const SHARER_PAGE_SIZE = 1000;
+  const allSharers: {
+    id: number;
+    title: string;
+    class_id: number;
+    has_autograder: boolean | null;
+    submission_mode: string | null;
+  }[] = [];
+  for (let offset = 0; ; offset += SHARER_PAGE_SIZE) {
+    const { data: sharers, error: sharersError } = await adminSupabase
+      .from("assignments")
+      .select("id, title, class_id, has_autograder, submission_mode")
+      .eq("template_repo", templateRepo)
+      .neq("id", assignment_id)
+      .order("id", { ascending: true })
+      .range(offset, offset + SHARER_PAGE_SIZE - 1);
+    if (sharersError) {
+      Sentry.captureException(sharersError, scope);
+      throw sharersError;
+    }
+    if (!sharers || sharers.length === 0) break;
+    allSharers.push(...sharers);
+    if (sharers.length < SHARER_PAGE_SIZE) break;
+  }
+  scope.setTag("template_repo_sharers", String(allSharers.length));
+
+  // Only `class_id` was authorized above, and the writes below use the
+  // service-role client. So the realignment must be confined to THIS class:
+  // otherwise an instructor who administers one section could silently flip
+  // has_autograder for another class that happens to point at the same
+  // `owner/repo` handout.
+  const foreignSharers = allSharers.filter((a) => a.class_id !== class_id);
+  // A PR-mode assignment's EFFECTIVE setting is always false, whatever its row says —
+  // PR submissions never run Actions. Comparing against a stale `true` would make a
+  // foreign PR sharer look aligned while enabling, skipping the 403 below and letting
+  // the toggle proceed to rewrite a repo another class depends on.
+  const effectiveHasAutograder = (a: { has_autograder: boolean | null; submission_mode: string | null }) =>
+    a.submission_mode !== "pr" && a.has_autograder !== false;
+  const outOfStepForeign = foreignSharers.filter((a) => effectiveHasAutograder(a) !== hasAutograder);
+  scope.setTag("template_repo_foreign_sharers", String(foreignSharers.length));
+  // Foreign sharers that this toggle changes the handout for but whose student repositories it
+  // CANNOT sync. queue_repository_syncs is class-scoped by design — it requires instructor
+  // privileges in the repositories' own class and refuses a mixed-class batch — so their repos
+  // keep the previous workflow state until an instructor over there syncs them.
+  //
+  // Reported as a COUNT ONLY, matching the PR-sharer refusal: an instructor in this class is
+  // not authorized to learn which assignments in another class exist.
+  //
+  // Not a reason to refuse the toggle. These sharers already agree with the requested flag —
+  // the 403 above rejected the ones that disagree — which means their flag and this handout
+  // were ALREADY inconsistent before this call: enabling means their repos never had the
+  // workflow their true flag implies, and disabling means their repos still carry one their
+  // false flag rejects. The toggle fixes the handout for everyone and leaves only their repo
+  // sync lagging, so refusing would leave both classes broken instead of one.
+  const unsyncedOtherClassCount = foreignSharers.length;
+  // Everything in THIS class that uses the handout. These are the repositories this caller is
+  // authorized to queue, and ALL of them are affected by a change to the shared repository —
+  // including sharers that already had the requested flag, and PR-mode sharers, which `realigned`
+  // deliberately excludes. Queueing only the realigned ones left those repositories running the
+  // leftover Action and showing failing checks until someone opened each assignment separately.
+  const inClassSharerIds = allSharers.filter((a) => a.class_id === class_id).map((a) => a.id);
+  if (outOfStepForeign.length > 0) {
+    // We cannot authorize those assignments, and editing the shared repo would
+    // change grading for them anyway. Refuse rather than reach outside the class.
+    throw new UserVisibleError(
+      `The handout ${templateRepo} is also used by ${outOfStepForeign.length} assignment` +
+        `${outOfStepForeign.length === 1 ? "" : "s"} in another class with a different autograder setting. ` +
+        `Changing it here would alter grading for a class you do not administer, so this handout cannot be ` +
+        `toggled. Give this assignment its own handout repository first.`,
+      403
+    );
+  }
+
+  // In-class sharers CAN be realigned, but not yet: this function is about to
+  // edit the repo, and if that fails the callers only roll back the assignment
+  // the instructor opened. Flipping the others first would leave them disagreeing
+  // with a handout that never changed. Collect them now, write them at the end.
+  //
+  // PR-mode sharers are excluded: their submissions are ingested by the PR webhook
+  // and never produce Actions grader results, so has_autograder must stay false for
+  // them (the create/edit paths and the backfill migration all enforce that).
+  // Flipping one to true here would make its submissions render as an autograder
+  // run that never completes. They keep their own correct value while the shared
+  // handout's workflow follows this assignment.
+  const inClassOutOfStep = allSharers.filter(
+    (a) => a.class_id === class_id && a.submission_mode !== "pr" && effectiveHasAutograder(a) !== hasAutograder
+  );
+  // A reconcile-only call must never take the workflow away from an assignment that still wants
+  // it. Unlike a real toggle, nothing here was explicitly requested: the caller fires this on
+  // ordinary saves of a PR assignment because it cannot tell from the client whether the handout
+  // still holds a live grade.yml. When the handout is shared with an in-class assignment that
+  // still has the autograder, parking the file would disable grading on THAT assignment as a side
+  // effect of editing this one's due date — `realignInClassSharers` would then flip its flag to
+  // match and queue its student repositories to have the workflow stripped.
+  //
+  // So stop before touching GitHub, and report which assignments are holding it. Left alone, the
+  // PR assignment's forks keep a workflow whose runs `autograder-create-submission` rejects, which
+  // is the same failing-check cost the enable direction refuses at the PR-sharer check below. That
+  // is the lesser harm — a wrong check on submissions that are ingested anyway, against silently
+  // ungrading a different assignment — but it needs an instructor to split the handouts, so the
+  // caller has to surface it rather than log and move on.
+  if (reconcile_only && inClassOutOfStep.length > 0) {
+    scope.setTag("reconcile_only_blocked_shared_handout", "true");
+    console.log(
+      `Reconcile-only sync for ${templateRepo}: refusing to park ${GRADE_WORKFLOW_PATH}, still required by ` +
+        inClassOutOfStep.map((a) => a.id).join(", ")
+    );
+    return {
+      action: "unchanged" as const,
+      has_autograder: false,
+      template_repo: templateRepo,
+      realigned_assignments: [],
+      unsynced_other_class_count: unsyncedOtherClassCount,
+      reconcile_blocked_by: inClassOutOfStep.map((a) => ({ id: a.id, title: a.title }))
+    };
+  }
+  const prSharers = allSharers.filter((a) => a.submission_mode === "pr");
+  // Excluding PR sharers from the FLAG update is not sufficient when enabling: the
+  // shared handout is the upstream those PR students fork from, so writing grade.yml
+  // into it hands their forks a workflow whose runs `autograder-create-submission`
+  // rejects — failing checks for students on an assignment that legitimately has no
+  // autograder. The repo cannot serve both modes, so refuse rather than half-apply.
+  if (hasAutograder && prSharers.length > 0) {
+    // Name only the assignments this instructor is authorized for. `prSharers` is not
+    // class-scoped — it cannot be, since a foreign PR sharer is just as affected by the
+    // repo write — but leaking another class's assignment titles and ids to someone
+    // authorized only for `class_id` is an information disclosure. Foreign ones are
+    // reported as a bare count.
+    const inClassPr = prSharers.filter((a) => a.class_id === class_id);
+    const foreignPrCount = prSharers.length - inClassPr.length;
+    const named = inClassPr.map((a) => `"${a.title}" (#${a.id})`).join(", ");
+    const others =
+      foreignPrCount > 0
+        ? `${named ? " and " : ""}${foreignPrCount} assignment${foreignPrCount === 1 ? "" : "s"} in another class`
+        : "";
+    throw new UserVisibleError(
+      `The handout ${templateRepo} is also used by ${named || ""}${others}, which submit by pull request. ` +
+        `Adding the grading workflow to that handout would give their forks a workflow that cannot report ` +
+        `results, so the autograder cannot be enabled while the handout is shared with a pull-request ` +
+        `assignment. Give this assignment its own handout repository first.`,
+      409
+    );
+  }
+  const skippedPrSharers = prSharers.filter((a) => a.class_id === class_id).length;
+  scope.setTag("template_repo_sharers_to_realign", String(inClassOutOfStep.length));
+  scope.setTag("template_repo_pr_sharers_skipped", String(skippedPrSharers));
+
+  /**
+   * Bring in-class sharers to the chosen setting. Called only after the repo edit
+   * has succeeded, so a GitHub failure never leaves them out of step with the
+   * handout.
+   *
+   * FATAL on failure. By this point the shared handout already carries the new
+   * workflow state, so a sharer left on the old flag would take the wrong
+   * submission path — its webhook would dispatch a grade.yml that is gone, or
+   * create direct submissions while a live workflow also runs. Reporting success
+   * with those rows unfixed is worse than surfacing the error, so this throws and
+   * lets the caller roll the flag back.
+   */
+  /**
+   * Put in-class sharers back on their previous flag after a later step failed.
+   *
+   * The callers roll back only the assignment being edited — they know nothing about the
+   * sharing set — so any failure AFTER realignInClassSharers has to compensate here or
+   * the sharers keep a flag that no longer matches the handout's workflow state. Never
+   * throws: every caller is about to throw the failure that brought it here, and that
+   * error must not be masked by a rollback problem.
+   */
+  async function revertRealignedSharers(realignedIds: number[], tag: string): Promise<void> {
+    if (realignedIds.length === 0) return;
+    scope.setTag(tag, "true");
+    const { error: revertError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: !hasAutograder })
+      .eq("class_id", class_id)
+      .in("id", realignedIds);
+    if (revertError) {
+      scope.setTag(`${tag}_failed`, "true");
+      Sentry.captureException(revertError, scope);
+    }
+  }
+
+  async function realignInClassSharers(): Promise<{ id: number; title: string }[]> {
+    if (inClassOutOfStep.length === 0) return [];
+    const { error: alignError } = await adminSupabase
+      .from("assignments")
+      .update({ has_autograder: hasAutograder })
+      .eq("class_id", class_id)
+      .in(
+        "id",
+        inClassOutOfStep.map((a) => a.id)
+      );
+    if (alignError) {
+      scope.setTag("sharer_realign_failed", "true");
+      Sentry.captureException(alignError, scope);
+      throw new UserVisibleError(
+        `The handout ${templateRepo} is shared with ` +
+          `${inClassOutOfStep.map((a) => `"${a.title}" (#${a.id})`).join(", ")}, and those assignments could not be ` +
+          `updated to match the new autograder setting: ${alignError.message}. The handout workflow was already ` +
+          `changed, so please retry — leaving them out of step would send their submissions down the wrong path.`,
+        502
+      );
+    }
+    console.log(
+      `Realigned has_autograder=${hasAutograder} for assignments sharing ${templateRepo}: ` +
+        inClassOutOfStep.map((a) => a.id).join(", ")
+    );
+    return inClassOutOfStep.map((a) => ({ id: a.id, title: a.title }));
+  }
+
+  if (!hasAutograder) {
+    // Park the workflow rather than just deleting it: instructors customize grade.yml
+    // (runner labels, grading_server, extra steps) and the handout holds the only
+    // assignment-specific copy, so a plain delete would lose it and re-enabling would
+    // silently substitute the stock class template. GitHub only runs workflows matching
+    // `.github/workflows/*.yml`, so the `.disabled` suffix stops every Action while
+    // keeping the content readable in the repo.
+    //
+    // Done as ONE commit (a rename), not park-then-delete. Two commits left an
+    // intermediate revision on the default branch holding both copies — i.e. a still
+    // runnable grade.yml — and the template-repo push webhook sets latest_template_sha
+    // from whichever delivery it happens to process. An out-of-order pair could
+    // therefore advertise that intermediate commit as the handout head, and a later
+    // student sync would reinstall the workflow on a no-autograder assignment.
+    // Correcting the pointer afterwards was a patch; one commit removes the bad
+    // revision entirely, so there is nothing to point at.
+    let renameCommitSha: string | undefined;
+    let moved = false;
+    try {
+      const result = await renameFileInRepo(
+        templateRepo,
+        GRADE_WORKFLOW_PATH,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        "Disable autograder workflow: this assignment has no autograder",
+        scope
+      );
+      moved = result.moved;
+      renameCommitSha = result.commit_sha;
+    } catch (e) {
+      scope.setTag("park_workflow_failed", "true");
+      Sentry.captureException(e, scope);
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new UserVisibleError(
+        `Could not move ${GRADE_WORKFLOW_PATH} out of the way in ${templateRepo}, so the autograder was left ` +
+          `enabled rather than risk losing a customized workflow. Please try again: ${msg}`,
+        502
+      );
+    }
+    // `moved: false` means there was no grade.yml — the normal case for a handout
+    // created repo-only.
+    scope.setTag("parked_workflow", String(moved));
+    // A reconcile-only call with nothing to park has found the handout already correct, so it
+    // stops here rather than re-pinning the revision and queueing every student repository.
+    // Those side effects are appropriate for a real toggle; performing them on every save of an
+    // assignment whose handout is already fine would be pure churn — and this call exists
+    // precisely because its caller cannot tell in advance which case it is in.
+    if (reconcile_only && !moved) {
+      scope.setTag("reconcile_only_noop", "true");
+      console.log(`Reconcile-only sync for ${templateRepo}: no live ${GRADE_WORKFLOW_PATH} to park, nothing to do`);
+      return {
+        action: "unchanged" as const,
+        has_autograder: false,
+        template_repo: templateRepo,
+        realigned_assignments: [],
+        unsynced_other_class_count: unsyncedOtherClassCount
+      };
+    }
+    const deleted = moved;
+    const deleteCommitSha = renameCommitSha;
+
+    /**
+     * Put the parked workflow back — unless a live one already exists.
+     *
+     * Both disable-rollback paths need this. The reverse rename bases its commit on the
+     * current head, so an instructor who pushed their own grade.yml after ours was parked
+     * would have it overwritten by the parked copy, and because that commit is a valid
+     * fast-forward, renameFileInRepo's retry protection cannot detect the loss. Their file
+     * already achieves what the rollback wants — a live workflow in the handout — so the
+     * correct action is to leave it and drop our parked copy instead.
+     *
+     * Returns the commit sha when a rename actually happened, so callers can re-pin the
+     * advertised head; undefined when there was nothing to do or someone else's file was kept.
+     */
+    const restoreParkedWorkflow = async (message: string): Promise<string | undefined> => {
+      const liveWorkflow = await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope).catch((e) => {
+        if (e instanceof RequestError && e.status === 404) return null;
+        throw e;
+      });
+      if (liveWorkflow) {
+        scope.setTag("disable_rollback_workflow_recreated", "true");
+        console.log(
+          `Not restoring the parked workflow in ${templateRepo}: a live ${GRADE_WORKFLOW_PATH} already exists ` +
+            `(pushed while the disable was in flight), so the parked copy is removed instead`
+        );
+        await deleteFileFromRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          "Remove parked autograder workflow: a live workflow was restored by hand",
+          scope
+        );
+        return undefined;
+      }
+      try {
+        const { commit_sha } = await renameFileInRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          GRADE_WORKFLOW_PATH,
+          message,
+          scope,
+          // The preflight above is a separate API call, so it cannot rule out a grade.yml created
+          // in between. This makes the condition part of the commit the rename actually builds,
+          // which is the only place it can be enforced.
+          true
+        );
+        return commit_sha;
+      } catch (renameError) {
+        if (!(renameError instanceof RenameDestinationExistsError)) throw renameError;
+        // Same outcome as the preflight branch: their file already achieves what the rollback
+        // wanted, so keep it and drop our parked copy.
+        scope.setTag("disable_rollback_workflow_recreated", "race");
+        console.log(
+          `${GRADE_WORKFLOW_PATH} appeared in ${templateRepo} while the rollback was in flight; keeping it and ` +
+            `removing the parked copy`
+        );
+        await deleteFileFromRepo(
+          templateRepo,
+          DISABLED_GRADE_WORKFLOW_PATH,
+          "Remove parked autograder workflow: a live workflow was restored by hand",
+          scope
+        );
+        return undefined;
+      }
+    };
+
+    // Same hazard as the restore path, mirrored: realignInClassSharers throws on
+    // failure, and by now the live workflow is GONE. If that throw escaped, the
+    // caller would roll has_autograder back to true and the assignment would claim
+    // an autograder with no workflow to run. Put the workflow back before
+    // rethrowing so the repo matches the flag the caller restores.
+    let realigned: { id: number; title: string }[] = [];
+    try {
+      realigned = await realignInClassSharers();
+    } catch (e) {
+      if (moved) {
+        scope.setTag("disable_rollback", "true");
+        try {
+          // One commit, and no need to hold the content in memory: the parked copy IS the
+          // content, so moving it back restores exactly what was there.
+          const rollbackCommitSha = await restoreParkedWorkflow(
+            "Roll back autograder workflow removal: disabling the autograder failed"
+          );
+          // Move the advertised head off the delete commit as well. Leaving it there
+          // would have handout syncs strip grade.yml from student repos while the caller
+          // restores has_autograder=true, so those repos could neither run Actions nor
+          // take the push-direct path (which requires the flag to be false).
+          if (rollbackCommitSha) {
+            const { error: rollbackShaError } = await adminSupabase
+              .from("assignments")
+              // Repo-wide, matching the forward pin above and for the same reason: the
+              // commit exists for every sharer, so leaving a foreign sharer pointed at
+              // the delete commit would have its sync strip grade.yml from student repos
+              // even though the workflow is back.
+              .update({ latest_template_sha: rollbackCommitSha })
+              .eq("template_repo", templateRepo);
+            if (rollbackShaError) {
+              scope.setTag("disable_rollback_sha_failed", "true");
+              Sentry.captureException(rollbackShaError, scope);
+            }
+          }
+        } catch (rollbackError) {
+          scope.setTag("disable_rollback_failed", "true");
+          Sentry.captureException(rollbackError, scope);
+        }
+      }
+      throw e;
+    }
+
+    /**
+     * Undo the repo edit AND the sharer realignment. Both pin failures below need it: a
+     * bare throw made the caller restore this assignment's flag to true while grade.yml
+     * stayed parked and the sharers stayed disabled — an assignment claiming an autograder
+     * with no runnable workflow, whose `#submit` pushes attempt a dispatch that is not
+     * there while also bypassing direct ingestion, losing the work. Never throws, so it
+     * cannot mask the failure that brought it here.
+     */
+    const rollBackDisable = async (): Promise<void> => {
+      if (moved) {
+        scope.setTag("disable_rollback", "true");
+        try {
+          await restoreParkedWorkflow(
+            "Roll back autograder workflow removal: the handout revision pointer could not be updated"
+          );
+        } catch (rollbackError) {
+          scope.setTag("disable_rollback_failed", "true");
+          Sentry.captureException(rollbackError, scope);
+        }
+      }
+      await revertRealignedSharers(
+        realigned.map((a) => a.id),
+        "pin_failure_sharer_rollback"
+      );
+    };
+
+    // Advertise the disable commit as the handout head. Repo-sync targets
+    // latest_template_sha, so returning while assignments still point at the older
+    // revision lets a sync that runs before the template-repo webhook copy the live
+    // grade.yml back into student repos even though has_autograder=false.
+    //
+    // AFTER realignment, mirroring the enable path: a rollback above restores the
+    // workflow, and pinning first would leave the pointer on a commit that no longer
+    // reflects the repo. Repo-wide rather than class-scoped — the commit exists for
+    // every sharer, and the 403 guard established that any foreign sharer already
+    // agrees with this setting.
+    //
+    // `deleted: false` still needs a pin. The edit flow reaches it when template_repo is
+    // replaced with a handout that never had grade.yml — nothing to move, but the
+    // assignment is still pointed at a commit in the OLD repository, so the syncs queued
+    // below would target a foreign revision and existing student repos would never receive
+    // the replacement handout. Resolve this repo's head in that case, exactly as the
+    // enable path's unchanged branch does.
+    let pinSha: string | undefined = deleted ? deleteCommitSha : undefined;
+    if (!pinSha) {
+      try {
+        pinSha = await getDefaultBranchHeadSha(templateRepo, scope);
+      } catch (headErr) {
+        scope.setTag("disable_head_lookup_failed", "true");
+        Sentry.captureException(headErr, scope);
+        await rollBackDisable();
+        throw new UserVisibleError(
+          `The autograder workflow is not present in ${templateRepo}, but its current revision could not be read ` +
+            `(${headErr instanceof Error ? headErr.message : String(headErr)}). Student repositories would have ` +
+            `been synced to the wrong revision, so the change was not completed — please try again.`,
+          502
+        );
+      }
+    }
+    // undefined only under the E2E GitHub stub, which has no repo to read.
+    if (pinSha) {
+      const { error: shaError } = await adminSupabase
+        .from("assignments")
+        .update({ latest_template_sha: pinSha })
+        .eq("template_repo", templateRepo);
+      if (shaError) {
+        // Not survivable: while the pointer names the pre-delete revision, a student
+        // handout sync copies the live grade.yml back even though has_autograder is
+        // false. Reporting success here would leave that window open silently, so fail
+        // and let the caller roll the flag back.
+        scope.setTag("pin_latest_template_sha_failed", "true");
+        Sentry.captureException(shaError, scope);
+        await rollBackDisable();
+        throw new UserVisibleError(
+          `The autograder workflow was removed from ${templateRepo}, but the handout revision pointer could not ` +
+            `be updated (${shaError.message}). The change was rolled back — please try again.`,
+          502
+        );
+      }
+    }
+
+    // Same need as the enable path, opposite direction: existing student repos still
+    // carry the live grade.yml until they sync, so every push keeps burning Actions
+    // minutes and showing the failing check this feature exists to remove. Queue after
+    // pinning, so the syncs target the revision that no longer has the workflow.
+    const disableQueue = await queueHandoutSyncsForAssignments(
+      adminSupabase,
+      req.headers.get("Authorization"),
+      [assignment_id, ...inClassSharerIds],
+      scope
+    );
+
+    return {
+      action: deleted ? ("removed" as const) : ("unchanged" as const),
+      has_autograder: false,
+      template_repo: templateRepo,
+      realigned_assignments: realigned,
+      repo_sync_queue_failed: disableQueue.failed,
+      unsynced_other_class_count: unsyncedOtherClassCount
+    };
+  }
+
+  // Autograder turned back on. Read the handout's current grade.yml rather than
+  // probing a hardcoded "main": handout repos may use another default branch, and
+  // a wrong answer here would make us try to create a file that already exists
+  // (the contents API rejects a create without the existing blob sha).
+  let existingSha: string | undefined;
+  try {
+    existingSha = (await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope)).sha;
+  } catch (e) {
+    if (!(e instanceof RequestError && e.status === 404)) throw e;
+  }
+  if (existingSha) {
+    // Realign BEFORE hashing. realignInClassSharers throws on failure and the callers
+    // answer that by rolling has_autograder back to false; writing workflow_sha first
+    // would leave that hash behind on an assignment the caller just marked
+    // no-autograder, which the has_autograder backfill reads as evidence that the
+    // autograder was in use.
+    //
+    // That ordering means a hash failure would otherwise leave the SHARERS enabled
+    // while the callers roll back only the assignment being edited — they know
+    // nothing about the sharing set. So compensate here: put the sharers back before
+    // rethrowing, since the caller cannot.
+    const realigned = await realignInClassSharers();
+    const realignedIds = realigned.map((a) => a.id);
+    // Resolve the head BEFORE hashing and use that one revision for both the hash and the
+    // pointer, exactly as the restore path does. Hashing the unqualified head and resolving
+    // the head separately let an instructor push in between produce the mismatch this branch
+    // is otherwise careful to avoid: workflow_sha describing the old head while
+    // latest_template_sha names the new one, so the queued syncs hand students a workflow
+    // whose Actions submissions are rejected against the recorded hash.
+    let unchangedHeadSha: string | undefined;
+    try {
+      unchangedHeadSha = await getDefaultBranchHeadSha(templateRepo, scope);
+    } catch (headErr) {
+      scope.setTag("unchanged_head_lookup_failed", "true");
+      Sentry.captureException(headErr, scope);
+      await revertRealignedSharers(realignedIds, "unchanged_head_sharer_rollback");
+      throw new UserVisibleError(
+        `${templateRepo} already contains the autograder workflow, but its current revision could not be read ` +
+          `(${headErr instanceof Error ? headErr.message : String(headErr)}). Student repositories would have been ` +
+          `synced to the wrong revision, so the change was not completed — please try again.`,
+        502
+      );
+    }
+    try {
+      await updateAutograderWorkflowHash(templateRepo, unchangedHeadSha);
+    } catch (e) {
+      await revertRealignedSharers(realignedIds, "sharer_realign_rollback");
+      throw e;
+    }
+
+    // No workflow file was written, but the assignment may still be pointing at the
+    // WRONG revision: the edit flow reaches this branch when template_repo is replaced
+    // with a handout that already has grade.yml, in which case latest_template_sha is
+    // still a commit from the OLD repo and existing student repos still hold the old
+    // workflow. Resolve this repo's head, pin it, and queue the syncs — the same three
+    // steps the file-writing paths do, just without a write of our own.
+    //
+    // Neither the hash above nor the pin below is best-effort: acknowledging success with the
+    // pointer still naming a commit in the old repository is the one combination that breaks
+    // grading outright, since the queued syncs hand students the old workflow and its Actions
+    // submissions are rejected for a hash mismatch. Propagate instead, so the caller rolls the
+    // flag and the autograder row back together.
+    //
+    // A genuine lookup failure throws and is handled above; `undefined` comes back only
+    // under the E2E GitHub stub, where there is no repo to read and no pointer worth
+    // pinning. Skip rather than fail, matching how the other pin sites treat the stub.
+    if (unchangedHeadSha) {
+      const { error: shaError } = await adminSupabase
+        .from("assignments")
+        .update({ latest_template_sha: unchangedHeadSha })
+        .eq("template_repo", templateRepo);
+      if (shaError) {
+        scope.setTag("pin_latest_template_sha_failed", "true");
+        Sentry.captureException(shaError, scope);
+        await revertRealignedSharers(realignedIds, "unchanged_pin_sharer_rollback");
+        throw new UserVisibleError(
+          `${templateRepo} already contains the autograder workflow, but the handout revision pointer could not be ` +
+            `updated (${shaError.message}). Student repositories would have been synced to the wrong revision, so ` +
+            `the change was not completed — please try again.`,
+          502
+        );
+      }
+    }
+    const unchangedQueue = await queueHandoutSyncsForAssignments(
+      adminSupabase,
+      req.headers.get("Authorization"),
+      [assignment_id, ...inClassSharerIds],
+      scope
+    );
+
+    return {
+      action: "unchanged" as const,
+      has_autograder: true,
+      template_repo: templateRepo,
+      realigned_assignments: realigned,
+      repo_sync_queue_failed: unchangedQueue.failed,
+      unsynced_other_class_count: unsyncedOtherClassCount
+    };
+  }
+
+  // Prefer the copy parked when the autograder was turned off — it may carry this
+  // assignment's customizations, which the class template would not. Fall back to
+  // the class template when there is nothing parked (e.g. the handout was created
+  // repo-only and never had a workflow).
+  let workflowContent: string | undefined;
+  let restoredFrom: "parked" | "class_template" = "parked";
+  let parkedSha: string | undefined;
+  try {
+    const parkedFile = await getFileFromRepo(templateRepo, DISABLED_GRADE_WORKFLOW_PATH, scope);
+    workflowContent = parkedFile.content;
+    parkedSha = parkedFile.sha;
+  } catch (e) {
+    if (!(e instanceof RequestError && e.status === 404)) throw e;
+  }
+
+  if (workflowContent === undefined) {
+    restoredFrom = "class_template";
+    const { handout: handoutTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
+    scope.setTag("source_template_repo", handoutTemplateRepo);
+    try {
+      const file = await getFileFromRepo(handoutTemplateRepo, GRADE_WORKFLOW_PATH, scope);
+      workflowContent = file.content;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new UserVisibleError(
+        `Could not read ${GRADE_WORKFLOW_PATH} from the handout template ${handoutTemplateRepo}, so the autograder ` +
+          `workflow could not be restored: ${msg}`,
+        400
+      );
+    }
+  }
+  scope.setTag("restored_workflow_from", restoredFrom);
+
+  // Create-only (no blob sha), so GitHub rejects the write if the file appeared between the
+  // existence probe near the top of this branch and here — an instructor pushing their own
+  // grade.yml in that window. Propagating that rejection made the caller restore
+  // has_autograder=false while the concurrently created workflow stayed LIVE in the handout:
+  // the flag says no autograder, student pushes take direct ingestion, and handout syncs
+  // still distribute a runnable workflow. The file being present is the outcome this branch
+  // wanted, so adopt it instead of failing — the code below hashes and pins whatever the
+  // head now holds, which is exactly the reconciliation the "already present" branch does.
+  let restoreCommitSha: string | undefined;
+  // Whether the workflow now in the handout is OURS. The rollback below deletes grade.yml,
+  // which must never happen to a file an instructor pushed themselves.
+  let weWroteTheWorkflow = false;
+  // The blob sha our write produced. Passed to the rollback delete so GitHub rejects it if
+  // the file has since been MODIFIED: `weWroteTheWorkflow` only records who created the file,
+  // and an instructor editing grade.yml between our write and a later failure would otherwise
+  // have their version resolved and deleted. A conflict is the correct outcome there.
+  let restoreContentSha: string | undefined;
+  try {
+    ({ commit_sha: restoreCommitSha, content_sha: restoreContentSha } = await writeFileToRepo(
+      templateRepo,
+      GRADE_WORKFLOW_PATH,
+      workflowContent,
+      restoredFrom === "parked"
+        ? "Restore autograder workflow from the parked copy: this assignment now has an autograder"
+        : "Restore autograder workflow from the class handout template: this assignment now has an autograder",
+      undefined,
+      scope
+    ));
+    weWroteTheWorkflow = true;
+  } catch (writeErr) {
+    // 422 is what the contents API returns for "sha wasn't supplied and the file exists";
+    // 409 is the same collision reported as a conflict.
+    const isAlreadyExists = writeErr instanceof RequestError && (writeErr.status === 422 || writeErr.status === 409);
+    if (!isAlreadyExists) throw writeErr;
+    // Confirm it really is present rather than trusting the status code, so a 422 raised for
+    // any other reason still fails loudly.
+    try {
+      await getFileFromRepo(templateRepo, GRADE_WORKFLOW_PATH, scope);
+    } catch {
+      throw writeErr;
+    }
+    scope.setTag("restore_workflow_created_concurrently", "true");
+    console.log(
+      `${GRADE_WORKFLOW_PATH} appeared in ${templateRepo} while enabling the autograder; adopting the existing file`
+    );
+    // restoreCommitSha stays undefined: the commit is not ours. The head resolved below is
+    // what gets hashed and pinned, which is the revision that actually carries the file.
+  }
+
+  // From here the handout has a RUNNABLE workflow. If anything below fails we
+  // throw, and callers roll has_autograder back to false — which would leave a
+  // live grade.yml on a no-autograder assignment: Actions would fire on pushes
+  // while the webhook also created direct submissions. So undo the restore before
+  // rethrowing, keeping the repo consistent with the flag the caller restores.
+  //
+  // The sharer realignment MUST sit inside this guard. It throws on failure, and
+  // running it after the guard let that throw escape with the workflow live while
+  // the caller set has_autograder=false — precisely the state this comment says
+  // must not happen.
+  let realignedOnRestore: { id: number; title: string }[] = [];
+  // ONE revision for both the workflow hash and the pointer below. The hash used to be read
+  // from the unqualified default-branch head while the pointer named restoreCommitSha, so an
+  // instructor push landing between the restore commit and here recorded the NEW workflow's
+  // hash while students were sent the OLD tree — every Actions submission then failed the
+  // hash check until another handout push happened to repair both values. Resolving once and
+  // using that sha for both keeps them describing the same tree by construction.
+  let hashedRevision: string | undefined;
+  try {
+    hashedRevision = await getDefaultBranchHeadSha(templateRepo, scope);
+    if (hashedRevision && restoreCommitSha && hashedRevision !== restoreCommitSha) {
+      // Someone pushed after our restore commit. Their commit is a descendant, so it still
+      // carries the restored workflow; hashing and pinning THEIR head is both consistent and
+      // forward, where pinning ours would have moved the pointer backwards over the value
+      // their push's own webhook writes.
+      scope.setTag("restore_head_advanced", "true");
+    }
+    await updateAutograderWorkflowHash(templateRepo, hashedRevision);
+    realignedOnRestore = await realignInClassSharers();
+  } catch (e) {
+    // Only undo a write of OURS. When the file was created concurrently by an instructor and
+    // adopted above, deleting it here would destroy their commit — worse than the
+    // inconsistency the rollback exists to prevent, and not ours to decide. Their workflow
+    // stays; the caller still restores has_autograder=false, so the mismatch is recorded
+    // under this tag for someone to reconcile deliberately.
+    if (!weWroteTheWorkflow) {
+      scope.setTag("restore_rollback_skipped_foreign_workflow", "true");
+      Sentry.captureException(e, scope);
+      throw e;
+    }
+    scope.setTag("restore_rollback", "true");
+    try {
+      await deleteFileFromRepo(
+        templateRepo,
+        GRADE_WORKFLOW_PATH,
+        "Roll back autograder workflow restore: enabling the autograder failed",
+        scope,
+        restoreContentSha
+      );
+    } catch (rollbackError) {
+      // Report the failed rollback too — the repo is now genuinely inconsistent
+      // and an instructor needs to know which state it is in.
+      scope.setTag("restore_rollback_failed", "true");
+      Sentry.captureException(rollbackError, scope);
+    }
+    throw e;
+  }
+
+  // Advertise the restore commit as the handout head, mirroring what the disable
+  // branch does for the delete commit: repo-sync targets `latest_template_sha`, so
+  // until the template-repo push webhook catches up an instructor syncing student
+  // repos right after re-enabling would be told they are already current, or would
+  // sync the previous revision that has no workflow.
+  //
+  // Deliberately AFTER the guard above. Pinning before it meant a rollback deleted
+  // the restored grade.yml while this pointer still named the restore commit that
+  // CONTAINS it — so a later student sync would reintroduce the workflow on an
+  // assignment whose flag the caller had just set back to false. Leaving the
+  // pointer at the older, workflow-free revision is the safe direction.
+  // Not class-scoped, for the same reason as the delete-commit pin above: the repo edit
+  // reached every sharer, so every sharer's advertised head must follow it.
+  // The revision hashed above, so the two always agree. Falls back to the restore commit
+  // only when the head could not be resolved (the E2E GitHub stub returns undefined), which
+  // is also the pre-existing behaviour.
+  const restorePinSha = hashedRevision ?? restoreCommitSha;
+  if (restorePinSha) {
+    const { error: shaError } = await adminSupabase
+      .from("assignments")
+      .update({ latest_template_sha: restorePinSha })
+      .eq("template_repo", templateRepo);
+    if (shaError) {
+      // Symmetric to the disable path: without the pointer, nothing tells student repos
+      // there is a new handout revision to pull, so they never receive the restored
+      // workflow.
+      //
+      // This sits OUTSIDE the restore-rollback guard above, so throwing bare would let
+      // the callers reset this assignment's flag to false while the live workflow stayed
+      // in the handout and the realigned sharers stayed enabled — pushes taking the
+      // direct-ingestion path while a stale Actions run also fired. Undo both before
+      // propagating.
+      scope.setTag("pin_latest_template_sha_failed", "true");
+      Sentry.captureException(shaError, scope);
+      // Same restriction as the rollback above: never delete a grade.yml an instructor
+      // created concurrently and this run merely adopted.
+      try {
+        if (!weWroteTheWorkflow) {
+          scope.setTag("restore_rollback_skipped_foreign_workflow", "true");
+          throw new Error("Not deleting a concurrently created grade.yml that this run did not write");
+        }
+        await deleteFileFromRepo(
+          templateRepo,
+          GRADE_WORKFLOW_PATH,
+          "Roll back autograder workflow restore: the handout revision pointer could not be updated",
+          scope,
+          restoreContentSha
+        );
+      } catch (rollbackError) {
+        scope.setTag("pin_failure_workflow_rollback_failed", "true");
+        Sentry.captureException(rollbackError, scope);
+      }
+      if (realignedOnRestore.length > 0) {
+        const { error: revertError } = await adminSupabase
+          .from("assignments")
+          .update({ has_autograder: !hasAutograder })
+          .eq("class_id", class_id)
+          .in(
+            "id",
+            realignedOnRestore.map((a) => a.id)
+          );
+        if (revertError) {
+          scope.setTag("pin_failure_sharer_rollback_failed", "true");
+          Sentry.captureException(revertError, scope);
+        }
+      }
+      throw new UserVisibleError(
+        `The autograder workflow was restored to ${templateRepo}, but the handout revision pointer could not be ` +
+          `updated (${shaError.message}). Student repositories would never receive the workflow, so the change ` +
+          `was rolled back — please try again.`,
+        502
+      );
+    }
+  }
+
+  const restoreQueue = await queueHandoutSyncsForAssignments(
+    adminSupabase,
+    req.headers.get("Authorization"),
+    [assignment_id, ...inClassSharerIds],
+    scope
+  );
+
+  // The autograder is live and hashed, so the toggle has succeeded. Clearing the
+  // parked copy is tidy-up only: a leftover grade.yml.disabled runs nothing, so a
+  // failure here must NOT undo a working restore or flip has_autograder back.
+  // Deliberately after the hash update, so a hash failure still leaves the
+  // preserved content available for the next attempt.
+  if (parkedSha) {
+    try {
+      await deleteFileFromRepo(
+        templateRepo,
+        DISABLED_GRADE_WORKFLOW_PATH,
+        "Remove parked autograder workflow: the live workflow has been restored",
+        scope,
+        parkedSha
+      );
+    } catch (cleanupError) {
+      scope.setTag("parked_copy_cleanup_failed", "true");
+      Sentry.captureException(cleanupError, scope);
+    }
+  }
+
+  return {
+    action: "added" as const,
+    has_autograder: true,
+    template_repo: templateRepo,
+    realigned_assignments: realignedOnRestore,
+    repo_sync_queue_failed: restoreQueue.failed,
+    unsynced_other_class_count: unsyncedOtherClassCount
+  };
+}
+
+Deno.serve(async (req) => {
+  return await wrapRequestHandler(req, handleRequest);
+});

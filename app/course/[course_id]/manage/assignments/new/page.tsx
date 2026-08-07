@@ -26,6 +26,7 @@ export default function NewAssignmentPage() {
       // app treats an unset value (`allow_student_formed_groups !== true`).
       allow_student_formed_groups: false,
       repo_mode: "template_only_staff",
+      has_autograder: true,
       protect_block_force_push: true,
       protect_require_pull_request: false,
       protect_required_reviewers: 0
@@ -47,6 +48,61 @@ export default function NewAssignmentPage() {
         const isNoRepo = repoMode === "none" || repoMode === "no_submission";
         const isPr = getValues("submission_mode") === "pr";
         const willCreateRepos = !isNoRepo;
+
+        // Validate the fork/source autograder agreement BEFORE inserting anything.
+        // assignment-create-handout-repo rejects this mismatch, but by then the
+        // assignment and its self-review settings already exist and nothing deletes
+        // them — the instructor is left with a partial assignment that has no handout.
+        // The form warns about this inline; this is the enforcement.
+        if (repoMode === "fork_from_prior_assignment") {
+          const sourceId = getValues("source_assignment_id");
+          if (sourceId) {
+            const supabase = createClient();
+            const { data: source, error: sourceError } = await supabase
+              .from("assignments")
+              .select("title, has_autograder")
+              .eq("id", Number(sourceId))
+              .maybeSingle();
+            // Fail CLOSED on a failed or empty lookup. Ignoring the error left `source`
+            // null, the guard passed, and creation proceeded into exactly the partial
+            // assignment this check exists to prevent.
+            if (sourceError || !source) {
+              toaster.error({
+                title: "Could not read the source assignment",
+                description:
+                  `This assignment forks from another assignment, but that assignment could not be read` +
+                  `${sourceError ? `: ${sourceError.message}` : " (not found, or not visible to you)"}. ` +
+                  `Nothing was created — please re-select the source assignment and try again.`
+              });
+              return;
+            }
+            const wantsAutograder = !isNoRepo && !isPr && getValues("has_autograder") !== false;
+            if ((source.has_autograder !== false) !== wantsAutograder) {
+              // Say WHY when the mode, not the checkbox, forces the mismatch. PR mode and
+              // the no-repo modes pin wantsAutograder to false, so against an autograded
+              // source neither checkbox state satisfies this test — telling the instructor
+              // to "make them match" would send them round a loop with no way out.
+              const modeForcesOff = isNoRepo || isPr;
+              toaster.error({
+                title: "Autograder setting must match the source assignment",
+                description:
+                  `This assignment forks from "${source.title}", so both share that assignment's handout ` +
+                  `repository and must have the same autograder setting. "${source.title}" has the autograder ` +
+                  `${source.has_autograder === false ? "disabled" : "enabled"}. ` +
+                  (modeForcesOff && source.has_autograder !== false
+                    ? isPr
+                      ? `This assignment submits by pull request, and those submissions are graded without GitHub Actions, ` +
+                        `so it cannot have an autograder. Choose a source assignment with the autograder disabled, or a ` +
+                        `repository configuration that gives this assignment its own handout. `
+                      : `This assignment has no student repository, so it cannot have an autograder. Choose a source ` +
+                        `assignment with the autograder disabled, or a repository configuration that creates repos. `
+                    : "") +
+                  `Nothing was created.`
+              });
+              return;
+            }
+          }
+        }
 
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
@@ -139,10 +195,14 @@ export default function NewAssignmentPage() {
               template_repo: isNoRepo ? null : getValues("template_repo"),
               submission_files: getValues("submission_files"),
               // has_autograder must reflect reality (it gates the webhook's autograder run and the
-              // results-page empty state). The form provisions a grader/solution repo only for repo
-              // modes, so no-repo modes ('none'/'no_submission') have no autograder. Instructors can
-              // still toggle this on the autograder config page.
-              has_autograder: !isNoRepo,
+              // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
+              // — the autograder runs as a GitHub Actions workflow inside the student repo. PR mode
+              // cannot either: those submissions are ingested by the PR webhook and never produce
+              // grader_results, which is why the backfill migration excludes them too. Otherwise
+              // it's the instructor's choice: unchecking it gives a "repo only" assignment (#895),
+              // where the handout is created without grade.yml so no Actions ever run. Instructors
+              // can still toggle this later on the autograder config page.
+              has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
               has_handgrader: true,
               class_id: Number.parseInt(course_id as string),
               group_config: getValues("group_config"),

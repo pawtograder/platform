@@ -554,11 +554,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
 
+  // Find the corresponding student and assignment
+  console.log("Creating submission for", repository, sha, workflow_ref);
+  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
+  const { data: repoData, error: repoError } = await adminSupabase
+    .from("repositories")
+    .select(
+      "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
+    )
+    .eq("repository", repository)
+    .maybeSingle();
+  if (repoError) {
+    Sentry.captureException(repoError, scope);
+    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
+  }
+
+  // Circuit-breaker gate, deliberately AFTER the repository lookup above.
+  //
+  // It used to run first, which meant a leftover grade.yml in a migrated PR-mode fork produced a
+  // FAILING check during any GitHub outage — even though the response for that case does no GitHub
+  // work at all: it is a no-op that exists precisely so those runs stop showing students a red X.
+  // Nothing between the two points calls GitHub (this is one database read), so moving the gate
+  // costs nothing and lets the exemption be expressed.
+  const isPrModeLeftoverRun =
+    repoData?.assignments?.submission_mode === "pr" && repoData?.assignments?.has_autograder === false;
+  if (isPrModeLeftoverRun) {
+    scope?.setTag("circuit_exempt", "pr_mode_leftover_workflow");
+  }
   try {
     const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
     if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
       const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
-      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+      if (!isPrModeLeftoverRun && row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
         scope.setTag("circuit_state", "open");
         scope.setContext("circuit_breaker_active", {
           org,
@@ -584,20 +611,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       error_message: e instanceof Error ? e.message : String(e)
     });
     Sentry.captureException(e, scope);
-  }
-  // Find the corresponding student and assignment
-  console.log("Creating submission for", repository, sha, workflow_ref);
-  // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
-  const { data: repoData, error: repoError } = await adminSupabase
-    .from("repositories")
-    .select(
-      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
-    )
-    .eq("repository", repository)
-    .maybeSingle();
-  if (repoError) {
-    Sentry.captureException(repoError, scope);
-    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
   }
 
   if (repoData) {
@@ -687,6 +700,218 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       const assignment_id = repoData.assignment_id;
       if (!workflow_ref.includes(`.github/workflows/grade.yml`)) {
         throw new Error(`Invalid workflow, got ${workflow_ref}`);
+      }
+      // A stale grade.yml can still be running in a student repo whose assignment
+      // no longer uses an autograder (the repo keeps its copy until the next
+      // handout sync). github-repo-webhook records that push directly, so letting
+      // the workflow through would add a SECOND submission for the same commit —
+      // and would run grading the instructor explicitly turned off.
+      //
+      // Gated on the flag alone, deliberately. An earlier revision also required a
+      // push-direct submission to already exist, which made this a race: the
+      // Actions job can reach this function before the webhook finishes cloning and
+      // inserting, and then the stale workflow proceeded anyway. Checking the flag
+      // is race-free.
+      //
+      // This is only safe because has_autograder is now trustworthy: it used to
+      // default to FALSE, so assignments with working autograders had it unset and
+      // rejecting on the flag broke them (it took out every e2e fixture). The
+      // backfill + default flip in 20260805170500 means FALSE now genuinely means
+      // "the instructor turned the autograder off".
+      if (repoData.assignments.has_autograder === false) {
+        // ...unless this run was DISPATCHED while the autograder was still on. The push
+        // webhook records a check run and stamps workflow_triggered_at when it dispatches
+        // grade.yml, and it creates no direct submission on that path — so if an
+        // instructor disables the autograder while an Actions job is already in flight,
+        // rejecting it here loses the student's work entirely: nothing else recorded that
+        // push. A stamped trigger time is proof the dispatch predates the toggle, so let
+        // those runs finish. Leftover-workflow runs on a repo that was never dispatched
+        // to have no such row and are still rejected below.
+        const { data: dispatched, error: dispatchedError } = await adminSupabase
+          .from("repository_check_runs")
+          .select("id, status")
+          .eq("repository_id", repoData.id)
+          .eq("sha", sha)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (dispatchedError) {
+          // A transient failure here is indistinguishable from "no dispatch" if only
+          // `data` is read, and falling through means the terminal 400 below — losing a
+          // pre-toggle push that has no direct submission either. Throw so the run is
+          // retried instead of rejected on a guess.
+          Sentry.captureException(dispatchedError, scope);
+          throw new Error(
+            `Could not determine whether the workflow run for ${repository}@${sha} predates the autograder being ` +
+              `disabled: ${dispatchedError.message}`
+          );
+        }
+        const dispatchedStatus = (dispatched?.status ?? null) as CheckRunStatus | null;
+        const triggeredAt = dispatchedStatus?.workflow_triggered_at;
+        // The exception belongs to ONE in-flight run, not to the commit. Keyed on the sha
+        // alone it never expired: `workflow_triggered_at` stays stamped forever, so
+        // re-running that workflow days after the toggle (same sha and run number, new
+        // attempt) was admitted too — and while a student repo still carries a leftover
+        // grade.yml, GitHub's "Re-run jobs" button was therefore enough to run grading the
+        // instructor had turned off and add another Actions-backed submission.
+        //
+        // So claim it: the first run to use the exception records its identity, and
+        // afterwards only that same run/attempt is honored. Same-run retries (a transient
+        // failure inside this function) still pass, since they carry the same identity.
+        // Does an Actions-backed submission already exist for this commit?
+        //
+        // Scoped to THIS run and attempt.
+        //
+        // A first version asked whether ANY Actions-backed submission existed for the sha, which
+        // rejected a genuinely in-flight RERUN: attempt 1 completes while the assignment is enabled,
+        // someone starts attempt 2, the instructor disables the autograder before attempt 2 reports,
+        // and the earlier attempt's submission then looked like proof that this work was already
+        // recorded. It is not — it is proof that a DIFFERENT attempt finished. Discarding a rerun's
+        // grading is exactly what the surrounding exception exists to prevent.
+        //
+        // So this now only rejects a true duplicate: this same run and attempt already recorded a
+        // submission. The claim below is what bounds the remaining case (a rerun genuinely started
+        // AFTER the disable) to one submission per commit; telling that apart from a pre-disable
+        // rerun would need the disable time persisted, which nothing currently records.
+        const { data: priorActionsSubmission, error: priorActionsError } = await adminSupabase
+          .from("submissions")
+          .select("id, run_number, run_attempt")
+          .eq("repository_id", repoData.id)
+          .eq("sha", sha)
+          .eq("run_number", Number.parseInt(decoded.run_id))
+          .eq("run_attempt", Number.parseInt(decoded.run_attempt))
+          .limit(1)
+          .maybeSingle();
+        if (priorActionsError) {
+          Sentry.captureException(priorActionsError, scope);
+          throw new Error(
+            `Could not determine whether ${repository}@${sha} already has an Actions-backed submission: ` +
+              `${priorActionsError.message}`
+          );
+        }
+        if (priorActionsSubmission) {
+          scope?.setTag("rejected_reason", "duplicate_run_attempt_after_disable");
+          throw new UserVisibleError(
+            "This assignment no longer uses an autograder, and this grading run has already been recorded, so it " +
+              "was ignored. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            400
+          );
+        }
+        const claim = dispatchedStatus?.autograder_disabled_exception;
+        const claimedByThisRun = claim
+          ? claim.run_id === decoded.run_id && claim.run_attempt === decoded.run_attempt
+          : false;
+        if (triggeredAt && claim && !claimedByThisRun) {
+          scope?.setTag("rejected_reason", "disable_exception_already_claimed");
+          throw new UserVisibleError(
+            "This assignment no longer uses an autograder. The grading run that was already in flight when it was " +
+              "turned off has already been recorded, so this re-run was ignored. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            400
+          );
+        }
+        if (triggeredAt) {
+          scope?.setTag("allowed_in_flight_dispatch", "true");
+          console.log(
+            `Allowing in-flight workflow run for ${repository}@${sha}: dispatched at ${triggeredAt}, before the ` +
+              `autograder was disabled`
+          );
+          if (!claim && dispatched) {
+            // Claiming is read-then-write rather than atomic, so two runs starting at the
+            // same instant could both claim. That is the pre-existing behaviour for
+            // concurrent runs on one commit and is bounded by the run itself; what matters
+            // here is closing the unbounded re-run window.
+            //
+            // Retried, then FAILED CLOSED. The first version logged and continued, which left
+            // workflow_triggered_at present with no claim — so the very re-run window the
+            // claim exists to close stayed open for this commit, and the mechanism failed
+            // open on its own write.
+            //
+            // I had reasoned that rejecting was worse because it discards a pre-toggle push
+            // with no direct submission behind it. That undervalued the other side: an
+            // unclaimed exception admits a LATER re-run, and because the trigger promotes the
+            // newest submission, that duplicate becomes the ACTIVE one — silently replacing
+            // whatever the instructor was grading. A rejection, by contrast, is visible: the
+            // run fails, and since the assignment is now has_autograder=false the student's
+            // next push is recorded directly by the webhook.
+            const claimStatus = {
+              ...dispatchedStatus,
+              autograder_disabled_exception: {
+                run_id: decoded.run_id,
+                run_attempt: decoded.run_attempt,
+                claimed_at: new Date().toISOString()
+              }
+            } as unknown as Json;
+            // Two extra attempts, because the common failure here is a statement timeout or a
+            // momentarily exhausted pool rather than anything about this row.
+            let claimError: { message: string } | null = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              const { error } = await adminSupabase
+                .from("repository_check_runs")
+                .update({ status: claimStatus })
+                .eq("id", dispatched.id);
+              claimError = error;
+              if (!error) break;
+              scope?.setTag("disable_exception_claim_retry", String(attempt));
+              if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+            }
+            if (claimError) {
+              scope?.setTag("disable_exception_claim_failed", "true");
+              Sentry.captureException(claimError, scope);
+              throw new Error(
+                `Could not record that this run is the in-flight dispatch for ${repository}@${sha} ` +
+                  `(${claimError.message}); rejecting it so the run can be retried rather than leaving the ` +
+                  `post-disable re-run window open`
+              );
+            }
+          }
+        } else if (repoData.assignments.submission_mode === "pr") {
+          // A PR-mode assignment is a special case of "no autograder", and it must not fail.
+          //
+          // The 20260805170500 backfill flips existing repository-backed PR assignments to
+          // has_autograder=false, but a migration cannot edit GitHub — so their handout and the
+          // student forks made from it still contain grade.yml until an instructor saves the
+          // assignment (which now reconciles it). Rejecting those runs with an error would put a
+          // red X on every student's PR in the meantime, for a workflow that is not theirs and
+          // whose absence changes nothing: their submissions are ingested from the pull request
+          // itself, not from Actions.
+          //
+          // So exit successfully having done nothing. The run is a no-op, not a failure.
+          scope?.setTag("skipped_reason", "pr_mode_leftover_workflow");
+          console.log(
+            `Ignoring leftover grading workflow run for ${repository}@${sha}: assignment ` +
+              `${repoData.assignment_id} submits by pull request, so Actions results are not used`
+          );
+          // Returned in the shape the handout-repo case already uses. That is the one response
+          // this function has which the action treats as TERMINAL-but-not-failed, which is
+          // exactly what is needed: no submission, no error, no red X.
+          return {
+            grader_url: "",
+            grader_sha: "",
+            handout_notice: {
+              message:
+                "This assignment is submitted by pull request, so its grading workflow does not run. Your " +
+                "submission is taken from the pull request itself — there is nothing to do here. Instructor: this " +
+                "repository still has a leftover .github/workflows/grade.yml; saving the assignment removes it from " +
+                "the handout.",
+              assignments: []
+            }
+          };
+        } else {
+          scope?.setTag("rejected_reason", "assignment_has_no_autograder");
+          throw new UserVisibleError(
+            "This assignment does not use an autograder, so this grading workflow run was ignored. " +
+              "Your push was recorded as a submission directly — there is nothing else to do. " +
+              "Instructor: this repository still has a leftover .github/workflows/grade.yml; sync it with the " +
+              "handout (which no longer has one) to stop these runs.",
+            // Expected terminal condition, not a server fault: 400 so the action does
+            // not retry (UserVisibleError defaults to 500).
+            400
+          );
+        }
       }
       // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (

@@ -4,10 +4,19 @@ import { createClass, createUserInClass, getTestRunPrefix, insertAssignment, sup
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // E2E for the push-mode zero-runner submission path (P0 of the PR-submission
-// epic). For a push-mode assignment with has_autograder=false, a `#submit` push
-// must create a submission DIRECTLY from the github-repo-webhook handler — no
-// repository_check_run, no grade.yml dispatch, no workflow_events — and ingest
-// the repo's files via the shared SubmissionIngestion core.
+// epic). For a push-mode assignment with has_autograder=false, EVERY push must
+// create a submission DIRECTLY from the github-repo-webhook handler — no grade.yml
+// dispatch and no workflow_events — and ingest the repo's files via the shared
+// SubmissionIngestion core.
+//
+// "Zero-runner" is about GitHub work, not about recording nothing: the path DOES
+// write a repository_check_runs row per commit, because that table doubles as the
+// commit history the UI reads. Those rows carry check_run_id = null, which is how a
+// history entry is distinguished from a real dispatched check run.
+//
+// Note the `#submit` marker is NOT required on this path (#895): with no
+// autograder there is no workflow to conserve, so a push is a submission on its
+// own. `#NOT-GRADED` still works, and the due-date gate still applies.
 //
 // HOW THIS RUNS
 // -------------
@@ -147,7 +156,8 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
         repository: repoName,
         class_id: classId,
         profile_id: student.private_profile_id,
-        synced_handout_sha: "none"
+        synced_handout_sha: "none",
+        is_github_ready: true
       })
       .select("id")
       .single();
@@ -206,10 +216,18 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
       .single();
     expect(subWithReview!.grading_review_id).not.toBeNull();
 
-    // Zero-runner: NO repository_check_run and NO workflow_events / grade.yml
-    // dispatch were created for this repo.
-    const { data: checkRuns } = await supabase.from("repository_check_runs").select("id").eq("repository_id", repoId);
-    expect(checkRuns ?? []).toHaveLength(0);
+    // Zero-runner means no GitHub work was dispatched — NOT that nothing was
+    // recorded. repository_check_runs doubles as the commit-history table that
+    // CommitHistoryDialog reads, so the push-direct path deliberately writes a row per
+    // commit; without it the history would be permanently empty on exactly the
+    // assignments this feature serves. What must be absent is any real dispatch:
+    // check_run_id stays null (no GitHub check run) and no workflow_events exist.
+    const { data: checkRuns } = await supabase
+      .from("repository_check_runs")
+      .select("id, check_run_id")
+      .eq("repository_id", repoId);
+    expect((checkRuns ?? []).length).toBeGreaterThan(0);
+    expect((checkRuns ?? []).every((c) => c.check_run_id === null)).toBe(true);
 
     const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
     expect(wfEvents ?? []).toHaveLength(0);
@@ -232,15 +250,267 @@ test.describe("Push-mode zero-runner submission (has_autograder=false)", () => {
     expect(subs).toHaveLength(1);
   });
 
-  test("non-#submit push to a push-mode no-autograder repo creates NO submission", async () => {
+  // #895: with no autograder there are no runner minutes to conserve, so EVERY
+  // push is a submission — requiring #submit would mean students who never
+  // learned the convention appear to have submitted nothing.
+  test("push with NO #submit marker still creates a submission with files", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
     const sha = `0badf00d${SAFE_ID}`.slice(0, 40);
-    const res = await deliverPush(makePushDetail(repoName, sha, "WIP, not submitting yet"), `e2e-push-${SAFE_ID}-3`);
-    expect(res.status).toBe(200);
+    const res = await deliverPush(makePushDetail(repoName, sha, "WIP, no marker at all"), `e2e-push-${SAFE_ID}-3`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
 
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, submitted_via, is_not_graded")
+      .eq("repository", repoName)
+      .eq("sha", sha);
+    expect(subs).toHaveLength(1);
+    expect(subs![0].submitted_via).toBe("git");
+    // No #NOT-GRADED in the message, so this is a graded submission.
+    expect(subs![0].is_not_graded).toBe(false);
+
+    const { data: files } = await supabase.from("submission_files").select("name").eq("submission_id", subs![0].id);
+    expect(files!.some((f) => f.name === "Main.java")).toBe(true);
+
+    // Still zero-runner: commit history is recorded (check_run_id null), but nothing
+    // is dispatched to GitHub.
+    const { data: checkRuns } = await supabase
+      .from("repository_check_runs")
+      .select("id, check_run_id")
+      .eq("repository_id", repoId);
+    expect((checkRuns ?? []).every((c) => c.check_run_id === null)).toBe(true);
+    const { data: wfEvents } = await supabase.from("workflow_events").select("id").eq("repository_name", repoName);
+    expect(wfEvents ?? []).toHaveLength(0);
+  });
+
+  test("successive pushes accumulate submissions, newest is active", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const shaA = `11111111${SAFE_ID}`.slice(0, 40);
+    const shaB = `22222222${SAFE_ID}`.slice(0, 40);
+
+    const r1 = await deliverPush(makePushDetail(repoName, shaA, "first pass"), `e2e-push-${SAFE_ID}-4a`);
+    expect(r1.status).toBe(200);
+    const r2 = await deliverPush(makePushDetail(repoName, shaB, "second pass"), `e2e-push-${SAFE_ID}-4b`);
+    expect(r2.status).toBe(200);
+
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, sha, is_active, ordinal")
+      .in("sha", [shaA, shaB])
+      .eq("repository", repoName)
+      .order("ordinal", { ascending: true });
+    expect(subs).toHaveLength(2);
+    // The submissions BEFORE-INSERT trigger owns ordinal/is_active: only the
+    // latest push is active.
+    const [first, second] = subs!;
+    expect(first.sha).toBe(shaA);
+    expect(second.sha).toBe(shaB);
+    expect(first.is_active).toBe(false);
+    expect(second.is_active).toBe(true);
+    expect(second.ordinal).toBeGreaterThan(first.ordinal);
+  });
+
+  // Handout syncs land on the student repo's default branch too. Now that every
+  // push is a submission, an instructor pushing a handout update must NOT become
+  // the student's newest "submission" — that would be work they never did.
+  test("auto-merged handout-sync PR push creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    // The marker has to abbreviate a handout revision the row actually carries — a
+    // hex-shaped token is deliberately NOT enough, because a student commit body can
+    // contain one. syncRepositoryToHandout names the branch and PR after
+    // `toSha.substring(0, 7)`, so seed the handout sha the sync would have been toward.
+    const handoutSha = `abc1234b${SAFE_ID}`.slice(0, 40);
+    const markerSha = handoutSha.slice(0, 7);
+    const { error: pinErr } = await supabase
+      .from("assignments")
+      .update({ latest_template_sha: handoutSha })
+      .eq("id", assignmentId);
+    expect(pinErr).toBeNull();
+    try {
+      const sha = `33333333${SAFE_ID}`.slice(0, 40);
+      const detail = makePushDetail(
+        repoName,
+        sha,
+        `Merge pull request #7 from pawtograder-playground/sync-to-${markerSha}\n\n[Instructor Update] Sync handout to ${markerSha}`
+      );
+      const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5`);
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      // Leave the assignment as the other tests expect to find it.
+      await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+    }
+  });
+
+  // The other half of that rule, and the reason the fixture above has to seed a real sha:
+  // the same message shape naming a revision nobody knows about is STUDENT work.
+  test("sync-shaped commit naming an unknown sha DOES create a submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `3a3a3a3a${SAFE_ID}`.slice(0, 40);
+    const detail = makePushDetail(
+      repoName,
+      sha,
+      // Hex-shaped, but not an abbreviation of any handout revision this repo carries.
+      "Merge pull request #8 from student/sync-to-deadbee\n\n[Instructor Update] Sync handout to deadbee"
+    );
+    const res = await deliverPush(detail, `e2e-push-${SAFE_ID}-5b`);
+    expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 2500));
     const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
+    expect(subs ?? []).toHaveLength(1);
+  });
+
+  test("fork fast-forward to the handout's head sha creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    // A fork_merge_upstream sync leaves the student repo's head at exactly the
+    // handout's head commit, with no distinguishing commit message.
+    const handoutSha = `44444444${SAFE_ID}`.slice(0, 40);
+    const { error: cfgErr } = await supabase
+      .from("assignments")
+      .update({ latest_template_sha: handoutSha })
+      .eq("id", assignmentId);
+    expect(cfgErr).toBeNull();
+
+    // try/finally, not a trailing statement: these tests run serially against one
+    // assignment and repo, so a restore skipped by a failed assertion leaves the next
+    // test asserting "no submission" against still-mutated state, where it passes
+    // vacuously and hides whatever broke.
+    try {
+      const res = await deliverPush(makePushDetail(repoName, handoutSha, "Add starter files"), `e2e-push-${SAFE_ID}-6`);
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase
+        .from("submissions")
+        .select("id")
+        .eq("repository", repoName)
+        .eq("sha", handoutSha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      await supabase.from("assignments").update({ latest_template_sha: null }).eq("id", assignmentId);
+    }
+  });
+
+  // The `repositories` row is inserted before createRepo runs, so GitHub's initial
+  // push for a freshly generated repo can arrive while is_github_ready is still
+  // false. That push is the starter template, not student work.
+  test("push to a repo still being provisioned creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const sha = `55555555${SAFE_ID}`.slice(0, 40);
+    // synced_repo_sha is what IDENTIFIES the starter-template push, and it has to match the
+    // commit being delivered. Repository creation records the head it produced there, and the
+    // handler drops an unready push only when the two agree — an unready repo pushing anything
+    // ELSE is student work that arrived before the readiness flag was written, and discarding it
+    // silently is what the sibling test below now guards against. Setting only is_github_ready
+    // here described a provisioning push the handler had no way to recognise.
+    const { error: notReadyErr } = await supabase
+      .from("repositories")
+      .update({ is_github_ready: false, synced_repo_sha: sha })
+      .eq("id", repoId);
+    expect(notReadyErr).toBeNull();
+
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, sha, "Initial commit from template"),
+        `e2e-push-${SAFE_ID}-7`
+      );
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      // Restored even on failure: leaving the repo unready would make the next test's
+      // "no submission" assertion pass for the wrong reason.
+      await supabase.from("repositories").update({ is_github_ready: true, synced_repo_sha: null }).eq("id", repoId);
+    }
+  });
+
+  // The other half of the unready case. Readiness can also be false because the database
+  // write failed after GitHub was already set up: the repository works, the student can
+  // push to it, and acknowledging those deliveries discarded their work permanently. Such a
+  // push must be REFUSED so GitHub redelivers it once the flag is repaired.
+  test("push to an unready repo that is not the starter commit is retried, not dropped", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    const provisioningSha = `66666666${SAFE_ID}`.slice(0, 40);
+    const studentSha = `77777777${SAFE_ID}`.slice(0, 40);
+    const { error: notReadyErr } = await supabase
+      .from("repositories")
+      .update({ is_github_ready: false, synced_repo_sha: provisioningSha })
+      .eq("id", repoId);
+    expect(notReadyErr).toBeNull();
+
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, studentSha, "Real student work"),
+        `e2e-push-${SAFE_ID}-7b`
+      );
+      // Non-2xx is the whole point: it is what makes GitHub redeliver. Asserted as "not
+      // acknowledged" rather than a specific code, since the handler signals it by throwing.
+      expect(res.status, await res.text().catch(() => "")).not.toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase
+        .from("submissions")
+        .select("id")
+        .eq("repository", repoName)
+        .eq("sha", studentSha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      await supabase.from("repositories").update({ is_github_ready: true, synced_repo_sha: null }).eq("id", repoId);
+    }
+  });
+
+  // Switching an assignment to a no-repo mode coerces has_autograder=false but
+  // leaves the old repositories rows behind; a later push to one of those must not
+  // become a git submission for an upload-only assignment.
+  test("push to a stale repo after switching to repo_mode='none' creates NO submission", async () => {
+    test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
+
+    // The protect_* fields must be cleared in the SAME update: the
+    // assignments_no_protection_when_no_repo constraint rejects a no-repo mode while
+    // any branch protection is still set, and insertAssignment leaves
+    // protect_block_force_push at its column default of true. (This mirrors what the
+    // edit page coerces for exactly this reason.)
+    const { error: modeErr } = await supabase
+      .from("assignments")
+      .update({
+        repo_mode: "none",
+        protect_block_force_push: false,
+        protect_require_pull_request: false,
+        protect_required_reviewers: 0
+      })
+      .eq("id", assignmentId);
+    expect(modeErr).toBeNull();
+
+    const sha = `66666666${SAFE_ID}`.slice(0, 40);
+    try {
+      const res = await deliverPush(
+        makePushDetail(repoName, sha, "still pushing to my old repo"),
+        `e2e-push-${SAFE_ID}-8`
+      );
+      expect(res.status, await res.text().catch(() => "")).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
+      expect(subs ?? []).toHaveLength(0);
+    } finally {
+      // Restore the repo mode first, then the protection default — the reverse order
+      // would trip the same constraint on the way back.
+      await supabase.from("assignments").update({ repo_mode: "template_only_staff" }).eq("id", assignmentId);
+      await supabase.from("assignments").update({ protect_block_force_push: true }).eq("id", assignmentId);
+    }
   });
 });
 
@@ -299,7 +569,8 @@ test.describe("Push to a pr-mode repo is a no-op (no submission / check run / wo
         repository: repoName,
         class_id: classId,
         profile_id: student.private_profile_id,
-        synced_handout_sha: "none"
+        synced_handout_sha: "none",
+        is_github_ready: true
       })
       .select("id")
       .single();
@@ -370,9 +641,13 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
       assignment_slug: `e2e-pushdue-${SAFE_ID}`
     });
     assignmentId = a.id;
+    // max_late_tokens: 0 is load bearing. insertAssignment seeds 10 and createClass gives each
+    // student 10, with require_tokens_before_due_date false — so a push two days late is covered
+    // automatically and accepted, which is correct behaviour and not what this case is about.
+    // Zero the allowance so the deadline is the only thing under test.
     const { error: cfgErr } = await supabase
       .from("assignments")
-      .update({ submission_mode: "push", has_autograder: false })
+      .update({ submission_mode: "push", has_autograder: false, max_late_tokens: 0 })
       .eq("id", assignmentId);
     expect(cfgErr).toBeNull();
 
@@ -382,12 +657,13 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
       repository: repoName,
       class_id: classId,
       profile_id: student.private_profile_id,
-      synced_handout_sha: "none"
+      synced_handout_sha: "none",
+      is_github_ready: true
     });
     expect(repoErr).toBeNull();
   });
 
-  test("#submit push with a FUTURE commit timestamp on a past-due assignment creates NO submission", async () => {
+  test("#submit push with a FUTURE commit timestamp on a past-due assignment is rejected, not graded", async () => {
     test.skip(!EVENTBRIDGE_SECRET, "EVENTBRIDGE_SECRET not set; cannot authenticate the webhook (see file header).");
 
     const sha = `f00dface${SAFE_ID}`.slice(0, 40);
@@ -402,8 +678,28 @@ test.describe("Push-direct submission honors the server-time due-date gate", () 
     expect(res.status, await res.text().catch(() => "")).toBe(200);
 
     await new Promise((r) => setTimeout(r, 1500));
-    const { data: subs } = await supabase.from("submissions").select("id").eq("repository", repoName).eq("sha", sha);
-    expect(subs ?? []).toHaveLength(0);
+    // A late push is RECORDED as a visible rejection rather than dropped: the feature tells
+    // students every push is a submission, so one that produces nothing has to say why, and the
+    // only surface a student can read is a workflow_run_error attached to a submission they own.
+    // What must not happen is a gradeable one — so assert the shape (inactive, fileless, with an
+    // after_due_date error) rather than the absence of a row.
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id, is_active")
+      .eq("repository", repoName)
+      .eq("sha", sha);
+    expect(subs ?? []).toHaveLength(1);
+    expect(subs![0].is_active).toBe(false);
+
+    const { data: files } = await supabase.from("submission_files").select("id").eq("submission_id", subs![0].id);
+    expect(files ?? []).toHaveLength(0);
+
+    const { data: errors } = await supabase
+      .from("workflow_run_error")
+      .select("name, data")
+      .eq("submission_id", subs![0].id);
+    expect(errors ?? []).toHaveLength(1);
+    expect((errors![0].data as { error_type?: string } | null)?.error_type).toBe("after_due_date");
   });
 });
 
@@ -463,7 +759,8 @@ test.describe("Push-direct submission skips gracefully on the group-transition 2
       repository: individualRepoName,
       class_id: classId,
       profile_id: student.private_profile_id,
-      synced_handout_sha: "none"
+      synced_handout_sha: "none",
+      is_github_ready: true
     });
     expect(repoErr).toBeNull();
 
