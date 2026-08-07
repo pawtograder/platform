@@ -29,7 +29,18 @@ import {
   Submission,
   SubmissionFile
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  Fieldset,
+  Heading,
+  IconButton,
+  Input,
+  Link as ChakraLink,
+  Stack,
+  Text,
+  Textarea
+} from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
@@ -670,8 +681,12 @@ export default function HelpRequestForm({
             as they&apos;re available. You can continue browsing the site while you wait — we&apos;ll notify you when
             someone joins. Please stay available to respond promptly.
           </Text>
+          {/* fg.info rather than blue.600: blue.600 is 5.17:1 on white but only
+              3.84:1 on the dark canvas, because a raw palette step does not
+              follow the color scheme. The token lightens to blue.300 in dark
+              mode (11.0:1). WCAG 1.4.3. */}
           {selectedHelpQueue && openRequestsAhead > 0 && (
-            <Text color="blue.600" mt={3} fontSize="sm" fontWeight="medium">
+            <Text color="fg.info" mt={3} fontSize="sm" fontWeight="medium">
               📋 There {openRequestsAhead === 1 ? "is" : "are"} currently {openRequestsAhead} request
               {openRequestsAhead !== 1 ? "s" : ""} ahead of you. We help students first-come, first-served.
             </Text>
@@ -682,12 +697,18 @@ export default function HelpRequestForm({
                 💡 Not urgent?
               </Text>{" "}
               Consider posting on the{" "}
-              <Link
-                href={`/course/${course_id}/discussion`}
-                style={{ color: "var(--chakra-colors-blue-700)", textDecoration: "underline" }}
-              >
-                Discussion Forum
-              </Link>{" "}
+              {/* Was an inline --chakra-colors-blue-700, which measured 2.02:1
+                  against the dark canvas (WCAG 1.4.3 wants 4.5:1) — a raw
+                  palette step stays dark when the page does not. Both the color
+                  and the underline have to sit on the <a> itself, not on a span
+                  inside it: this link is inside a block of text, so axe reads
+                  the anchor's own computed style to decide whether it is
+                  distinguishable from the prose around it (1.4.1), and an
+                  underline on a child span leaves that undecidable. `asChild`
+                  merges the Chakra styles onto the Next.js anchor. */}
+              <ChakraLink asChild color="fg.info" textDecoration="underline">
+                <Link href={`/course/${course_id}/discussion`}>Discussion Forum</Link>
+              </ChakraLink>{" "}
               instead. You can post publicly to get help from classmates and staff, or privately to reach only the
               course staff. It&apos;s a great option for questions that don&apos;t need an immediate response.
             </Text>
@@ -705,8 +726,11 @@ export default function HelpRequestForm({
         </Box>
         <OfficeHoursDiscussionBrowser />
 
+        {/* orange.500 on white is 2.8:1 — and this conflict warning is text a
+            student needs to be able to read. fg.warning is orange.700 in light
+            mode and orange.300 in dark. WCAG 1.4.3. */}
         {wouldConflict && (
-          <Text color="orange.500" mb={4}>
+          <Text color="fg.warning" mb={4}>
             ⚠️ You already have a {is_private ? "private" : "public"} solo help request in this queue. You can have up
             to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request, switch
             privacy settings, or add other students to create a group request.
@@ -881,7 +905,12 @@ export default function HelpRequestForm({
                       {...field}
                       placeholder="Describe your question or issue in detail..."
                       minHeight="200px"
-                      width="800px"
+                      // A fixed 800px here set the fieldset's min-content, so
+                      // every field in the form stayed 800px wide and the page
+                      // scrolled horizontally at 320px (WCAG 1.4.10). Cap the
+                      // comfortable typing width instead of demanding it.
+                      width="100%"
+                      maxWidth="800px"
                     />
                   );
                 }}
@@ -1081,15 +1110,21 @@ export default function HelpRequestForm({
           )}
 
           <Fieldset.Content>
+            {/*
+              The heading is a Text, not the Field's label: a Field.Label points
+              at the same control the checkbox already labels, which duplicates
+              the label id and leaves the control with two labels.
+            */}
             <Field
-              label="Privacy "
               helperText={
                 selectedSubmissionId
                   ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
                   : "Private requests are only visible to course staff and associated students."
               }
-              optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
             >
+              <Text textStyle="sm" fontWeight="medium">
+                Privacy {selectedSubmissionId ? "(Required)" : "(Optional)"}
+              </Text>
               <Controller
                 name="is_private"
                 control={control}

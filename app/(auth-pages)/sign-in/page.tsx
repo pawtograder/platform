@@ -35,6 +35,14 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
                   <SubmitButton
                     variant="outline"
                     width="100%"
+                    // SSO labels are deployment-configurable and the default one
+                    // ("Continue with Microsoft (Northeastern Login)") is 297px
+                    // of nowrap text, which pushed the page past 320px. Let a
+                    // long label wrap and the button grow with it (WCAG 1.4.10).
+                    whiteSpace="normal"
+                    height="auto"
+                    minH="10"
+                    py="2"
                     aria-label={sso.label}
                     pendingText={
                       <>

@@ -1,5 +1,7 @@
 "use client";
 
+import { Box, Heading, Text } from "@chakra-ui/react";
+
 // import { useCallback, useEffect, useState } from "react";
 
 export default function CanvasClasses() {
@@ -29,5 +31,15 @@ export default function CanvasClasses() {
   //         }
   //     </div>
   // );
-  return <div>WIP</div>;
+  // Placeholder page, but it is routable and reachable, so it still owes a
+  // <main> landmark — it renders outside the course layout that supplies one,
+  // and the global skip link targets #main-content.
+  return (
+    <Box as="main" id="main-content" tabIndex={-1} p={4}>
+      <Heading as="h1" size="lg">
+        Canvas classes
+      </Heading>
+      <Text>WIP</Text>
+    </Box>
+  );
 }

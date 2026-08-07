@@ -84,7 +84,10 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
         <Link
           href={`/course/${courseId}/assignments/${request.assignment_id}/submissions/${request.submission_id}#regrade-request-${request.id}`}
         >
-          <Text color="blue.500" textDecoration="underline">
+          {/* fg.info, not blue.500: blue.500 on the table's white surface is
+              3.67:1 (WCAG 1.4.3 needs 4.5:1), and it does not lighten in dark
+              mode. The token is blue.600 / blue.300 — 5.17:1 and 11.0:1. */}
+          <Text color="fg.info" textDecoration="underline">
             {request.assignments?.title || "Unknown"}
           </Text>
         </Link>

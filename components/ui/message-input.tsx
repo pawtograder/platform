@@ -11,13 +11,13 @@ import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { getLanguageFromFile, isTextFile } from "@/lib/utils";
 import { getCurrentCursorPosition } from "@/utils/cursorPosition";
 import { createClient } from "@/utils/supabase/client";
-import { Box, Button, Field, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
+import { Box, Button, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { IGif } from "@giphy/js-types";
-import MDEditor from "@uiw/react-md-editor";
+import MDEditor, { commands as mdCommands, type ICommand } from "@uiw/react-md-editor";
 import { useParams } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { cloneElement, isValidElement, useCallback, useRef, useState } from "react";
 import { FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
 import { TbMathFunction } from "react-icons/tb";
 import { Checkbox } from "./checkbox";
@@ -25,6 +25,32 @@ import GiphyPicker from "./giphy-picker";
 import { MentionDropdown } from "./mention-dropdown";
 import { toaster } from "./toaster";
 import { Tooltip } from "./tooltip";
+
+/**
+ * Hide a toolbar command's icon from the accessibility tree.
+ *
+ * Every command already names its own button through `buttonProps["aria-label"]`
+ * ("Add bold text (ctrl + b)"), but ships the glyph as `<svg role="img">` with no
+ * accessible name — nine of them fail 1.1.1 that way. The icon is decorative
+ * next to a named button, so the fix is to hide it rather than to name it twice.
+ * Child commands (the title-level dropdown) carry their own icons, so the walk
+ * recurses into the array form of `children`.
+ */
+function withHiddenIcon(command: ICommand): ICommand {
+  const icon = isValidElement(command.icon)
+    ? cloneElement(command.icon as React.ReactElement<React.SVGProps<SVGSVGElement>>, {
+        "aria-hidden": true,
+        focusable: false
+      })
+    : command.icon;
+  const children = Array.isArray(command.children) ? command.children.map(withHiddenIcon) : command.children;
+  return { ...command, icon, children } as ICommand;
+}
+
+// Built once: getCommands() returns a fresh array per call, and a new `commands`
+// identity on every render would remount the whole toolbar.
+const TOOLBAR_COMMANDS = mdCommands.getCommands().map(withHiddenIcon);
+const TOOLBAR_EXTRA_COMMANDS = mdCommands.getExtraCommands().map(withHiddenIcon);
 
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
@@ -604,10 +630,23 @@ export default function MessageInput(props: MessageInputProps) {
             )}
           </HStack>
           <Box>
-            <Field.Root orientation="horizontal">
-              <Field.Label fontSize="xs">{sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}</Field.Label>
-              <Checkbox checked={enterToSend} onChange={() => setEnterToSend(!enterToSend)} disabled={disabledProp} />
-            </Field.Root>
+            {/*
+              The checkbox carries its own label rather than a Field.Label: a
+              Field.Label points `for` at the same input the Checkbox root
+              (itself a <label>) already labels, which left this control with two
+              labels and no name of its own. row-reverse keeps the text to the
+              left of the box, where the field's horizontal orientation put it.
+            */}
+            <Checkbox
+              checked={enterToSend}
+              onChange={() => setEnterToSend(!enterToSend)}
+              disabled={disabledProp}
+              flexDirection="row-reverse"
+            >
+              <Text as="span" fontSize="xs">
+                {sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}
+              </Text>
+            </Checkbox>
           </Box>
           {onClose && (
             <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2} disabled={disabledProp}>
@@ -712,7 +751,16 @@ export default function MessageInput(props: MessageInputProps) {
             await onFileTransfer(event.clipboardData);
           }
         }}
+        commands={TOOLBAR_COMMANDS}
+        extraCommands={TOOLBAR_EXTRA_COMMANDS}
         textareaProps={{
+          // The editor renders a bare <textarea> with nothing pointing at it, so
+          // the compose box — the point of the page — announced as just "edit".
+          // A Field.Label around this component cannot reach it either: the
+          // label's `for` targets a Chakra control id the third-party textarea
+          // never adopts. Callers that sit under a visible label should pass the
+          // same text as `ariaLabel` so the two agree (WCAG 2.5.3).
+          "aria-label": ariaLabel ?? placeholder ?? "Message",
           disabled: isSending || disabledProp,
           onKeyDown: handleKeyDown,
           onInput: (e) => {
