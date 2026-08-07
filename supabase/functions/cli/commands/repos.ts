@@ -4,7 +4,7 @@
 
 import { Buffer } from "node:buffer";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
-import { getFileFromRepo } from "../../_shared/GitHubWrapper.ts";
+import { getFileFromRepo, GRADE_WORKFLOW_PATH } from "../../_shared/GitHubWrapper.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
@@ -22,8 +22,6 @@ import type {
 
 /** Group ids per `.in()` batch; rows per batch are drained by pageAll. */
 const BATCH = 200;
-
-const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
 /**
  * Repositories for an assignment, excluding those owned by a disabled enrollment.
@@ -225,6 +223,16 @@ async function handleSyncGradeWorkflowContext(
   const templateRepo = assignment.template_repo?.trim();
   if (!templateRepo) {
     throw new CLICommandError("Assignment has no template_repo (handout)", 400);
+  }
+  // Refuse rather than fall through to a confusing 404 on the handout: a
+  // no-autograder assignment has no grade.yml by design, and pushing one into
+  // every student repo would re-enable the GitHub Actions runs it exists to avoid.
+  if (assignment.has_autograder === false) {
+    throw new CLICommandError(
+      `Assignment ${assignment.id} has no autograder, so there is no ${GRADE_WORKFLOW_PATH} to sync. ` +
+        `Enable the autograder on the assignment's autograder page first.`,
+      400
+    );
   }
 
   let gradeContent: string;

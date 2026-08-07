@@ -2,11 +2,14 @@ import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
+import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
+import { sentryIdentity } from "./SentryContext.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
+    beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("DENO_DEPLOYMENT_ID")!,
     sendDefaultPii: true,
     integrations: [],
     tracesSampleRate: 0,
@@ -110,23 +113,28 @@ export async function assertUserIsInstructor(courseId: number, authHeader: strin
   if (error) {
     console.error(error);
   }
+  assertAuthLookupSucceeded(error);
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: enrollment } = await supabase
+  const { data: enrollment, error: enrollmentError } = await supabase
     .from("user_roles")
     .select("*")
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .eq("role", "instructor")
     .maybeSingle();
+  // maybeSingle, so an absent row is `null` with no error and any error is a real failure.
+  assertRoleLookupSucceeded(enrollmentError, "Role lookup");
   if (!enrollment) {
     //OK if user is an ADMIN of any course
-    const { data: adminEnrollment } = await supabase
+    const { data: adminEnrollment, error: adminError } = await supabase
       .from("user_roles")
       .select("*")
       .eq("user_id", user.id)
       .eq("role", "admin");
+    // Denying instructor access because the admin fallback query failed would be the same mistake.
+    assertRoleLookupSucceeded(adminError, "Role lookup");
     if (adminEnrollment && adminEnrollment.length > 0) {
       return { supabase, enrollment: adminEnrollment[0] };
     }
@@ -159,6 +167,39 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   return { ...result, isServiceRole: false };
 }
 /**
+ * Distinguish "the authorization question was answered no" from "the authorization question could not
+ * be asked".
+ *
+ * These assertions read the caller's roles over PostgREST and treated a missing row and a failed query
+ * identically, so while Kong was returning 502s during e2e runs, enrolled students were told
+ * `SecurityError` — 401, "not enrolled in this course". Nothing retries a 401, and the resulting Sentry
+ * events are indistinguishable from the genuine denials that the negative-path tests produce, so the
+ * failure hid inside expected noise.
+ *
+ * `.single()` reports "no unique row" as PGRST116, which IS the denial and must keep its current
+ * status. Every other error — a 5xx, a transport failure, a schema problem — means we do not know the
+ * answer, and saying so as a retryable 503 is both true and actionable.
+ */
+export function assertRoleLookupSucceeded(error: { code?: string; message: string } | null, operation: string): void {
+  if (!error || error.code === "PGRST116") return;
+  throw new UserVisibleError(`${operation} is temporarily unavailable: ${error.message}`, 503);
+}
+
+/**
+ * Same, for the auth server. Only an explicit 4xx is a statement about the token.
+ *
+ * Note the range check rather than `< 500`: `@supabase/auth-js` reports a transport failure (DNS,
+ * connection refused, CORS) as an `AuthRetryableFetchError` carrying `status: 0`, so a naive "below
+ * 500 means the auth server answered" test would classify exactly the outage this guard exists to
+ * catch as a 401. Anything that is not a 4xx — 0, absent, 3xx, 5xx — means we never got an answer.
+ */
+export function assertAuthLookupSucceeded(error: { status?: number; message: string } | null | undefined): void {
+  if (!error) return;
+  if (error.status !== undefined && error.status >= 400 && error.status < 500) return;
+  throw new UserVisibleError(`Authentication is temporarily unavailable: ${error.message}`, 503);
+}
+
+/**
  * Assert that the caller is a platform admin (has an `admin` role in any class),
  * or is the service role. Use for admin-only functions that are not scoped to a
  * single course (e.g. listing GitHub App installations for the create-class form).
@@ -180,20 +221,22 @@ export async function assertUserIsAdmin(authHeader: string | null) {
     }
   });
   const token = authHeader.replace("Bearer ", "");
-  const {
-    data: { user }
-  } = await supabase.auth.getUser(token);
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  assertAuthLookupSucceeded(userError);
+  const user = userData?.user;
   if (!user) {
     throw new SecurityError("User not found");
   }
   // Mirror authorize_for_admin(): a disabled admin role must not authorize.
-  const { data: adminEnrollment } = await supabase
+  const { data: adminEnrollment, error: adminError } = await supabase
     .from("user_roles")
     .select("id")
     .eq("user_id", user.id)
     .eq("role", "admin")
     .eq("disabled", false)
     .limit(1);
+  // No `.single()` here, so an empty result is `[]` and any error at all is a real failure.
+  assertRoleLookupSucceeded(adminError, "Role lookup");
   if (!adminEnrollment || adminEnrollment.length === 0) {
     throw new SecurityError("User is not an admin");
   }
@@ -213,16 +256,18 @@ export async function assertUserIsInstructorOrGrader(courseId: number, authHeade
   if (error) {
     console.error(error);
   }
+  assertAuthLookupSucceeded(error);
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: enrollment } = await supabase
+  const { data: enrollment, error: enrollmentError } = await supabase
     .from("user_roles")
     .select("*")
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .in("role", ["instructor", "grader"])
     .single();
+  assertRoleLookupSucceeded(enrollmentError, "Role lookup");
   if (!enrollment) {
     throw new SecurityError("User is not an instructor or grader for this course");
   }
@@ -235,18 +280,19 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
     }
   });
   const token = authHeader.replace("Bearer ", "");
-  const {
-    data: { user }
-  } = await supabase.auth.getUser(token);
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  assertAuthLookupSucceeded(userError);
+  const user = userData?.user;
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: enrollment } = await supabase
+  const { data: enrollment, error: enrollmentError } = await supabase
     .from("user_roles")
     .select("*, classes(*)")
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .single();
+  assertRoleLookupSucceeded(enrollmentError, "Enrollment lookup");
   if (!enrollment) {
     throw new SecurityError("User is not enrolled in this course");
   }

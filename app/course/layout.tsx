@@ -1,3 +1,4 @@
+import SessionUserRecovery from "@/components/SessionUserRecovery";
 import { AuthStateProvider } from "@/hooks/useAuthState";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/server";
@@ -11,6 +12,7 @@ export default async function AuthedLayout({ children }: { children: React.React
   }
   return (
     <AuthStateProvider user={user?.user}>
+      <SessionUserRecovery userId={user.user.id} />
       <ClassProfileProvider>{children}</ClassProfileProvider>
     </AuthStateProvider>
   );
