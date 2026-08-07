@@ -1,6 +1,7 @@
 "use client";
 
 import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
+import { useBranding } from "@/components/branding/branding-provider";
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
 import { KarmaBadge } from "@/components/discussion/KarmaBadge";
@@ -536,9 +537,25 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   const rawRootThread = useTableControllerValueById(courseController.discussionThreadTeasers, root_id);
   const { filterDiscussionTeaser } = useViewAsStudentDataMask();
   const maskedOut = rawRootThread != null && !filterDiscussionTeaser(rawRootThread);
+  // The subject is only known client-side, so the title is written here rather
+  // than by generateMetadata — but it has to produce what the course layout's
+  // template would (`%s · course · brand`, app/course/[course_id]/layout.tsx).
+  // It used to end at the subject, which made this the one student route whose
+  // <title> dropped the product name (WCAG 2.4.2), and rendered "- undefined"
+  // until the thread loaded.
+  const branding = useBranding();
+  const courseName = (() => {
+    try {
+      const c = courseController.course; // may throw until loaded
+      return c.course_title || c.name;
+    } catch {
+      return undefined;
+    }
+  })();
   useEffect(() => {
-    document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
-  }, [courseController.course.name, thread?.subject]);
+    if (!courseName || !thread?.subject) return;
+    document.title = `${thread.subject} · Discussion · ${courseName} · ${branding.name}`;
+  }, [courseName, thread?.subject, branding.name]);
 
   return (
     <>

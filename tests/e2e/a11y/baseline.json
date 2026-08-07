@@ -164,15 +164,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "discussion-thread|light|page-title|violation": {
-      "route": "discussion-thread",
-      "scheme": "light",
-      "rule": "page-title",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "[discussion thread] <title> includes the product name (\"Pawtograder\")"
-    },
     "flashcard-deck|dark|nested-interactive|violation": {
       "route": "flashcard-deck",
       "scheme": "dark",
