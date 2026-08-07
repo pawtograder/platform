@@ -10,10 +10,14 @@
  * Rather than patch one token, every rule in both bundled themes was measured
  * against its editor background and the ones below AA are corrected here. Each
  * correction keeps the original hue and saturation and moves lightness only as
- * far as it takes to reach ~5:1 — the extra half-point over the 4.5 threshold is
- * headroom for the line-highlight and annotation backgrounds this viewer paints
- * behind code (`monaco-line-highlight`, review-comment view zones), which shift
- * the effective backdrop away from the theme's own background color.
+ * far as it takes to reach ~5:1, half a point of margin over the 4.5 threshold.
+ *
+ * That margin is for rounding, NOT for anything the viewer paints behind code.
+ * A translucent overlay swamps it: the old 30% yellow line highlight put every
+ * dark token at ~2:1 regardless of this file, which is why it is now a left
+ * rail (see {@link lineHighlightRail}). Any future backdrop has to leave the
+ * code background alone for the same reason — keeping tokens at AA under a
+ * yellow wash needs an alpha of 0.04 or less, which is invisible.
  *
  * `inherit: true` means these are the bundled themes with the listed rules
  * replaced; nothing else about them changes.
@@ -32,6 +36,27 @@ export const ACCESSIBLE_MONACO_DARK = "pawtograder-dark";
 /** Theme name for a Chakra color mode. */
 export function accessibleMonacoTheme(colorMode: string | undefined): string {
   return colorMode === "dark" ? ACCESSIBLE_MONACO_DARK : ACCESSIBLE_MONACO_LIGHT;
+}
+
+/**
+ * Color of the left rail that marks the line `scrollToLine` just jumped to.
+ *
+ * This used to be a 30% yellow fill across the whole line. A fill sits behind
+ * the code, so it decided the contrast of every token on the one line the
+ * reader had just been sent to: 2.05:1 for the corrected dark tokens, 2.31:1
+ * for `keyword`, 4.60:1 even for plain editor text, and 4.29:1 for the light
+ * `number` token (WCAG 1.4.3 wants 4.5:1). Lowering the alpha does not rescue
+ * it — the ceiling is 0.04 dark / 0.08 light, which nobody would see.
+ *
+ * A rail carries the same "you are here" meaning without touching the code
+ * background. It is also the first version of this cue that is visible in light
+ * mode: the old fill measured 1.07:1 against the light editor background,
+ * against the 3:1 that 1.4.11 asks of a state indicator. These two clear it
+ * comfortably — yellow.300 is 12.65:1 on #1E1E1E, yellow.700 is 4.92:1 on
+ * #FFFFFE.
+ */
+export function lineHighlightRail(colorMode: string | undefined): string {
+  return colorMode === "dark" ? "#FDE047" : "#A16207";
 }
 
 /**
