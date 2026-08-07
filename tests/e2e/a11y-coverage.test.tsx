@@ -146,7 +146,7 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
     // a shrunk active set passes the partial-run guard and drops those routes'
     // rows from the ledger. Since deleting a row is how this repo claims a fix,
     // that would fabricate the proof. Assert the measured count as well.
-    expect(ACTIVE_ROUTES.length, "student routes actually scanned").toBeGreaterThanOrEqual(38);
+    expect(ACTIVE_ROUTES.length, "student routes actually scanned").toBeGreaterThanOrEqual(39);
     for (const r of SKIPPED_ROUTES) {
       expect(r.skip, `skipped route ${r.id} must say why`).toBeTruthy();
     }

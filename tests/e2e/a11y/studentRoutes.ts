@@ -18,7 +18,14 @@
  * registry stays an honest denominator.
  */
 import { seedAgentPages, type AgentSeed } from "../a11yAgentSeeding";
-import { insertOfficeHoursQueue, insertHelpQueueAssignment, insertHelpRequest, supabase } from "../TestingUtils";
+import {
+  createClass,
+  createUsersInClass,
+  insertOfficeHoursQueue,
+  insertHelpQueueAssignment,
+  insertHelpRequest,
+  supabase
+} from "../TestingUtils";
 
 export type StudentRouteState = {
   /** Stable id used as the baseline key — keep it stable across refactors. */
@@ -173,6 +180,30 @@ export async function seedStudentSurface(): Promise<StudentSurface> {
     throw new Error(`seedStudentSurface: could not seed discussion_thread_watchers — ${watcherError.message}`);
   }
 
+  // Enrol the student in a second class so /course renders the picker.
+  //
+  // app/course/page.tsx redirects to /course/<id> when the user has exactly one
+  // enrollment, and seedAgentPages creates a brand-new student in one class, so
+  // /course used to land on the course dashboard. The sweep recorded the
+  // dashboard's findings under the picker's key: a page nobody had scanned,
+  // reported as covered.
+  //
+  // This class stays deliberately empty. The picker lists enrollments, so a
+  // second row is all it takes to render, and seeding content into it would add
+  // fixtures no route reads.
+  const secondCourse = await createClass({ name: "E2E A11y Second Class" });
+  await createUsersInClass([
+    {
+      role: "student",
+      class_id: secondCourse.id,
+      // Same email = same user, joined to another class, rather than a second
+      // student who would leave the first one still redirecting.
+      email: seed.student.email,
+      name: "Agent Student",
+      useMagicLink: true
+    }
+  ]);
+
   return { ...seed, pollId, queueId, deckId, helpRequestId, assignmentId, submissionId, threadId, surveyId };
 }
 
@@ -218,12 +249,10 @@ export const STUDENT_ROUTES: StudentRouteState[] = [
   {
     id: "course-picker",
     label: "course picker",
-    path: () => "/course",
-    skip:
-      "unreachable with the current seed: app/course/page.tsx redirects to /course/<id> when the user has exactly " +
-      "one enrollment, and seedStudentSurface creates a brand-new student in one class — so this row was recording " +
-      "the course dashboard's findings under the picker's key. To restore it, enrol the seeded student in a second " +
-      "class (createUsersInClass accepts an existing `email`, so the same user can join another createClass())."
+    // Reachable only because seedStudentSurface enrols the student in a second
+    // class. With one enrollment app/course/page.tsx redirects to the course
+    // dashboard, and this row silently recorded that page's findings instead.
+    path: () => "/course"
   },
   {
     id: "canvas-classes",
