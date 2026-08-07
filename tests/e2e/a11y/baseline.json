@@ -326,42 +326,6 @@
       "impact": "serious",
       "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
-    "office-hours-request-in-queue|dark|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-request-in-queue",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«r15»"
-    },
-    "office-hours-request-in-queue|light|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-request-in-queue",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«r15»"
-    },
-    "office-hours-request|dark|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-request",
-      "scheme": "dark",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«r13»"
-    },
-    "office-hours-request|light|form-field-multiple-labels|incomplete": {
-      "route": "office-hours-request",
-      "scheme": "light",
-      "rule": "form-field-multiple-labels",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "moderate",
-      "sample": "#«r13»"
-    },
     "polls|dark|nested-interactive|violation": {
       "route": "polls",
       "scheme": "dark",

@@ -11,7 +11,7 @@ import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { getLanguageFromFile, isTextFile } from "@/lib/utils";
 import { getCurrentCursorPosition } from "@/utils/cursorPosition";
 import { createClient } from "@/utils/supabase/client";
-import { Box, Button, Field, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
+import { Box, Button, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { IGif } from "@giphy/js-types";
@@ -604,10 +604,23 @@ export default function MessageInput(props: MessageInputProps) {
             )}
           </HStack>
           <Box>
-            <Field.Root orientation="horizontal">
-              <Field.Label fontSize="xs">{sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}</Field.Label>
-              <Checkbox checked={enterToSend} onChange={() => setEnterToSend(!enterToSend)} disabled={disabledProp} />
-            </Field.Root>
+            {/*
+              The checkbox carries its own label rather than a Field.Label: a
+              Field.Label points `for` at the same input the Checkbox root
+              (itself a <label>) already labels, which left this control with two
+              labels and no name of its own. row-reverse keeps the text to the
+              left of the box, where the field's horizontal orientation put it.
+            */}
+            <Checkbox
+              checked={enterToSend}
+              onChange={() => setEnterToSend(!enterToSend)}
+              disabled={disabledProp}
+              flexDirection="row-reverse"
+            >
+              <Text as="span" fontSize="xs">
+                {sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}
+              </Text>
+            </Checkbox>
           </Box>
           {onClose && (
             <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2} disabled={disabledProp}>
