@@ -23,6 +23,17 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
   // has no accessible name (4.1.2). `getLabelProps()` is what `Switch.Label`
   // itself spreads — id and data-attrs, no element type — so taking it here
   // resolves the reference without adding a second `<label>`.
+  //
+  // One consequence for callers: now that the reference resolves, `children`
+  // IS the accessible name, and an `aria-label` on this Root no longer
+  // contributes to it. Before, the dangling reference let the name fall
+  // through to the wrapping `<label>`, which picked the `aria-label` up, so a
+  // caller passing both got the long string. Do not use `aria-label` to append
+  // an explanation to a Switch that has visible text — pass
+  // `inputProps={{ "aria-describedby": id }}` pointing at the explanation, the
+  // way `code-file.tsx` does. Clearing the machine's `aria-labelledby` is not
+  // an option: Zag's `mergeProps` keeps its own value for any key the caller
+  // sets to `undefined`.
   return (
     <ChakraSwitch.Root ref={rootRef} {...rest}>
       <ChakraSwitch.HiddenInput ref={ref} {...inputProps} />
