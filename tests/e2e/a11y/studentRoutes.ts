@@ -17,7 +17,6 @@
  * still coverage information — it says "known gap, here's why" — so the
  * registry stays an honest denominator.
  */
-import { addDays } from "date-fns";
 import { seedAgentPages, type AgentSeed } from "../a11yAgentSeeding";
 import { insertOfficeHoursQueue, insertHelpQueueAssignment, insertHelpRequest, supabase } from "../TestingUtils";
 
@@ -87,8 +86,13 @@ export async function seedStudentSurface(): Promise<StudentSurface> {
   // A live poll so /polls and /poll/[course_id] render the answer form rather
   // than an empty state. `question` must be a SurveyJS config: the page casts
   // it and bails to "No Live Poll Available" when `elements` is absent.
-  // `require_login` stays false because the public-poll route is scanned
-  // signed-out, and the page renders a "Login Required" stub otherwise.
+  // `require_login` stays false so the public-poll route measures the surface an
+  // unauthenticated respondent sees: the page only reads auth when the flag is
+  // set, and renders a "Login Required" stub for a signed-out visitor otherwise.
+  // NOTE: the `public-poll` row is not marked `anonymous`, so today the sweep
+  // reaches it signed in. Marking it anonymous is the honest fix, but it changes
+  // what is measured and needs a baseline re-record, so it is left as a gap
+  // rather than flipped silently.
   const { data: poll, error: pollError } = await supabase
     .from("live_polls")
     .insert({
@@ -169,8 +173,6 @@ export async function seedStudentSurface(): Promise<StudentSurface> {
     throw new Error(`seedStudentSurface: could not seed discussion_thread_watchers — ${watcherError.message}`);
   }
 
-  void addDays; // kept for future date-dependent routes
-
   return { ...seed, pollId, queueId, deckId, helpRequestId, assignmentId, submissionId, threadId, surveyId };
 }
 
@@ -202,22 +204,35 @@ export const STUDENT_ROUTES: StudentRouteState[] = [
   },
   {
     id: "root",
-    label: "root redirect",
+    label: "root",
     path: () => "/",
     anonymous: true,
-    expectLandmarks: false,
-    expectReflow: false // redirect shell, no <main> of its own
+    // Signed out, `/` is not a redirect: app/page.tsx renders the sign-in form
+    // inside app/(auth-pages)/layout.tsx, which DOES supply <main id="main-content">.
+    // So the landmark exemption is only about the missing nav, and 1.4.10 is
+    // measurable here — exempting it was recording coverage that never happened.
+    // (`REDIRECTS_BY_DESIGN` still lists this id, because an authenticated visit
+    // is bounced to /course by utils/supabase/middleware.ts.)
+    expectLandmarks: false
   },
-  { id: "course-picker", label: "course picker", path: () => "/course" },
+  {
+    id: "course-picker",
+    label: "course picker",
+    path: () => "/course",
+    skip:
+      "unreachable with the current seed: app/course/page.tsx redirects to /course/<id> when the user has exactly " +
+      "one enrollment, and seedStudentSurface creates a brand-new student in one class — so this row was recording " +
+      "the course dashboard's findings under the picker's key. To restore it, enrol the seeded student in a second " +
+      "class (createUsersInClass accepts an existing `email`, so the same user can join another createClass())."
+  },
   {
     id: "canvas-classes",
     label: "canvas classes",
     path: () => "/course/canvas-classes"
-    // Renders an unbuilt stub (`return <div>WIP</div>`) and so has no <main>.
-    // Kept under the landmark checks anyway: it is reachable, the missing
-    // landmark is a real 1.3.1 failure, and the row is verified evidence. The
-    // duplicate reflow row it used to carry is gone because reflow is skipped
-    // once the main-landmark check has already failed.
+    // Still an unbuilt stub, but a routable one, so it is kept under the full
+    // landmark + reflow checks rather than exempted. It renders outside the
+    // course layout, so app/course/canvas-classes/page.tsx supplies its own
+    // <main id="main-content"> (the 1.3.1 failure the first sweep recorded here).
   },
   {
     id: "error-page",

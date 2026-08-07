@@ -3,7 +3,7 @@
  *
  * Differs from `assertStudentPageAccessible` (tests/e2e/axeStudentA11y.ts) in
  * three ways that matter for coverage work, and deliberately does NOT replace
- * it — the existing per-feature call sites keep their current behaviour:
+ * it — the existing per-feature call sites keep their current behavior:
  *
  *  1. It COLLECTS instead of asserting, so one run can sweep every route and
  *     report the whole picture rather than dying on the first bad page.
@@ -16,7 +16,7 @@
  *     the markdown editor, the Pyret REPL and react-select chips also hid every
  *     unrelated rule on the app's main student interaction surfaces. Here the
  *     scan sees everything and known third-party defects are filtered afterwards
- *     by (rule × selector) — see SCOPED_SUPPRESSIONS.
+ *     by (rule x selector) — see SCOPED_SUPPRESSIONS.
  */
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
@@ -65,6 +65,20 @@ export const SCOPED_SUPPRESSIONS: ScopedSuppression[] = [
 
 function suppressed(rule: string, target: string): boolean {
   return SCOPED_SUPPRESSIONS.some((s) => s.rule === rule && target.includes(s.selector));
+}
+
+/**
+ * Drop the individual nodes a suppression covers, keeping the rest.
+ *
+ * Judging the whole result by `nodes[0]` would reproduce the blanket-exclude
+ * behavior this list replaced: axe reports ONE result per rule with every
+ * matching node in it, so a widget node that happens to sort first would silence
+ * the app's own nodes for that rule — and, because the result is dropped
+ * entirely, `nodes` is never recorded and `newFindings` loses its growth check.
+ */
+function unsuppressedNodes(rule: string, nodes: { target?: unknown[] }[]): { target?: unknown[] }[] {
+  if (SCOPED_SUPPRESSIONS.length === 0) return nodes;
+  return nodes.filter((n) => !suppressed(rule, String(n.target?.[0] ?? "")));
 }
 
 const FREEZE_STYLE_ID = "a11y-coverage-animation-freeze";
@@ -233,17 +247,14 @@ async function decideUndecidedPopupControls(page: Page, results: AxeResults): Pr
   return { ...results, incomplete };
 }
 
-function toFindings(
-  results: { violations?: unknown[]; incomplete?: unknown[] },
-  kind: "violation" | "incomplete"
-): Finding[] {
+function toFindings(results: AxeResults, kind: "violation" | "incomplete"): Finding[] {
   const bucket = (kind === "violation" ? results.violations : results.incomplete) ?? [];
   const out: Finding[] = [];
   for (const raw of bucket) {
-    const r = raw as { id: string; impact?: string | null; nodes?: { target?: unknown[] }[] };
-    const nodes = r.nodes ?? [];
+    const r = raw as AxeResult & { id: string };
+    const nodes = unsuppressedNodes(r.id, r.nodes ?? []);
+    if (nodes.length === 0) continue;
     const sample = String(nodes[0]?.target?.[0] ?? "");
-    if (suppressed(r.id, sample)) continue;
     out.push({ rule: r.id, kind, impact: r.impact ?? "unknown", nodes: nodes.length, sample });
   }
   return out;
@@ -259,6 +270,14 @@ function toFindings(
 export async function collectFindings(page: Page, colorScheme: ColorScheme): Promise<Finding[]> {
   await page.emulateMedia({ colorScheme });
   await assertThemeApplied(page, colorScheme);
+  // The class flip is the START of the repaint, not the end of it. Widgets that
+  // re-theme from an effect rather than from CSS — Monaco via
+  // `monaco.editor.setTheme`, SurveyJS via `surveyModel.applyTheme` — are still
+  // swapping colors when `assertThemeApplied` resolves, and axe sampling
+  // mid-swap reports color-contrast nodes that never reproduce. The caller
+  // settles the page once, before the light pass; this is the same 250ms
+  // stabilization `assertReflowAt320` uses after a viewport change.
+  await page.waitForTimeout(250);
   await page
     .waitForFunction(() => document.title.trim().length > 0, undefined, { timeout: 10_000 })
     .catch(() => {

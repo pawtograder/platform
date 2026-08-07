@@ -14,8 +14,7 @@
  * from it is the proof that something got fixed.
  *
  * Regenerate after intentional changes — unfiltered, or the write is refused:
- *   A11Y_COVERAGE=1 A11Y_BASELINE_UPDATE=1 \
- *     npx playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium
+ *   npm run a11y:coverage:update
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -79,7 +78,11 @@ export function loadBaseline(): Baseline {
 }
 
 export function isUpdateMode(): boolean {
-  return Boolean(process.env.A11Y_BASELINE_UPDATE);
+  // Not `Boolean(env)`: this flag both skips the per-route regression gate and
+  // rewrites a checked-in ledger, and `A11Y_BASELINE_UPDATE=0` — which a CI job
+  // exporting every a11y flag as "0" would produce — is truthy as a string.
+  const raw = process.env.A11Y_BASELINE_UPDATE?.trim().toLowerCase();
+  return raw !== undefined && raw !== "" && raw !== "0" && raw !== "false";
 }
 
 /**
@@ -93,7 +96,12 @@ export function newFindings(baseline: Baseline, routeId: string, scheme: ColorSc
   return findings.filter((f) => {
     const known = baseline.entries[findingKey(routeId, scheme, f)];
     if (!known) return true;
-    return f.nodes > known.nodes;
+    // Fail closed on a malformed row. This file is hand-edited (deleting a line
+    // is how a fix is claimed), so a merge or a bad edit can drop `nodes` or
+    // leave it a string — and `f.nodes > undefined` / `f.nodes > "3"` is false
+    // for every value, which would exempt that rule on that route forever.
+    const recordedNodes = typeof known.nodes === "number" && Number.isFinite(known.nodes) ? known.nodes : 0;
+    return f.nodes > recordedNodes;
   });
 }
 
@@ -134,7 +142,7 @@ export function writeBaseline(
       `Refusing to rewrite ${path.basename(BASELINE_PATH)} from a partial run: ` +
         `${coverage.covered.size}/${coverage.expected.length} routes recorded, missing ${missing.join(", ")}.\n` +
         `Regenerate with a full, unfiltered run:\n` +
-        `  A11Y_COVERAGE=1 A11Y_BASELINE_UPDATE=1 npx playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium`
+        `  npm run a11y:coverage:update`
     );
   }
   const sorted: Record<string, BaselineEntry> = {};

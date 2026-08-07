@@ -61,7 +61,7 @@ export function lineHighlightRail(colorMode: string | undefined): string {
 
 /**
  * Token rules from `vs-dark` that fail AA on its #1E1E1E background, with the
- * measured before → after ratio.
+ * measured before -> after ratio.
  */
 const DARK_RULES: editor.ITokenThemeRule[] = [
   { token: "variable.predefined", foreground: "758CC5" }, // #4864AA 2.92 -> 5.01
@@ -86,11 +86,20 @@ const LIGHT_RULES: editor.ITokenThemeRule[] = [
   { token: "operator.sql", foreground: "617181" } // #778899 3.64 -> 5.01
 ];
 
+/** Registration is global to the Monaco singleton, so it only has to happen once. */
+let registered = false;
+
 /**
- * Define both themes on the Monaco singleton. Safe to call repeatedly —
- * `defineTheme` replaces a definition of the same name.
+ * Define both themes on the Monaco singleton. Safe to call repeatedly, and now
+ * cheap to: `defineTheme` ends with `if (this._theme.themeName === themeName)
+ * this.setTheme(themeName)`, so redefining the theme an editor is already using
+ * re-resolves it and re-broadcasts a color-theme change to every mounted editor.
+ * The rules are static constants, so a second call can never produce a different
+ * result — skip it.
  */
 export function registerAccessibleMonacoThemes(monaco: Monaco): void {
+  if (registered) return;
+  registered = true;
   monaco.editor.defineTheme(ACCESSIBLE_MONACO_LIGHT, { base: "vs", inherit: true, rules: LIGHT_RULES, colors: {} });
   monaco.editor.defineTheme(ACCESSIBLE_MONACO_DARK, { base: "vs-dark", inherit: true, rules: DARK_RULES, colors: {} });
 }

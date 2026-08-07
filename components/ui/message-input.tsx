@@ -35,14 +35,24 @@ import { Tooltip } from "./tooltip";
  * next to a named button, so the fix is to hide it rather than to name it twice.
  * Child commands (the title-level dropdown) carry their own icons, so the walk
  * recurses into the array form of `children`.
+ *
+ * Only `<svg>` icons are touched, deliberately. `title1`…`title6` put their
+ * *visible text* in the `icon` slot (`<div style={{fontSize:18}}>Title 1</div>`,
+ * @uiw/react-md-editor commands/title1.js), so hiding those would strip the only
+ * on-screen text of the dropdown items from the a11y tree — and `focusable` is
+ * an SVG-only attribute that has no business on a `<div>`.
  */
 function withHiddenIcon(command: ICommand): ICommand {
-  const icon = isValidElement(command.icon)
+  const isSvgIcon = isValidElement(command.icon) && command.icon.type === "svg";
+  const icon = isSvgIcon
     ? cloneElement(command.icon as React.ReactElement<React.SVGProps<SVGSVGElement>>, {
         "aria-hidden": true,
         focusable: false
       })
     : command.icon;
+  // `children` is either an array of sub-commands or a render prop; only the
+  // array form can be walked. The built-ins use arrays today, so a custom
+  // grouped command with a render prop keeps its own icons unhidden.
   const children = Array.isArray(command.children) ? command.children.map(withHiddenIcon) : command.children;
   return { ...command, icon, children } as ICommand;
 }
@@ -109,6 +119,16 @@ export default function MessageInput(props: MessageInputProps) {
     onChange: editorOnChange,
     value: initialValue,
     ariaLabel,
+    // Pulled out of `editorProps` on purpose. `MessageInputProps` extends
+    // MDEditor's props, so these three are legal caller props — and because
+    // `{...editorProps}` is spread last, a caller passing them wholesale would
+    // replace the objects below, silently dropping the textarea's accessible
+    // name, `disabled`, the enter-to-send/mention `onKeyDown` and the four
+    // cursor-tracking handlers. Merge instead of letting React's later-wins
+    // ordering decide.
+    textareaProps: callerTextareaProps,
+    commands: callerCommands,
+    extraCommands: callerExtraCommands,
     uploadFolder = "discussion",
     maxCodeLines = 300,
     inlineFileUpload = true, // Default to inline mode
@@ -751,8 +771,8 @@ export default function MessageInput(props: MessageInputProps) {
             await onFileTransfer(event.clipboardData);
           }
         }}
-        commands={TOOLBAR_COMMANDS}
-        extraCommands={TOOLBAR_EXTRA_COMMANDS}
+        commands={callerCommands ?? TOOLBAR_COMMANDS}
+        extraCommands={callerExtraCommands ?? TOOLBAR_EXTRA_COMMANDS}
         textareaProps={{
           // The editor renders a bare <textarea> with nothing pointing at it, so
           // the compose box — the point of the page — announced as just "edit".
@@ -760,7 +780,11 @@ export default function MessageInput(props: MessageInputProps) {
           // label's `for` targets a Chakra control id the third-party textarea
           // never adopts. Callers that sit under a visible label should pass the
           // same text as `ariaLabel` so the two agree (WCAG 2.5.3).
-          "aria-label": ariaLabel ?? placeholder ?? "Message",
+          //
+          // `||`, not `??`: `placeholder=""` is the idiom for "no placeholder",
+          // and `??` would turn it into an explicitly empty accessible name,
+          // which is worse than having none.
+          "aria-label": ariaLabel || placeholder || "Message",
           disabled: isSending || disabledProp,
           onKeyDown: handleKeyDown,
           onInput: (e) => {
@@ -784,7 +808,8 @@ export default function MessageInput(props: MessageInputProps) {
             const textarea = e.target as HTMLTextAreaElement;
             const position = getCurrentCursorPosition(textarea);
             setCursorPosition(position);
-          }
+          },
+          ...callerTextareaProps
         }}
         onChange={(value) => {
           setValue(value);

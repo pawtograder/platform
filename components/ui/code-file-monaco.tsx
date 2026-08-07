@@ -1178,6 +1178,8 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       return <Skeleton />;
     }
 
+    const railColor = lineHighlightRail(colorMode);
+
     return (
       <Box
         border="1px solid"
@@ -1190,25 +1192,19 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         display="flex"
         flexDirection="column"
         css={{
-          // A rail, not a fill: a wash across the line sits behind the code and
-          // decides the contrast of every token on it — see lineHighlightRail
-          // for the measurements. Leaving the background alone keeps the
-          // corrected syntax colors meaningful on exactly the line the reader
-          // was sent to.
-          // Frame the row instead of filling it, and put the loud part of the
-          // cue in the glyph margin, which is left of the code and has nothing
-          // behind it. The old full-line wash was unmistakable but decided the
-          // contrast of every token on the one line the reader had just been
-          // sent to; an outline plus a margin marker is as findable and leaves
-          // the code background alone.
+          // Frame the deep-linked row instead of filling it, and put the loud
+          // part of the cue in the glyph margin, which is left of the code and
+          // has nothing behind it. `lineHighlightRail` holds the measurements
+          // for why the old full-line wash had to go.
           "& .monaco-line-highlight": {
-            boxShadow: `inset 4px 0 0 ${lineHighlightRail(colorMode)}, inset 0 2px 0 ${lineHighlightRail(colorMode)}, inset 0 -2px 0 ${lineHighlightRail(colorMode)}`,
-            transition: "opacity 2s ease-out"
+            boxShadow: `inset 4px 0 0 ${railColor}, inset 0 2px 0 ${railColor}, inset 0 -2px 0 ${railColor}`
           },
           // Was applied but never styled, so it did nothing. It is the one part
-          // of the row that can carry a solid fill.
+          // of the row that can carry a solid fill. NOTE: this shares the glyph
+          // margin lane with `.monaco-comment-glyph`, so on a line that already
+          // has comments the marker covers the 💬 for the 2s it lives.
           "& .monaco-line-highlight-glyph": {
-            backgroundColor: lineHighlightRail(colorMode),
+            backgroundColor: railColor,
             borderRadius: "2px"
           },
           "& .monaco-comment-glyph": {
