@@ -55,6 +55,7 @@ const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.de
 
 // Import Monaco type separately for type checking
 import type { Monaco } from "@monaco-editor/react";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "@/components/ui/monaco-a11y-theme";
 import { FaCheck } from "react-icons/fa6";
 import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";
@@ -714,6 +715,7 @@ function InnerRubricPage() {
   );
 
   function handleEditorWillMount(monaco: Monaco) {
+    registerAccessibleMonacoThemes(monaco);
     // Expose the Monaco namespace for e2e tests that need to read/write YAML directly.
     // No-op in normal use - just a property on window.
     (window as Window & { monaco?: Monaco }).monaco = monaco;
@@ -1714,7 +1716,7 @@ function InnerRubricPage() {
                     monacoEditorRef.current = editor;
                   }}
                   value={value}
-                  theme={colorMode === "dark" ? "vs-dark" : "vs"}
+                  theme={accessibleMonacoTheme(colorMode)}
                   onValidate={(markers) => {
                     // If the editor is empty, don't show schema validation errors.
                     // Schema errors for an empty document are not helpful.

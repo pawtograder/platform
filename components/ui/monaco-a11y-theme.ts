@@ -22,10 +22,18 @@
  * `inherit: true` means these are the bundled themes with the listed rules
  * replaced; nothing else about them changes.
  *
- * Adopting this in another editor is one line in its `beforeMount`:
- * `registerAccessibleMonacoThemes(monaco)`, then use `accessibleMonacoTheme()`
- * for the `theme` prop. Registration is global to the Monaco singleton but must
- * still run before any editor asks for the theme by name.
+ * Every Monaco mount in the app uses these themes, and any new one has to as
+ * well. Both halves are required: call `registerAccessibleMonacoThemes(monaco)`
+ * in `beforeMount` AND pass `accessibleMonacoTheme(colorMode)` as `theme`.
+ *
+ * Doing only the second half is worse than doing neither, because Monaco falls
+ * back to the light `vs` for a theme name it does not know, so a dark page gets
+ * a light editor. Doing only the first is a no-op.
+ *
+ * Leaving one editor on the bundled `vs`/`vs-dark` breaks the others: the
+ * `theme` prop routes to `monaco.editor.setTheme`, which is global to the
+ * Monaco singleton rather than scoped to an instance, so whichever editor
+ * mounts or re-renders last decides the token colors for all of them.
  */
 import type { Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
