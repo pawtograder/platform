@@ -45,6 +45,10 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
+import { accessibleSelectComponents } from "@/components/ui/select-a11y";
+
+/** Option shape for the "invite students" pickers. */
+type InviteeOption = { label: string | null; value: string };
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
@@ -78,7 +82,7 @@ function CreateGroupButton({
   const ungroupedProfiles = useUngroupedProfiles(allGroups);
 
   const [name, setName] = useState<string>("");
-  const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
+  const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<InviteeOption>>([]);
   const supabase = useMemo(() => createClient(), []);
   const [isLoading, setIsLoading] = useState(false);
   const { repositories } = useCourseController();
@@ -120,6 +124,7 @@ function CreateGroupButton({
                 <Select
                   onChange={(e) => setSelectedInvitees(e)}
                   isMulti={true}
+                  components={accessibleSelectComponents<InviteeOption, true>()}
                   options={ungroupedProfiles.map((p) => ({ label: p.name, value: p.id }))}
                 />
               </Field.Root>
@@ -198,7 +203,7 @@ function InviteButton({
   const [open, setOpen] = useState(false);
   const invalidate = useInvalidate();
   const supabase = useMemo(() => createClient(), []);
-  const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
+  const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<InviteeOption>>([]);
   const ungroupedProfiles = useUngroupedProfiles(allGroups);
   const ungroupedProfilesWithoutInvitations = useMemo(() => {
     return ungroupedProfiles.filter((p) => !group.assignment_group_invitations.some((i) => i.invitee === p.id));
@@ -238,6 +243,7 @@ function InviteButton({
                 <Select
                   onChange={(e) => setSelectedInvitees(e)}
                   isMulti={true}
+                  components={accessibleSelectComponents<InviteeOption, true>()}
                   options={ungroupedProfilesWithoutInvitations.map((p) => ({ label: p.name, value: p.id }))}
                 />
               </Field.Root>

@@ -272,24 +272,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "office-hours-queue-new|dark|aria-command-name|violation": {
-      "route": "office-hours-queue-new",
-      "scheme": "dark",
-      "rule": "aria-command-name",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-fcnpod"
-    },
-    "office-hours-queue-new|dark|aria-prohibited-attr|violation": {
-      "route": "office-hours-queue-new",
-      "scheme": "dark",
-      "rule": "aria-prohibited-attr",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-xqf4pu"
-    },
     "office-hours-queue-new|dark|color-contrast|incomplete": {
       "route": "office-hours-queue-new",
       "scheme": "dark",
@@ -298,24 +280,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
-    },
-    "office-hours-queue-new|light|aria-command-name|violation": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "aria-command-name",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-fcnpod"
-    },
-    "office-hours-queue-new|light|aria-prohibited-attr|violation": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "aria-prohibited-attr",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-xqf4pu"
     },
     "office-hours-queue-new|light|color-contrast|incomplete": {
       "route": "office-hours-queue-new",
@@ -434,15 +398,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-files|dark|aria-prohibited-attr|incomplete": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "aria-prohibited-attr",
-      "kind": "incomplete",
-      "nodes": 2,
-      "impact": "serious",
-      "sample": ".css-dj5smh"
-    },
     "submission-files|dark|nested-interactive|violation": {
       "route": "submission-files",
       "scheme": "dark",
@@ -451,15 +406,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-files|light|aria-prohibited-attr|incomplete": {
-      "route": "submission-files",
-      "scheme": "light",
-      "rule": "aria-prohibited-attr",
-      "kind": "incomplete",
-      "nodes": 2,
-      "impact": "serious",
-      "sample": ".css-dj5smh"
     },
     "submission-files|light|nested-interactive|violation": {
       "route": "submission-files",
