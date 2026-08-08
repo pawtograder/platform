@@ -594,6 +594,20 @@ const FIELD_SELECTOR = `input${NON_TEXT_INPUT_TYPES.map((t) => `:not([type=${t}]
  *
  * `checkbox` is deliberately absent: Space toggles a checkbox, arrows do not.
  */
+/**
+ * Does a browse LINE announce a control of its own?
+ *
+ * The discriminator retargetActToControl turns on. NVDA renders a control the
+ * user can activate with its role in the line ("Privacy (Optional), check box,
+ * checked, ..."), whereas the SurveyJS choice defect leaves a line of pure label
+ * text with no role word at all ("Just right") while the control sits on the
+ * previous line, nameless. Enter works on the first and is a dead key on the
+ * second, and nothing else in the observation distinguishes them — both report a
+ * bare `label` navigator object.
+ */
+export const ACT_LINE_NAMES_A_CONTROL =
+  /\b(check ?box|radio button|button|link|edit|combo box|list box|slider|spin button|menu item|tab|tree view|graphic)\b/i;
+
 const ARROW_MUTABLE_SELECTOR = [
   "input[type=radio]",
   "input[type=range]",
@@ -2808,14 +2822,21 @@ export class NvdaHarness implements AtDriver {
    * the next form field forward from line 4 is the following option — hopping
    * that way would select "Too fast" when the plan asked for "Just right".
    *
-   * Engages only on the exact signature of the defect — a milestone-bearing
-   * `act` whose oracle reply is a bare `label` — and accepts the hop only when
-   * EVERY milestone word is present on what it landed on. Both bounds were paid
-   * for in run 31270612942, where a looser version of each broke a task that had
-   * been passing: "nameless" alone caught ordinary prose ("paragraph") and
-   * suppressed a working Enter, and overlap-matching accepted "Reference
-   * Assignment (Optional)" for a milestone of "privacy (optional)" on the
-   * strength of the single word "optional".
+   * THREE bounds, each paid for by a task this broke while too loose:
+   *
+   *  - the oracle reply must be a bare `label`. "Any nameless object" also
+   *    catches ordinary prose, whose reply is "paragraph"; that suppressed a
+   *    working Enter on a milestone of "post" (run 31270612942).
+   *  - the LINE must not announce a control. A `label` object alone does not
+   *    mean Enter is dead — the Chakra privacy checkbox reports one too, but its
+   *    line reads "Privacy (Optional), check box, checked, ..." and Enter works.
+   *    Suppressing it failed office-hours__help-request (run 31273130928).
+   *  - EVERY milestone word must appear on what the hop landed on. Overlap
+   *    accepted "Reference Assignment (Optional), combo box" for a milestone of
+   *    "privacy (optional)" on the single word "optional", so Enter opened a
+   *    combo box instead of ticking a checkbox (run 31270612942).
+   *
+   * Together these admit the measured defect and nothing else in the suite.
    *
    * Returns "skip" when the hop did not reach a control matching the milestone.
    * Skipping is safe by construction: the Enter it suppresses is the one already
@@ -2838,8 +2859,25 @@ export class NvdaHarness implements AtDriver {
     // no name to give. A `<label>` is different in kind: it is never a thing to
     // activate, only ever a wrapper around the control that is.
     if (clean(check.reply) !== "label") return "proceed";
+    // ...and the LINE must be bare text. A nameless `label` navigator object does
+    // NOT imply Enter is a no-op — that was measured on SurveyJS markup and does
+    // not generalise. Run 31273130928 proved the counter-example: the Chakra
+    // privacy checkbox also reports a `label` object, but its browse LINE already
+    // carries name and role ("Privacy (Optional), check box, checked, ...") and
+    // Enter on it works. Suppressing that Enter failed a task that had passed.
+    //
+    // What actually separates the two is whether the line NVDA matched the
+    // milestone against announced a control at all. The broken case is a line of
+    // pure label text with no role word anywhere in it ("Just right"); the
+    // working case names its own role. Only the former needs retargeting, and
+    // only the former is proven to be a dead Enter.
+    const before = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    if (ACT_LINE_NAMES_A_CONTROL.test(before)) {
+      this.debug("act: line already announces a control — leaving this act alone", { item: before.slice(0, 120) });
+      return "proceed";
+    }
 
-    this.debug("act: cursor is on a nameless LABEL — the milestone matched label text, not the control", {
+    this.debug("act: cursor is on bare label text, not the control it names", {
       milestone,
       oracleReply: check.reply.slice(0, 120),
       hop: "previous form field (the control precedes its label text)"
