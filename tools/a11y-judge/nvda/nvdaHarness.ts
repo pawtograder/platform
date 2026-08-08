@@ -2785,6 +2785,72 @@ export class NvdaHarness implements AtDriver {
     });
   }
 
+  /**
+   * Move the review cursor from a control's LABEL TEXT onto the control itself,
+   * so `act`'s Enter has something it can actually activate.
+   *
+   * The failure this exists for, measured on the seeded survey. NVDA's browse
+   * buffer splits a SurveyJS choice across two lines, and the control's own line
+   * carries role and state but NO name (the label text is already adjacent in
+   * the buffer, so NVDA does not repeat it):
+   *
+   *   line 3  the radio       spoken "radio button, not checked"
+   *   line 4  the label text  spoken "Just right"   navigatorObject "label"
+   *
+   * A milestone of "just right" can therefore ONLY match line 4 — and Enter
+   * there does nothing whatsoever (measured: nothing checked, activeElement
+   * BODY). Worse, the ladder never notices: the speech matches, the cursor
+   * oracle answers a bare "label" and correctly ABSTAINS, and the gate accepts
+   * on abstain, so zero resyncs fire and the control-hop rung never runs. The
+   * survey was submitted with whatever was checked by other means.
+   *
+   * BACKWARD, not forward: the control PRECEDES its label text in the buffer, so
+   * the next form field forward from line 4 is the following option — hopping
+   * that way would select "Too fast" when the plan asked for "Just right".
+   *
+   * Engages only on the exact signature of the defect — a milestone-bearing
+   * `act` whose oracle reply reduced to NO content words at all — so an `act` on
+   * a properly named control (every other one in the suite) is untouched.
+   *
+   * Returns "skip" when the hop did not reach a control matching the milestone.
+   * Skipping is safe by construction: the Enter it suppresses is the one already
+   * proven to be a no-op, so this is never worse than the behaviour it replaces,
+   * and it is far better than firing Enter at whatever the hop landed on.
+   */
+  private async retargetActToControl(milestone: string | undefined): Promise<"proceed" | "skip"> {
+    const wanted = cursorOracleApplies(milestone);
+    if (!wanted.applies) return "proceed";
+    // corroborateCursor ran for THIS step (run() calls it before execute) and
+    // stamped its record with the index this step is about to take.
+    const check = this.cursorChecks.at(-1);
+    if (!check || check.stepIndex !== this.steps.length || check.command !== "act") return "proceed";
+    if (check.verdict !== "abstained" || check.objectTokens.length > 0) return "proceed";
+
+    this.debug("act: cursor is on a NAMELESS object — the milestone matched label text, not the control", {
+      milestone,
+      oracleReply: check.reply.slice(0, 120),
+      hop: "previous form field (the control precedes its label text)"
+    });
+    await this.moveToControl("previous");
+    const item = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    // The hop's own speech is enough here and costs nothing extra: a form-field
+    // quick-nav announces the control the way focus does, name included
+    // ("Just right, radio button, not checked"), which is exactly the name the
+    // line read omitted.
+    const { content } = nvdaCursorTokens(item);
+    const shared = content.filter((token) => wanted.tokens.includes(token));
+    if (shared.length > 0) {
+      this.debug("act: retargeted onto the control the milestone names", { item: item.slice(0, 120), shared });
+      return "proceed";
+    }
+    this.debug("act: RETARGET FAILED — not firing Enter, which would activate the wrong control", {
+      milestone,
+      landedOn: item.slice(0, 120),
+      wanted: wanted.tokens
+    });
+    return "skip";
+  }
+
   private async execute(command: AtCommand, arg?: string, context?: AtStepContext): Promise<void> {
     const nvda = this.nvda;
     const kc = nvda.keyboardCommands;
@@ -2796,8 +2862,13 @@ export class NvdaHarness implements AtDriver {
         return this.arrowSweep("next", () => nvda.next(opts));
       case "previous":
         return this.arrowSweep("previous", () => nvda.previous(opts));
-      case "act":
+      case "act": {
+        // A milestone can match the LABEL TEXT of a control instead of the
+        // control, and Enter there does nothing at all. Retarget first; a
+        // failed retarget must not fire Enter (see retargetActToControl).
+        if ((await this.retargetActToControl(context?.milestone)) === "skip") return;
         return nvda.act(opts);
+      }
       case "interact": {
         // NVDA has no interaction levels; entering focus mode is the analogue.
         // But NVDA+Space is a TOGGLE, not a descent, and toggling focus mode onto
