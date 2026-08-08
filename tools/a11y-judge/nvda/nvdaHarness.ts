@@ -2871,7 +2871,13 @@ export class NvdaHarness implements AtDriver {
     // pure label text with no role word anywhere in it ("Just right"); the
     // working case names its own role. Only the former needs retargeting, and
     // only the former is proven to be a dead Enter.
-    const before = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    // undoOracleEcho, exactly as `case "interact"` does and for the same reason:
+    // itemText() is an alias for lastSpokenPhrase(), corroborateCursor has just
+    // interrogated the oracle for this very step, so without this the "line" read
+    // here is the oracle's own answer — "label" — which of course names no
+    // control. Run 31275593976 is what that cost: the stand-down never fired,
+    // privacy (optional) retargeted anyway and help-request failed a third time.
+    const before = this.undoOracleEcho(await this.itemTextSafe(ITEM_TEXT_PROBE_MS));
     if (ACT_LINE_NAMES_A_CONTROL.test(before)) {
       this.debug("act: line already announces a control — leaving this act alone", { item: before.slice(0, 120) });
       return "proceed";
