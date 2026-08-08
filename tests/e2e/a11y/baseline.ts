@@ -13,8 +13,16 @@
  * can only shrink — `baseline.json` is a checked-in ledger, and removing a line
  * from it is the proof that something got fixed.
  *
+ * That proof is only worth anything because the sweep runs on every PR (the
+ * `e2e-local` job in .github/workflows/deploy.yml). While it was opt-in,
+ * deleting rows without running it looked exactly like fixing the defects.
+ *
  * Regenerate after intentional changes — unfiltered, or the write is refused:
  *   npm run a11y:coverage:update
+ *
+ * Re-record locally and commit the result. CI runs in check mode and fails if
+ * the sweep modifies this file, so a regeneration cannot ride in on a PR that
+ * did not mean to make one.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

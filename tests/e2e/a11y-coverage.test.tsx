@@ -18,10 +18,18 @@
  * It does NOT fail on pre-existing findings: those are recorded in
  * `a11y/baseline.json` (see baseline.ts for why). New findings fail.
  *
- * Opt-in, like the other heavy a11y lanes, until we decide the workflow is
- * worth gating on:
+ * Gated on A11Y_COVERAGE so a normal `npx playwright test` skips it, but it is
+ * NOT opt-in in CI: the `e2e-local` job in .github/workflows/deploy.yml runs it
+ * against the same stack on every PR, and a new finding fails the build. That
+ * is what makes a baseline deletion an assertion rather than a claim.
+ *
+ * Locally:
  *   npm run a11y:coverage
  *   (= A11Y_COVERAGE=1 playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium)
+ *
+ * After fixing a defect, re-record with `npm run a11y:coverage:update` and
+ * commit the shorter ledger; CI runs in check mode and fails if the sweep
+ * modifies baseline.json.
  *
  * `--project=chromium` is not optional. playwright.config.ts declares chromium
  * AND webkit, and baseline.json is keyed route|scheme|rule|kind with no browser
