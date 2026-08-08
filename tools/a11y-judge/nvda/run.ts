@@ -42,12 +42,13 @@ import {
   ARTIFACT_ROOT,
   describeCursorContradiction,
   describeHostClear,
+  describeSweepMutation,
   describeTypeDegradation,
   writeRunArtifacts,
   type CalibrationEntry,
   type TaskReport
 } from "./report";
-import { NvdaHarness, type NvdaCursorCheck, type TypeStepFidelity } from "./nvdaHarness";
+import { NvdaHarness, type NvdaCursorCheck, type SweepMutation, type TypeStepFidelity } from "./nvdaHarness";
 
 const REQUIRED_ENV = [
   "BASE_URL",
@@ -324,6 +325,14 @@ async function main(): Promise<void> {
         `— see summary.md`
     );
   }
+  const mutatingTasks = reports.filter((r) => (r.sweepMutations ?? []).length > 0);
+  if (mutatingTasks.length > 0) {
+    console.log(
+      `[a11y:nvda] ⚠️  ${mutatingTasks.length} task(s) where a READING sweep changed the page's answers (an ` +
+        `arrow inside a radio group selects — issue #913): ${mutatingTasks.map((r) => r.id).join(", ")} ` +
+        `— see summary.md`
+    );
+  }
   if (fatalError !== undefined) throw fatalError;
   if (failed.length > 0) process.exitCode = 1;
 
@@ -358,6 +367,7 @@ async function main(): Promise<void> {
       // other place these records are cleared.
       let fidelity: TypeStepFidelity[] = [];
       let cursorChecks: NvdaCursorCheck[] = [];
+      let sweepMutations: SweepMutation[] = [];
       const recordingPath = args.record ? path.join(ARTIFACT_ROOT, runId, "recordings", `${loaded.id}.mp4`) : undefined;
       const stopRecording = recordingPath ? startRecording(recordingPath) : () => {};
       try {
@@ -449,6 +459,16 @@ async function main(): Promise<void> {
           console.log(`[a11y:nvda]   ⚠️  CURSOR CONTRADICTION — ${describeCursorContradiction(c)}`);
         }
 
+        // Sweep mutations. `next`/`previous` are arrows, and in focus mode an
+        // arrow inside a radio group selects — so a reading sweep can answer the
+        // survey it is reading (issue #913). Drained BEFORE the write predicate
+        // below, because a mutating sweep is exactly what makes that predicate
+        // lie: the answer it finds is the driver's, not the user's.
+        sweepMutations = harness.takeSweepMutations();
+        for (const m of sweepMutations) {
+          console.log(`[a11y:nvda]   ⚠️  SWEEP MUTATION — ${describeSweepMutation(m)}`);
+        }
+
         if (plan.taskKind === "write" && !args.calibrate) {
           await sleep(WRITE_SETTLE_MS);
           const predicate = await getTask(plan.taskId)!.predicate(null, taskContext);
@@ -467,6 +487,15 @@ async function main(): Promise<void> {
               contradicted.map(describeCursorContradiction).join(" | ")
           );
         }
+        // Fails the task even when the restore succeeded: the repair keeps the
+        // rest of the run honest, it does not turn a write back into a read.
+        if (sweepMutations.length > 0 && !args.calibrate) {
+          throw new Error(
+            `a reading sweep changed the page's answers (see issue #913 — NVDA reports these controls ` +
+              `correctly; the driver's own arrow keys were selecting them): ` +
+              sweepMutations.map(describeSweepMutation).join(" | ")
+          );
+        }
 
         console.log(
           `[a11y:nvda] ✅ ${loaded.id} (${result.resyncs.length} resyncs, cursor oracle: ` +
@@ -481,6 +510,7 @@ async function main(): Promise<void> {
           calibration,
           typeFidelity: fidelity,
           cursorChecks,
+          sweepMutations,
           recordingPath,
           steps: harness.steps.slice(stepsBefore)
         };
@@ -505,6 +535,14 @@ async function main(): Promise<void> {
           console.log(`[a11y:nvda]   ⚠️  CURSOR CONTRADICTION — ${describeCursorContradiction(c)}`);
         }
         cursorChecks = [...cursorChecks, ...undrainedChecks];
+        // And the sweep mutations, for the same reason: an attempt that died
+        // mid-plan is when "did the driver answer the question itself?" matters
+        // most, because the write predicate never got to run.
+        const undrainedMutations = harness.takeSweepMutations();
+        for (const m of undrainedMutations) {
+          console.log(`[a11y:nvda]   ⚠️  SWEEP MUTATION — ${describeSweepMutation(m)}`);
+        }
+        sweepMutations = [...sweepMutations, ...undrainedMutations];
         if (attempt === TASK_RETRIES) {
           return {
             ...base,
@@ -515,6 +553,7 @@ async function main(): Promise<void> {
             resyncs: [],
             typeFidelity: fidelity,
             cursorChecks,
+            sweepMutations,
             recordingPath,
             steps: harness.steps.slice(stepsBefore)
           };
