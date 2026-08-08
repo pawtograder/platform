@@ -449,6 +449,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.log(
           `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`
         );
+        // Row id of the `repositories` row this iteration is provisioning, used by the
+        // readiness update below. Resolved from the pre-existing row when there is one,
+        // or from the insert when we create it — never reconstructed from `group.name`,
+        // which changes when a group is renamed while `repositories.repository` keeps
+        // the name it was created with.
+        let repoRowId: number | undefined = groupMembership.assignment_groups.repositories[0]?.id;
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
@@ -474,6 +480,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             console.error(error);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
+          repoRowId = dbRepo!.id;
           try {
             const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
             const strategy = resolveRepoCreationStrategy(
@@ -515,15 +522,44 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               creation_method: strategy.creationMethod,
               branch_protection: branchProtectionFromAssignment(assignment)
             });
-            await adminSupabase
+            // Sync permissions and mark ready HERE. This branch returns below without
+            // reaching the existing-repo sync further down, so deferring the flag to
+            // that point left every newly created group repo at is_github_ready=false
+            // — and the push-direct submission path skips unready repos, so the
+            // group's real pushes would be ignored until a reconciler happened to fix
+            // it. Sync first, then flag: a permission failure must leave the row
+            // unready, because the reconciler only repairs is_github_ready=false rows.
+            await syncRepoPermissions(
+              c.classes!.github_org!,
+              repoName,
+              c.classes!.slug!,
+              group.assignment_groups_members
+                .filter((m) => m.user_roles)
+                .filter((m) => m.user_roles.users.github_username)
+                .map((m) => m.user_roles.users.github_username!),
+              scope
+            );
+            // ONE checked write for both fields. They were two writes, and the first was
+            // unchecked: if it failed transiently the row still became ready, so the reconciler —
+            // which only requeues unready rows — would never revisit it, leaving synced_repo_sha
+            // null and later handout syncs with no repo-side merge base. Readiness must not be
+            // able to outlive the sha it is supposed to accompany.
+            const { error: readyError } = await adminSupabase
               .from("repositories")
-              .update({
-                synced_repo_sha: headSha || null
-              })
+              .update({ synced_repo_sha: headSha || null, is_github_ready: true })
               .eq("id", dbRepo!.id);
-            if (error) {
-              console.error(error);
-              throw new UserVisibleError(`Error creating repo: ${error}`);
+            if (readyError) {
+              // Propagate, as the individual-repo branch does. Logging alone let this
+              // callback return and the whole function report is_ok, while the row stayed
+              // is_github_ready=false — so the push-direct guard acknowledged and
+              // discarded every group push until the reconciler repaired it, with no
+              // replay of what was lost.
+              console.error(readyError);
+              Sentry.captureException(readyError, scope);
+              throw new UserVisibleError(
+                `Group repository ${repoName} was created but could not be marked ready ` +
+                  `(${readyError.message}). Please retry: pushes to it would not be recorded until this is fixed.`
+              );
             }
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);
@@ -555,9 +591,78 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .map((m) => m.user_roles.users.github_username!),
             scope
           );
+          // Only NOW is the repo genuinely usable: it exists and its members can
+          // reach it. Consumers that gate on is_github_ready (including the
+          // push-direct submission path for no-autograder assignments) depend on
+          // that meaning.
+          //
+          // Keyed on the row id and with `.select()` so a zero-row match is reported:
+          // a bare `.update()` returns error=null when nothing matched, which would
+          // leave the repo permanently unusable with no signal.
+          if (repoRowId === undefined) {
+            const err = new Error(
+              `Could not resolve the repositories row for ${c.classes!.github_org!}/${repoName} (assignment ${assignment.id}); is_github_ready not set`
+            );
+            console.error(err);
+            Sentry.captureException(err, scope);
+          } else {
+            // Only promote a row whose repo is known to be FULLY created. This branch runs for
+            // an EXISTING is_github_ready=false row, and permission sync can succeed against a
+            // repository a previous attempt created but never finished — one whose contents or
+            // synced_repo_sha were never recorded. Marking that ready is worse than leaving it
+            // alone: is_github_ready=false is exactly what makes the reconciler requeue it, so
+            // promoting suppresses the only thing that would finish the job, while opening the
+            // repo to push-direct ingestion in its incomplete state. synced_repo_sha is written
+            // immediately after createRepo, so its presence is the signal that creation
+            // completed.
+            //
+            // Scoped by that column in the UPDATE itself rather than checked first, so a
+            // concurrent creation finishing in between cannot slip through the gap.
+            const { data: readyRows, error: readyError } = await adminSupabase
+              .from("repositories")
+              .update({ is_github_ready: true })
+              .eq("id", repoRowId)
+              .not("synced_repo_sha", "is", null)
+              .select("id");
+            if (!readyError && (readyRows ?? []).length === 0) {
+              // Distinguishable from a failure: the row exists, it just is not finished. Leave
+              // it unready so the creation worker picks it up, and do NOT report an error to
+              // the student — nothing is wrong yet.
+              const { data: pendingRow } = await adminSupabase
+                .from("repositories")
+                .select("id, synced_repo_sha")
+                .eq("id", repoRowId)
+                .maybeSingle();
+              if (pendingRow && pendingRow.synced_repo_sha === null) {
+                scope?.setTag("repo_not_promoted_incomplete_creation", String(repoRowId));
+                console.log(
+                  `Not marking ${repoName} ready: creation has not completed (synced_repo_sha is null). ` +
+                    `Leaving it for the creation worker.`
+                );
+                return assignment;
+              }
+            }
+            if (readyError || (readyRows ?? []).length === 0) {
+              const failure =
+                readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`);
+              console.error(failure);
+              Sentry.captureException(failure, scope);
+              // Propagate, as the newly-created branch does. This branch is reached after
+              // permissions have just been repaired on an EXISTING is_github_ready=false
+              // row, so logging alone reported success while the row stayed unready — and
+              // the push-direct guard then acknowledged and discarded every push to it
+              // until a reconciler run, with no replay of what was lost. Throwing lands in
+              // the catch below, which keeps the row unready for the reconciler and tells
+              // the student to retry.
+              throw new Error(
+                `${repoName} could not be marked ready (${failure.message}); pushes to it would not be recorded`
+              );
+            }
+          }
         } catch (e) {
           console.log(`Error syncing repo permissions: ${repoName}`);
           console.error(e);
+          // is_github_ready stays false so the 15-minute reconciler retries.
           errorMessages.push(
             `Error syncing repo permissions: ${repoName}, please ask your instructor to check that this is configured correctly.`
           );
@@ -656,13 +761,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         });
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
-        await adminSupabase
+        const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
-            synced_handout_sha: assignment.latest_template_sha
+            synced_handout_sha: assignment.latest_template_sha,
+            // See the group-repo path above: createRepo + syncRepoPermissions have
+            // both succeeded, so mark the row ready rather than leaving it for a
+            // later reconciler.
+            is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        if (readyError) {
+          // Do NOT report success: the repo exists on GitHub but the row still reads
+          // is_github_ready=false, and the push-direct webhook guard skips unready
+          // repos — so student pushes would be acknowledged and discarded until the
+          // periodic reconciler repairs the row, with no replay of what was lost.
+          console.error(readyError);
+          Sentry.captureException(readyError, scope);
+          throw new UserVisibleError(
+            `Repository ${repoName} was created but could not be marked ready (${readyError.message}). ` +
+              `Please retry: pushes to it would not be recorded until this is fixed.`
+          );
+        }
 
         return new_repo_sha;
       } catch (e) {

@@ -9,6 +9,7 @@ import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useIdentity } from "@/hooks/useIdentities";
 import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
@@ -35,8 +36,9 @@ type AssignmentUnit = {
   name: string;
   type: "assignment" | "self review";
   due_date: TZDate | undefined;
+  /** The date the row displays as "Due" — the suggested date in emphasized courses. Drives ordering and the 24-hour highlight. */
+  primary_date: TZDate | undefined;
   due_date_component: JSX.Element;
-  due_date_link?: string;
   repo: string;
   is_repo_ready: boolean;
   name_link: string;
@@ -143,6 +145,7 @@ export default function StudentPage() {
     () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
     [courseAssignments]
   );
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -161,20 +164,36 @@ export default function StudentPage() {
       const modifiedDueDate = assignment.due_date
         ? new TZDate(assignment.due_date, course?.time_zone ?? "America/New_York")
         : undefined;
+      // The date this row actually shows as "Due". Ordering and the 24-hour highlight follow it
+      // so the list reads in the order students see, rather than by a hard deadline the
+      // emphasized layout pushes into the background.
+      const suggestedForRow = suggestedDueDateById.get(assignment.id);
+      const suggestedTZDate = suggestedForRow
+        ? new TZDate(suggestedForRow, course?.time_zone ?? "America/New_York")
+        : undefined;
+      // Mirrors the fallback inside DueDateDisplay: a suggested date later than this student's
+      // effective deadline is not rendered as the due date, so it must not drive ordering or the
+      // highlight either.
+      const primaryDate =
+        showSuggestedDueDate && suggestedTZDate && !(modifiedDueDate && suggestedTZDate > modifiedDueDate)
+          ? suggestedTZDate
+          : modifiedDueDate;
       result.push({
         key: assignment.id.toString(),
         name: assignment.title!,
         type: "assignment",
         due_date: modifiedDueDate,
+        primary_date: primaryDate,
         due_date_component: modifiedDueDate ? (
           <DueDateDisplay
-            suggestedDueDate={suggestedDueDateById.get(assignment.id)}
+            suggestedDueDate={suggestedForRow}
+            showSuggested={showSuggestedDueDate}
+            dueDate={modifiedDueDate}
             dueDateNode={<TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />}
           />
         ) : (
           <>-</>
         ),
-        due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
@@ -189,11 +208,15 @@ export default function StudentPage() {
         const evalDueDate = assignment.due_date
           ? addHours(new Date(assignment.due_date), assignment.self_review_deadline_offset ?? 0)
           : undefined;
+        // One instance for both fields: a self review has no suggested date, so its displayed date
+        // and its deadline are the same moment and must not be able to drift apart.
+        const evalDueTZDate = evalDueDate ? new TZDate(evalDueDate) : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
           type: "self review",
-          due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
+          due_date: evalDueTZDate,
+          primary_date: evalDueTZDate,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           is_repo_ready: assignment.is_github_ready ?? false,
@@ -203,14 +226,24 @@ export default function StudentPage() {
         });
       }
     });
-    // Sort by effective due date (includes lab-based scheduling and extensions)
+    // Sort by the date each row displays (the suggested date in emphasized courses, otherwise the
+    // effective due date, which includes lab-based scheduling and extensions).
+    // `primary_date` is only unset when `due_date` is too, so no fallback chain is needed. These
+    // are already TZDate instances; re-wrapping them just to read `getTime()` recomputes the zone
+    // offset twice per comparison for no change in the value.
+    const nowMs = Date.now();
     const sortedResult = result.sort((a, b) => {
-      const dateA = a.due_date ? new TZDate(a.due_date) : new TZDate(new Date());
-      const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
-      return dateB.getTime() - dateA.getTime();
+      const dateA = a.primary_date?.getTime() ?? nowMs;
+      const dateB = b.primary_date?.getTime() ?? nowMs;
+      return dateB - dateA;
     });
     const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
 
+    // Past/future bucketing intentionally stays on the hard deadline even when the suggested date
+    // is emphasized. The buckets answer "can I still act on this?", and an assignment past its
+    // suggested date is still submittable and still gradeable until the deadline — filing it under
+    // "Past Assignments" would hide exactly the resubmission window this feature exists to
+    // support. The row itself shows both dates, so the distinction stays visible.
     return {
       allAssignedWork: sortedResult,
       workInFuture: sortedResult.filter((work) => {
@@ -220,7 +253,7 @@ export default function StudentPage() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id, suggestedDueDateById]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById, showSuggestedDueDate]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();
@@ -316,7 +349,18 @@ export default function StudentPage() {
             </Table.Row>
           )}
           {visibleFuture.map((work) => {
-            const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
+            // Flag a row when either date it shows is within the next 24 hours: the suggested date
+            // students are asked to work to, or the hard deadline after which submissions close.
+            // Both bounds matter. Without the lower bound, an emphasized row whose suggested date
+            // has passed reports a large negative difference, satisfies `< 24`, and stays flagged
+            // for its whole resubmission window; without the hard deadline in the union, that same
+            // row loses the cue at the moment the enforced deadline is actually imminent.
+            const now = new Date();
+            const isCloseDeadline = [work.primary_date, work.due_date].some((date) => {
+              if (!date) return false;
+              const hoursUntil = differenceInHours(date, now);
+              return hoursUntil >= 0 && hoursUntil < 24;
+            });
             return (
               <Table.Row
                 key={work.key}
@@ -324,9 +368,7 @@ export default function StudentPage() {
                 borderColor={isCloseDeadline ? "border.info" : undefined}
                 bg={isCloseDeadline ? "bg.info" : undefined}
               >
-                <Table.Cell>
-                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
-                </Table.Cell>
+                <Table.Cell>{work.due_date_component}</Table.Cell>
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
@@ -395,9 +437,7 @@ export default function StudentPage() {
           {visiblePast.map((work) => {
             return (
               <Table.Row key={work.key}>
-                <Table.Cell>
-                  <Link href={work.due_date_link ?? ""}>{work.due_date_component}</Link>
-                </Table.Cell>
+                <Table.Cell>{work.due_date_component}</Table.Cell>
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>

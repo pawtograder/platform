@@ -717,12 +717,25 @@ export async function removePushWebhook(repoName: string, webhookId: number, sco
   console.log("webhook removed", webhook.data);
 }
 
-export async function updateAutograderWorkflowHash(repoName: string) {
+/** Path of the autograder's GitHub Actions workflow inside a handout/student repo. */
+export const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+export async function updateAutograderWorkflowHash(
+  repoName: string,
+  /**
+   * Exact commit to hash the workflow at. Omit for the default branch's current head.
+   * Pass a sha when the caller also pins `latest_template_sha`: hashing the unqualified
+   * head while pinning a different revision let a concurrent instructor push record the
+   * NEW workflow's hash against the OLD tree that students receive, so their Actions
+   * submissions failed the hash check until another push repaired both values.
+   */
+  ref?: string
+) {
   if (isGithubStubEnabled()) {
-    await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName });
+    await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
   }
-  const file = (await getFileFromRepo(repoName, ".github/workflows/grade.yml")) as { content: string };
+  const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH, undefined, ref)) as { content: string };
   const hash = createHash("sha256");
   if (!file.content) {
     throw new Error("File not found");
@@ -784,7 +797,17 @@ export async function repoHasFileAtRef(
   }
 }
 
-export async function getFileFromRepo(repoName: string, path: string, scope?: Sentry.Scope) {
+export async function getFileFromRepo(
+  repoName: string,
+  path: string,
+  scope?: Sentry.Scope,
+  /**
+   * Commit sha / branch / tag to read at. Omit for the default branch's current head.
+   * Pass an exact commit sha when the read has to be consistent with other reads of the
+   * same tree — an unqualified read races with any push landing between the two calls.
+   */
+  ref?: string
+) {
   scope?.setTag("github_operation", "get_file");
   scope?.setTag("repository", repoName);
   scope?.setTag("file_path", path);
@@ -798,7 +821,8 @@ export async function getFileFromRepo(repoName: string, path: string, scope?: Se
   const file = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
     owner: repoName.split("/")[0],
     repo: repoName.split("/")[1],
-    path
+    path,
+    ...(ref ? { ref } : {})
   });
   if ("content" in file.data) {
     const base64Content = file.data.content;
@@ -847,6 +871,313 @@ export async function writeFileToRepo(
     commit_sha: response.data.commit?.sha,
     content_sha: response.data.content?.sha
   };
+}
+
+/**
+ * Delete a file from a repo via the GitHub contents API.
+ *
+ * Idempotent: if the file is already absent, returns `{ deleted: false }` rather
+ * than throwing, so callers can "ensure removed" without a pre-check. Used to
+ * strip `.github/workflows/grade.yml` from the handout of a no-autograder
+ * assignment, so student repos generated from it never run a grading workflow.
+ */
+/**
+ * Current head commit sha of a repo's DEFAULT branch (not necessarily "main").
+ *
+ * Used to recover a handout revision when an idempotent step reports it had nothing to
+ * do — e.g. a retry of handout creation finds grade.yml already deleted, so the delete
+ * returns no commit sha, yet the assignment still needs a `latest_template_sha` to give
+ * student syncs a target.
+ */
+export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.Scope): Promise<string | undefined> {
+  scope?.setTag("github_operation", "get_default_branch_head");
+  scope?.setTag("repository", repoName);
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("getDefaultBranchHeadSha", { repoName }, scope);
+    return undefined;
+  }
+  // An E2E repository name carries a per-run `--<suffix>` that exists only in our database;
+  // GitHub has the un-suffixed repo, which is why every clone goes through
+  // getRepoToCloneConsideringE2E. Answering "what is the head of the suffixed repo" is not
+  // possible and not meaningful: the head of the SHARED fixture repo says nothing about the fake
+  // sha an E2E push carries. Callers already treat `undefined` as "could not determine, assume
+  // current", which is the behaviour the E2E stub above relies on — but that stub is gated on
+  // PAWTOGRADER_GITHUB_STUB, a different flag from the E2E_MOCK_GITHUB / END_TO_END_SECRET setup
+  // the webhook-driven suites use, so without this the new pre-insert and supersede checks issued
+  // a real `GET /repos/...--<suffix>` that 404s, threw, and answered 500 for every push-direct
+  // delivery in the e2e stack.
+  if (repoName.startsWith(END_TO_END_REPO_PREFIX)) {
+    scope?.setTag("get_default_branch_head_skipped", "e2e_repo");
+    return undefined;
+  }
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Get default branch head failed: No octokit found for ${repoName}`);
+  }
+  const [owner, repo] = repoName.split("/");
+  const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${repoData.default_branch}`
+  });
+  return ref.object.sha;
+}
+
+/**
+ * Move a file within a repo in a SINGLE commit, via the Git trees API.
+ *
+ * The contents API can only touch one path per commit, so "park then delete" took two
+ * commits and left an intermediate revision on the default branch containing BOTH
+ * copies — i.e. still a runnable `.github/workflows/grade.yml`. The template-repo push
+ * webhook sets `latest_template_sha` from whichever delivery it processes, so an
+ * out-of-order pair could advertise that intermediate commit as the handout head, and a
+ * later student sync would reinstall the workflow on a no-autograder assignment.
+ * Correcting the pointer afterwards was a patch; one commit removes the bad revision
+ * entirely.
+ *
+ * Returns `{ moved: false }` when `fromPath` does not exist, so callers can treat it as
+ * "ensure moved" without a pre-check.
+ */
+/** Thrown by renameFileInRepo when `refuseIfDestinationExists` is set and `toPath` is present. */
+export class RenameDestinationExistsError extends Error {
+  constructor(repoName: string, toPath: string, atSha: string) {
+    super(`${toPath} already exists in ${repoName} at ${atSha}; refusing to overwrite it`);
+    this.name = "RenameDestinationExistsError";
+  }
+}
+
+export async function renameFileInRepo(
+  repoName: string,
+  fromPath: string,
+  toPath: string,
+  message: string,
+  scope?: Sentry.Scope,
+  /**
+   * Refuse the move if `toPath` already exists at the exact commit the new tree is built on.
+   *
+   * Set by the restore direction of the autograder toggle. Its caller checks for a live
+   * grade.yml first, but that check is a separate API call — a TOCTOU window in which an
+   * instructor can create the file, after which this function would build its tree from the
+   * newer head and overwrite their workflow with the parked copy, as a perfectly valid
+   * fast-forward that nothing rejects. Enforcing the condition at the head the commit is
+   * actually based on is what closes the window; the caller then handles the conflict.
+   *
+   * Not the default: the disable direction deliberately overwrites a stale parked copy from an
+   * earlier cycle.
+   */
+  refuseIfDestinationExists?: boolean
+): Promise<{ moved: boolean; commit_sha?: string }> {
+  scope?.setTag("github_operation", "rename_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", fromPath);
+
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("renameFileInRepo", { repoName, fromPath, toPath }, scope);
+    return { moved: true };
+  }
+
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Rename file in repo failed: No octokit found for ${repoName}`);
+  }
+  const [owner, repo] = repoName.split("/");
+
+  // Resolve the default branch once, rather than assuming "main". The branch itself does
+  // not move; only its head does, which is what the retry loop re-reads.
+  const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const branch = repoData.default_branch;
+
+  // The head is resolved BEFORE the source file is read, and the read is pinned to it.
+  //
+  // Reading first and resolving after was a lost-update race: an instructor pushing a
+  // grade.yml customization in between meant the contents call returned the OLD file
+  // while the ref call returned the NEWER head. The commit was then a legitimate
+  // fast-forward from that newer head, so nothing rejected it — it just wrote the stale
+  // content to `toPath` and deleted the newer live file, silently discarding the
+  // customization. Pinning the read to the exact commit the tree is based on makes the
+  // two views of the repo consistent by construction.
+  //
+  // The branch can still move after the pinned read, but then the parent is stale and
+  // GitHub rejects the ref update as a non-fast-forward (422) rather than losing the
+  // push, so retrying re-reads at the new head. Bounded, since a repo under continuous
+  // pushes should fail loudly instead of looping.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner,
+      repo,
+      ref: `heads/${branch}`
+    });
+    const headSha = ref.object.sha;
+
+    // Absent at this commit means there is nothing to move — but "nothing to move" is a
+    // CLAIM ABOUT THE HEAD, so confirm the head has not moved before reporting it. The disable
+    // flow treats `moved: false` as "the workflow is already gone", then resolves and pins the
+    // current head; if an instructor pushed a new grade.yml between this read and the return,
+    // that pinned revision contains a live workflow while the assignment is recorded as having
+    // no autograder. Re-reading the ref turns the race into a retry, mirroring what the
+    // file-present path does when its ref update is rejected.
+    let content: string;
+    try {
+      content = (await getFileFromRepo(repoName, fromPath, scope, headSha)).content;
+    } catch (error) {
+      if (error instanceof RequestError && error.status === 404) {
+        const { data: recheck } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner,
+          repo,
+          ref: `heads/${branch}`
+        });
+        if (recheck.object.sha !== headSha) {
+          if (attempt < MAX_ATTEMPTS) {
+            scope?.setTag("rename_file_absent_recheck_retry", String(attempt));
+            console.log(
+              `${fromPath} was absent at ${headSha} in ${repoName}, but the branch has moved to ` +
+                `${recheck.object.sha}; retrying before reporting it missing`
+            );
+            continue;
+          }
+          // Out of attempts with the head still moving: THROW rather than report the file
+          // absent. `moved: false` is read as "already gone", and the disable flow then pins
+          // the current head — which, if the file was created during this probe, contains a
+          // live workflow on an assignment about to be recorded as having no autograder.
+          // Reporting an absence we could not confirm is the one answer that must not escape.
+          scope?.setTag("rename_file_absent_recheck_exhausted", "true");
+          throw new Error(
+            `Could not confirm whether ${fromPath} exists in ${repoName}: it was absent at ${headSha}, but the ` +
+              `default branch moved on every one of ${MAX_ATTEMPTS} attempts`
+          );
+        }
+        console.log(`Not moving ${fromPath} in ${repoName}: file does not exist at ${headSha}`);
+        return { moved: false };
+      }
+      throw error;
+    }
+
+    if (refuseIfDestinationExists) {
+      let destinationExists = false;
+      try {
+        await getFileFromRepo(repoName, toPath, scope, headSha);
+        destinationExists = true;
+      } catch (error) {
+        if (!(error instanceof RequestError && error.status === 404)) throw error;
+      }
+      if (destinationExists) {
+        scope?.setTag("rename_destination_exists", "true");
+        throw new RenameDestinationExistsError(repoName, toPath, headSha);
+      }
+    }
+
+    const { data: headCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner,
+      repo,
+      commit_sha: headSha
+    });
+
+    // One tree carrying both halves of the move: the new path added, the old deleted
+    // (a null sha is the trees API's delete).
+    const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+      owner,
+      repo,
+      base_tree: headCommit.tree.sha,
+      tree: [
+        // `mode`/`type` are literal unions in the Octokit types, so they must not widen
+        // to `string`. A null sha is how the trees API expresses a delete.
+        { path: toPath, mode: "100644" as const, type: "blob" as const, content },
+        { path: fromPath, mode: "100644" as const, type: "blob" as const, sha: null }
+      ]
+    });
+
+    const { data: commit } = await octokit.request("POST /repos/{owner}/{repo}/git/commits", {
+      owner,
+      repo,
+      message,
+      tree: newTree.sha,
+      parents: [headSha]
+    });
+
+    try {
+      await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: commit.sha
+      });
+    } catch (error) {
+      // 422 = the ref no longer points at our parent, i.e. someone pushed while we were
+      // building. The commit object we created is unreferenced and harmless; take the
+      // new head and redo the move on top of it.
+      if (error instanceof RequestError && error.status === 422 && attempt < MAX_ATTEMPTS) {
+        scope?.setTag("rename_file_retry", String(attempt));
+        console.log(`Ref ${branch} in ${repoName} moved while renaming ${fromPath}; retrying (attempt ${attempt})`);
+        continue;
+      }
+      throw error;
+    }
+
+    console.log(`Moved ${fromPath} -> ${toPath} in ${repoName} as ${commit.sha}`);
+    return { moved: true, commit_sha: commit.sha };
+  }
+
+  throw new Error(
+    `Rename ${fromPath} -> ${toPath} in ${repoName} failed: the default branch moved on every one of ` +
+      `${MAX_ATTEMPTS} attempts`
+  );
+}
+
+export async function deleteFileFromRepo(
+  repoName: string,
+  path: string,
+  message: string,
+  scope?: Sentry.Scope,
+  /**
+   * Blob sha of the file being deleted, when the caller already read it. Skips a redundant
+   * contents-API round trip (and the extra failure point it adds) in the common case where
+   * the caller has just fetched the file.
+   */
+  knownSha?: string
+): Promise<{ deleted: boolean; commit_sha?: string }> {
+  scope?.setTag("github_operation", "delete_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("deleteFileFromRepo", { repoName, path }, scope);
+    return { deleted: true };
+  }
+
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Delete file from repo failed: No octokit found for ${repoName}`);
+  }
+
+  // The contents API needs the blob sha of the file being deleted.
+  let sha: string | undefined = knownSha;
+  if (!sha) {
+    try {
+      const file = await getFileFromRepo(repoName, path, scope);
+      sha = file.sha;
+    } catch (error) {
+      if (error instanceof RequestError && error.status === 404) {
+        console.log(`Not deleting ${path} from ${repoName}: file does not exist`);
+        return { deleted: false };
+      }
+      throw error;
+    }
+  }
+  if (!sha) {
+    throw new Error(`Delete file from repo failed: could not resolve blob sha for ${path} in ${repoName}`);
+  }
+
+  console.log("deleting file from repo", repoName, path);
+  const response = await octokit.request("DELETE /repos/{owner}/{repo}/contents/{path}", {
+    owner: repoName.split("/")[0],
+    repo: repoName.split("/")[1],
+    path,
+    message,
+    sha
+  });
+  return { deleted: true, commit_sha: response.data.commit?.sha };
 }
 
 async function getJwks() {

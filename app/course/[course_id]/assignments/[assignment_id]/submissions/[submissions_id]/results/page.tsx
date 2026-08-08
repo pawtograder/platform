@@ -250,6 +250,12 @@ export default function GraderResults() {
   if (!query.data) {
     return <Box>No grader results found</Box>;
   }
+  // Whether an Actions run backs this submission at all. Push-direct ingestion writes
+  // run_number/run_attempt 0, so the Actions URL built from them is /actions/runs/0/attempts/0 —
+  // a dead link. A retained oversized rejection is exactly that case and it always carries a
+  // workflow_run_error, so the error branch below would otherwise send every such student to a
+  // 404 and describe a grading run that never existed.
+  const hasActionsRun = (query.data.data.run_number ?? 0) > 0;
   if (query.data.data.workflow_run_error && query.data.data.workflow_run_error.length > 0) {
     const errors = filterWorkflowRunErrorsForDisplay(query.data.data.workflow_run_error);
 
@@ -301,31 +307,43 @@ export default function GraderResults() {
               })}
               <Box mt={4}>
                 <Text fontSize="sm" color="fg.error">
-                  Please check{" "}
-                  <Link
-                    href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
-                  >
-                    the GitHub Actions run for this submission
-                  </Link>{" "}
-                  for more details, or contact your instructor for assistance.
+                  {hasActionsRun ? (
+                    <>
+                      Please check{" "}
+                      <Link
+                        href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
+                      >
+                        the GitHub Actions run for this submission
+                      </Link>{" "}
+                      for more details, or contact your instructor for assistance.
+                    </>
+                  ) : (
+                    <>Push again once you have addressed this, or contact your instructor for assistance.</>
+                  )}
                 </Text>
               </Box>
             </Alert>
           ) : (
             <Alert title="Submission Processing Error" status="warning" role="alert" p={4} mb={4}>
-              The autograder reported a problem, but the detailed message is only visible to course staff. Your code was
-              still pushed to{" "}
+              {hasActionsRun ? "The autograder reported a problem" : "There was a problem recording this submission"},
+              but the detailed message is only visible to course staff. Your code was still pushed to{" "}
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
               <Box mt={4}>
                 <Text fontSize="sm">
-                  Open{" "}
-                  <Link
-                    href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
-                  >
-                    the GitHub Actions run log
-                  </Link>{" "}
-                  to see the full error output, or ask your instructor or TA—they can see the same details in
-                  Pawtograder and in GitHub.
+                  {hasActionsRun ? (
+                    <>
+                      Open{" "}
+                      <Link
+                        href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
+                      >
+                        the GitHub Actions run log
+                      </Link>{" "}
+                      to see the full error output, or ask your instructor or TA—they can see the same details in
+                      Pawtograder and in GitHub.
+                    </>
+                  ) : (
+                    <>Ask your instructor or TA — they can see the full details in Pawtograder.</>
+                  )}
                 </Text>
               </Box>
             </Alert>
@@ -370,13 +388,31 @@ export default function GraderResults() {
     );
   }
   if (!query.data.data.grader_results) {
-    // No autograder result for this submission. has_autograder is maintained as a
-    // reliable signal — set from grader-repo provisioning at create time and
-    // backfilled for existing rows — so when it's false the autograder will never
-    // produce a result: show a "manual grading" notice instead of "autograder
-    // hasn't finished". This only picks the empty-state copy; a submission that DOES
-    // have grader_results always renders them (below), regardless of the flag.
-    if (query.data.data.assignments && query.data.data.assignments.has_autograder === false) {
+    // No autograder result for this submission. Decide per SUBMISSION first, not from the
+    // assignment's current has_autograder: that flag is mutable while submissions are
+    // historical, so keying only off it leaves a push-direct submission stuck on
+    // "Autograder has not finished running" forever once the autograder is re-enabled.
+    // Channels that never produce grader results: upload, manual entry, a PR submission,
+    // or a push-direct submission (run_number 0 — no Actions run backs it). The
+    // assignment flag is only the fallback for an Actions-backed submission with no result
+    // yet. This picks the empty-state copy only; a submission that DOES have
+    // grader_results always renders them below, regardless of the flag.
+    const via = query.data.data.submitted_via;
+    const submissionCannotHaveResults =
+      via === "upload" ||
+      via === "manual" ||
+      via === "pr" ||
+      (via === "git" && (query.data.data.run_number ?? 0) === 0);
+    // An Actions-backed submission still in flight (run_number > 0, no grader_results)
+    // must NOT be shown as manual grading just because the assignment's flag has since
+    // been turned off: the backend deliberately lets a workflow dispatched before the
+    // disable finish, so results are still coming. Only the channel check, which is
+    // per-submission, can rule results out.
+    const dispatchedActionsRunPending = hasActionsRun;
+    if (
+      submissionCannotHaveResults ||
+      (query.data.data.assignments?.has_autograder === false && !dispatchedActionsRunPending)
+    ) {
       return (
         <Container>
           <Box p={4} margin={{ base: "2", lg: "4" }}>
@@ -393,14 +429,19 @@ export default function GraderResults() {
         <Box p={4} margin={{ base: "2", lg: "4" }}>
           <Alert title="Autograder has not finished running" role="status">
             The autograder started running {formatDistanceToNow(query.data.data.created_at, { addSuffix: true })}, and
-            has not completed yet. Please check{" "}
-            <Link
-              href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
-            >
-              the GitHub Actions run for this submission
-            </Link>{" "}
-            if you want to see live output from the grading script. How long the autograder takes to run depends
-            primarily on how the assignment is configured.
+            has not completed yet.{" "}
+            {hasActionsRun ? (
+              <>
+                Please check{" "}
+                <Link
+                  href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
+                >
+                  the GitHub Actions run for this submission
+                </Link>{" "}
+                if you want to see live output from the grading script.
+              </>
+            ) : null}{" "}
+            How long the autograder takes to run depends primarily on how the assignment is configured.
           </Alert>
         </Box>
       </Container>

@@ -10904,6 +10904,7 @@ export type Database = {
           id: number | null;
           open_regrade_requests_count: number | null;
           release_date: string | null;
+          suggested_due_date: string | null;
           title: string | null;
         };
         Insert: {
@@ -10913,6 +10914,7 @@ export type Database = {
           id?: number | null;
           open_regrade_requests_count?: never;
           release_date?: string | null;
+          suggested_due_date?: string | null;
           title?: string | null;
         };
         Update: {
@@ -10922,6 +10924,7 @@ export type Database = {
           id?: number | null;
           open_regrade_requests_count?: never;
           release_date?: string | null;
+          suggested_due_date?: string | null;
           title?: string | null;
         };
         Relationships: [
@@ -11167,6 +11170,20 @@ export type Database = {
           prompt_views: number | null;
           returned_to_deck: number | null;
           student_profile_id: string | null;
+        };
+        Relationships: [];
+      };
+      pg_buffercache: {
+        Row: {
+          bufferid: number | null;
+          isdirty: boolean | null;
+          pinning_backends: number | null;
+          relblocknumber: number | null;
+          reldatabase: unknown;
+          relfilenode: unknown;
+          relforknumber: number | null;
+          reltablespace: unknown;
+          usagecount: number | null;
         };
         Relationships: [];
       };
@@ -13118,6 +13135,7 @@ export type Database = {
         };
         Returns: number;
       };
+      github_team_slugify: { Args: { p_value: string }; Returns: string };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
         Returns: undefined;
@@ -13419,6 +13437,12 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      pg_buffercache_pages: { Args: never; Returns: Record<string, unknown>[] };
+      pg_buffercache_summary: { Args: never; Returns: Record<string, unknown> };
+      pg_buffercache_usage_counts: {
+        Args: never;
+        Returns: Record<string, unknown>[];
+      };
       preview_error_pin_matches: {
         Args: {
           p_assignment_id: number;
@@ -13514,6 +13538,15 @@ export type Database = {
           handout_template_repo: string;
           solution_template_repo: string;
         }[];
+      };
+      resolve_effective_template_repo: {
+        Args: {
+          p_constant: string;
+          p_guc_name: string;
+          p_org_default: string;
+          p_override: string;
+        };
+        Returns: string;
       };
       retry_repository_creation: {
         Args: { p_repository_id: number };

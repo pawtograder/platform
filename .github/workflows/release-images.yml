@@ -402,6 +402,19 @@ jobs:
   # the upgrade and `--wait` blocks until it — and every Deployment — is
   # healthy, so a failed migration or rollout turns this job red.
   deploy-staging:
+    env:
+      # Raise the client-side API throttle for every helm call in this job
+      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
+      #
+      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
+      # default of 5 req/s. The initial apply spends the burst, then everything
+      # after it (notably --wait/--wait-for-jobs polling every resource in the
+      # release) crawls at 5 req/s until the operation context expires:
+      #   UPGRADE FAILED: client rate limiter Wait returned an error
+      # That error is the client queueing behind its own limiter, not the API
+      # server rejecting anything, so the fix is on this side.
+      HELM_QPS: "50"
+      HELM_BURST_LIMIT: "300"
     needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API

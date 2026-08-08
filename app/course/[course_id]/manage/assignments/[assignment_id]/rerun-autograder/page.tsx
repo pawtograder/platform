@@ -1039,7 +1039,7 @@ export default function RerunAutograderPage() {
   if (isAssignmentLoading) {
     return <Skeleton height="100px" />;
   }
-  if (!assignment?.data.autograder.grader_repo) {
+  if (!assignment?.data?.autograder?.grader_repo) {
     return <Text>Assignment not found</Text>;
   }
   return (

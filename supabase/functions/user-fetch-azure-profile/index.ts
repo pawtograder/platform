@@ -3,6 +3,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { wrapRequestHandler, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -317,8 +319,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
 // Initialize Sentry
 Sentry.init({
-  dsn: Deno.env.get("SENTRY_DSN"),
-  environment: Deno.env.get("ENVIRONMENT") || "development"
+  beforeSend: normalizeEventFingerprint,
+  ...sentryIdentity(),
+  dsn: Deno.env.get("SENTRY_DSN")
 });
 
 Deno.serve(async (req: Request) => {
