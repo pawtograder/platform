@@ -1,79 +1,7 @@
 {
-  "recordedAt": "2026-08-06T13:53:39.073Z",
+  "recordedAt": "2026-08-08T00:11:17.820Z",
   "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
   "entries": {
-    "assignment-detail|dark|nested-interactive|violation": {
-      "route": "assignment-detail",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "assignment-detail|light|nested-interactive|violation": {
-      "route": "assignment-detail",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "assignments|dark|nested-interactive|violation": {
-      "route": "assignments",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "assignments|light|nested-interactive|violation": {
-      "route": "assignments",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "course-home|dark|nested-interactive|violation": {
-      "route": "course-home",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "course-home|light|nested-interactive|violation": {
-      "route": "course-home",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "discussion-list|dark|nested-interactive|violation": {
-      "route": "discussion-list",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "discussion-list|light|nested-interactive|violation": {
-      "route": "discussion-list",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "discussion-new|dark|color-contrast|incomplete": {
       "route": "discussion-new",
       "scheme": "dark",
@@ -81,16 +9,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
-    },
-    "discussion-new|dark|nested-interactive|violation": {
-      "route": "discussion-new",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
+      "sample": "#radio-group\\:«ri»\\:radio\\:33 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|light|color-contrast|incomplete": {
       "route": "discussion-new",
@@ -99,52 +18,7 @@
       "kind": "incomplete",
       "nodes": 11,
       "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
-    },
-    "discussion-new|light|nested-interactive|violation": {
-      "route": "discussion-new",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "discussion-thread|dark|nested-interactive|violation": {
-      "route": "discussion-thread",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "discussion-thread|light|nested-interactive|violation": {
-      "route": "discussion-thread",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "flashcard-deck|dark|nested-interactive|violation": {
-      "route": "flashcard-deck",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "flashcard-deck|light|nested-interactive|violation": {
-      "route": "flashcard-deck",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
+      "sample": "#radio-group\\:«ri»\\:radio\\:33 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "flashcards|dark|heading-order|violation": {
       "route": "flashcards",
@@ -155,15 +29,6 @@
       "impact": "moderate",
       "sample": "h3"
     },
-    "flashcards|dark|nested-interactive|violation": {
-      "route": "flashcards",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "flashcards|light|heading-order|violation": {
       "route": "flashcards",
       "scheme": "light",
@@ -172,69 +37,6 @@
       "nodes": 1,
       "impact": "moderate",
       "sample": "h3"
-    },
-    "flashcards|light|nested-interactive|violation": {
-      "route": "flashcards",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "github-help|dark|nested-interactive|violation": {
-      "route": "github-help",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "github-help|light|nested-interactive|violation": {
-      "route": "github-help",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "gradebook|dark|nested-interactive|violation": {
-      "route": "gradebook",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "gradebook|light|nested-interactive|violation": {
-      "route": "gradebook",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "notifications|dark|nested-interactive|violation": {
-      "route": "notifications",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "notifications|light|nested-interactive|violation": {
-      "route": "notifications",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     },
     "office-hours-queue-new|dark|color-contrast|incomplete": {
       "route": "office-hours-queue-new",
@@ -254,42 +56,6 @@
       "impact": "serious",
       "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
     },
-    "polls|dark|nested-interactive|violation": {
-      "route": "polls",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "polls|light|nested-interactive|violation": {
-      "route": "polls",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "regrade-requests|dark|nested-interactive|violation": {
-      "route": "regrade-requests",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "regrade-requests|light|nested-interactive|violation": {
-      "route": "regrade-requests",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-checks|dark|color-contrast|incomplete": {
       "route": "submission-checks",
       "scheme": "dark",
@@ -298,15 +64,6 @@
       "nodes": 11,
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
-    "submission-checks|dark|nested-interactive|violation": {
-      "route": "submission-checks",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     },
     "submission-checks|light|color-contrast|incomplete": {
       "route": "submission-checks",
@@ -317,15 +74,6 @@
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submission-checks|light|nested-interactive|violation": {
-      "route": "submission-checks",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-deployments|dark|color-contrast|incomplete": {
       "route": "submission-deployments",
       "scheme": "dark",
@@ -334,15 +82,6 @@
       "nodes": 11,
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
-    "submission-deployments|dark|nested-interactive|violation": {
-      "route": "submission-deployments",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     },
     "submission-deployments|light|color-contrast|incomplete": {
       "route": "submission-deployments",
@@ -353,51 +92,6 @@
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submission-deployments|light|nested-interactive|violation": {
-      "route": "submission-deployments",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submission-files|dark|nested-interactive|violation": {
-      "route": "submission-files",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submission-files|light|nested-interactive|violation": {
-      "route": "submission-files",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submission-grade|dark|nested-interactive|violation": {
-      "route": "submission-grade",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submission-grade|light|nested-interactive|violation": {
-      "route": "submission-grade",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-repo-analytics|dark|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
       "scheme": "dark",
@@ -406,15 +100,6 @@
       "nodes": 11,
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
-    "submission-repo-analytics|dark|nested-interactive|violation": {
-      "route": "submission-repo-analytics",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     },
     "submission-repo-analytics|light|color-contrast|incomplete": {
       "route": "submission-repo-analytics",
@@ -425,15 +110,6 @@
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submission-repo-analytics|light|nested-interactive|violation": {
-      "route": "submission-repo-analytics",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-results|dark|color-contrast|incomplete": {
       "route": "submission-results",
       "scheme": "dark",
@@ -442,15 +118,6 @@
       "nodes": 11,
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
-    "submission-results|dark|nested-interactive|violation": {
-      "route": "submission-results",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     },
     "submission-results|light|color-contrast|incomplete": {
       "route": "submission-results",
@@ -461,15 +128,6 @@
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submission-results|light|nested-interactive|violation": {
-      "route": "submission-results",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-root|dark|color-contrast|incomplete": {
       "route": "submission-root",
       "scheme": "dark",
@@ -479,15 +137,6 @@
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
-    "submission-root|dark|nested-interactive|violation": {
-      "route": "submission-root",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
     "submission-root|light|color-contrast|incomplete": {
       "route": "submission-root",
       "scheme": "light",
@@ -496,87 +145,6 @@
       "nodes": 11,
       "impact": "serious",
       "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
-    "submission-root|light|nested-interactive|violation": {
-      "route": "submission-root",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submissions-list|dark|nested-interactive|violation": {
-      "route": "submissions-list",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "submissions-list|light|nested-interactive|violation": {
-      "route": "submissions-list",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "survey-taking|dark|nested-interactive|violation": {
-      "route": "survey-taking",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "survey-taking|light|nested-interactive|violation": {
-      "route": "survey-taking",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "surveys|dark|nested-interactive|violation": {
-      "route": "surveys",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "surveys|light|nested-interactive|violation": {
-      "route": "surveys",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "unsubscribe-thread|dark|nested-interactive|violation": {
-      "route": "unsubscribe-thread",
-      "scheme": "dark",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
-    },
-    "unsubscribe-thread|light|nested-interactive|violation": {
-      "route": "unsubscribe-thread",
-      "scheme": "light",
-      "rule": "nested-interactive",
-      "kind": "violation",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": ".css-lnfksf"
     }
   }
 }
