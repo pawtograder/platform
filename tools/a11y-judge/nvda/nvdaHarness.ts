@@ -1428,8 +1428,8 @@ export class NvdaHarness implements AtDriver {
 
   /**
    * Control-level cursor hop for replayPlan (AtDriver.moveToControl): browse-mode
-   * quick nav, B / Shift-B (guidepup keyCodeCommands.moveToNextButton /
-   * moveToPreviousButton).
+   * quick nav, F / Shift-F (guidepup keyCodeCommands.moveToNextFormField /
+   * moveToPreviousFormField).
    *
    * WHY a second mover at all. `next`/`previous` are ArrowDown/ArrowUp: they move
    * the browse caret by LINE and leave it at the line START. Run 30760469666's
@@ -1439,8 +1439,35 @@ export class NvdaHarness implements AtDriver {
    * (the line names Reply, and nvdaLineSegmentAlternates offers it) and the
    * cursor oracle answered "Like (0 likes), button" every time: `contradicted`,
    * correctly, 75 presses in a row. The matcher and the gate were both right; the
-   * ladder simply had no gesture that could reach the button. B is that gesture,
-   * and Reply is two hops from Like.
+   * ladder simply had no gesture that could reach the button. A quick-nav to the
+   * adjacent CONTROL is that gesture, and Reply is two hops from Like.
+   *
+   * WHY FORM FIELD (F) RATHER THAN BUTTON (B). This started as B, which fixed
+   * the discussion case and nothing else: a button hop can only ever reach a
+   * button, so a milestone naming a RADIO or a CHECKBOX had no resync gesture at
+   * all. That is the survey selection failure — measured on the seeded survey,
+   * NVDA's browse buffer splits every SurveyJS choice across two lines, the
+   * control's own line carrying role and state but NO name:
+   *
+   *   line 3  the radio       spoken "radio button, not checked"
+   *                           navigatorObject "Just right, radio button, ... 2 of 3"
+   *   line 4  the label text  spoken "Just right"    navigatorObject "label"
+   *
+   * so the milestone "just right" can only ever match line 4 — and Enter there
+   * does nothing at all (measured: nothing checked, activeElement BODY). Every
+   * line sweep in the ladder lands on text the `act` cannot use.
+   *
+   * F fixes it because NVDA's form-field quick-nav announces the control the way
+   * focus does, name included, and lands the caret on the control itself:
+   *
+   *   F-hop  spoken "Just right, radio button, not checked"
+   *          Enter -> checked=Just right, activeElement=INPUT#q2_1
+   *
+   * F is also a strict SUPERSET of B — NVDA's form fields are edits, buttons,
+   * checkboxes, radio buttons, combo boxes, list boxes and sliders — so the
+   * discussion-reply case this rung was built for still resolves, just through a
+   * gesture that can also reach the other three-quarters of a form. The cost is
+   * hops spent on non-button fields, which the sweep budget already absorbs.
    *
    * Reports nothing on purpose (see the hook's contract): the caller reads where
    * this landed with an ordinary `observe`, so the hop's speech goes through
@@ -1452,11 +1479,11 @@ export class NvdaHarness implements AtDriver {
    */
   async moveToControl(direction: ControlHopDirection): Promise<void> {
     const kc = this.nvda.keyboardCommands;
-    const gesture = direction === "next" ? kc.moveToNextButton : kc.moveToPreviousButton;
+    const gesture = direction === "next" ? kc.moveToNextFormField : kc.moveToPreviousFormField;
     // No "from" reading here on purpose: itemText() is a round trip, replayPlan
     // may spend 24 hops on one milestone, and the observe either side of every
     // hop already records where the cursor was and where it landed.
-    this.debug("control hop: quick-nav to the adjacent button", {
+    this.debug("control hop: quick-nav to the adjacent form control", {
       direction,
       gesture: gesture.representation
     });
