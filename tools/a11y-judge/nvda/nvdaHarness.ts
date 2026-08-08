@@ -2809,8 +2809,13 @@ export class NvdaHarness implements AtDriver {
    * that way would select "Too fast" when the plan asked for "Just right".
    *
    * Engages only on the exact signature of the defect — a milestone-bearing
-   * `act` whose oracle reply reduced to NO content words at all — so an `act` on
-   * a properly named control (every other one in the suite) is untouched.
+   * `act` whose oracle reply is a bare `label` — and accepts the hop only when
+   * EVERY milestone word is present on what it landed on. Both bounds were paid
+   * for in run 31270612942, where a looser version of each broke a task that had
+   * been passing: "nameless" alone caught ordinary prose ("paragraph") and
+   * suppressed a working Enter, and overlap-matching accepted "Reference
+   * Assignment (Optional)" for a milestone of "privacy (optional)" on the
+   * strength of the single word "optional".
    *
    * Returns "skip" when the hop did not reach a control matching the milestone.
    * Skipping is safe by construction: the Enter it suppresses is the one already
@@ -2825,8 +2830,16 @@ export class NvdaHarness implements AtDriver {
     const check = this.cursorChecks.at(-1);
     if (!check || check.stepIndex !== this.steps.length || check.command !== "act") return "proceed";
     if (check.verdict !== "abstained" || check.objectTokens.length > 0) return "proceed";
+    // The reply must be a bare LABEL, not merely nameless. Run 31270612942
+    // proved the difference matters: a milestone of "post" sat on ordinary prose
+    // whose reply was "paragraph", this guard engaged, the hop landed on the
+    // reply textarea and SUPPRESSED an Enter that had been working. "paragraph"
+    // is exactly the benign collapse NVDA_ROLE_TOKENS documents — plain text has
+    // no name to give. A `<label>` is different in kind: it is never a thing to
+    // activate, only ever a wrapper around the control that is.
+    if (clean(check.reply) !== "label") return "proceed";
 
-    this.debug("act: cursor is on a NAMELESS object — the milestone matched label text, not the control", {
+    this.debug("act: cursor is on a nameless LABEL — the milestone matched label text, not the control", {
       milestone,
       oracleReply: check.reply.slice(0, 120),
       hop: "previous form field (the control precedes its label text)"
@@ -2838,15 +2851,27 @@ export class NvdaHarness implements AtDriver {
     // ("Just right, radio button, not checked"), which is exactly the name the
     // line read omitted.
     const { content } = nvdaCursorTokens(item);
-    const shared = content.filter((token) => wanted.tokens.includes(token));
-    if (shared.length > 0) {
-      this.debug("act: retargeted onto the control the milestone names", { item: item.slice(0, 120), shared });
+    // EVERY milestone word must be present, not merely one. Overlap alone is far
+    // too weak for a gesture that picks WHICH control gets activated: in run
+    // 31270612942 a milestone of "privacy (optional)" shared its one word
+    // "optional" with "Reference Assignment (Optional), combo box" and this hop
+    // accepted it, so Enter opened a combo box instead of ticking the privacy
+    // checkbox and the whole help-request task failed. Overlap is the right rule
+    // for judgeCursorOracle, which only has to decide whether two readings
+    // describe the same place; it is the wrong rule here.
+    const missing = wanted.tokens.filter((token) => !content.includes(token));
+    if (missing.length === 0) {
+      this.debug("act: retargeted onto the control the milestone names", {
+        item: item.slice(0, 120),
+        matched: wanted.tokens
+      });
       return "proceed";
     }
     this.debug("act: RETARGET FAILED — not firing Enter, which would activate the wrong control", {
       milestone,
       landedOn: item.slice(0, 120),
-      wanted: wanted.tokens
+      wanted: wanted.tokens,
+      missing
     });
     return "skip";
   }
