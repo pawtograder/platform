@@ -57,6 +57,9 @@ describe("isSelfViewAsScope", () => {
   it("ignores query strings and fragments", () => {
     expect(isSelfViewAsScope("/course/12/assignments/34?tab=results", 12, 34)).toBe(true);
     expect(isSelfViewAsScope("/course/12/assignments?q=lab", 12, 34)).toBe(false);
+    expect(isSelfViewAsScope("/course/12/assignments/34#test-9", 12, 34)).toBe(true);
+    expect(isSelfViewAsScope("/course/12/assignments/34?tab=results#test-9", 12, 34)).toBe(true);
+    expect(isSelfViewAsScope("/course/12/assignments#top", 12, 34)).toBe(false);
   });
 });
 
@@ -68,14 +71,27 @@ describe("parseViewAsCookieValue", () => {
   });
 
   it("reads an assignment-scoped self preview", () => {
-    expect(parseViewAsCookieValue(`${profileId}:34`)).toEqual({ profileId, previewAssignmentId: 34 });
+    expect(parseViewAsCookieValue(`${profileId}~34`)).toEqual({ profileId, previewAssignmentId: 34 });
+  });
+
+  it("uses a delimiter that survives URI encoding unchanged", () => {
+    // The client writes through encodeURIComponent and reads back through decodeURIComponent, while
+    // the server parses whatever `cookies()` hands it. A delimiter that encoding rewrites would let
+    // those two disagree, and the server would read every path as out of scope.
+    const raw = `${profileId}~34`;
+    expect(encodeURIComponent(raw)).toBe(raw);
+    expect(parseViewAsCookieValue(encodeURIComponent(raw))).toEqual({ profileId, previewAssignmentId: 34 });
   });
 
   it("rejects empty and malformed values rather than widening them", () => {
     expect(parseViewAsCookieValue(null)).toBeNull();
     expect(parseViewAsCookieValue("")).toBeNull();
     // A non-numeric suffix must not degrade into a course-wide target for that profile.
-    expect(parseViewAsCookieValue(`${profileId}:not-a-number`)).toBeNull();
-    expect(parseViewAsCookieValue(`${profileId}:`)).toBeNull();
+    expect(parseViewAsCookieValue(`${profileId}~not-a-number`)).toBeNull();
+    expect(parseViewAsCookieValue(`${profileId}~`)).toBeNull();
+    expect(parseViewAsCookieValue(`~34`)).toBeNull();
+    // Extra segments are a shape this function never writes: reject rather than salvage a prefix,
+    // which would turn a scoped preview into a course-wide target.
+    expect(parseViewAsCookieValue(`${profileId}~34~99`)).toBeNull();
   });
 });

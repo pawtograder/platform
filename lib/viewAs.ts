@@ -23,20 +23,28 @@ export function viewAsCookieName(courseId: number | string): string {
 }
 
 /**
- * Cookie payload: `<profileId>` for an enrolled student, `<profileId>:<assignmentId>` for a staff
- * self-preview. A profile id is a UUID, so `:` cannot collide with one.
+ * Cookie payload: `<profileId>` for an enrolled student, `<profileId>~<assignmentId>` for a staff
+ * self-preview. A profile id is a UUID, so `~` cannot collide with one.
+ *
+ * `~` rather than a more obvious `:` because `encodeURIComponent` leaves it alone. The client reads
+ * this value back through `decodeURIComponent` while the server reads it from `cookies()`, and a
+ * delimiter that survives neither, one, nor both of those unchanged is a decoding bug waiting to
+ * split the two apart — with the server silently deciding every path is out of scope.
  */
+const VIEW_AS_DELIMITER = "~";
+
 export function parseViewAsCookieValue(value: string | null | undefined): ViewAsTarget | null {
   if (!value) return null;
-  const [profileId, assignmentPart] = value.split(":");
+  const parts = value.split(VIEW_AS_DELIMITER);
+  // Reject anything this function did not write. Salvaging a prefix out of an unexpected shape is
+  // how a scoped preview would quietly widen into a course-wide target.
+  if (parts.length > 2) return null;
+  const [profileId, assignmentPart] = parts;
   if (!profileId) return null;
   if (assignmentPart === undefined) {
     return { profileId, previewAssignmentId: null };
   }
-  return /^\d+$/.test(assignmentPart)
-    ? { profileId, previewAssignmentId: Number(assignmentPart) }
-    : // A malformed suffix must not silently widen into a course-wide target.
-      null;
+  return /^\d+$/.test(assignmentPart) ? { profileId, previewAssignmentId: Number(assignmentPart) } : null;
 }
 
 /** Client-only: read the current view-as target for a course, if any. */
@@ -59,8 +67,11 @@ export function setViewAsCookie(
   previewAssignmentId?: number | null
 ): void {
   if (typeof document === "undefined") return;
-  const value = previewAssignmentId == null ? profileId : `${profileId}:${previewAssignmentId}`;
-  document.cookie = `${viewAsCookieName(courseId)}=${encodeURIComponent(value)}; path=/; SameSite=Lax`;
+  const value = previewAssignmentId == null ? profileId : `${profileId}${VIEW_AS_DELIMITER}${previewAssignmentId}`;
+  // Secure only on https, so the cookie is withheld from plaintext requests in deployed
+  // environments without breaking local development, which is served over http.
+  const secure = typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${viewAsCookieName(courseId)}=${encodeURIComponent(value)}; path=/; SameSite=Lax${secure}`;
 }
 
 /** Client-only: clear the view-as target for a course. */
