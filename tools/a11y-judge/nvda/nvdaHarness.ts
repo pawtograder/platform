@@ -748,22 +748,31 @@ function sweepRestoreJs(kind: string, key: string, value: string): string {
 }
 
 /**
- * Page-side "did that Enter do anything?" signature.
+ * Page-side "did that Enter change an ANSWER?" signature.
+ *
+ * Checkable state only — deliberately not focus, and not location. Run
+ * 31312543653 is why: this began as checked-state plus activeElement plus href,
+ * and Enter on a SurveyJS label moves focus to BODY while changing nothing at
+ * all, so the signature differed, the Enter was scored as effective and the
+ * retarget never ran. Focus moving is not an answer being given.
  *
  * The `act` retarget only ever engages on a line of bare label text (see
- * retargetActToControl), and Enter on such a line either activates the control
- * the label belongs to or does nothing at all — so checkable state, focus and
- * location together are enough to tell those apart. Buttons and links never
- * reach this path: their lines name their own role.
+ * retargetActToControl), where Enter either activates the control the label
+ * belongs to or does nothing — and every such control in these plans is a
+ * checkbox or a radio. Buttons and links never reach this path: their lines name
+ * their own role.
  */
+/** The prefix keeps "nothing is checked" (a real, common reading — the survey
+ *  starts blank) distinguishable from "the host read failed", which hostEval
+ *  reports as the empty string. */
+const ACT_SIGNATURE_PREFIX = "checked:";
+
 function actStateSignatureJs(): string {
   return `(() => {
-    const checked = [...document.querySelectorAll('input[type=checkbox],input[type=radio]')]
+    return ${JSON.stringify(ACT_SIGNATURE_PREFIX)} + [...document.querySelectorAll('input[type=checkbox],input[type=radio]')]
       .filter((i) => i.checked)
       .map((i) => (i.name || i.id || '?') + '=' + i.value)
       .join(',');
-    const el = document.activeElement;
-    return checked + '|' + (el ? el.tagName + (el.id ? '#' + el.id : '') : 'none') + '|' + location.href;
   })()`;
 }
 
@@ -3007,9 +3016,16 @@ export class NvdaHarness implements AtDriver {
         const before = await signature();
         await nvda.act(opts);
         const after = await signature();
-        if (!before || after !== before) {
-          this.debug("act: Enter on the label text did something — no retarget needed", {
-            milestone: context?.milestone
+        // A lost read (hostEval reports "") is not evidence either way, and must
+        // not be mistaken for "nothing is checked" — which is the survey's own
+        // starting state. Only two good reads that AGREE prove the key was dead.
+        const readable = before.startsWith(ACT_SIGNATURE_PREFIX) && after.startsWith(ACT_SIGNATURE_PREFIX);
+        if (!readable || after !== before) {
+          this.debug("act: Enter changed an answer, or the check was unreadable — no retarget", {
+            milestone: context?.milestone,
+            before,
+            after,
+            readable
           });
           return;
         }
