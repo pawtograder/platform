@@ -747,6 +747,26 @@ function sweepRestoreJs(kind: string, key: string, value: string): string {
   })()`;
 }
 
+/**
+ * Page-side "did that Enter do anything?" signature.
+ *
+ * The `act` retarget only ever engages on a line of bare label text (see
+ * retargetActToControl), and Enter on such a line either activates the control
+ * the label belongs to or does nothing at all — so checkable state, focus and
+ * location together are enough to tell those apart. Buttons and links never
+ * reach this path: their lines name their own role.
+ */
+function actStateSignatureJs(): string {
+  return `(() => {
+    const checked = [...document.querySelectorAll('input[type=checkbox],input[type=radio]')]
+      .filter((i) => i.checked)
+      .map((i) => (i.name || i.id || '?') + '=' + i.value)
+      .join(',');
+    const el = document.activeElement;
+    return checked + '|' + (el ? el.tagName + (el.id ? '#' + el.id : '') : 'none') + '|' + location.href;
+  })()`;
+}
+
 const tidyLabel = (s: string): string =>
   s
     .replace(/\s+/g, " ")
@@ -2822,27 +2842,62 @@ export class NvdaHarness implements AtDriver {
    * the next form field forward from line 4 is the following option — hopping
    * that way would select "Too fast" when the plan asked for "Just right".
    *
-   * THREE bounds, each paid for by a task this broke while too loose:
+   * Reached only as a FALLBACK, after an Enter that provably changed nothing
+   * (see `case "act"`). That ordering is the correction for three red runs spent
+   * trying to predict which widgets need it:
    *
    *  - the oracle reply must be a bare `label`. "Any nameless object" also
    *    catches ordinary prose, whose reply is "paragraph"; that suppressed a
    *    working Enter on a milestone of "post" (run 31270612942).
-   *  - the LINE must not announce a control. A `label` object alone does not
-   *    mean Enter is dead — the Chakra privacy checkbox reports one too, but its
-   *    line reads "Privacy (Optional), check box, checked, ..." and Enter works.
-   *    Suppressing it failed office-hours__help-request (run 31273130928).
+   *  - the LINE must not announce a control, which keeps buttons and links out.
    *  - EVERY milestone word must appear on what the hop landed on. Overlap
    *    accepted "Reference Assignment (Optional), combo box" for a milestone of
    *    "privacy (optional)" on the single word "optional", so Enter opened a
    *    combo box instead of ticking a checkbox (run 31270612942).
    *
-   * Together these admit the measured defect and nothing else in the suite.
+   * None of those was enough on its own, because the distinguishing fact is not
+   * visible in the announcement at all. Run 31286526726 measured the Chakra
+   * privacy checkbox presenting the SAME bare-label line as a SurveyJS choice
+   * ("Privacy (Optional)", no role word, `label` object) — yet Enter ticks it,
+   * because its `<label>` activates its input, while SurveyJS's leaves
+   * activeElement on BODY. No amount of reading the speech separates those. Only
+   * pressing the key and looking at the page does, which is why this now runs
+   * after the Enter rather than instead of it.
+   *
+   * `skip` therefore means "the Enter already happened and did nothing, and the
+   * hop could not find the control either" — a genuine dead end, not a
+   * suppressed keystroke.
    *
    * Returns "skip" when the hop did not reach a control matching the milestone.
    * Skipping is safe by construction: the Enter it suppresses is the one already
    * proven to be a no-op, so this is never worse than the behaviour it replaces,
    * and it is far better than firing Enter at whatever the hop landed on.
    */
+  /**
+   * Is this `act` sitting on the shape that MIGHT need retargeting — a line of
+   * bare label text, matched by a naming milestone, with a nameless `label`
+   * navigator object?
+   *
+   * Answering yes costs only the two host reads that bracket the Enter; it does
+   * not change what the Enter does. That is the whole point of the inversion:
+   * the previous shape decided to retarget INSTEAD of pressing Enter, and was
+   * wrong about which widgets need it (run 31286526726 — the Chakra privacy
+   * checkbox has exactly the same bare-label line as SurveyJS, but Enter on it
+   * works, because its `<label>` activates its input where SurveyJS's does not).
+   * Pressing first and checking after replaces that guess with a measurement.
+   */
+  private async actNeedsNoOpCheck(milestone: string | undefined): Promise<boolean> {
+    if (!this.hostEval) return false;
+    const wanted = cursorOracleApplies(milestone);
+    if (!wanted.applies) return false;
+    const check = this.cursorChecks.at(-1);
+    if (!check || check.stepIndex !== this.steps.length || check.command !== "act") return false;
+    if (check.verdict !== "abstained" || check.objectTokens.length > 0) return false;
+    if (clean(check.reply) !== "label") return false;
+    const line = this.undoOracleEcho(await this.itemTextSafe(ITEM_TEXT_PROBE_MS));
+    return !ACT_LINE_NAMES_A_CONTROL.test(line);
+  }
+
   private async retargetActToControl(milestone: string | undefined): Promise<"proceed" | "skip"> {
     const wanted = cursorOracleApplies(milestone);
     if (!wanted.applies) return "proceed";
@@ -2943,9 +2998,21 @@ export class NvdaHarness implements AtDriver {
       case "previous":
         return this.arrowSweep("previous", () => nvda.previous(opts));
       case "act": {
-        // A milestone can match the LABEL TEXT of a control instead of the
-        // control, and Enter there does nothing at all. Retarget first; a
-        // failed retarget must not fire Enter (see retargetActToControl).
+        // A milestone can match the LABEL TEXT of a control rather than the
+        // control. Enter there does nothing on some widgets and works fine on
+        // others, so the Enter goes FIRST and the retarget is the fallback for
+        // when it demonstrably did nothing (see retargetActToControl).
+        if (!(await this.actNeedsNoOpCheck(context?.milestone))) return nvda.act(opts);
+        const signature = () => this.hostEval!(actStateSignatureJs()).catch(() => "");
+        const before = await signature();
+        await nvda.act(opts);
+        const after = await signature();
+        if (!before || after !== before) {
+          this.debug("act: Enter on the label text did something — no retarget needed", {
+            milestone: context?.milestone
+          });
+          return;
+        }
         if ((await this.retargetActToControl(context?.milestone)) === "skip") return;
         return nvda.act(opts);
       }
