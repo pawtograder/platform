@@ -21,6 +21,8 @@ test.setTimeout(120_000);
 let course: Course;
 let instructor: TestingUser;
 let grader: TestingUser;
+/** A real enrollment, so the "view as an enrolled student" path has something to resolve. */
+let student: TestingUser;
 let assignmentId: number;
 /** An assignment whose release date is still in the future, as it is while staff test it. */
 let unreleasedAssignmentId: number;
@@ -182,7 +184,7 @@ test.beforeAll(async ({}, testInfo) => {
   testInfo.setTimeout(120_000);
   const emailSuffix = Math.random().toString(36).slice(2, 8);
   course = await createClass({ name: "Test Assignment View As Student" });
-  [instructor, grader] = await createUsersInClass([
+  [instructor, grader, student] = await createUsersInClass([
     {
       name: "Test Assignment View Instructor",
       public_profile_name: "Test Assignment View Instructor Public",
@@ -196,6 +198,14 @@ test.beforeAll(async ({}, testInfo) => {
       public_profile_name: "Test Assignment View Grader Public",
       email: `test-assignment-view-grader-${emailSuffix}@pawtograder.net`,
       role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Test Assignment View Student",
+      public_profile_name: "Test Assignment View Student Public",
+      email: `test-assignment-view-student-${emailSuffix}@pawtograder.net`,
+      role: "student",
       class_id: course.id,
       useMagicLink: true
     }
@@ -230,7 +240,7 @@ test.beforeAll(async ({}, testInfo) => {
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
-  await logMagicLinksOnFailure([instructor, grader]);
+  await logMagicLinksOnFailure([instructor, grader, student]);
 });
 
 test.describe("Test Assignment student preview", () => {
@@ -252,7 +262,7 @@ test.describe("Test Assignment student preview", () => {
 
     const banner = page.getByRole("alert", { name: "Viewing as student" });
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("Test Assignment View Grader");
+    await expect(banner).toContainText("Previewing your own submission as a student");
     await expect(page.getByRole("button", { name: "Submission History" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Commit History" })).toHaveCount(0);
     await expect(page.getByText("Student's Due Date:")).toHaveCount(0);
@@ -304,7 +314,7 @@ test.describe("Test Assignment student preview", () => {
 
     const banner = page.getByRole("alert", { name: "Viewing as student" });
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("Test Assignment View Instructor");
+    await expect(banner).toContainText("Previewing your own submission as a student");
     await expect(page.getByRole("button", { name: "Commit History" })).toHaveCount(0);
 
     await banner.getByRole("button", { name: "Exit student view" }).click();
@@ -328,7 +338,7 @@ test.describe("Test Assignment student preview", () => {
     );
     const banner = page.getByRole("alert", { name: "Viewing as student" });
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("Test Assignment View Instructor");
+    await expect(banner).toContainText("Previewing your own submission as a student");
 
     // Exiting returns the same page under the instructor's own identity.
     await banner.getByRole("button", { name: "Exit student view" }).click();
@@ -336,5 +346,69 @@ test.describe("Test Assignment student preview", () => {
     await expect(page).toHaveURL(
       new RegExp(`/course/${course.id}/assignments/${unreleasedAssignmentId}/submissions/${unreleasedSubmissionId}/`)
     );
+  });
+
+  // Issue #892: the preview is the instructor's own staff profile wearing a student's view, so
+  // pages keyed on a real `role = 'student'` enrollment — the assignments dashboard RPC, the
+  // course-home upcoming panel — had nothing to return for it. Following the student nav out of
+  // the previewed assignment reported "No upcoming deadlines available" for a course whose
+  // assignments were all released.
+  test("leaving the previewed assignment restores the instructor view instead of an empty student list", async ({
+    page
+  }) => {
+    const submissionId = staffSubmissions.get("instructor");
+    if (!submissionId) throw new Error("missing instructor test submission");
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
+    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+
+    // The preview shows the student nav; its Assignments tab is the page that came back empty.
+    // Target the href rather than the accessible name: the nav wraps each link's label in a
+    // role="group" element, which zeroes out the link's name-from-content, and both breakpoint
+    // copies of the nav are in the DOM at once.
+    await page.locator(`a[href="/course/${course.id}/assignments"]`).filter({ visible: true }).first().click();
+
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/assignments`));
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expect(page.getByText("No upcoming deadlines available")).toHaveCount(0);
+
+    // The cookie is cleared on the way out, so returning to the assignment does not silently
+    // re-enter the preview.
+    await page.goto(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`);
+    await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+  });
+
+  // The other half of #892: an instructor who wants a course-wide student view gets there by
+  // viewing a real enrolled student, and that path is offered where the preview leaves off.
+  test("instructor switches from the self preview to a real student's read-only view", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
+    await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
+
+    const picker = page.getByRole("combobox", { name: "View the course as a student" });
+    await picker.click();
+    await picker.fill(student.private_profile_name);
+    await page.getByRole("option", { name: new RegExp(student.private_profile_name) }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments$`));
+    const banner = page.getByRole("alert", { name: "Viewing as student" });
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(student.private_profile_name);
+
+    // The full student view populates: the released assignment is listed for the student, and the
+    // empty state the self preview produced is absent.
+    await expect(page.getByRole("link", { name: "Test Assignment Student Preview E2E" })).toBeVisible();
+    await expect(page.getByText("No upcoming deadlines available")).toHaveCount(0);
+    // The unreleased assignment stays hidden, as it is for the student.
+    await expect(page.getByRole("link", { name: "Test Assignment Unreleased Preview E2E" })).toHaveCount(0);
+
+    // Viewing an enrolled student is course-wide, not scoped to one assignment.
+    await banner.getByRole("button", { name: "Exit student view" }).click();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
   });
 });

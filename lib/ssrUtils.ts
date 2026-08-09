@@ -1,9 +1,9 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { viewAsCookieName } from "@/lib/viewAs";
+import { isSelfViewAsScope, viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import type {
   Assignment,
   AssignmentDueDateException,
@@ -143,7 +143,8 @@ export type EffectiveCourseIdentity = UserRoleData & {
   /**
    * True when staff are previewing their *own* test-assignment work as a student, rather than
    * masquerading as an enrolled student. These viewers keep staff-level access to the assignment
-   * itself (they own it) — only the student-facing content filters apply.
+   * itself (they own it) — only the student-facing content filters apply. Only ever true within
+   * the assignment the preview was entered from; see `isSelfViewAsScope`.
    */
   isViewingAsSelf: boolean;
   /** The viewer's actual role in the course (unchanged by view-as). */
@@ -192,6 +193,19 @@ export async function getEffectiveCourseIdentity(
   }
 
   if (targetProfileId === realRole.private_profile_id) {
+    // Self view-as only applies inside the assignment it was entered from. Everywhere else the
+    // cookie is inert and the real staff identity is returned, so pages that key on a real
+    // student enrollment never render against a synthetic one (issue #892). The client provider
+    // clears the stale cookie once it observes the same thing.
+    //
+    // A missing x-pathname means middleware did not run for this request; treat that as in scope
+    // so the Test Assignment preview degrades to its previous behavior rather than silently
+    // switching off. In practice it is always present — X-User-ID rides the same mechanism, and
+    // every caller redirects away without it.
+    const pathname = (await headers()).get("x-pathname");
+    if (pathname && !isSelfViewAsScope(pathname, course_id)) {
+      return base;
+    }
     return {
       role: "student",
       class_id: realRole.class_id,

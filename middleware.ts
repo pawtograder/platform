@@ -12,6 +12,12 @@ export async function middleware(request: NextRequest) {
   // Setting only the response header is not enough — Next never sees it.
   request.headers.set("x-nonce", nonce);
   request.headers.set("Content-Security-Policy", csp);
+  // Server Components cannot read the request path (layouts get no pathname prop, and a soft
+  // navigation re-runs only the segments below the reused layout). `getEffectiveCourseIdentity`
+  // needs it to bound staff self view-as to the assignment it was entered from. Set on the
+  // *request* headers so `updateSession`'s `new Headers(request.headers)` copy forwards it,
+  // the same way X-User-ID reaches server components.
+  request.headers.set("x-pathname", request.nextUrl.pathname);
 
   const response = await updateSession(request);
   response.headers.set(cspHeaderName(), csp);

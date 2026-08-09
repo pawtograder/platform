@@ -7,10 +7,10 @@ import { UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/Databas
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
-import { clearViewAsCookie, getViewAsCookie, setViewAsCookie } from "@/lib/viewAs";
+import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -29,6 +29,13 @@ type ClassProfileContextType = {
   isViewingAsStudent: boolean;
   /** Convenience alias for `isViewingAsStudent` — gate write surfaces on this. */
   isReadOnly: boolean;
+  /**
+   * True when staff are previewing their *own* test-assignment work as a student rather than
+   * masquerading as an enrolled student. Only ever true inside the assignment the preview was
+   * entered from (see `isSelfViewAsScope`), and the surfaces that need a real student enrollment
+   * stay empty for it — so UI that offers a course-wide student view should branch on this.
+   */
+  isViewingAsSelf: boolean;
   /** The viewer's actual role in the course, unaffected by view-as. */
   realRole: Database["public"]["Enums"]["app_role"];
   /** The viewer's actual private profile id, unaffected by view-as. */
@@ -121,6 +128,7 @@ type UserRoleWithClassAndUser = GetResult<
  */
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
+  const pathname = usePathname();
   const { user } = useAuthState();
   const userId = user?.id;
   const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
@@ -261,6 +269,24 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       return;
     }
     if (viewAsProfileId === realMyRole.private_profile_id) {
+      // Self view-as (the Test Assignment preview) is bounded to the assignment it was entered
+      // from — see isSelfViewAsScope. Outside it, drop the synthetic student identity and clear
+      // the cookie so returning to an assignment page does not silently re-enter student view.
+      // The reload matches exitViewAs: the course/office-hours controllers were mounted from the
+      // server layout under the student role, and swapping identity underneath them races their
+      // teardown.
+      if (!isSelfViewAsScope(pathname ?? "", course_id as string)) {
+        clearViewAsCookie(course_id as string);
+        setViewAsRole(null);
+        setViewAsProfileId(null);
+        setIsResolvingViewAs(false);
+        // Only reload once the cookie is genuinely gone. If clearing ever failed, a reload would
+        // re-read it, re-enter this branch, and loop; dropping the identity in memory is enough.
+        if (typeof window !== "undefined" && !getViewAsCookie(course_id as string)) {
+          window.location.assign(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+        }
+        return;
+      }
       setViewAsRole({ ...realMyRole, role: "student" } as UserRoleWithClassAndUser);
       setIsResolvingViewAs(false);
       return;
@@ -291,7 +317,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [realMyRole, viewAsProfileId, course_id]);
+  }, [realMyRole, viewAsProfileId, course_id, pathname]);
 
   const enterViewAs = useCallback(
     (studentPrivateProfileId: string, redirectTo?: string) => {
@@ -408,6 +434,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         public_profile: effectiveRole.publicProfile,
         isViewingAsStudent,
         isReadOnly: isViewingAsStudent,
+        isViewingAsSelf: isViewingAsStudent ? viewAsRole.private_profile_id === myRole.private_profile_id : false,
         realRole: myRole.role,
         realPrivateProfileId: myRole.private_profile_id,
         viewAsProfileName: isViewingAsStudent ? (viewAsRole.privateProfile?.name ?? undefined) : undefined,
