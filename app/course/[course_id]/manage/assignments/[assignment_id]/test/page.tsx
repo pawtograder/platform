@@ -2,7 +2,6 @@
 
 import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assignment_id]/commitHistory";
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
-import { ViewAsStudentPicker } from "@/components/course/view-as-student-picker";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -64,25 +63,22 @@ export default function TestAssignmentPage() {
         return;
       }
       event.preventDefault();
-      enterViewAs(private_profile_id, href);
+      // Record which assignment the preview belongs to, so it cannot follow the viewer to a
+      // different assignment (see isSelfViewAsScope).
+      enterViewAs(private_profile_id, {
+        redirectTo: href,
+        previewAssignmentId: Number.parseInt(assignment_id as string)
+      });
     }
   });
   return (
     <Box>
       <Heading size="sm">Test Assignment</Heading>
       <Text fontSize="sm" color="fg.muted">
-        You can create your own repository to test the assignment. Submission details open in student view with the same
-        read-only banner, grade-release rules, rubric visibility, and hidden autograder-output behavior students see.
-        Use the banner to exit student view and compare the instructor or grader view.
+        Create your own repository to test the assignment. Submissions open in read-only student view, with the same
+        grade-release, rubric-visibility, and hidden-output rules students get. The preview covers this assignment only
+        — leave it, or use the banner, to return to your staff view.
       </Text>
-      <Text fontSize="sm" color="fg.muted" mt={2}>
-        That preview covers this assignment only — it is your own staff account wearing a student&apos;s view, so
-        course-wide pages such as the Assignments list have no enrollment to draw on. To see the whole course as a
-        student sees it, view it as one of your enrolled students instead.
-      </Text>
-      <Box mt={2} mb={4} maxW="sm">
-        <ViewAsStudentPicker showLabel />
-      </Box>
       {/* {repository?.data.length ? (
         <CreateStudentReposButton syncAllPermissions />
       ): <></>} */}

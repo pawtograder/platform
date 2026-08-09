@@ -1,5 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "@/tests/global-setup";
+import type { Page } from "@playwright/test";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -28,6 +29,19 @@ let assignmentId: number;
 let unreleasedAssignmentId: number;
 let unreleasedSubmissionId: number;
 const staffSubmissions = new Map<string, number>();
+
+/**
+ * Waits until the per-course view-as cookie is gone. Dropping out of the preview is completed on the
+ * client, so this is the signal that it has actually happened; asserting only that the banner is
+ * absent can pass against a page that has not hydrated yet.
+ */
+async function expectViewAsCookieCleared(page: Page) {
+  await expect
+    .poll(
+      async () => (await page.context().cookies()).filter((cookie) => cookie.name === `view_as_${course.id}`).length
+    )
+    .toBe(0);
+}
 
 async function requireNoError<T>(result: { data: T; error: { message: string } | null }, context: string): Promise<T> {
   if (result.error) {
@@ -372,6 +386,10 @@ test.describe("Test Assignment student preview", () => {
     await page.locator(`a[href="/course/${course.id}/assignments"]`).filter({ visible: true }).first().click();
 
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/assignments`));
+    // Wait for the cookie to go before asserting the banner's absence. Leaving the preview is
+    // finished by the client, so a bare "not visible" check can pass against a page that simply has
+    // not hydrated yet — and the next navigation would abort the clearing mid-flight.
+    await expectViewAsCookieCleared(page);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
     await expect(page.getByText("No upcoming deadlines available")).toHaveCount(0);
 
@@ -382,33 +400,72 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
   });
 
-  // The other half of #892: an instructor who wants a course-wide student view gets there by
-  // viewing a real enrolled student, and that path is offered where the preview leaves off.
-  test("instructor switches from the self preview to a real student's read-only view", async ({ page }) => {
+  // The other half of #892: the course-wide student view an instructor actually wants comes from
+  // viewing a real enrolled student, launched from the course home rather than from a single
+  // student's summary page, which is where the only entry point used to live.
+  test("instructor enters a real student's read-only view from the course home", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await loginAsUser(page, instructor, course);
-    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
-    await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
+    await page.goto(`/course/${course.id}`);
 
-    const picker = page.getByRole("combobox", { name: "View the course as a student" });
+    await page.getByRole("button", { name: "View as student" }).click();
+    const dialog = page.getByRole("dialog");
+    const picker = dialog.getByRole("combobox", { name: "Student to view as" });
     await picker.click();
     await picker.fill(student.private_profile_name);
-    await page.getByRole("option", { name: new RegExp(student.private_profile_name) }).click();
+    await page.getByRole("option", { name: student.private_profile_name }).click();
+    await dialog.getByRole("button", { name: "Enter student view" }).click();
 
-    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments$`));
     const banner = page.getByRole("alert", { name: "Viewing as student" });
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(student.private_profile_name);
+    // Not the self preview: this identity is a real enrollment.
+    await expect(banner).not.toContainText("Previewing your own submission");
+    // The launcher hides itself while a view-as is active; the banner owns the exit.
+    await expect(page.getByRole("button", { name: "View as student" })).toHaveCount(0);
 
-    // The full student view populates: the released assignment is listed for the student, and the
-    // empty state the self preview produced is absent.
+    // Viewing an enrolled student is course-wide, so the assignments dashboard — the page the self
+    // preview could never populate — lists the student's released work.
+    await page.locator(`a[href="/course/${course.id}/assignments"]`).filter({ visible: true }).first().click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments$`));
     await expect(page.getByRole("link", { name: "Test Assignment Student Preview E2E" })).toBeVisible();
     await expect(page.getByText("No upcoming deadlines available")).toHaveCount(0);
     // The unreleased assignment stays hidden, as it is for the student.
     await expect(page.getByRole("link", { name: "Test Assignment Unreleased Preview E2E" })).toHaveCount(0);
 
-    // Viewing an enrolled student is course-wide, not scoped to one assignment.
+    // Unlike the self preview, this identity is not scoped to one assignment: it survives a course
+    // level page. That is the behavior the scoping change could regress.
+    await page.goto(`/course/${course.id}/gradebook`);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+    await page.goto(`/course/${course.id}`);
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(student.private_profile_name);
+
     await banner.getByRole("button", { name: "Exit student view" }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+  });
+
+  // The preview is bound to the assignment it was entered from, not to "any assignment": otherwise
+  // a deep link or global-search jump to another assignment kept the synthetic identity alive,
+  // release-date exemption included, while the banner claimed it covered only one assignment.
+  test("the preview does not follow the instructor to a different assignment", async ({ page }) => {
+    const submissionId = staffSubmissions.get("instructor");
+    if (!submissionId) throw new Error("missing instructor test submission");
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
+    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+
+    // A different assignment, reached directly the way a deep link or search hit would.
+    await page.goto(`/course/${course.id}/assignments/${unreleasedAssignmentId}`);
+    await expectViewAsCookieCleared(page);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+
+    // Returning to the assignment the preview belonged to does not silently resume it either:
+    // leaving cleared the cookie.
+    await page.goto(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
   });
 });

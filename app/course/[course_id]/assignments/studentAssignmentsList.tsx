@@ -149,7 +149,9 @@ export default function StudentAssignmentsList() {
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
-    assignments?.forEach(async (assignment) => {
+    // Deliberately not async: `forEach` discards the promise, so an `await` added here later would
+    // let the pushes below land after `result.sort(...)` and rows would silently vanish.
+    assignments?.forEach((assignment) => {
       const group = groups?.find((group) => group.assignment_id === assignment.id);
       let repo = assignment.repository || "-";
       if (group && group.assignment_groups) {
@@ -246,8 +248,10 @@ export default function StudentAssignmentsList() {
     // support. The row itself shows both dates, so the distinction stays visible.
     return {
       allAssignedWork: sortedResult,
+      // An assignment with no due date belongs in Upcoming: it is still actionable, and requiring a
+      // date in both filters dropped it from the page entirely, with no trace for the student.
       workInFuture: sortedResult.filter((work) => {
-        return work.due_date && work.due_date > curTimeInCourseTimezone;
+        return !work.due_date || work.due_date > curTimeInCourseTimezone;
       }),
       workInPast: sortedResult.filter((work) => {
         return work.due_date && work.due_date < curTimeInCourseTimezone;

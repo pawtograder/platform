@@ -1,17 +1,17 @@
 "use client";
 
-import { ViewAsStudentPicker } from "@/components/course/view-as-student-picker";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Button, HStack, Text } from "@chakra-ui/react";
 import { FaEye } from "react-icons/fa";
 
 /**
- * Sticky banner shown while an instructor is viewing the course as a student (read-only).
+ * Sticky banner shown while staff are viewing the course as a student (read-only).
  * Provides an unmissable indicator and a one-click exit.
  *
- * While previewing their own test-assignment work, the banner also offers a switch to a real
- * enrolled student: that preview only covers the assignment it was entered from, so the banner is
- * where an instructor who wants a course-wide student view will be standing (issue #892).
+ * The self case (previewing your own test-assignment submission) says so explicitly, and says that
+ * it covers only this assignment: it is the staff member's own profile wearing a student's view, so
+ * enrollment-keyed pages have nothing to show for it and it is scoped accordingly. Reading
+ * "Viewing as <your own name>" there made the whole feature look half-built (issue #892).
  */
 export function ViewAsBanner() {
   const { isViewingAsStudent, isViewingAsSelf, viewAsProfileName, exitViewAs } = useClassProfiles();
@@ -48,7 +48,6 @@ export function ViewAsBanner() {
           Viewing as {viewAsProfileName ?? "student"} — read only. You cannot make changes in this mode.
         </Text>
       )}
-      {isViewingAsSelf && <ViewAsStudentPicker />}
       <Button size="xs" variant="surface" colorPalette="orange" onClick={exitViewAs} aria-label="Exit student view">
         Exit student view
       </Button>

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { isSelfViewAsScope, viewAsCookieName } from "@/lib/viewAs";
+import { isSelfViewAsScope, parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
 import { cookies, headers } from "next/headers";
 import type {
@@ -187,10 +187,11 @@ export async function getEffectiveCourseIdentity(
   }
 
   const cookieStore = await cookies();
-  const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
-  if (!targetProfileId) {
+  const target = parseViewAsCookieValue(cookieStore.get(viewAsCookieName(course_id))?.value);
+  if (!target) {
     return base;
   }
+  const targetProfileId = target.profileId;
 
   if (targetProfileId === realRole.private_profile_id) {
     // Self view-as only applies inside the assignment it was entered from. Everywhere else the
@@ -198,12 +199,12 @@ export async function getEffectiveCourseIdentity(
     // student enrollment never render against a synthetic one (issue #892). The client provider
     // clears the stale cookie once it observes the same thing.
     //
-    // A missing x-pathname means middleware did not run for this request; treat that as in scope
-    // so the Test Assignment preview degrades to its previous behavior rather than silently
-    // switching off. In practice it is always present — X-User-ID rides the same mechanism, and
-    // every caller redirects away without it.
-    const pathname = (await headers()).get("x-pathname");
-    if (pathname && !isSelfViewAsScope(pathname, course_id)) {
+    // A missing x-pathname means middleware did not run for this request. Treat that as out of
+    // scope: the preview is a convenience, and failing it closed keeps the synthetic identity off
+    // pages that cannot serve it. In practice the header is always present — X-User-ID rides the
+    // same mechanism, and every caller of this function redirects away without it.
+    const pathname = (await headers()).get("x-pathname") ?? "";
+    if (!isSelfViewAsScope(pathname, course_id, target.previewAssignmentId)) {
       return base;
     }
     return {
