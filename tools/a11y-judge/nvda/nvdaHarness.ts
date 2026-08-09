@@ -1190,7 +1190,7 @@ export interface TypeStepFidelity {
 export interface SweepMutation {
   /** Index this step has in NvdaHarness.steps. */
   stepIndex: number;
-  command: "next" | "previous";
+  command: "next" | "previous" | "readNext";
   /** 'radio' or 'value' — which arrow-mutable control was under focus. */
   kind: string;
   /** Radio group name, or the control's name/id. */
@@ -2766,7 +2766,7 @@ export class NvdaHarness implements AtDriver {
    * floor: the probes are host-side, and a driver without one has never been able
    * to see this.
    */
-  private async arrowSweep(command: "next" | "previous", arrow: () => Promise<void>): Promise<void> {
+  private async arrowSweep(command: "next" | "previous" | "readNext", arrow: () => Promise<void>): Promise<void> {
     if (!this.hostEval) return arrow();
 
     const before = await this.hostEval(sweepSignatureJs(true)).catch(() => "");
@@ -3427,7 +3427,14 @@ export class NvdaHarness implements AtDriver {
       }
       case "readNext": {
         const n = Math.min(Math.max(parseInt(arg ?? "10", 10) || 10, 1), READ_NEXT_MAX);
-        for (let i = 0; i < n; i++) await nvda.next(opts);
+        // Through arrowSweep, exactly like `next`/`previous`: these are the SAME
+        // ArrowDown, and a read-ahead is if anything the more dangerous of the
+        // two because it fires up to READ_NEXT_MAX of them in a row. Calling
+        // nvda.next() directly here left the biggest sweep in the plans
+        // unguarded, which is why q2 kept coming back "Too slow" long after the
+        // `act` had correctly selected "Just right" (run 31315071708), and why
+        // the original #913 log shows 27-28 announcements of each option.
+        for (let i = 0; i < n; i++) await this.arrowSweep("readNext", () => nvda.next(opts));
         return;
       }
       case "restartFromTop":
