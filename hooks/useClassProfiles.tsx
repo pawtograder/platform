@@ -299,7 +299,16 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         // Guarded on the cookie being gone as well: if clearing ever failed, a reload would re-read
         // it, re-enter this branch, and loop. Dropping the identity in memory is enough.
         if (publishedSelfPreviewRef.current && typeof window !== "undefined" && !getViewAsTarget(course_id as string)) {
-          window.location.assign(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+          // Navigate to the path this effect is reacting to, not to window.location. During a soft
+          // navigation the router can publish the new pathname before the address bar commits, so
+          // reading window.location here may still yield the *previous* page — reloading that would
+          // cancel the navigation in flight and drop the viewer back where they started. Search and
+          // hash only belong to the destination once the two agree.
+          const destination =
+            window.location.pathname === pathname
+              ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+              : (pathname ?? window.location.pathname);
+          window.location.assign(destination);
         }
         return;
       }

@@ -35,6 +35,15 @@ const staffSubmissions = new Map<string, number>();
  * client, so this is the signal that it has actually happened; asserting only that the banner is
  * absent can pass against a page that has not hydrated yet.
  */
+/**
+ * Waits for a submission page to finish redirecting to its default tab. Navigating away before that
+ * lands means the pending redirect supersedes the navigation, which reads as a click that did
+ * nothing.
+ */
+async function expectSubmissionTabSettled(page: Page) {
+  await expect(page).toHaveURL(/\/submissions\/\d+\/(results|files|grade)/);
+}
+
 async function expectViewAsCookieCleared(page: Page) {
   await expect
     .poll(
@@ -378,6 +387,10 @@ test.describe("Test Assignment student preview", () => {
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
     await page.getByRole("link", { name: String(submissionId), exact: true }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+    // The submission page redirects itself to its default tab. A click issued before that settles is
+    // lost to the redirect — the banner paints first, so it is not a sufficient gate on its own
+    // (this failed on WebKit, where hydration is slower).
+    await expectSubmissionTabSettled(page);
 
     // The preview shows the student nav; its Assignments tab is the page that came back empty.
     // Target the href rather than the accessible name: the nav wraps each link's label in a
@@ -456,6 +469,7 @@ test.describe("Test Assignment student preview", () => {
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
     await page.getByRole("link", { name: String(submissionId), exact: true }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+    await expectSubmissionTabSettled(page);
 
     // A different assignment, reached directly the way a deep link or search hit would.
     await page.goto(`/course/${course.id}/assignments/${unreleasedAssignmentId}`);
