@@ -2877,15 +2877,26 @@ export class NvdaHarness implements AtDriver {
     // here is the oracle's own answer — "label" — which of course names no
     // control. Run 31275593976 is what that cost: the stand-down never fired,
     // privacy (optional) retargeted anyway and help-request failed a third time.
-    const before = this.undoOracleEcho(await this.itemTextSafe(ITEM_TEXT_PROBE_MS));
+    const raw = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    const before = this.undoOracleEcho(raw);
     if (ACT_LINE_NAMES_A_CONTROL.test(before)) {
       this.debug("act: line already announces a control — leaving this act alone", { item: before.slice(0, 120) });
       return "proceed";
     }
 
+    // Everything the stand-down decision rests on. Run 31282511729 showed it not
+    // firing on the privacy checkbox with no way to tell WHY from the log: the
+    // pre-hop line was never recorded, only the oracle reply. These four fields
+    // separate the possibilities — the echo was not undone (raw === before and
+    // both are "label"), the tail was some third phrase entirely, or the line
+    // genuinely carries no role word at that moment.
     this.debug("act: cursor is on bare label text, not the control it names", {
       milestone,
       oracleReply: check.reply.slice(0, 120),
+      rawTail: raw.slice(0, 160),
+      lineAfterUndoEcho: before.slice(0, 160),
+      namesAControl: ACT_LINE_NAMES_A_CONTROL.test(before),
+      lastContentItem: this.lastContentItem?.raw.slice(0, 160) ?? "(none)",
       hop: "previous form field (the control precedes its label text)"
     });
     await this.moveToControl("previous");
