@@ -1,4 +1,4 @@
-import { isSelfViewAsScope, parseViewAsCookieValue } from "@/lib/viewAs";
+import { clearStalePreviewCookies, getTabId, isSelfViewAsScope, parseViewAsCookieValue } from "@/lib/viewAs";
 
 /**
  * The scope predicate is the whole of the #892 fix: the server (getEffectiveCourseIdentity) and the
@@ -67,31 +67,104 @@ describe("parseViewAsCookieValue", () => {
   const profileId = "39dab5f1-3685-4d1a-8e9a-4b3abaee6971";
 
   it("reads a bare profile id as a course-wide target", () => {
-    expect(parseViewAsCookieValue(profileId)).toEqual({ profileId, previewAssignmentId: null });
+    expect(parseViewAsCookieValue(profileId)).toEqual({
+      profileId,
+      previewAssignmentId: null,
+      previewTabId: null
+    });
   });
 
-  it("reads an assignment-scoped self preview", () => {
-    expect(parseViewAsCookieValue(`${profileId}~34`)).toEqual({ profileId, previewAssignmentId: 34 });
+  it("reads an assignment-scoped self preview with the tab that opened it", () => {
+    expect(parseViewAsCookieValue(`${profileId}~34~ab12cd34`)).toEqual({
+      profileId,
+      previewAssignmentId: 34,
+      previewTabId: "ab12cd34"
+    });
+  });
+
+  it("treats a value written before tab tracking as owned by no tab", () => {
+    // Such a cookie is cleanable by any mount, rather than sticky until the browser closes.
+    expect(parseViewAsCookieValue(`${profileId}~34`)).toEqual({
+      profileId,
+      previewAssignmentId: 34,
+      previewTabId: null
+    });
+    expect(parseViewAsCookieValue(`${profileId}~34~`)).toEqual({
+      profileId,
+      previewAssignmentId: 34,
+      previewTabId: null
+    });
   });
 
   it("uses a delimiter that survives URI encoding unchanged", () => {
     // The client writes through encodeURIComponent and reads back through decodeURIComponent, while
     // the server parses whatever `cookies()` hands it. A delimiter that encoding rewrites would let
     // those two disagree, and the server would read every path as out of scope.
-    const raw = `${profileId}~34`;
+    const raw = `${profileId}~34~ab12cd34`;
     expect(encodeURIComponent(raw)).toBe(raw);
-    expect(parseViewAsCookieValue(encodeURIComponent(raw))).toEqual({ profileId, previewAssignmentId: 34 });
+    expect(parseViewAsCookieValue(encodeURIComponent(raw))).toEqual({
+      profileId,
+      previewAssignmentId: 34,
+      previewTabId: "ab12cd34"
+    });
   });
 
   it("rejects empty and malformed values rather than widening them", () => {
     expect(parseViewAsCookieValue(null)).toBeNull();
     expect(parseViewAsCookieValue("")).toBeNull();
-    // A non-numeric suffix must not degrade into a course-wide target for that profile.
+    // A non-numeric assignment must not degrade into a course-wide target for that profile.
     expect(parseViewAsCookieValue(`${profileId}~not-a-number`)).toBeNull();
     expect(parseViewAsCookieValue(`${profileId}~`)).toBeNull();
     expect(parseViewAsCookieValue(`~34`)).toBeNull();
-    // Extra segments are a shape this function never writes: reject rather than salvage a prefix,
-    // which would turn a scoped preview into a course-wide target.
-    expect(parseViewAsCookieValue(`${profileId}~34~99`)).toBeNull();
+    // More segments than this module ever writes: reject rather than salvage a prefix.
+    expect(parseViewAsCookieValue(`${profileId}~34~tab~extra`)).toBeNull();
+  });
+});
+
+describe("clearStalePreviewCookies", () => {
+  const profileId = "39dab5f1-3685-4d1a-8e9a-4b3abaee6971";
+  const otherProfile = "e860f42d-f381-4404-902c-79d222b23c69";
+
+  beforeEach(() => {
+    for (const row of document.cookie.split("; ")) {
+      const name = row.split("=")[0];
+      if (name) document.cookie = `${name}=; path=/; max-age=0`;
+    }
+    window.sessionStorage.clear();
+  });
+
+  it("ends a self preview this tab left behind in another course", () => {
+    const tabId = getTabId();
+    document.cookie = `view_as_12=${profileId}~34~${tabId}; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual(["12"]);
+    expect(document.cookie).not.toContain("view_as_12");
+  });
+
+  it("leaves a preview another tab is still using alone", () => {
+    // Cookies are shared across tabs, so an unconditional sweep would end that tab's preview the
+    // moment this one opened a different course.
+    document.cookie = `view_as_12=${profileId}~34~someothertab; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual([]);
+    expect(document.cookie).toContain("view_as_12");
+  });
+
+  it("leaves the course currently being rendered to the provider's own scope check", () => {
+    const tabId = getTabId();
+    document.cookie = `view_as_12=${profileId}~34~${tabId}; path=/`;
+    // Inside course 12 the current path decides, and it may well be inside the preview.
+    expect(clearStalePreviewCookies("12")).toEqual([]);
+    expect(document.cookie).toContain("view_as_12");
+  });
+
+  it("never touches a course-wide enrolled-student target", () => {
+    document.cookie = `view_as_12=${otherProfile}; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual([]);
+    expect(document.cookie).toContain("view_as_12");
+  });
+
+  it("cleans up a scoped cookie that carries no tab id", () => {
+    document.cookie = `view_as_12=${profileId}~34; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual(["12"]);
+    expect(document.cookie).not.toContain("view_as_12");
   });
 });

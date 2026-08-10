@@ -10,7 +10,14 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
-import { clearViewAsCookie, getViewAsTarget, isSelfViewAsScope, setViewAsCookie, ViewAsTarget } from "@/lib/viewAs";
+import {
+  clearStalePreviewCookies,
+  clearViewAsCookie,
+  getViewAsTarget,
+  isSelfViewAsScope,
+  setViewAsCookie,
+  ViewAsTarget
+} from "@/lib/viewAs";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -278,6 +285,10 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       selfPreviewCourseRef.current = null;
       publishedSelfPreviewRef.current = false;
     }
+    // A full-document navigation to another course destroys the mount that held the ref above, so
+    // also sweep previews this tab left behind in other courses. Reading them back from the cookies
+    // is the only way a fresh mount can recognise them.
+    clearStalePreviewCookies(course_id as string | undefined);
     if (!course_id) {
       setViewAsTarget(null);
       return;
