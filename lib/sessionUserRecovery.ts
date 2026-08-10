@@ -161,17 +161,33 @@ function hasReloadedForSignOut(renderedUserId: string): boolean {
   try {
     return window.sessionStorage.getItem(SIGNED_OUT_RELOAD_GUARD_KEY) === renderedUserId;
   } catch {
-    // Same failure posture as readReloadGuard: assume we have NOT reloaded, so a
-    // real sign-out still heals. The browser's own reload throttling backstops.
-    return false;
+    // Unlike readReloadGuard, "assume we have NOT reloaded" is NOT safe here.
+    // That guard is paired with a converging reload; this one is not, so a tab
+    // that cannot read the marker would reload on every poll forever. Reporting
+    // "already reloaded" instead means an unreadable store suppresses the
+    // recovery rather than looping it — see markReloadedForSignOut.
+    return true;
   }
 }
 
-function markReloadedForSignOut(renderedUserId: string): void {
+/**
+ * Record the reload, and say whether the record will survive it.
+ *
+ * False means the marker could not be persisted, and the caller must NOT reload:
+ * with no marker the next poll sees the same absent session and reloads again,
+ * once a minute, forever. The one-reload bound is only a bound if it can be
+ * remembered, so where it cannot, the safe failure is to leave the tab alone —
+ * stale content the user can still navigate away from, rather than a page that
+ * reloads out from under them. Private mode and blocked-storage profiles pay
+ * that cost; the mismatch guard next door is unaffected, since its reload
+ * converges and cannot loop.
+ */
+function markReloadedForSignOut(renderedUserId: string): boolean {
   try {
     window.sessionStorage.setItem(SIGNED_OUT_RELOAD_GUARD_KEY, renderedUserId);
+    return window.sessionStorage.getItem(SIGNED_OUT_RELOAD_GUARD_KEY) === renderedUserId;
   } catch {
-    /* ignore */
+    return false;
   }
 }
 
@@ -216,7 +232,9 @@ export function recoverFromForeignSession(
 export function recoverFromSignedOutSession(renderedUserId: string, reload: () => void = defaultReload): boolean {
   if (typeof window === "undefined") return false;
   if (hasReloadedForSignOut(renderedUserId)) return false;
-  markReloadedForSignOut(renderedUserId);
+  // Mark BEFORE reloading, and only reload if the mark stuck: an unrecorded
+  // reload is an unbounded one (see markReloadedForSignOut).
+  if (!markReloadedForSignOut(renderedUserId)) return false;
   reload();
   return true;
 }
@@ -268,7 +286,7 @@ export function installSessionUserRecovery({
   // anyway — INITIAL_SESSION arrives with none on any page that legitimately has
   // no session yet, and treating that as a sign-out would reload the sign-in
   // page. A poll tick, by contrast, is a positive statement about *now*.
-  const poll = window.setInterval(() => {
+  const checkNow = () => {
     if (document.visibilityState !== "visible") return;
     void client.auth
       .getSession()
@@ -287,10 +305,23 @@ export function installSessionUserRecovery({
       // A failed session read tells us nothing — neither about identity nor
       // about whether the user is still signed in. Leave the tab be.
       .catch(() => {});
-  }, pollIntervalMs);
+  };
+
+  const poll = window.setInterval(checkNow, pollIntervalMs);
+
+  // The moment the tab comes back is the moment its staleness starts to matter,
+  // and it is exactly when the poll has been skipping (hidden tabs are not
+  // polled). Without this, a tab that was hidden when another tab signed out
+  // shows its rendered, authenticated page for up to a full interval after the
+  // user looks at it again — the window in which someone reads private data on
+  // a machine that has been signed out. supabase-js does not close it either:
+  // its own visibility recovery emits nothing when the cookie is simply gone.
+  const onVisible = () => checkNow();
+  document.addEventListener("visibilitychange", onVisible);
 
   return () => {
     data.subscription.unsubscribe();
     window.clearInterval(poll);
+    document.removeEventListener("visibilitychange", onVisible);
   };
 }

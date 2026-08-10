@@ -364,6 +364,94 @@ describe("installSessionUserRecovery", () => {
     uninstall();
   });
 
+  // Raised in review: if the marker cannot be persisted, the one-reload bound is
+  // not a bound at all — every poll would see the same absent session and reload
+  // again, once a minute, forever. Stale content beats a page reloading out from
+  // under the user, so an unusable store suppresses the recovery instead.
+  it("does not reload at all when sessionStorage cannot persist the guard", async () => {
+    jest.useFakeTimers();
+    const getItem = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
+    const setItem = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
+    try {
+      const { client, setSession } = fakeClient();
+      const uninstall = installSessionUserRecovery({
+        client,
+        renderedUserId: "user-a",
+        reload,
+        pollIntervalMs: 1000
+      });
+
+      setSession(null);
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(reloadCalls).toBe(0);
+
+      uninstall();
+    } finally {
+      getItem.mockRestore();
+      setItem.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  // Raised in review: hidden tabs are not polled, so without a visibility hook a
+  // tab that was hidden during the sign-out keeps showing private data for up to
+  // a full interval after the user looks at it again.
+  it("checks immediately when a hidden tab becomes visible again", async () => {
+    jest.useFakeTimers();
+    let visibility: DocumentVisibilityState = "hidden";
+    const spy = jest.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    try {
+      const { client, setSession } = fakeClient();
+      const uninstall = installSessionUserRecovery({
+        client,
+        renderedUserId: "user-a",
+        reload,
+        pollIntervalMs: 60_000
+      });
+
+      // Signed out elsewhere while this tab sat hidden: no poll runs.
+      setSession(null);
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(reloadCalls).toBe(0);
+
+      // The user comes back. This must not wait for the next 60s tick.
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reloadCalls).toBe(1);
+
+      uninstall();
+    } finally {
+      spy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it("stops listening for visibility changes on uninstall", async () => {
+    jest.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    const spy = jest.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    try {
+      const { client, setSession } = fakeClient();
+      installSessionUserRecovery({ client, renderedUserId: "user-a", reload, pollIntervalMs: 60_000 })();
+
+      setSession(null);
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reloadCalls).toBe(0);
+    } finally {
+      spy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   it("unsubscribes and stops polling on uninstall", async () => {
     jest.useFakeTimers();
     try {

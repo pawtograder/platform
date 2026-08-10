@@ -680,11 +680,27 @@ function hostFieldWriteJs(text: string): string {
   })()`;
 }
 
+/** Parsed form of a sweep signature. `kind` is the discriminator; `none`/`safe`
+ *  are the two cheap exits (nothing focused / focus is not arrow-mutable). */
+interface SweepSignature {
+  kind: "none" | "safe" | "radio" | "value";
+  key: string;
+  value: string;
+}
+
+/** No selection at all — distinct from a control whose value is the empty
+ *  string, which is why it is a sentinel rather than "". */
+const SWEEP_NO_SELECTION = " none";
+
 /**
  * Page-side expression reading the ANSWER the focused arrow-mutable control
- * carries, as a comparable string. Returns 'none|', 'safe|<TAG>' (focus is not
- * on such a control — the overwhelmingly common case, and the cheap exit), or
- * '<kind>|<key>|<value>'.
+ * carries. Returns JSON: `{kind, key, value}`.
+ *
+ * JSON rather than a delimited string, because the fields are arbitrary DOM
+ * `name`/`value` content. A pipe-delimited encoding parsed with split("|") — the
+ * first version of this — truncates a legitimate option value like "A|one" to
+ * "A", so a change to "A|two" compares EQUAL and the guard silently misses the
+ * mutation it exists to catch.
  *
  * For a radio the value is the group's CHECKED member, not the focused one:
  * focus and selection are different things in a radio group, and it is the
@@ -695,19 +711,35 @@ function hostFieldWriteJs(text: string): string {
  */
 function sweepSignatureJs(remember: boolean): string {
   return `(() => {
+    const NONE = ${JSON.stringify(SWEEP_NO_SELECTION)};
     const el = ${remember ? "document.activeElement" : `window[${JSON.stringify(SWEEP_ELEMENT_KEY)}] || document.activeElement`};
     ${remember ? `window[${JSON.stringify(SWEEP_ELEMENT_KEY)}] = el;` : ""}
-    if (!el || el === document.body || !el.matches) return 'none|';
-    if (!el.matches(${JSON.stringify(ARROW_MUTABLE_SELECTOR)})) return 'safe|' + el.tagName;
+    const out = (kind, key, value) => JSON.stringify({ kind: kind, key: key, value: value });
+    if (!el || el === document.body || !el.matches) return out('none', '', '');
+    if (!el.matches(${JSON.stringify(ARROW_MUTABLE_SELECTOR)})) return out('safe', el.tagName, '');
     if (el.tagName === 'INPUT' && el.type === 'radio') {
-      if (!el.name) return 'radio|<unnamed>|' + (el.checked ? el.value : '<none>');
-      const picked = el.form
-        ? [...el.form.querySelectorAll('input[type=radio]')].find((r) => r.name === el.name && r.checked)
-        : [...document.querySelectorAll('input[type=radio]')].find((r) => r.name === el.name && r.checked);
-      return 'radio|' + el.name + '|' + (picked ? picked.value : '<none>');
+      if (!el.name) return out('radio', '<unnamed>', el.checked ? el.value : NONE);
+      const scope = el.form || document;
+      const picked = [...scope.querySelectorAll('input[type=radio]')].find((r) => r.name === el.name && r.checked);
+      return out('radio', el.name, picked ? picked.value : NONE);
     }
-    return 'value|' + (el.name || el.id || el.tagName) + '|' + String(el.value == null ? '' : el.value);
+    return out('value', el.name || el.id || el.tagName, String(el.value == null ? '' : el.value));
   })()`;
+}
+
+/** Parse a sweep signature; null when the host read failed or returned garbage,
+ *  which the caller must treat as "no evidence", never as "unchanged". */
+function parseSweepSignature(raw: string): SweepSignature | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { kind, key, value } = parsed as Partial<SweepSignature>;
+    if (kind !== "none" && kind !== "safe" && kind !== "radio" && kind !== "value") return null;
+    return { kind, key: typeof key === "string" ? key : "", value: typeof value === "string" ? value : "" };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -731,8 +763,12 @@ function sweepRestoreJs(kind: string, key: string, value: string): string {
       const scope = el.form || document;
       const group = [...scope.querySelectorAll('input[type=radio]')].filter((r) => r.name === key);
       if (!group.length) return 'no-group|' + key;
+      // No target: the group had NO selection before the arrow. Uncheck every
+      // member and notify on each, but say so — this is DOM-only, and a
+      // framework that keeps the answer in its own model (SurveyJS does) may
+      // re-derive it, so the caller must not report this as a verified restore.
       const target = group.find((r) => r.value === want);
-      if (!target) { group.forEach((r) => { r.checked = false; }); fire(el); return 'cleared|' + key; }
+      if (!target) { group.forEach((r) => { r.checked = false; fire(r); }); return 'cleared-dom-only|' + key; }
       const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
       if (desc && desc.set) { desc.set.call(target, true); } else { target.checked = true; }
       fire(target);
@@ -1290,6 +1326,9 @@ export class NvdaHarness implements AtDriver {
   private typeFidelity: TypeStepFidelity[] = [];
   private cursorChecks: NvdaCursorCheck[] = [];
   private sweepMutations: SweepMutation[] = [];
+  /** Which focused control this sweep has already left focus mode for, so the
+   *  Escape fires once rather than on every step (see arrowSweep). */
+  private sweepFocusModeExitKey: string | null = null;
   /** The interrogation the CURRENT command performed, if any — consumed by
    *  undoOracleEcho and cleared at the top of every run(). */
   private oracleEcho: CursorOracleReply | null = null;
@@ -1378,6 +1417,7 @@ export class NvdaHarness implements AtDriver {
     this.typeFidelity = [];
     this.cursorChecks = [];
     this.sweepMutations = [];
+    this.sweepFocusModeExitKey = null;
     this.oracleEcho = null;
     this.cursorGate = null;
     await this.enterWebArea();
@@ -2769,42 +2809,65 @@ export class NvdaHarness implements AtDriver {
   private async arrowSweep(command: "next" | "previous" | "readNext", arrow: () => Promise<void>): Promise<void> {
     if (!this.hostEval) return arrow();
 
-    const before = await this.hostEval(sweepSignatureJs(true)).catch(() => "");
-    const [kind, key = "", value = ""] = before.split("|");
+    const before = parseSweepSignature(await this.hostEval(sweepSignatureJs(true)).catch(() => ""));
     // 'none' (nothing focused) and 'safe' (focused, but arrows do not change its
     // value) are the overwhelmingly common readings on a reading sweep, and both
-    // exit before spending a single extra gesture.
-    if (kind !== "radio" && kind !== "value") return arrow();
+    // exit before spending a single extra gesture. An unreadable probe exits the
+    // same way: no evidence is not evidence of danger.
+    if (!before || (before.kind !== "radio" && before.kind !== "value")) return arrow();
+    const { kind, key, value } = before;
 
-    this.debug("sweep: focus is on an arrow-mutable control — leaving focus mode before arrowing", {
-      command,
-      kind,
-      key,
-      answer: value
-    });
-    let leftFocusMode = true;
-    await this.withTimeout(
-      "sweep:exitFocusMode",
-      this.nvda.perform(this.nvda.keyboardCommands.exitFocusMode, { capture: "initial" }),
-      FOCUS_RUNG_TIMEOUT_MS
-    ).catch((e) => {
-      leftFocusMode = false;
-      this.debug("sweep: exitFocusMode threw — arrowing anyway, the check below is the real guard", {
-        error: String(e)
+    // Escape ONLY on the first sweep step for a given focused control.
+    //
+    // Browse-mode arrows move the review cursor and leave DOM focus where it is,
+    // so once we have left focus mode this probe keeps reporting the same
+    // arrow-mutable element on every subsequent step. Re-sending Escape there is
+    // not a no-op: NVDA is already in browse mode, so the key reaches the PAGE,
+    // and a control inside a dialog or popover would have that UI dismissed by
+    // the very sweep that is supposed to be reading it (raised in review).
+    // The before/after check below is what actually protects the answer, so
+    // skipping the repeat costs nothing.
+    const focusKey = `${kind}:${key}`;
+    const alreadyLeft = this.sweepFocusModeExitKey === focusKey;
+    let leftFocusMode = alreadyLeft;
+    if (!alreadyLeft) {
+      this.debug("sweep: focus is on an arrow-mutable control — leaving focus mode before arrowing", {
+        command,
+        kind,
+        key,
+        answer: value
       });
-    });
+      leftFocusMode = true;
+      await this.withTimeout(
+        "sweep:exitFocusMode",
+        this.nvda.perform(this.nvda.keyboardCommands.exitFocusMode, { capture: "initial" }),
+        FOCUS_RUNG_TIMEOUT_MS
+      ).catch((e) => {
+        leftFocusMode = false;
+        this.debug("sweep: exitFocusMode threw — arrowing anyway, the check below is the real guard", {
+          error: String(e)
+        });
+      });
+      this.sweepFocusModeExitKey = focusKey;
+    }
 
     await arrow();
 
-    const after = await this.hostEval(sweepSignatureJs(false)).catch(() => "");
-    const afterValue = after.split("|")[2] ?? "";
+    const after = parseSweepSignature(await this.hostEval(sweepSignatureJs(false)).catch(() => ""));
     // An unreadable after-reading is not a mutation: a lost host probe has never
     // been treated as proof of failure anywhere else in this file either.
-    if (!after || after.split("|")[0] !== kind || afterValue === value) return;
+    if (!after || after.kind !== kind || after.value === value) return;
+    const afterValue = after.value;
 
     const restore = await this.hostEval(sweepRestoreJs(kind, key, value)).catch((e) => `threw|${String(e)}`);
-    const confirm = await this.hostEval(sweepSignatureJs(false)).catch(() => "");
-    const restored = (confirm.split("|")[2] ?? "") === value;
+    const confirmed = parseSweepSignature(await this.hostEval(sweepSignatureJs(false)).catch(() => ""));
+    // Clearing a radio group back to "no selection" is DOM-only and cannot be
+    // confirmed from here: frameworks keep the answer in their own model (raised
+    // in review — SurveyJS re-derives it, so autosave can still carry the
+    // driver's value while the DOM reads empty). Report that honestly rather
+    // than claiming a restore this cannot verify; run.ts fails the task on the
+    // mutation either way.
+    const restored = value === SWEEP_NO_SELECTION ? false : confirmed !== null && confirmed.value === value;
     this.debug("sweep: THE ARROW CHANGED THE ANSWER — this step read nothing, it wrote (issue #913)", {
       command,
       kind,

@@ -358,6 +358,14 @@ async function main(): Promise<void> {
     }
 
     let lastError = "";
+    // OUTSIDE the attempt loop, unlike the two per-attempt buffers below, and
+    // deliberately. A sweep mutation is a defect in the DRIVER, not a flake in
+    // the app: the retry cannot fix it, and re-declaring this per attempt meant
+    // a mutating first attempt followed by a clean second one returned
+    // status:"passed" with no mutation anywhere in the report — a green enforce
+    // run over a task the driver had answered itself, which is the exact failure
+    // the record exists to prevent. Raised in review by both reviewers.
+    let sweepMutations: SweepMutation[] = [];
     for (let attempt = 0; attempt <= TASK_RETRIES; attempt++) {
       const started = Date.now();
       const stepsBefore = harness.steps.length;
@@ -367,7 +375,6 @@ async function main(): Promise<void> {
       // other place these records are cleared.
       let fidelity: TypeStepFidelity[] = [];
       let cursorChecks: NvdaCursorCheck[] = [];
-      let sweepMutations: SweepMutation[] = [];
       const recordingPath = args.record ? path.join(ARTIFACT_ROOT, runId, "recordings", `${loaded.id}.mp4`) : undefined;
       const stopRecording = recordingPath ? startRecording(recordingPath) : () => {};
       try {
@@ -543,7 +550,12 @@ async function main(): Promise<void> {
           console.log(`[a11y:nvda]   ⚠️  SWEEP MUTATION — ${describeSweepMutation(m)}`);
         }
         sweepMutations = [...sweepMutations, ...undrainedMutations];
-        if (attempt === TASK_RETRIES) {
+        // A sweep mutation ends the task here rather than burning a retry. The
+        // driver wrote an answer it was supposed to be reading; running the plan
+        // again cannot un-write it, and the page it would re-run against now
+        // carries that write. Retrying could only launder the failure into a
+        // pass (see the declaration of sweepMutations above).
+        if (sweepMutations.length > 0 || attempt === TASK_RETRIES) {
           return {
             ...base,
             status: "failed",
