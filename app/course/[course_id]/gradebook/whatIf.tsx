@@ -359,12 +359,18 @@ function GradebookCard({
   column,
   private_profile_id,
   isCollapsedGroupItem = false,
-  whatIfEnabled
+  whatIfEnabled,
+  // A column inside a group sits under that group's <h2>, so it is an h3;
+  // an ungrouped column is a direct child of the page's h1 and stays an h2.
+  // Keeping this honest matters for heading navigation — a fixed level would
+  // either skip h2 or flatten the group relationship away (WCAG 1.3.1).
+  headingLevel = 2
 }: {
   column: GradebookColumn;
   private_profile_id: string;
   isCollapsedGroupItem?: boolean;
   whatIfEnabled: boolean;
+  headingLevel?: 2 | 3;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const whatIfVal = useWhatIfGrade(column.id);
@@ -424,7 +430,7 @@ function GradebookCard({
       <HStack align="start" flexWrap="wrap" gap={2} w="100%">
         <Card.Header flexGrow={10} minW={0} p={0}>
           <VStack align="start" w="100%">
-            <Heading size="sm" id={`grade-title-${column.id}`}>
+            <Heading as={headingLevel === 3 ? "h3" : "h2"} size="sm" id={`grade-title-${column.id}`}>
               {column.name}
             </Heading>
             {linkToAssignment && (
@@ -471,34 +477,43 @@ function GroupHeader({
   onToggle: () => void;
 }) {
   return (
-    // A real <button> (WCAG 2.1.1/4.1.2): keyboard focusable/operable with the
-    // expanded state announced — the clickable-div version locked keyboard users
-    // out of expanding gradebook groups entirely. type="button" pins the default
-    // away from type=submit so a form ancestor never treats toggling as a submit.
-    <Card.Root
-      asChild
-      w="100%"
-      bg="bg.subtle"
-      cursor="pointer"
-      borderRadius="none"
-      borderBottom="none"
-      textAlign="left"
-      px={2}
-      py={2}
-      _hover={{ bg: "bg.info" }}
-    >
-      <button type="button" aria-expanded={!isCollapsed} onClick={onToggle}>
-        {/* Buttons only permit phrasing content, so the layout wrappers render as spans. */}
-        <HStack as="span" justifyContent="space-between" alignItems="center">
-          <HStack as="span" gap={2}>
-            <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
-            <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
-              {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
-            </Text>
+    // The group name is a heading as well as a control (WCAG 1.3.1): it labels
+    // the block of columns beneath it, so heading navigation has to be able to
+    // reach it. As a bare <button> it was invisible to heading nav, leaving a
+    // grouped gradebook with no reachable structure between the h1 and the
+    // individual columns. <h2><button> is the standard disclosure pattern —
+    // the heading carries the structure, the button carries the operability.
+    // fontSize/fontWeight inherit so this stays visually identical.
+    <chakra.h2 w="100%" m={0} fontSize="inherit" fontWeight="inherit">
+      {/* A real <button> (WCAG 2.1.1/4.1.2): keyboard focusable/operable with the
+          expanded state announced — the clickable-div version locked keyboard users
+          out of expanding gradebook groups entirely. type="button" pins the default
+          away from type=submit so a form ancestor never treats toggling as a submit. */}
+      <Card.Root
+        asChild
+        w="100%"
+        bg="bg.subtle"
+        cursor="pointer"
+        borderRadius="none"
+        borderBottom="none"
+        textAlign="left"
+        px={2}
+        py={2}
+        _hover={{ bg: "bg.info" }}
+      >
+        <button type="button" aria-expanded={!isCollapsed} onClick={onToggle}>
+          {/* Buttons only permit phrasing content, so the layout wrappers render as spans. */}
+          <HStack as="span" justifyContent="space-between" alignItems="center">
+            <HStack as="span" gap={2}>
+              <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
+              <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
+                {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
+              </Text>
+            </HStack>
           </HStack>
-        </HStack>
-      </button>
-    </Card.Root>
+        </button>
+      </Card.Root>
+    </chakra.h2>
   );
 }
 
@@ -544,6 +559,7 @@ function CollapsedGroupColumn({
       private_profile_id={private_profile_id}
       isCollapsedGroupItem={true}
       whatIfEnabled={whatIfEnabled}
+      headingLevel={3}
     />
   );
 }
@@ -709,6 +725,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
                 column={column}
                 private_profile_id={private_profile_id}
                 whatIfEnabled={whatIfEnabled}
+                headingLevel={3}
               />
             );
           });
