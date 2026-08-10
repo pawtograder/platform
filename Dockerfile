@@ -19,6 +19,22 @@ RUN npm config set fetch-retries 5 \
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+
+# node:22-bookworm-slim ships no system CA bundle at all — /etc/ssl/certs is
+# empty and ca-certificates is not installed. Node does not care, because it has
+# its own CA list compiled in, which is why `npm ci` has always worked and why
+# nothing noticed. sentry-cli is a native libcurl binary, not Node, so it reads
+# the system bundle and without it every source map upload dies with curl error
+# 60 "unable to get local issuer certificate" — see build 730, which uploaded
+# nothing and still went green.
+#
+# apt over http needs no CA itself, so this bootstraps cleanly. Retries because
+# this builds on a network that has already eaten one package mirror.
+RUN apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -s /etc/ssl/certs/ca-certificates.crt
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 

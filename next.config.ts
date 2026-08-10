@@ -213,6 +213,17 @@ const sentryConfig = {
   // build runs inside Docker where CI is unset, and the upload report is the
   // only evidence the upload happened at all.
   silent: !isCi && !process.env.SENTRY_AUTH_TOKEN,
+  // A failed upload is otherwise only a log line: the plugin keeps compiling and
+  // the build goes green having shipped no source maps. Build 730 did exactly
+  // that for ~20 minutes. If a token was supplied then uploading was the point,
+  // so make failure fatal; without one, nothing changes.
+  ...(process.env.SENTRY_AUTH_TOKEN
+    ? {
+        errorHandler: (err: Error) => {
+          throw err;
+        }
+      }
+    : {}),
   disableLogger: true
 };
 
