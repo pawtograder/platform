@@ -7,10 +7,10 @@ import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
+import { Box, Button, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import type { MouseEvent } from "react";
+import { FaEye } from "react-icons/fa";
 
 export default function TestAssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -49,35 +49,25 @@ export default function TestAssignmentPage() {
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }
-  const submissionLinkProps = (href: string) => ({
-    href,
-    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-      event.preventDefault();
-      // Record which assignment the preview belongs to, so it cannot follow the viewer to a
-      // different assignment (see isSelfViewAsScope).
-      enterViewAs(private_profile_id, {
-        redirectTo: href,
-        previewAssignmentId: Number.parseInt(assignment_id as string)
-      });
-    }
-  });
+  // Opening a submission goes to the staff view: the two questions staff have here are "what does
+  // the grading interface look like on a real submission?" and "what will the student see?", and
+  // routing the first through the second made the grading view reachable only by entering the
+  // student preview and then exiting it.
+  const previewAsStudent = (href: string) => {
+    // Record which assignment the preview belongs to, so it cannot follow the viewer to a
+    // different assignment (see isSelfViewAsScope).
+    enterViewAs(private_profile_id, {
+      redirectTo: href,
+      previewAssignmentId: Number.parseInt(assignment_id as string)
+    });
+  };
   return (
     <Box>
       <Heading size="sm">Test Assignment</Heading>
       <Text fontSize="sm" color="fg.muted">
-        Create your own repository to test the assignment. Submissions open in read-only student view, with the same
-        grade-release, rubric-visibility, and hidden-output rules students get. The preview covers this assignment only
-        — leave it, or use the banner, to return to your staff view.
+        Create your own repository to test the assignment. Opening a submission shows it the way you grade it.{" "}
+        <em>Preview as student</em> shows the same submission as a student sees it — read only, with their
+        grade-release, rubric-visibility, and hidden-output rules — and covers this assignment only.
       </Text>
       {/* {repository?.data.length ? (
         <CreateStudentReposButton syncAllPermissions />
@@ -107,6 +97,7 @@ export default function TestAssignmentPage() {
               <Table.ColumnHeader>Commit</Table.ColumnHeader>
               <Table.ColumnHeader>Auto Grader Score</Table.ColumnHeader>
               <Table.ColumnHeader>Total Score</Table.ColumnHeader>
+              <Table.ColumnHeader>Student view</Table.ColumnHeader>
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -117,13 +108,13 @@ export default function TestAssignmentPage() {
                   return (
                     <>
                       <Table.Cell>
-                        <Link {...submissionLinkProps(submissionHref)}>
+                        <Link href={submissionHref}>
                           {submission.is_active ? <ActiveSubmissionIcon /> : ""}
                           {submission.id}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
-                        <Link {...submissionLinkProps(submissionHref)}>
+                        <Link href={submissionHref}>
                           <TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />
                         </Link>
                       </Table.Cell>
@@ -139,7 +130,7 @@ export default function TestAssignmentPage() {
                         )}
                       </Table.Cell>
                       <Table.Cell>
-                        <Link {...submissionLinkProps(submissionHref)}>
+                        <Link href={submissionHref}>
                           {!submission.grader_results
                             ? "In Progress"
                             : submission.grader_results && submission.grader_results.errors
@@ -148,13 +139,27 @@ export default function TestAssignmentPage() {
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
-                        <Link {...submissionLinkProps(submissionHref)}>
+                        <Link href={submissionHref}>
                           {submission.submission_reviews?.completed_at
                             ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
                             : submission.is_active
                               ? "Pending"
                               : ""}
                         </Link>
+                      </Table.Cell>
+                      <Table.Cell>
+                        {/* The accessible name starts with the visible label so the two cannot
+                            disagree (WCAG 2.5.3), and carries the submission id because every row
+                            offers the same action. */}
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          aria-label={`Preview as student, submission ${submission.id}`}
+                          onClick={() => previewAsStudent(submissionHref)}
+                        >
+                          <FaEye aria-hidden />
+                          Preview as student
+                        </Button>
                       </Table.Cell>
                     </>
                   );

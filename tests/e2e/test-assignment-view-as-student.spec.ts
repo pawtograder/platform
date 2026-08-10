@@ -31,10 +31,13 @@ let unreleasedSubmissionId: number;
 const staffSubmissions = new Map<string, number>();
 
 /**
- * Waits until the per-course view-as cookie is gone. Dropping out of the preview is completed on the
- * client, so this is the signal that it has actually happened; asserting only that the banner is
- * absent can pass against a page that has not hydrated yet.
+ * Opens a test submission in the read-only student preview. Clicking the submission itself goes to
+ * the staff/grading view, so the preview is entered from the explicit per-row action.
  */
+async function enterStudentPreview(page: Page, submissionId: number) {
+  await page.getByRole("button", { name: `Preview as student, submission ${submissionId}` }).click();
+}
+
 /**
  * Waits for a submission page to finish redirecting to its default tab. Navigating away before that
  * lands means the pending redirect supersedes the navigation, which reads as a click that did
@@ -44,6 +47,11 @@ async function expectSubmissionTabSettled(page: Page) {
   await expect(page).toHaveURL(/\/submissions\/\d+\/(results|files|grade)/);
 }
 
+/**
+ * Waits until the per-course view-as cookie is gone. Dropping out of the preview is completed on the
+ * client, so this is the signal that it has actually happened; asserting only that the banner is
+ * absent can pass against a page that has not hydrated yet.
+ */
 async function expectViewAsCookieCleared(page: Page) {
   await expect
     .poll(
@@ -278,7 +286,7 @@ test.describe("Test Assignment student preview", () => {
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
     await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
 
-    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await enterStudentPreview(page, submissionId);
     await expect(page).toHaveURL(
       new RegExp(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}/results`)
     );
@@ -333,7 +341,7 @@ test.describe("Test Assignment student preview", () => {
 
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
-    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await enterStudentPreview(page, submissionId);
 
     const banner = page.getByRole("alert", { name: "Viewing as student" });
     await expect(banner).toBeVisible();
@@ -344,6 +352,27 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
   });
 
+  // Opening a test submission goes straight to the grading view. It used to enter the student
+  // preview, so seeing the grading interface on a real submission meant entering the preview and
+  // then exiting it.
+  test("opening a test submission lands in the staff grading view, not the student preview", async ({ page }) => {
+    const submissionId = staffSubmissions.get("instructor");
+    if (!submissionId) throw new Error("missing instructor test submission");
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
+    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+
+    await expect(page).toHaveURL(
+      new RegExp(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`)
+    );
+    // Staff chrome the student preview hides, so this is the grading view and not a student one.
+    await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
+    await expect(page.getByText("Student's Due Date:")).toBeVisible();
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expectViewAsCookieCleared(page);
+  });
+
   // Issue #883: the student release-date gate on the assignment layout also fired for staff
   // previewing their own test submission, bouncing them to the all-courses dashboard while
   // leaving the view-as cookie set.
@@ -352,7 +381,7 @@ test.describe("Test Assignment student preview", () => {
     await page.goto(`/course/${course.id}/manage/assignments/${unreleasedAssignmentId}/test`);
     await expect(page.getByRole("heading", { name: "Test Assignment", exact: true })).toBeVisible();
 
-    await page.getByRole("link", { name: String(unreleasedSubmissionId), exact: true }).click();
+    await enterStudentPreview(page, unreleasedSubmissionId);
 
     await expect(page).toHaveURL(
       new RegExp(
@@ -385,7 +414,7 @@ test.describe("Test Assignment student preview", () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
-    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await enterStudentPreview(page, submissionId);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
     // The submission page redirects itself to its default tab. A click issued before that settles is
     // lost to the redirect — the banner paints first, so it is not a sufficient gate on its own
@@ -467,7 +496,7 @@ test.describe("Test Assignment student preview", () => {
 
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
-    await page.getByRole("link", { name: String(submissionId), exact: true }).click();
+    await enterStudentPreview(page, submissionId);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
     await expectSubmissionTabSettled(page);
 
@@ -478,6 +507,29 @@ test.describe("Test Assignment student preview", () => {
 
     // Returning to the assignment the preview belonged to does not silently resume it either:
     // leaving cleared the cookie.
+    await page.goto(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
+  });
+
+  // Leaving the course ends the preview too. The provider also covers /course (the course list), so
+  // a soft navigation there leaves `course_id` absent and the scope-cleanup effect can no longer
+  // reach the originating cookie — which used to survive and silently resume the preview on return.
+  test("leaving the course ends the preview rather than leaving the cookie behind", async ({ page }) => {
+    const submissionId = staffSubmissions.get("instructor");
+    if (!submissionId) throw new Error("missing instructor test submission");
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignmentId}/test`);
+    await enterStudentPreview(page, submissionId);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+    await expectSubmissionTabSettled(page);
+
+    // The home link is a soft navigation to /course, keeping this provider mounted.
+    await page.locator('a[href="/course"]').filter({ visible: true }).first().click();
+    await expectViewAsCookieCleared(page);
+
     await page.goto(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();

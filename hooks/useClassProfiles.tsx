@@ -158,6 +158,12 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   // a soft navigation" (needs a reload to rebuild controllers) from "loaded a page the preview never
   // covered" (the server already rendered staff).
   const publishedSelfPreviewRef = useRef(false);
+  // The course whose self-preview cookie this mount is responsible for. This provider also covers
+  // `/course` (the course list), so a soft navigation to the course picker or to another course
+  // leaves `course_id` absent or pointing elsewhere, and the scope-cleanup effect below can no
+  // longer reach the originating cookie. Without this, returning to that assignment later re-entered
+  // the preview silently, contradicting the banner's promise that navigating away ends it.
+  const selfPreviewCourseRef = useRef<string | null>(null);
   // True while the (instructor, viewAsProfileId) → student role lookup is in flight.
   // We must not publish the real instructor identity during that window, or read-only
   // gates would briefly re-enable instructor write UI. Initialized to true when a
@@ -263,6 +269,15 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   // Re-read the per-course view-as cookie if course_id changes (e.g. navigating
   // between courses inside this provider).
   useEffect(() => {
+    // Leaving the course that owns a self-preview ends it, wherever the viewer went. Only the
+    // self-preview is cleared this way: viewing an enrolled student is course-wide and is meant to
+    // still be there when you come back to that course.
+    const previewCourse = selfPreviewCourseRef.current;
+    if (previewCourse && previewCourse !== (course_id as string | undefined)) {
+      clearViewAsCookie(previewCourse);
+      selfPreviewCourseRef.current = null;
+      publishedSelfPreviewRef.current = false;
+    }
     if (!course_id) {
       setViewAsTarget(null);
       return;
@@ -313,6 +328,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         return;
       }
       publishedSelfPreviewRef.current = true;
+      selfPreviewCourseRef.current = course_id as string;
       setViewAsRole({ ...realMyRole, role: "student" } as UserRoleWithClassAndUser);
       setIsResolvingViewAs(false);
       return;
