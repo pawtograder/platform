@@ -22,6 +22,7 @@ import {
   Box,
   Button,
   Card,
+  chakra,
   Code,
   Float,
   Heading,
@@ -35,6 +36,7 @@ import {
 } from "@chakra-ui/react";
 
 import { Alert } from "@/components/ui/alert";
+import { SpokenValue } from "@/components/ui/spoken-value";
 import pluralize from "pluralize";
 import type { CSSProperties, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -130,9 +132,16 @@ function WhatIfScoreCell({
     whatIfVal?.what_if !== null &&
     whatIfVal?.what_if !== score;
   const max_score = column.max_score ?? 100;
-  let scoreToShow: string | number | null | undefined = "N/A";
+  // `hasNumericScore` tracks whether `scoreToShow` is a real point value rather
+  // than a status word. The two are rendered very differently: only a number
+  // takes the "/max" suffix, and only a number is spoken as "N of M points"
+  // (issue #915 — every status used to pick up the suffix, so a submitted-but-
+  // ungraded item rendered "Submitted/100" and announced "Submitted slash 100").
+  let scoreToShow: string | number = "N/A";
+  let hasNumericScore = false;
   if (score !== null && score !== undefined) {
     scoreToShow = score;
+    hasNumericScore = true;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
   } else if (submissionStatus.status === "found") {
@@ -145,11 +154,19 @@ function WhatIfScoreCell({
     scoreToShow = "In Progress";
   }
   if (isShowingWhatIf) {
-    if (whatIfVal?.what_if !== null && whatIfVal?.what_if !== undefined) {
-      scoreToShow = whatIfVal.what_if;
-    } else {
-      scoreToShow = "0";
-    }
+    scoreToShow = whatIfVal?.what_if ?? 0;
+    hasNumericScore = true;
+  }
+  const showMaxScore = hasNumericScore && column.max_score != null;
+  // Screen readers get the value in words. "5/100" is at best ambiguous read as
+  // "5 slash 100"; a status word paired with a max is actively wrong, so the max
+  // moves to a "worth N points" clause where it is still available but no longer
+  // reads as a fraction of a score the student does not have.
+  let spokenScore: string;
+  if (hasNumericScore) {
+    spokenScore = column.max_score != null ? `${scoreToShow} of ${column.max_score} points` : `${scoreToShow} points`;
+  } else {
+    spokenScore = column.max_score != null ? `${scoreToShow}, worth ${column.max_score} points` : `${scoreToShow}`;
   }
   return (
     <HStack gap={0} pr={2} flexWrap="wrap" justifyContent="flex-end">
@@ -192,12 +209,17 @@ function WhatIfScoreCell({
           </Text>
         </Box>
       )}
-      {column.render_expression && "("}
+      {/* Punctuation that only groups the rendered expression with the raw
+          score visually — spoken it is just "left paren" noise, and the
+          SpokenValue below already reads the score as a phrase. */}
+      {column.render_expression && <chakra.span aria-hidden="true">(</chakra.span>}
       <Text fontSize="sm" whiteSpace="nowrap">
-        {scoreToShow}
-        {column.max_score && `/${column.max_score}`}
+        <SpokenValue spoken={spokenScore}>
+          {scoreToShow}
+          {showMaxScore && `/${column.max_score}`}
+        </SpokenValue>
       </Text>
-      {column.render_expression && ")"}
+      {column.render_expression && <chakra.span aria-hidden="true">)</chakra.span>}
       {whatIfEnabled && canEditColumn(column) && (
         // Keyboard path into what-if editing (WCAG 2.1.1): the card-level click
         // handler is a pointer convenience; this button is the operable control.

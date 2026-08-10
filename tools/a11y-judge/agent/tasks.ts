@@ -60,6 +60,14 @@ export function normalizeAnswer(text: string): string {
  */
 function answerContains(verdict: AgentVerdict | null, needles: string[]): PredicateResult {
   if (!verdict) return { success: false, detail: "no verdict emitted" };
+  // A needle read from `ctx.seed` is typed `string` but is really only as good
+  // as the seeder: reference a key `seedAgentPages()` never sets and this used
+  // to die inside normalizeAnswer with a bare "Cannot read properties of
+  // undefined". Fail the predicate with the cause named instead.
+  const unbound = needles.filter((n) => n === undefined || n === null || n === "");
+  if (unbound.length > 0) {
+    return { success: false, detail: `predicate needles missing from seed bindings: ${JSON.stringify(needles)}` };
+  }
   const answer = normalizeAnswer(verdict.taskAnswer);
   const missing = needles.filter((n) => !tokenBoundaryPattern(normalizeAnswer(n)).test(answer));
   return missing.length === 0
@@ -118,12 +126,21 @@ export const GRADEBOOK_COLUMNS_TASK: TaskDefinition = {
   id: "gradebook-assignment",
   pageId: "gradebook",
   kind: "read",
-  readNeedleKeys: ["assignmentName"],
+  // `gradebookSpokenScore` ("45 of 100 points") rather than a bare
+  // `gradebookScore`: needles are matched as whole tokens against the speech
+  // log, and a lone "45" would also be satisfied by any incidental number the
+  // journey passes through. The multi-word phrase can only come from the score
+  // cell itself. Needling the name alone let the lane pass while no score was
+  // reachable at all (issue #915).
+  readNeedleKeys: ["assignmentName", "gradebookSpokenScore"],
   prompt: [
     "You are on your course gradebook page. Find the assignment entries listed there and report",
-    "in taskAnswer the name of each assignment you can find, plus any score shown for it."
+    "in taskAnswer the name of each assignment you can find, and for each one the score and the",
+    "maximum it is out of, in the form '<points> out of <max>' (e.g. '7 out of 10'). If no score",
+    "is shown for an entry, say so explicitly instead of guessing."
   ].join(" "),
-  predicate: async (verdict, ctx) => answerContains(verdict, [ctx.seed.assignmentName])
+  predicate: async (verdict, ctx) =>
+    answerContains(verdict, [ctx.seed.assignmentName, ctx.seed.gradebookScore, ctx.seed.gradebookMaxScore])
 };
 
 export const DISCUSSION_REPLY_TASK: TaskDefinition = {
