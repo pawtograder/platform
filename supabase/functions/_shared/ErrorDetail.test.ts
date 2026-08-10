@@ -7,7 +7,7 @@
  * Run from supabase/functions:  deno test --no-check _shared/ErrorDetail.test.ts
  */
 import { assertEquals } from "jsr:@std/assert@^1";
-import { describeCause } from "./ErrorDetail.ts";
+import { describeCause, isDuplicateKey } from "./ErrorDetail.ts";
 
 Deno.test("describeCause: a PostgREST error object keeps its message and code", () => {
   // Verbatim shape from a Dev-project event.
@@ -47,4 +47,32 @@ Deno.test("describeCause: primitives stringify", () => {
   assertEquals(describeCause("plain string"), "plain string");
   assertEquals(describeCause(null), "null");
   assertEquals(describeCause(undefined), "undefined");
+});
+
+Deno.test("isDuplicateKey: a PostgREST unique violation matches", () => {
+  // Verbatim shape from the prod `handleDelete` events (revoked_token_ids_pkey).
+  assertEquals(
+    isDuplicateKey({
+      code: "23505",
+      details: "Key (token_id)=(d30dc25a-839c-4fe3-ae82-1ab815227eb6) already exists.",
+      hint: null,
+      message: 'duplicate key value violates unique constraint "revoked_token_ids_pkey"'
+    }),
+    true
+  );
+});
+
+Deno.test("isDuplicateKey: other Postgres errors do not match", () => {
+  // 23503 is a foreign-key violation — a real inconsistency, not an idempotent repeat.
+  assertEquals(isDuplicateKey({ code: "23503", message: "violates foreign key constraint" }), false);
+  assertEquals(isDuplicateKey({ code: "PGRST116", message: "no rows" }), false);
+  // A transport failure has no code at all and must never be mistaken for a benign duplicate.
+  assertEquals(isDuplicateKey({ message: "An invalid response was received from the upstream server" }), false);
+});
+
+Deno.test("isDuplicateKey: non-objects are safe", () => {
+  assertEquals(isDuplicateKey(null), false);
+  assertEquals(isDuplicateKey(undefined), false);
+  assertEquals(isDuplicateKey("23505"), false);
+  assertEquals(isDuplicateKey(new Error("duplicate key value violates unique constraint")), false);
 });

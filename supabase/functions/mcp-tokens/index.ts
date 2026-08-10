@@ -20,7 +20,7 @@ import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
-import { describeCause } from "../_shared/ErrorDetail.ts";
+import { describeCause, isDuplicateKey } from "../_shared/ErrorDetail.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 
 // Initialize Sentry if configured
@@ -269,11 +269,16 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
     });
   }
 
-  // Update token to mark as revoked
+  // Mark as revoked, but only if it is not already. `.is("revoked_at", null)` is what keeps this
+  // idempotent: an unqualified update rewrites the timestamp on every repeat call, so revoking a
+  // second time silently replaced the record of when the credential was FIRST withdrawn — the one
+  // fact a revocation audit trail exists to preserve. A no-op update is not an error here; the
+  // token ends up revoked either way, which is all the caller asked for.
   const { error: updateError } = await supabase
     .from("api_tokens")
     .update({ revoked_at: new Date().toISOString() })
-    .eq("id", token.id);
+    .eq("id", token.id)
+    .is("revoked_at", null);
 
   if (updateError) {
     Sentry.captureException(updateError, {
@@ -292,7 +297,12 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
     .from("revoked_token_ids")
     .insert({ token_id: body.token_id });
 
-  if (revokeInsertError) {
+  // A duplicate key here means the id is ALREADY in the revocation list — the exact state this call
+  // set out to reach, reached by an earlier call. Reporting it produced a steady trickle of prod
+  // Sentry issues (`handleDelete`, 23505 on revoked_token_ids) for revokes that succeeded from the
+  // user's point of view and left the token correctly revoked. Every other insert failure still
+  // reports: those leave the fast-lookup table genuinely out of step with api_tokens.
+  if (revokeInsertError && !isDuplicateKey(revokeInsertError)) {
     // Log but don't fail - the token is already marked revoked in api_tokens
     // The revoked_token_ids table is just for fast lookup optimization
     Sentry.captureException(revokeInsertError, {
