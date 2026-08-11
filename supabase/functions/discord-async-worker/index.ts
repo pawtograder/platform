@@ -19,6 +19,7 @@ import type {
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
+import { classifyDiscordError, isBotPermissionProblem } from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 // Declare EdgeRuntime for type safety
@@ -234,6 +235,116 @@ async function sendToDeadLetterQueue(
   return true;
 }
 
+type DiscordMembershipState = Database["public"]["Enums"]["discord_membership_state"];
+
+/**
+ * Record where a user stands with a class's Discord server.
+ *
+ * This is what replaces retrying: a user who has not joined the server, or a bot that cannot invite
+ * them, is a state to record and show an instructor, not an operation to attempt again next hour.
+ */
+async function recordMembershipStatus(
+  adminSupabase: SupabaseClient<Database>,
+  args: {
+    classId: number;
+    userId: string;
+    guildId: string;
+    state: DiscordMembershipState;
+    discordErrorCode?: number;
+    detail?: string;
+  },
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    const { error } = await adminSupabase.rpc("record_discord_membership_status", {
+      p_class_id: args.classId,
+      p_user_id: args.userId,
+      p_guild_id: args.guildId,
+      p_state: args.state,
+      p_discord_error_code: args.discordErrorCode,
+      p_detail: args.detail
+    });
+    if (error) {
+      throw error;
+    }
+    console.log(
+      `[recordMembershipStatus] Recorded ${args.state} for user ${args.userId} in class ${args.classId} (guild ${args.guildId})`
+    );
+  } catch (e) {
+    // Failing to record the state must not turn a terminal outcome back into a retry loop, so this
+    // is reported and swallowed.
+    console.error(`[recordMembershipStatus] Failed to record ${args.state}:`, e);
+    scope.setContext("membership_status_error", {
+      class_id: args.classId,
+      user_id: args.userId,
+      guild_id: args.guildId,
+      state: args.state,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+  }
+}
+
+/** Resolve a Discord snowflake to a Pawtograder user id, which is what the status table keys on. */
+async function lookupUserIdByDiscordId(
+  adminSupabase: SupabaseClient<Database>,
+  discordId: string
+): Promise<string | null> {
+  const { data, error } = await adminSupabase.from("users").select("user_id").eq("discord_id", discordId).single();
+  if (error || !data) {
+    console.warn(`[lookupUserIdByDiscordId] No user found for discord_id=${discordId}`, error);
+    return null;
+  }
+  return data.user_id;
+}
+
+/**
+ * Report a failure that no number of retries can fix.
+ *
+ * Deliberately not the dead letter queue. A DLQ row is a request for a human to look at one message;
+ * these arrive continuously for as long as the underlying condition holds, and 30,332 of them buried
+ * the queue they were meant to make legible. One grouped Sentry event per (method, cause) says the
+ * same thing without the table growing. The fingerprint is explicit so every occurrence of a cause
+ * lands in one issue rather than one per user or guild.
+ */
+function reportTerminalFailure(
+  envelope: DiscordAsyncEnvelope,
+  meta: { msg_id: number; enqueued_at: string },
+  error: unknown,
+  classification: { httpStatus?: number; code?: number; reason?: string },
+  scope: Sentry.Scope
+) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  console.log(
+    `[reportTerminalFailure] ${envelope.method} failed terminally (${classification.reason ?? "unclassified"}), not retrying: ${errorMessage}`
+  );
+
+  scope.setTag("terminal", "true");
+  scope.setTag("discord_error_code", String(classification.code ?? "none"));
+  scope.setContext("terminal_failure", {
+    method: envelope.method,
+    reason: classification.reason,
+    http_status: classification.httpStatus,
+    discord_error_code: classification.code,
+    error_message: errorMessage,
+    retry_count: envelope.retry_count ?? 0,
+    original_msg_id: meta.msg_id,
+    enqueued_at: meta.enqueued_at,
+    class_id: envelope.class_id
+  });
+  scope.setFingerprint([
+    "discord-terminal",
+    envelope.method,
+    String(classification.code ?? classification.httpStatus ?? "unknown")
+  ]);
+  scope.setLevel("warning");
+
+  Sentry.captureMessage(
+    `Discord ${envelope.method} cannot succeed and will not be retried: ${classification.reason ?? errorMessage}`,
+    scope
+  );
+}
+
 // ============================================================================
 // Slash Command Registration
 // ============================================================================
@@ -310,7 +421,7 @@ async function registerSlashCommands(scope: Sentry.Scope): Promise<CommandResult
 type UserRoleRecord = {
   user_id: string;
   class_id: number;
-  role: string;
+  role: Database["public"]["Enums"]["app_role"];
   discord_id: string;
   discord_server_id: string;
 };
@@ -321,19 +432,145 @@ type BatchSyncResult = {
     synced: number;
     not_in_guild: number;
     invite_created: number;
+    cannot_invite: number;
     errors: number;
   };
 };
 
-async function checkGuildMembership(guildId: string, discordUserId: string, botToken: string): Promise<boolean> {
+type MembershipCheck =
+  | { result: "member" }
+  | { result: "not_member" }
+  /** The bot cannot read this guild at all, which no student can resolve. */
+  | { result: "forbidden"; status: number }
+  /** The check failed for a reason that says nothing about the user. */
+  | { result: "unknown" };
+
+/**
+ * Whether the bot sees a user in a guild.
+ *
+ * `unknown` and `forbidden` are kept apart from `not_member` on purpose. A network error or a 5xx says
+ * nothing about the user, and treating it as "not a member" would record a wrong state and hand the
+ * student an invite they do not need. A 403 says something about the bot.
+ */
+async function checkGuildMembership(
+  guildId: string,
+  discordUserId: string,
+  botToken: string
+): Promise<MembershipCheck> {
   try {
     const response = await fetch(`${DISCORD_API_BASE}/guilds/${guildId}/members/${discordUserId}`, {
       method: "GET",
       headers: { Authorization: `Bot ${botToken}` }
     });
-    return response.status === 200;
+    if (response.status === 200) return { result: "member" };
+    if (response.status === 404) return { result: "not_member" };
+    if (response.status === 401 || response.status === 403) {
+      return { result: "forbidden", status: response.status };
+    }
+    return { result: "unknown" };
   } catch {
-    return false;
+    return { result: "unknown" };
+  }
+}
+
+/**
+ * Create and store a Discord invite for a user who is not in the guild.
+ *
+ * `guildInviteFailures` carries a guild that has already failed this run. Without it a bot that
+ * cannot list channels produces one failing invite attempt per enrolled user per hour — 557 of the
+ * 594 dead-letter rows on 2026-08-11 were that one 403, repeated. One attempt per guild per run is
+ * enough to learn the same thing.
+ */
+async function ensureInviteForUser(
+  adminSupabase: SupabaseClient<Database>,
+  record: UserRoleRecord,
+  guildInviteFailures: Map<string, { code?: number; reason: string }>,
+  scope: Sentry.Scope
+): Promise<"created" | "cannot_invite" | "error"> {
+  const knownFailure = guildInviteFailures.get(record.discord_server_id);
+  if (knownFailure) {
+    await recordMembershipStatus(
+      adminSupabase,
+      {
+        classId: record.class_id,
+        userId: record.user_id,
+        guildId: record.discord_server_id,
+        state: "cannot_invite",
+        discordErrorCode: knownFailure.code,
+        detail: knownFailure.reason
+      },
+      scope
+    );
+    return "cannot_invite";
+  }
+
+  try {
+    const invite = await discord.createGuildInvite(record.discord_server_id, 604800, 5, scope); // 7 days, 5 uses
+    const expiresAt = new Date(Date.now() + 604800 * 1000);
+
+    const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
+      {
+        user_id: record.user_id,
+        class_id: record.class_id,
+        guild_id: record.discord_server_id,
+        invite_code: invite.code,
+        invite_url: invite.url,
+        expires_at: expiresAt.toISOString(),
+        used: false
+      },
+      { onConflict: "user_id,class_id,guild_id" }
+    );
+
+    if (inviteError) {
+      console.error(`[ensureInviteForUser] Failed to store invite:`, inviteError);
+      scope.setContext("invite_storage_error", { error_message: inviteError.message });
+      Sentry.captureException(inviteError, scope);
+      return "error";
+    }
+
+    await recordMembershipStatus(
+      adminSupabase,
+      {
+        classId: record.class_id,
+        userId: record.user_id,
+        guildId: record.discord_server_id,
+        state: "not_joined",
+        detail: `Invite ${invite.url} is waiting to be used`
+      },
+      scope
+    );
+    return "created";
+  } catch (error) {
+    const classification = classifyDiscordError(error);
+    const reason = error instanceof Error ? error.message : String(error);
+
+    if (isBotPermissionProblem(error)) {
+      // The bot's own configuration. Remember it for the rest of this run so the remaining users in
+      // this guild cost nothing, and record it against the user so an instructor sees who is stuck.
+      guildInviteFailures.set(record.discord_server_id, { code: classification.code, reason });
+      await recordMembershipStatus(
+        adminSupabase,
+        {
+          classId: record.class_id,
+          userId: record.user_id,
+          guildId: record.discord_server_id,
+          state: "cannot_invite",
+          discordErrorCode: classification.code,
+          detail: reason
+        },
+        scope
+      );
+      return "cannot_invite";
+    }
+
+    console.error(`[ensureInviteForUser] Invite creation failed for guild ${record.discord_server_id}:`, error);
+    scope.setContext("invite_creation_error", {
+      guild_id: record.discord_server_id,
+      class_id: record.class_id,
+      error_message: reason
+    });
+    Sentry.captureException(error, scope);
+    return "error";
   }
 }
 
@@ -341,64 +578,98 @@ async function processBatchRoleSync(
   adminSupabase: SupabaseClient<Database>,
   scope: Sentry.Scope
 ): Promise<BatchSyncResult> {
+  const emptySummary = { total: 0, synced: 0, not_in_guild: 0, invite_created: 0, cannot_invite: 0, errors: 1 };
+
   const botToken = Deno.env.get("DISCORD_BOT_TOKEN");
   if (!botToken) {
     console.error("[processBatchRoleSync] Missing DISCORD_BOT_TOKEN");
-    return { summary: { total: 0, synced: 0, not_in_guild: 0, invite_created: 0, errors: 1 } };
+    return { summary: emptySummary };
   }
 
-  // Get all users who need role sync
-  const { data, error } = await adminSupabase
-    .from("user_roles")
-    .select(
-      `
-      user_id,
-      class_id,
-      role,
-      users!inner(discord_id),
-      classes!inner(discord_server_id)
-    `
-    )
-    .eq("disabled", false)
-    .not("users.discord_id", "is", null)
-    .not("classes.discord_server_id", "is", null);
+  // Candidates come from an RPC rather than a client-side query so the active-class scoping lives in
+  // one place. This query used to run against every class that had ever had a Discord server: 76% of
+  // classes have ended, and their students were re-checked every hour forever.
+  const { data, error } = await adminSupabase.rpc("get_discord_role_sync_candidates");
 
   if (error) {
-    console.error("[processBatchRoleSync] Error fetching users:", error);
+    console.error("[processBatchRoleSync] Error fetching candidates:", error);
     scope.setContext("batch_sync_error", { error: error.message });
-    return { summary: { total: 0, synced: 0, not_in_guild: 0, invite_created: 0, errors: 1 } };
+    Sentry.captureException(error, scope);
+    return { summary: emptySummary };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const records: UserRoleRecord[] = (data || []).map((record: any) => ({
-    user_id: record.user_id,
-    class_id: record.class_id,
-    role: record.role,
-    discord_id: record.users.discord_id,
-    discord_server_id: record.classes.discord_server_id
-  }));
+  const records: UserRoleRecord[] = (data ?? []).flatMap((record) =>
+    record.discord_id && record.discord_server_id
+      ? [
+          {
+            user_id: record.user_id,
+            class_id: record.class_id,
+            role: record.role,
+            discord_id: record.discord_id,
+            discord_server_id: record.discord_server_id
+          }
+        ]
+      : []
+  );
 
-  console.log(`[processBatchRoleSync] Found ${records.length} user-role records to process`);
+  console.log(`[processBatchRoleSync] Found ${records.length} user-role records in active classes to process`);
 
-  const summary = { total: records.length, synced: 0, not_in_guild: 0, invite_created: 0, errors: 0 };
+  const summary = {
+    total: records.length,
+    synced: 0,
+    not_in_guild: 0,
+    invite_created: 0,
+    cannot_invite: 0,
+    errors: 0
+  };
 
   // Cache membership checks per guild/user
-  const membershipCache = new Map<string, boolean>();
+  const membershipCache = new Map<string, MembershipCheck>();
+  // Guilds whose invite creation has already failed this run, so the failure costs one call, not one
+  // call per enrolled student.
+  const guildInviteFailures = new Map<string, { code?: number; reason: string }>();
 
   for (const record of records) {
     const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
 
     // Check membership if not cached
     if (!membershipCache.has(cacheKey)) {
-      const isMember = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
-      membershipCache.set(cacheKey, isMember);
+      const membership = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
+      membershipCache.set(cacheKey, membership);
       // Small delay to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    const isMember = membershipCache.get(cacheKey)!;
+    const membership = membershipCache.get(cacheKey)!;
 
-    if (isMember) {
+    if (membership.result === "unknown") {
+      // Nothing was learned about this user, so nothing is recorded and nothing is enqueued. The next
+      // run will check again.
+      summary.errors++;
+      continue;
+    }
+
+    if (membership.result === "forbidden") {
+      // The bot cannot read this guild's members, so it certainly cannot invite anyone into it. Record
+      // it against the student and remember the guild so the invite path below does not try either.
+      const reason = `Discord returned ${membership.status} for the guild member lookup; the bot cannot read this server`;
+      guildInviteFailures.set(record.discord_server_id, { reason });
+      await recordMembershipStatus(
+        adminSupabase,
+        {
+          classId: record.class_id,
+          userId: record.user_id,
+          guildId: record.discord_server_id,
+          state: "cannot_invite",
+          detail: reason
+        },
+        scope
+      );
+      summary.cannot_invite++;
+      continue;
+    }
+
+    if (membership.result === "member") {
       // User is in guild, enqueue role sync
       try {
         const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
@@ -413,45 +684,77 @@ async function processBatchRoleSync(
           summary.errors++;
         } else {
           summary.synced++;
+          // Clears any not_joined or cannot_invite this user was carrying.
+          await recordMembershipStatus(
+            adminSupabase,
+            {
+              classId: record.class_id,
+              userId: record.user_id,
+              guildId: record.discord_server_id,
+              state: "in_guild"
+            },
+            scope
+          );
         }
       } catch (e) {
         console.error(`[processBatchRoleSync] Exception enqueueing sync:`, e);
         summary.errors++;
       }
-    } else {
-      // User not in guild - check for existing invite
-      const { data: existingInvite } = await adminSupabase
-        .from("discord_invites")
-        .select("id")
-        .eq("user_id", record.user_id)
-        .eq("class_id", record.class_id)
-        .eq("guild_id", record.discord_server_id)
-        .eq("used", false)
-        .gt("expires_at", new Date().toISOString())
-        .single();
-
-      if (existingInvite) {
-        summary.not_in_guild++;
-      } else {
-        // Enqueue role sync which will create invite
-        try {
-          const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
-            p_user_id: record.user_id,
-            p_class_id: record.class_id,
-            p_role: record.role,
-            p_action: "add"
-          });
-
-          if (syncError) {
-            summary.errors++;
-          } else {
-            summary.invite_created++;
-          }
-        } catch {
-          summary.errors++;
-        }
-      }
+      continue;
     }
+
+    // The user is not in the guild, which no role operation can fix — adding a role to a non-member
+    // returns 404 however many times it is attempted. So nothing is enqueued here. The membership
+    // check above runs again next hour, and the user picks up their roles once they join.
+    const { data: existingInvite } = await adminSupabase
+      .from("discord_invites")
+      .select("id")
+      .eq("user_id", record.user_id)
+      .eq("class_id", record.class_id)
+      .eq("guild_id", record.discord_server_id)
+      .eq("used", false)
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (existingInvite) {
+      summary.not_in_guild++;
+      await recordMembershipStatus(
+        adminSupabase,
+        {
+          classId: record.class_id,
+          userId: record.user_id,
+          guildId: record.discord_server_id,
+          state: "not_joined",
+          detail: "An unused invite is already outstanding"
+        },
+        scope
+      );
+      continue;
+    }
+
+    const inviteResult = await ensureInviteForUser(adminSupabase, record, guildInviteFailures, scope);
+    if (inviteResult === "created") {
+      summary.invite_created++;
+    } else if (inviteResult === "cannot_invite") {
+      summary.cannot_invite++;
+    } else {
+      summary.errors++;
+    }
+  }
+
+  if (guildInviteFailures.size > 0) {
+    // One event per run naming the guilds an admin needs to fix, rather than one per affected student.
+    const summaryScope = scope.clone();
+    summaryScope.setContext("discord_invite_permission_failures", {
+      guild_ids: [...guildInviteFailures.keys()],
+      reasons: [...guildInviteFailures.values()].map((f) => f.reason)
+    });
+    summaryScope.setFingerprint(["discord-batch-role-sync", "invite-permission-denied"]);
+    summaryScope.setLevel("warning");
+    Sentry.captureMessage(
+      `Discord bot cannot create invites in ${guildInviteFailures.size} guild(s); affected students cannot be invited until an admin grants access`,
+      summaryScope
+    );
   }
 
   return { summary };
@@ -1056,81 +1359,92 @@ export async function processEnvelope(
           const member = await discord.getGuildMember(args.guild_id, args.user_id, scope);
 
           if (!member) {
-            // User is not in the guild - create an invite link
+            // The user has not joined the server. That is a permanent state until the user acts, so
+            // this operation is finished either way — the invite below is a courtesy, and its failure
+            // is recorded rather than retried.
             console.log(`[processEnvelope] User ${args.user_id} not in guild ${args.guild_id}, creating invite`);
-            const invite = await discord.createGuildInvite(args.guild_id, 604800, 5, scope); // 7 days, 5 uses
 
-            console.log(`[processEnvelope] Created invite for user ${args.user_id}: ${invite.url}`);
-            scope.setContext("discord_invite_created", {
-              user_id: args.user_id,
-              guild_id: args.guild_id,
-              invite_code: invite.code,
-              invite_url: invite.url
-            });
-            Sentry.captureMessage(`Discord invite created for user not in server: ${invite.url}`, {
-              level: "info",
-              tags: { user_id: args.user_id, guild_id: args.guild_id }
-            });
+            const platformUserId = envelope.class_id
+              ? await lookupUserIdByDiscordId(adminSupabase, args.user_id)
+              : null;
 
-            // Store invite in database if we have class_id
-            if (envelope.class_id) {
-              try {
-                // Get user_id from discord_id
-                const { data: userData, error: userError } = await adminSupabase
-                  .from("users")
-                  .select("user_id")
-                  .eq("discord_id", args.user_id)
-                  .single();
+            try {
+              const invite = await discord.createGuildInvite(args.guild_id, 604800, 5, scope); // 7 days, 5 uses
+              console.log(`[processEnvelope] Created invite for user ${args.user_id}: ${invite.url}`);
 
-                if (!userError && userData) {
-                  // Calculate expiration time (7 days from now)
-                  const expiresAt = new Date();
-                  expiresAt.setTime(expiresAt.getTime() + 604800 * 1000); // 7 days in milliseconds
+              if (envelope.class_id && platformUserId) {
+                const expiresAt = new Date(Date.now() + 604800 * 1000); // 7 days
 
-                  // Upsert invite (replace existing if any)
-                  const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
-                    {
-                      user_id: userData.user_id,
-                      class_id: envelope.class_id,
-                      guild_id: args.guild_id,
-                      invite_code: invite.code,
-                      invite_url: invite.url,
-                      expires_at: expiresAt.toISOString(),
-                      used: false
-                    },
-                    {
-                      onConflict: "user_id,class_id,guild_id"
-                    }
-                  );
-
-                  if (inviteError) {
-                    console.error(`[processEnvelope] Failed to store invite in database:`, inviteError);
-                    scope.setContext("invite_storage_error", {
-                      error_message: inviteError.message
-                    });
-                  } else {
-                    console.log(
-                      `[processEnvelope] Stored invite in database: user_id=${userData.user_id}, class_id=${envelope.class_id}`
-                    );
+                const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
+                  {
+                    user_id: platformUserId,
+                    class_id: envelope.class_id,
+                    guild_id: args.guild_id,
+                    invite_code: invite.code,
+                    invite_url: invite.url,
+                    expires_at: expiresAt.toISOString(),
+                    used: false
+                  },
+                  {
+                    onConflict: "user_id,class_id,guild_id"
                   }
+                );
+
+                if (inviteError) {
+                  console.error(`[processEnvelope] Failed to store invite in database:`, inviteError);
+                  scope.setContext("invite_storage_error", {
+                    error_message: inviteError.message
+                  });
+                  Sentry.captureException(inviteError, scope);
                 } else {
-                  console.warn(
-                    `[processEnvelope] Could not find user with discord_id=${args.user_id} to store invite:`,
-                    userError
+                  console.log(
+                    `[processEnvelope] Stored invite in database: user_id=${platformUserId}, class_id=${envelope.class_id}`
                   );
                 }
-              } catch (e) {
-                console.error(`[processEnvelope] Error storing invite in database:`, e);
-                scope.setContext("invite_storage_exception", {
-                  error_message: e instanceof Error ? e.message : String(e)
-                });
+
+                await recordMembershipStatus(
+                  adminSupabase,
+                  {
+                    classId: envelope.class_id,
+                    userId: platformUserId,
+                    guildId: args.guild_id,
+                    state: "not_joined",
+                    detail: `Invite ${invite.url} is waiting to be used`
+                  },
+                  scope
+                );
+              } else {
+                console.warn(`[processEnvelope] No class_id or matching user, skipping invite storage`);
               }
-            } else {
-              console.warn(`[processEnvelope] No class_id in envelope, skipping invite storage`);
+            } catch (inviteError) {
+              const classification = classifyDiscordError(inviteError);
+              const reason = inviteError instanceof Error ? inviteError.message : String(inviteError);
+
+              if (!classification.terminal) {
+                // A rate limit or timeout on the invite call is worth another attempt.
+                throw inviteError;
+              }
+
+              // The bot cannot build an invite. Only an admin can change that, so record it and stop.
+              if (envelope.class_id && platformUserId) {
+                await recordMembershipStatus(
+                  adminSupabase,
+                  {
+                    classId: envelope.class_id,
+                    userId: platformUserId,
+                    guildId: args.guild_id,
+                    state: isBotPermissionProblem(inviteError) ? "cannot_invite" : "not_joined",
+                    discordErrorCode: classification.code,
+                    detail: reason
+                  },
+                  scope
+                );
+              }
+              reportTerminalFailure(envelope, meta, inviteError, classification, scope);
             }
 
-            // Don't fail - the invite was created, user can join later
-            // The role will be added when they join and the sync runs again
+            // Either way this message is done. The user is not in the guild, so there is no role to
+            // add; the hourly membership check picks them up once they join.
             return true;
           }
 
@@ -1141,15 +1455,11 @@ export async function processEnvelope(
           // Mark any pending invites for this user/guild as used
           if (envelope.class_id) {
             try {
-              const { data: userData, error: userError } = await adminSupabase
-                .from("users")
-                .select("user_id")
-                .eq("discord_id", args.user_id)
-                .single();
+              const platformUserId = await lookupUserIdByDiscordId(adminSupabase, args.user_id);
 
-              if (!userError && userData) {
+              if (platformUserId) {
                 const { error: markError } = await adminSupabase.rpc("mark_discord_invite_used", {
-                  p_user_id: userData.user_id,
+                  p_user_id: platformUserId,
                   p_guild_id: args.guild_id
                 });
 
@@ -1157,9 +1467,21 @@ export async function processEnvelope(
                   console.warn(`[processEnvelope] Failed to mark invite as used:`, markError);
                 } else {
                   console.log(
-                    `[processEnvelope] Marked invites as used for user_id=${userData.user_id}, guild_id=${args.guild_id}`
+                    `[processEnvelope] Marked invites as used for user_id=${platformUserId}, guild_id=${args.guild_id}`
                   );
                 }
+
+                // Clears any not_joined or cannot_invite this user was carrying.
+                await recordMembershipStatus(
+                  adminSupabase,
+                  {
+                    classId: envelope.class_id,
+                    userId: platformUserId,
+                    guildId: args.guild_id,
+                    state: "in_guild"
+                  },
+                  scope
+                );
               }
             } catch (e) {
               console.error(`[processEnvelope] Error marking invite as used:`, e);
@@ -1243,6 +1565,17 @@ export async function processEnvelope(
   } catch (error) {
     console.error(`[processEnvelope] Error processing envelope:`, error);
     console.trace(error);
+
+    // A failure that cannot succeed on a later attempt gets recorded once and archived. Requeueing it
+    // buys five more identical failures and a dead-letter row, and the hourly enqueue brings it
+    // straight back — which is how 30,332 dead-lettered operations accumulated for ~30 users.
+    const classification = classifyDiscordError(error);
+    if (classification.terminal) {
+      reportTerminalFailure(envelope, meta, error, classification, scope);
+      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      return false;
+    }
+
     const rt = detectRateLimit(error);
     console.log(`[processEnvelope] Rate limit detected: ${rt.isRateLimit}, retry_after: ${rt.retryAfter}`);
     scope.setTag("rate_limit", rt.isRateLimit ? "true" : "false");

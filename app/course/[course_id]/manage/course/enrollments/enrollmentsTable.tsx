@@ -7,7 +7,8 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useClassSections, useCourse, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useDiscordMembershipStatus, type DiscordMembershipState } from "@/hooks/useDiscordMembershipStatus";
 import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useTags from "@/hooks/useTags";
@@ -37,13 +38,25 @@ import {
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  useReactTable
+  useReactTable,
+  type Row
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useRef, useState, type ElementType } from "react";
+import {
+  FaEdit,
+  FaLink,
+  FaTrash,
+  FaUserCog,
+  FaClock,
+  FaTimes,
+  FaFileExport,
+  FaGithub,
+  FaExclamationTriangle,
+  FaQuestionCircle
+} from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -75,6 +88,45 @@ type InvitationRow = Database["public"]["Tables"]["invitations"]["Row"] & { type
 // Combined type for table rows
 type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollment" }) | InvitationRow;
 
+type DiscordStatusLabel = "In server" | "Not in server" | "Cannot invite" | "Not linked" | "Not checked yet";
+
+const DISCORD_STATUS_PRESENTATION: Record<DiscordStatusLabel, { color: string; icon: ElementType }> = {
+  "In server": { color: "green.600", icon: CheckIcon },
+  // The bot can see the student is missing but cannot invite them; only a Discord admin can fix it.
+  "Cannot invite": { color: "red.600", icon: FaExclamationTriangle },
+  // Ordinary and self-resolving: the student has an invite and has not used it yet.
+  "Not in server": { color: "orange.600", icon: FaClock },
+  "Not linked": { color: "gray.fg", icon: FaTimes },
+  "Not checked yet": { color: "gray.400", icon: FaQuestionCircle }
+};
+
+/**
+ * Where one student stands with the class's Discord server.
+ *
+ * A student with no recorded state is reported as unchecked rather than as present. The hourly sync
+ * records every outcome it observes, so silence means it has not looked yet — claiming they are in
+ * the server would be a guess, and the whole point of this column is that the previous behaviour
+ * (retry, dead-letter, tell nobody) left instructors guessing.
+ */
+function discordStatusLabel(
+  row: UserRoleWithPrivateProfileAndUser,
+  stateByUser: Map<string, DiscordMembershipState>
+): DiscordStatusLabel {
+  if (!row.users?.discord_id) {
+    return "Not linked";
+  }
+  switch (stateByUser.get(row.user_id)) {
+    case "cannot_invite":
+      return "Cannot invite";
+    case "not_joined":
+      return "Not in server";
+    case "in_guild":
+      return "In server";
+    default:
+      return "Not checked yet";
+  }
+}
+
 /**
  * Client component rendering the enrollments management table for a course.
  * Provides filtering, pagination, bulk tag add/remove, and per-user actions
@@ -86,6 +138,11 @@ export default function EnrollmentsTable() {
   const supabase = createClient();
   const labSections = useLabSections();
   const classSections = useClassSections();
+  const course = useCourse();
+  const discordServerConfigured = !!course?.discord_server_id;
+  const { byUserId: discordStateByUser } = useDiscordMembershipStatus(
+    discordServerConfigured ? Number(course_id) : undefined
+  );
 
   const setSisSyncOptOut = useCallback(
     async (userRoleId: number, sis_sync_opt_out: boolean) => {
@@ -606,6 +663,45 @@ export default function EnrollmentsTable() {
           return values.includes(status);
         }
       },
+      // Only shown for classes that actually have a Discord server; everywhere else the column would
+      // be a full column of "N/A".
+      ...(discordServerConfigured
+        ? [
+            {
+              id: "discord_status",
+              header: "Discord Status",
+              accessorFn: (row: EnrollmentTableRow) =>
+                row.type === "invitation" ? "N/A" : discordStatusLabel(row, discordStateByUser),
+              cell: ({ row }: { row: Row<EnrollmentTableRow> }) => {
+                if (row.original.type === "invitation") {
+                  return (
+                    <Text color="gray.400" fontSize="sm">
+                      N/A
+                    </Text>
+                  );
+                }
+                const label = discordStatusLabel(row.original, discordStateByUser);
+                const { color, icon } = DISCORD_STATUS_PRESENTATION[label];
+                return (
+                  <Flex alignItems="center" gap={2}>
+                    <Icon as={icon} color={color} />
+                    <Text color={color} fontWeight="medium" fontSize="sm">
+                      {label}
+                    </Text>
+                  </Flex>
+                );
+              },
+              filterFn: (row: Row<EnrollmentTableRow>, id: string, filterValue: unknown) => {
+                if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+                const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+                if (row.original.type === "invitation") {
+                  return values.includes("N/A");
+                }
+                return values.includes(discordStatusLabel(row.original, discordStateByUser));
+              }
+            } satisfies ColumnDef<EnrollmentTableRow>
+          ]
+        : []),
       {
         id: "canvas_id",
         header: "SIS Link",
@@ -876,7 +972,9 @@ export default function EnrollmentsTable() {
       cancelInvitation,
       classSections,
       labSections,
-      setSisSyncOptOut
+      setSisSyncOptOut,
+      discordServerConfigured,
+      discordStateByUser
     ]
   );
 

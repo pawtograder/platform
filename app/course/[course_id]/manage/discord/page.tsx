@@ -10,6 +10,7 @@ import { useState, useEffect } from "react";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import LinkDiscordAccount from "@/components/discord/link-account";
+import DiscordMembershipStatusAlerts from "@/components/discord/membership-status-alerts";
 import PendingInvites from "@/components/discord/pending-invites";
 import { SyncRolesPanel } from "@/components/discord/sync-roles-button";
 
@@ -127,6 +128,9 @@ export default function DiscordManagementPage() {
           automatically posted to Discord channels.
         </Text>
       </Box>
+
+      {/* Students who are not in the server, and whether that needs an admin */}
+      {isServerConfigured && <DiscordMembershipStatusAlerts classId={course.id} />}
 
       {/* Link Discord Account */}
       <Box>

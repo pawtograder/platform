@@ -1,6 +1,7 @@
 "use client";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import DiscordMembershipStatusAlerts from "@/components/discord/membership-status-alerts";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -554,10 +555,14 @@ function LinkedSectionsTab() {
   );
 }
 export default function EnrollmentsPage() {
+  const { course_id } = useParams();
+  const classId = Number(course_id);
+
   return (
     <Container>
       <Heading my="4">Enrollments</Heading>
       <LinkedSectionsTab />
+      <DiscordMembershipStatusAlerts classId={Number.isFinite(classId) ? classId : undefined} />
       <EnrollmentsTable />
     </Container>
   );

@@ -2122,6 +2122,60 @@ export type Database = {
           }
         ];
       };
+      discord_membership_status: {
+        Row: {
+          class_id: number;
+          detail: string | null;
+          discord_error_code: number | null;
+          first_observed_at: string;
+          guild_id: string;
+          id: number;
+          last_observed_at: string;
+          observed_count: number;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          detail?: string | null;
+          discord_error_code?: number | null;
+          first_observed_at?: string;
+          guild_id: string;
+          id?: number;
+          last_observed_at?: string;
+          observed_count?: number;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          detail?: string | null;
+          discord_error_code?: number | null;
+          first_observed_at?: string;
+          guild_id?: string;
+          id?: number;
+          last_observed_at?: string;
+          observed_count?: number;
+          state?: Database["public"]["Enums"]["discord_membership_state"];
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_membership_status_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discord_membership_status_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discord_messages: {
         Row: {
           class_id: number;
@@ -12818,6 +12872,30 @@ export type Database = {
         };
         Returns: Json;
       };
+      get_discord_membership_status_for_class: {
+        Args: { p_class_id: number };
+        Returns: {
+          detail: string;
+          discord_error_code: number;
+          discord_username: string;
+          email: string;
+          last_observed_at: string;
+          name: string;
+          sortable_name: string;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        }[];
+      };
+      get_discord_role_sync_candidates: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          discord_id: string;
+          discord_server_id: string;
+          role: Database["public"]["Enums"]["app_role"];
+          user_id: string;
+        }[];
+      };
       get_discussion_engagement: {
         Args: { p_class_id: number };
         Returns: {
@@ -13266,6 +13344,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_discord_discussion_stats_update: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_email_batch_processor_background_task: {
         Args: never;
         Returns: undefined;
@@ -13284,6 +13366,10 @@ export type Database = {
       };
       is_allowed_grader_key: {
         Args: { class: number; graderkey: string };
+        Returns: boolean;
+      };
+      is_class_active: {
+        Args: { p_archived: boolean; p_end_date: string };
         Returns: boolean;
       };
       is_in_class: {
@@ -13491,6 +13577,17 @@ export type Database = {
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_discord_membership_status: {
+        Args: {
+          p_class_id: number;
+          p_detail?: string;
+          p_discord_error_code?: number;
+          p_guild_id: string;
+          p_state: Database["public"]["Enums"]["discord_membership_state"];
+          p_user_id: string;
+        };
+        Returns: undefined;
       };
       record_github_async_error: {
         Args: { p_error_data: Json; p_method: string; p_org: string };
@@ -13814,6 +13911,7 @@ export type Database = {
         | "scheduling"
         | "operations"
         | "forum";
+      discord_membership_state: "in_guild" | "not_joined" | "cannot_invite";
       discord_resource_type: "help_request" | "regrade_request" | "discussion_thread";
       discussion_discord_notification_type: "all" | "followed_only" | "none";
       discussion_notification_type: "immediate" | "digest" | "disabled";
@@ -14021,6 +14119,7 @@ export const Constants = {
         "operations",
         "forum"
       ],
+      discord_membership_state: ["in_guild", "not_joined", "cannot_invite"],
       discord_resource_type: ["help_request", "regrade_request", "discussion_thread"],
       discussion_discord_notification_type: ["all", "followed_only", "none"],
       discussion_notification_type: ["immediate", "digest", "disabled"],
