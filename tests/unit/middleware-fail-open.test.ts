@@ -67,7 +67,12 @@ describe("updateSession — failure path", () => {
 
     await updateSession(request);
 
+    // The tag, not just the count: routing depends on it, and a regression that drops
+    // `feature: middleware-session` still reports one call.
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), {
+      tags: { feature: "middleware-session" }
+    });
   });
 
   it("passes the request through rather than refusing outright", async () => {

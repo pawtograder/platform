@@ -375,7 +375,8 @@ export function useMissingRubricChecksForActiveReview() {
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: true
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -385,7 +386,8 @@ export function useMissingRubricChecksForActiveReview() {
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: false
+        gradeTargetsBlocked: false,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -397,7 +399,8 @@ export function useMissingRubricChecksForActiveReview() {
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: true
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -417,7 +420,8 @@ export function useMissingRubricChecksForActiveReview() {
       missing_optional_checks,
       missing_required_criteria,
       missing_optional_criteria,
-      gradeTargetsBlocked: false
+      gradeTargetsBlocked: false,
+      gradeTargetsLoaded: groupLoaded
     };
   }, [
     activeSubmissionReview,
@@ -427,7 +431,8 @@ export function useMissingRubricChecksForActiveReview() {
     comments,
     rubricPartStudentAssignments,
     gradeTargets,
-    gradeTargetsBlocked
+    gradeTargetsBlocked,
+    groupLoaded
   ]);
 }
 

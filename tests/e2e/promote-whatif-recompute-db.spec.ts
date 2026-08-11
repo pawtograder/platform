@@ -164,7 +164,11 @@ test.describe("promote_whatif_grader_result — the promoted score reaches the g
     const victimId = rows?.[0]?.id;
     expect(victimId).toBeDefined();
 
-    await supabase.from("grader_result_tests").delete().eq("id", victimId!);
+    // Checked, like every other Supabase call in this file. A silently failed delete leaves the
+    // score at 20 and the failure below reads as "the AFTER DELETE trigger did not fire" -- the
+    // wrong conclusion in the one test written to prove that it does.
+    const { error: deleteError } = await supabase.from("grader_result_tests").delete().eq("id", victimId!);
+    if (deleteError) throw new Error(`delete grader_result_test failed: ${deleteError.message}`);
 
     expect(await readAutogradeScore(reviewId)).toBe(10);
   });

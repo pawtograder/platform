@@ -179,13 +179,23 @@ async function ensureExistingRepoCreated({
         console.error(`Error creating repository ${repo.repository}:`, createError);
         scope?.setTag("repo_creation_error", "failed_to_create_missing_repo");
         scope?.setTag("repository", repo.repository);
-        // Don't throw here - we want to continue processing other repos
+        // Rethrow. The per-repo isolation the old comment wanted is what the caller's
+        // `Promise.allSettled` already provides, so this no longer stops the other repositories --
+        // it only lets summarizeSettled see the failure. Swallowing it meant every settlement was
+        // `fulfilled`, so `ensuredSummary.failed` was always 0 and a run where GitHub 5xx'd on
+        // every pre-existing repo reported the same "All repository operations succeeded" as a
+        // clean one.
+        throw createError;
       }
     } else {
       // Some other error occurred while checking repo existence
       console.error(`Error checking repository ${repo.repository}:`, e);
       scope?.setTag("repo_check_error", "failed_to_check_repo_existence");
       scope?.setTag("repository", repo.repository);
+      // Rethrow for the same reason as the creation failure above: a repo whose existence we could
+      // not determine has NOT been ensured, and reporting it as ensured is the fail-open this pass
+      // exists to close.
+      throw e;
     }
   }
 }

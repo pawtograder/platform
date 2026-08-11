@@ -1417,13 +1417,25 @@ Deno.serve((req) => {
   if (!started) {
     console.log(`[serve] Starting batch handler`);
     started = true;
-    // Reset on exit: runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
-    // without this the flag stays true for the isolate's whole life, so the worker never restarts
-    // even once the underlying fault clears.
+    // Reset on exit so the flag does not stay true for the isolate's whole life, which would stop
+    // the worker restarting even once the underlying fault cleared. Unlike the notification and
+    // gradebook processors, this loop has no consecutive-error cap: batch errors are captured,
+    // delayed 5s, and retried indefinitely, so the only way out is a throw before the loop -- the
+    // missing-environment-variable check. `.catch` is what makes that throw visible: nothing
+    // consumes the promise handed to waitUntil, so without it the one error that can actually end
+    // this worker is an unhandled rejection and never reaches Sentry.
     EdgeRuntime.waitUntil(
-      runBatchHandler().finally(() => {
-        started = false;
-      })
+      runBatchHandler()
+        .catch((e) => {
+          console.error(`[serve] Batch handler exited with an error:`, e);
+          const scope = new Sentry.Scope();
+          scope.setTag("function", "discord_async_worker");
+          scope.setTag("error_source", "run_batch_handler_startup");
+          Sentry.captureException(e, scope);
+        })
+        .finally(() => {
+          started = false;
+        })
     );
   } else {
     console.log(`[serve] Batch handler already started, skipping`);

@@ -28,6 +28,7 @@ import {
 } from "@chakra-ui/react";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
 import {
@@ -168,7 +169,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: true
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -178,7 +180,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: false
+        gradeTargetsBlocked: false,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -191,7 +194,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
-        gradeTargetsBlocked: true
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -205,7 +209,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         gradeTargets,
         rubricPartIdsInScope
       }),
-      gradeTargetsBlocked: false
+      gradeTargetsBlocked: false,
+      gradeTargetsLoaded: groupLoaded
     };
   }, [
     reviewAssignment,
@@ -217,7 +222,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     rubricPartStudentAssignments,
     gradeTargets,
     rubricPartIdsInScope,
-    gradeTargetsBlocked
+    gradeTargetsBlocked,
+    groupLoaded
   ]);
 }
 
@@ -362,19 +368,35 @@ export function CompleteReviewAssignmentButton() {
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   // The optional lists are not consumed here — the dialog below renders only the required ones.
-  const { missing_required_checks, missing_required_criteria, gradeTargetsBlocked } =
+  const { missing_required_checks, missing_required_criteria, gradeTargetsBlocked, gradeTargetsLoaded } =
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
 
   // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
   // below are always arrays and so never gated anything.
-  if (!reviewAssignment || gradeTargetsBlocked || reviewAssignment.completed_at) {
+  // Spin only while there is genuinely something to wait for -- see the matching note in
+  // CompleteReviewButton.
+  if (!reviewAssignment || reviewAssignment.completed_at || (gradeTargetsBlocked && !gradeTargetsLoaded)) {
     // Render a loading state or disabled button if already completed
     return (
       <Button variant="surface" loading={!reviewAssignment?.completed_at}>
         {reviewAssignment?.completed_at ? "Review Assignment Completed" : "Complete Review Assignment"}
       </Button>
+    );
+  }
+
+  // Settled AND blocked is a different state from still-loading, and it used to render the same
+  // spinner — one that never resolved, with nothing telling the grader why. The only way to reach
+  // it is an empty assignment group, so say that, in the words the completion trigger uses when it
+  // refuses the same review server-side.
+  if (gradeTargetsBlocked) {
+    return (
+      <Tooltip content="This submission has no students to grade (its assignment group is empty), so per-student checks cannot be verified. Add the group's member(s) back to the assignment group, or turn off per-student grading for the rubric part.">
+        <Button variant="surface" disabled>
+          Complete Review Assignment
+        </Button>
+      </Tooltip>
     );
   }
 
@@ -412,7 +434,8 @@ export function CompleteReviewButton() {
     missing_optional_checks,
     missing_required_criteria,
     missing_optional_criteria,
-    gradeTargetsBlocked
+    gradeTargetsBlocked,
+    gradeTargetsLoaded
   } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
@@ -467,11 +490,27 @@ export function CompleteReviewButton() {
   // it never fired. The real not-ready case is group membership: until it loads we cannot tell an
   // ungraded per-student check from a graded one, and the fallback counts one member's comment as
   // covering the whole group — an all-clear on a review nobody has finished.
-  if (!activeSubmissionReview || gradeTargetsBlocked) {
+  // Spin only while there is genuinely something to wait for. `gradeTargetsBlocked` is false
+  // outright for a rubric with no per-student parts, so gating the spinner on `gradeTargetsLoaded`
+  // alone would stall the common case behind a group fetch whose result it does not use.
+  if (!activeSubmissionReview || (gradeTargetsBlocked && !gradeTargetsLoaded)) {
     return (
       <Button variant="surface" loading disabled>
         Complete Review
       </Button>
+    );
+  }
+
+  // Loaded, and still blocked. Same split as CompleteReviewAssignmentButton: this used to render
+  // the spinner above, which never resolved because there was nothing left to wait for. The
+  // wording matches what the completion trigger raises when it refuses the same review.
+  if (gradeTargetsBlocked) {
+    return (
+      <Tooltip content="This submission has no students to grade (its assignment group is empty), so per-student checks cannot be verified. Add the group's member(s) back to the assignment group, or turn off per-student grading for the rubric part.">
+        <Button variant="surface" disabled>
+          Complete Review
+        </Button>
+      </Tooltip>
     );
   }
 

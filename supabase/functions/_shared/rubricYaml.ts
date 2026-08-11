@@ -755,6 +755,32 @@ export function validateRubricYaml(input: unknown): ValidateResult {
           }
         }
 
+        // Option points get the same treatment as the check's own points. `data` rides the YAML
+        // round-trip opaquely, so without this an option holding -3 reached update_rubric_full
+        // unexamined -- and an option's points become a comment's points the moment a grader
+        // selects it, which inverts the sign the criterion's scoring mode intends.
+        const rawCheckData = rawCheck.data;
+        if (isPlainObject(rawCheckData) && Array.isArray((rawCheckData as { options?: unknown }).options)) {
+          const rawOptions = (rawCheckData as { options: unknown[] }).options;
+          rawOptions.forEach((rawOption, optIdx) => {
+            if (!isPlainObject(rawOption)) return;
+            const optionPoints = (rawOption as { points?: unknown }).points;
+            if (optionPoints === undefined || optionPoints === null) return;
+            const optionPath = `${checkPath}.data.options[${optIdx}].points`;
+            if (typeof optionPoints !== "number" || !Number.isFinite(optionPoints)) {
+              errors.push({
+                path: optionPath,
+                message: `${String(optionPoints)} is not a finite number`
+              });
+            } else if (optionPoints < 0) {
+              errors.push({
+                path: optionPath,
+                message: `${optionPoints} is negative; fix the value rather than relying on it being made positive`
+              });
+            }
+          });
+        }
+
         if (rawCheck.student_visibility !== undefined && rawCheck.student_visibility !== null) {
           if (!(STUDENT_VISIBILITIES as readonly string[]).includes(String(rawCheck.student_visibility))) {
             errors.push({

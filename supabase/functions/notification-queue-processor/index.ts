@@ -549,11 +549,20 @@ async function archiveMessage(
       message_id: msgId
     });
   } catch (error) {
-    scope.setContext("archive_error", {
+    // Clone before annotating. Callers pass long-lived scopes -- runBatchHandler's `scope` lives
+    // for the isolate, and `emailScope` spans a whole batch -- so setting `archive_error` on the
+    // caller's scope stamped one failed archive onto every later event from the same worker,
+    // including unrelated ones from subsequent polling iterations.
+    // Same defensive shape the digest paths below use: callers may hand in a scope stand-in
+    // without `clone`, and a failed archive must still report rather than throw a TypeError.
+    const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
+    const archiveScope: Sentry.Scope =
+      typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
+    archiveScope.setContext("archive_error", {
       msg_id: msgId,
       error_message: error instanceof Error ? error.message : String(error)
     });
-    Sentry.captureException(error, scope);
+    Sentry.captureException(error, archiveScope);
     console.error(`Failed to archive message ${msgId}: ${error}`);
   }
 }
@@ -715,10 +724,14 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
   if (transportPrecheck.kind === "misconfigured") {
     scope.setTag("email_config", "misconfigured");
     scope.setContext("email_config", { missing: transportPrecheck.missing });
-    // Names the variables, not EMAIL_ENABLED: `misconfigured` is also reachable with EMAIL_ENABLED
-    // unset (a host with no SMTP_FROM, or an unparseable SMTP_PORT), and asserting "EMAIL_ENABLED
-    // is set" sends whoever triages it looking for a variable that is not there.
-    Sentry.captureMessage(`Email is configured to send but ${transportPrecheck.missing.join(", ")} is not set`, scope);
+    // One event, not two. This used to also `captureMessage` here before throwing, but the throw
+    // is caught by runBatchHandler and captured with this same scope, so a single misconfiguration
+    // opened two separately-grouped issues that had to be triaged together. The exception is the
+    // one to keep: it carries the tag and context set just above, and it is what actually stops
+    // the batch. The message names the variables rather than EMAIL_ENABLED, because
+    // `misconfigured` is also reachable with EMAIL_ENABLED unset (a host with no SMTP_FROM, or an
+    // unparseable SMTP_PORT), and asserting "EMAIL_ENABLED is set" sends whoever triages it
+    // looking for a variable that is not there.
     throw new Error(`Email is enabled but misconfigured: missing ${transportPrecheck.missing.join(", ")}`);
   }
   if (transportPrecheck.kind === "disabled" && transportPrecheck.reason === "no_smtp_host") {

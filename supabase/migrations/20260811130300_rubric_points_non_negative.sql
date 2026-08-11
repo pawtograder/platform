@@ -32,8 +32,10 @@
 -- Deliberately NOT constrained: submission_comments.points,
 -- submission_file_comments.points, submission_artifact_comments.points (applied-comment
 -- points; graders can and do override a check's value there, and constraining a scoring
--- column that carries live grades is a separate change), and option points inside
--- rubric_checks.data (jsonb, not reachable from a column CHECK).
+-- column that carries live grades is a separate change). Option points inside
+-- rubric_checks.data are jsonb and so unreachable from a column CHECK, but they ARE
+-- guarded on the write path: update_rubric_full raises on them by name below, and
+-- rubricYaml.ts rejects them before serializing.
 --
 -- NOT VALID, deliberately. Local dev DB has 0 violating rows in either column, but that is
 -- 14 checks and 8 criteria -- no evidence about staging or production, which predate both
@@ -236,6 +238,40 @@ BEGIN
 
   IF FOUND THEN
     RAISE EXCEPTION 'Check "%" in criterion "%" has negative points (%). Points must be zero or greater; for deductions set the criterion scoring mode to deduct-from-total or deduction-only instead of using negative points.',
+      COALESCE(v_bad_name, '(unnamed)'), COALESCE(v_bad_parent_name, '(unnamed)'), v_bad_points
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  ----------------------------------------------------------------
+  -- Option points, inside rubric_checks.data.
+  --
+  -- The two guards above cover the columns, and the CHECK constraints back them. Neither reaches
+  -- an option's points: that value lives in jsonb, which is why the header records it as not
+  -- constrainable from a column CHECK. Without this guard the only thing standing between a
+  -- negative option and the database was sanitizeCheckPoints in lib/rubric/pointsSanitize.ts,
+  -- which runs in the browser -- so the CLI, the YAML import path (rubric_checks.data rides the
+  -- round-trip opaquely), and any direct RPC caller could still persist one. An option's points
+  -- become a comment's points when a grader selects it, so a negative there inverts the scoring
+  -- mode's intended sign exactly as a negative check points does.
+  --
+  -- Raised by name here rather than left to a constraint, matching the two guards above.
+  ----------------------------------------------------------------
+  SELECT opt->>'label', chk->>'name', (opt->>'points')::numeric
+  INTO v_bad_name, v_bad_parent_name, v_bad_points
+  FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
+       jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit,
+       jsonb_array_elements(COALESCE(crit->'checks', '[]'::jsonb)) chk,
+       jsonb_array_elements(
+         CASE WHEN jsonb_typeof(chk->'data'->'options') = 'array'
+              THEN chk->'data'->'options'
+              ELSE '[]'::jsonb
+         END
+       ) opt
+  WHERE COALESCE((opt->>'points')::numeric, 0) < 0
+  LIMIT 1;
+
+  IF FOUND THEN
+    RAISE EXCEPTION 'Option "%" in check "%" has negative points (%). Points must be zero or greater; for deductions set the criterion scoring mode to deduct-from-total or deduction-only instead of using negative points.',
       COALESCE(v_bad_name, '(unnamed)'), COALESCE(v_bad_parent_name, '(unnamed)'), v_bad_points
       USING ERRCODE = 'invalid_parameter_value';
   END IF;

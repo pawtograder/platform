@@ -2297,11 +2297,27 @@ async function handlePushToGraderSolution(
       // configure-webhook flows do; an instructor editing pawtograder.yml through RepoFileEditor
       // arrives here instead of either of those.
       for (const autograder of autograders) {
-        const { data: handoutTarget } = await adminSupabase
+        const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
           .eq("id", autograder.id)
           .maybeSingle();
+        if (handoutTargetError) {
+          // A failed read is NOT "this assignment has no handout". Falling through to the
+          // `continue` below would skip the reseed while leaving configReconcileOk true, so the
+          // pointer would advance over hashes the config write above has already invalidated --
+          // the exact state the seedResult guard further down refuses. Same transient causes
+          // (statement timeout, pool exhaustion) as the update errors above.
+          configReconcileOk = false;
+          scope?.setTag("handout_target_lookup_failed", "true");
+          Sentry.captureException(handoutTargetError, scope);
+          console.error(
+            `Could not read the handout target for assignment ${autograder.id} after a grader-config push`,
+            handoutTargetError
+          );
+          continue;
+        }
+        // An assignment that genuinely has no template_repo is a steady state, not a failure.
         if (!handoutTarget?.template_repo) continue;
         const seedResult = await seedHandoutFileHashes({
           adminSupabase,

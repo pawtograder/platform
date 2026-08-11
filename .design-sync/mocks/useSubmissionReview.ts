@@ -22,6 +22,10 @@ export function useMissingRubricChecksForActiveReview(): any {
     missing_optional_checks: [],
     missing_required_criteria: [],
     missing_optional_criteria: [],
-    gradeTargetsBlocked: false
+    gradeTargetsBlocked: false,
+    // Paired with gradeTargetsBlocked: the toolbar reads both to tell "group still loading" from
+    // "group settled and empty", and an undefined value here would render the preview's Complete
+    // Review button as a permanent spinner.
+    gradeTargetsLoaded: true
   };
 }

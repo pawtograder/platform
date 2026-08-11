@@ -23,6 +23,7 @@ export {
 } from "@/lib/rubric/points";
 export type { AssignToStudentPartSummary, RubricPointsBreakdown } from "@/lib/rubric/points";
 export {
+  NEGATIVE_POINTS_REJECTED_MESSAGE,
   NEGATIVE_POINTS_WARNING_MESSAGE,
   NegativePointsError,
   normalizePointValue,

@@ -115,11 +115,24 @@ assert_edge_envfrom_optional() {
   # Nothing else in this workload may be mandatory either, except the in-cluster
   # Redis URL, which is deliberately optional: false (documented in the tpl) and
   # only renders for a non-external redis.provider.
-  # Anchored to the field, so the tpl's explanatory comments (which mention the
-  # string) don't trip it.
-  if grep -qE '^[[:space:]]*optional: false' "$OUTFILE"; then
+  #
+  # The exception has to be applied, not just described: the previous form scanned
+  # the whole manifest for the field, so any call site rendering with
+  # redis.provider=internal or shared would have failed on the one mandatory
+  # reference the chart intends. Pair the field with the secretRef name on the line
+  # above it and drop pawtograder-redis, which also keeps this anchored to the field
+  # rather than the tpl's explanatory comments (they mention the string).
+  # Captured rather than tested with `grep -q -v`: those two flags together are not portable
+  # (ugrep reports no match where GNU grep reports one), and a guardrail that silently inverts on
+  # a different grep is worse than no guardrail. A non-empty capture is the violation, and it
+  # doubles as the failure output.
+  local mandatory
+  mandatory="$(grep -B1 -E '^[[:space:]]*optional: false' "$OUTFILE" \
+                | grep -E '^[[:space:]]*name:' \
+                | grep -vF 'name: pawtograder-redis' || true)"
+  if [ -n "$mandatory" ]; then
     echo "FAIL [$label]: rendered a mandatory envFrom secretRef (optional: false)"
-    grep -B2 -E '^[[:space:]]*optional: false' "$OUTFILE"
+    echo "$mandatory"
     bad=1
   fi
   if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi

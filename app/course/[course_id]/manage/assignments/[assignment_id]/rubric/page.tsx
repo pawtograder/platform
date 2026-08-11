@@ -38,6 +38,7 @@ import {
   computeRubricPointsBreakdown,
   HydratedRubricToYamlRubric,
   maxPointsForCriterion,
+  NEGATIVE_POINTS_REJECTED_MESSAGE,
   NegativePointsError,
   resolveReferences,
   sanitizeHydratedRubricPoints,
@@ -1119,8 +1120,12 @@ function InnerRubricPage() {
       const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
       try {
         const parsedValue = YAML.parse(value);
-        // Warnings ignored: this is a pure diff for the unsaved-changes indicator. A buffer holding
-        // `-5` against a saved `5` correctly reports as changed.
+        // Warnings ignored: this is a pure diff for the unsaved-changes indicator. Note what that
+        // means for negatives — YamlRubricToHydratedRubric absolutizes before returning, so a
+        // buffer holding `-5` against a saved `5` hydrates to `5` and reports as UNCHANGED. The
+        // Save button stays disabled, which is the right outcome (the save would be refused
+        // anyway) but is not what "changed" would suggest; the source-mode warning banner is what
+        // tells the author their buffer needs fixing.
         const { rubric: currentEditorActiveRubric } = YamlRubricToHydratedRubric(parsedValue, {
           assignment_id: Number(assignment_id),
           is_private: false,
@@ -1819,14 +1824,26 @@ function InnerRubricPage() {
                   Preview paused while typing
                 </Alert>
               )}
+              {/* "Rejected", not "adjusted". The tree editor absolutizes and its banner says so;
+                  source mode leaves the buffer alone and saveRubric throws NegativePointsError on
+                  these same warnings, so the tree's wording promised a fix and then failed the
+                  save on the unfixed value. The per-warning message is replaced rather than
+                  reused for the same reason -- it is the tree's text. */}
               {pointsWarnings.length > 0 && viewMode === "source" && (
-                <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
+                <Alert status="warning" variant="surface" title="Negative points must be fixed before saving" mt={2}>
                   <VStack gap={1} align="stretch">
                     {pointsWarnings.map((w) => (
                       <Text key={w.path} fontSize="sm">
-                        {w.message}
+                        <Text as="span" fontFamily="mono" fontSize="xs" color="fg.muted">
+                          {w.path}:{" "}
+                        </Text>
+                        {NEGATIVE_POINTS_REJECTED_MESSAGE}
                       </Text>
                     ))}
+                    <Text fontSize="sm" color="fg.muted">
+                      The preview on this page shows these values as positive. Your source is unchanged — that
+                      difference is why the save is refused.
+                    </Text>
                   </VStack>
                 </Alert>
               )}
