@@ -14,6 +14,7 @@ import {
   clearStalePreviewCookies,
   clearViewAsCookie,
   getViewAsTarget,
+  isPreviewOwnedByThisTab,
   isSelfViewAsScope,
   setViewAsCookie,
   ViewAsTarget
@@ -311,7 +312,13 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       // from — see isSelfViewAsScope. Outside it, drop the synthetic student identity and clear
       // the cookie so returning to an assignment page does not silently re-enter student view.
       if (!isSelfViewAsScope(pathname ?? "", course_id as string, viewAsTarget?.previewAssignmentId ?? null)) {
-        clearViewAsCookie(course_id as string);
+        // Only the tab that opened the preview may end it. Another tab of the same course that
+        // simply lands on an out-of-scope page shares this cookie, and deleting it there would kill
+        // a preview that tab is still using. Dropping the synthetic identity locally is enough for
+        // this tab either way — the server already ignored the cookie on an out-of-scope path.
+        if (isPreviewOwnedByThisTab(viewAsTarget)) {
+          clearViewAsCookie(course_id as string);
+        }
         setViewAsRole(null);
         setViewAsTarget(null);
         setIsResolvingViewAs(false);

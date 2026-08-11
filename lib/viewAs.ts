@@ -134,6 +134,19 @@ export function clearViewAsCookie(courseId: number | string): void {
 }
 
 /**
+ * Whether this tab is the one that opened a scoped preview, and may therefore end it.
+ *
+ * Cookies are shared across tabs, so without this a tab that merely wanders onto an out-of-scope
+ * page in the same course would delete a preview another tab is actively using. A target with no
+ * recorded tab (written before tab tracking, or where storage was unavailable) is treated as owned,
+ * so it can still be cleaned up rather than lingering forever.
+ */
+export function isPreviewOwnedByThisTab(target: ViewAsTarget | null | undefined): boolean {
+  if (!target || target.previewAssignmentId == null) return false;
+  return target.previewTabId === null || target.previewTabId === getTabId();
+}
+
+/**
  * Client-only: end self-previews that this tab started in *other* courses, and report which courses
  * were cleared.
  *
@@ -150,7 +163,6 @@ export function clearViewAsCookie(courseId: number | string): void {
  */
 export function clearStalePreviewCookies(currentCourseId: number | string | undefined): string[] {
   if (typeof document === "undefined") return [];
-  const thisTab = getTabId();
   const cleared: string[] = [];
   for (const row of document.cookie.split("; ")) {
     const eq = row.indexOf("=");
@@ -168,8 +180,7 @@ export function clearStalePreviewCookies(currentCourseId: number | string | unde
     // Undecodable or unparseable values are left alone rather than aborting the scan, so one bad
     // cookie cannot stop the rest from being cleaned up.
     const target = parseViewAsCookieValue(safeDecodeURIComponent(row.slice(eq + 1)));
-    if (!target || target.previewAssignmentId == null) continue;
-    if (target.previewTabId !== null && target.previewTabId !== thisTab) continue;
+    if (!isPreviewOwnedByThisTab(target)) continue;
     clearViewAsCookie(cookieCourseId);
     cleared.push(cookieCourseId);
   }

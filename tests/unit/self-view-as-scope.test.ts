@@ -1,4 +1,10 @@
-import { clearStalePreviewCookies, getTabId, isSelfViewAsScope, parseViewAsCookieValue } from "@/lib/viewAs";
+import {
+  clearStalePreviewCookies,
+  getTabId,
+  isPreviewOwnedByThisTab,
+  isSelfViewAsScope,
+  parseViewAsCookieValue
+} from "@/lib/viewAs";
 
 /**
  * The scope predicate is the whole of the #892 fix: the server (getEffectiveCourseIdentity) and the
@@ -205,5 +211,34 @@ describe("clearStalePreviewCookies", () => {
     document.cookie = `view_as_12=${profileId}~34; path=/`;
     expect(clearStalePreviewCookies("99")).toEqual(["12"]);
     expect(document.cookie).not.toContain("view_as_12");
+  });
+});
+
+describe("isPreviewOwnedByThisTab", () => {
+  const profileId = "39dab5f1-3685-4d1a-8e9a-4b3abaee6971";
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("owns a preview this tab opened", () => {
+    const tabId = getTabId();
+    expect(isPreviewOwnedByThisTab({ profileId, previewAssignmentId: 34, previewTabId: tabId })).toBe(true);
+  });
+
+  it("does not own another tab's preview", () => {
+    // The provider clears the cookie when it lands out of scope. Another tab of the same course
+    // shares that cookie, so without this check merely visiting the gradebook in a second tab would
+    // end a preview the first tab is still using.
+    expect(isPreviewOwnedByThisTab({ profileId, previewAssignmentId: 34, previewTabId: "someothertab" })).toBe(false);
+  });
+
+  it("treats a preview with no recorded tab as owned, so it can still be cleaned up", () => {
+    expect(isPreviewOwnedByThisTab({ profileId, previewAssignmentId: 34, previewTabId: null })).toBe(true);
+  });
+
+  it("is not applicable to course-wide targets or nothing at all", () => {
+    expect(isPreviewOwnedByThisTab({ profileId, previewAssignmentId: null, previewTabId: null })).toBe(false);
+    expect(isPreviewOwnedByThisTab(null)).toBe(false);
   });
 });
