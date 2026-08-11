@@ -2,20 +2,10 @@ import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
-import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
-import { sentryIdentity } from "./SentryContext.ts";
-
-if (Deno.env.get("SENTRY_DSN")) {
-  Sentry.init({
-    beforeSend: normalizeEventFingerprint,
-    ...sentryIdentity(),
-    dsn: Deno.env.get("SENTRY_DSN")!,
-    sendDefaultPii: true,
-    integrations: [],
-    tracesSampleRate: 0,
-    ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
-  });
-}
+// Import for side effect. Module evaluation order guarantees this runs to completion before any
+// code in this file, so the ~50 functions that rely on importing HandlerUtils to get Sentry keep
+// exactly the behavior they had when the init lived here.
+import "./SentryInit.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -429,7 +419,12 @@ export async function wrapRequestHandler(
         }
       }),
       {
-        headers: genericErrorHeaders
+        headers: genericErrorHeaders,
+        // Every typed branch above sets a status; this catch-all did not, and Response defaults to
+        // 200. So an unclassified throw — a TypeError, an OOM, anything not one of our error types —
+        // was reported to the caller as a SUCCESSFUL request with an error object in the body.
+        // Latent in most functions, since only a caller that inspects the body would notice.
+        status: 500
       }
     );
   }

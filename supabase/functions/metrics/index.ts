@@ -2,6 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { BottleneckLimiterSnapshot, collectBottleneckRedisSnapshots } from "../_shared/BottleneckRedisMetrics.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+// Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
+// without this Sentry.init never ran and every capture was a silent no-op.
+import "../_shared/SentryInit.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 /** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
@@ -117,8 +120,29 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const asyncLowPriorityQueueCount = queueSizes?.[0]?.async_low_priority_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
     const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
+    const gradebookRowRecalculateDlqCount = queueSizes?.[0]?.gradebook_row_recalculate_dlq_queue_size || 0;
     const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
     const discordDlqQueueCount = queueSizes?.[0]?.discord_dlq_queue_size || 0;
+    const notificationEmailsQueueCount = queueSizes?.[0]?.notification_emails_queue_size || 0;
+
+    // Oldest-message age per queue. Depth alone cannot tell a healthy busy queue from a stalled
+    // one, and depth thresholds need retuning every term; age is scale-free.
+    const queueOldestSeconds: { queue: string; seconds: number }[] = [
+      { queue: "async_calls", seconds: queueSizes?.[0]?.async_oldest_seconds || 0 },
+      { queue: "async_calls_dlq", seconds: queueSizes?.[0]?.dlq_oldest_seconds || 0 },
+      {
+        queue: "gradebook_row_recalculate",
+        seconds: queueSizes?.[0]?.gradebook_row_recalculate_oldest_seconds || 0
+      },
+      {
+        queue: "gradebook_row_recalculate_dlq",
+        seconds: queueSizes?.[0]?.gradebook_row_recalculate_dlq_oldest_seconds || 0
+      },
+      { queue: "discord_async_calls", seconds: queueSizes?.[0]?.discord_oldest_seconds || 0 },
+      { queue: "discord_async_calls_dlq", seconds: queueSizes?.[0]?.discord_dlq_oldest_seconds || 0 },
+      { queue: "async_calls_low_priority", seconds: queueSizes?.[0]?.async_low_priority_oldest_seconds || 0 },
+      { queue: "notification_emails", seconds: queueSizes?.[0]?.notification_emails_oldest_seconds || 0 }
+    ];
 
     // Generate Prometheus metrics format
     const timestamp = Date.now(); // Unix timestamp in milliseconds
@@ -153,6 +177,10 @@ pawtograder_async_dlq_size ${dlqQueueCount} ${timestamp}
 # TYPE pawtograder_gradebook_row_recalculate_queue_size gauge
 pawtograder_gradebook_row_recalculate_queue_size ${gradebookRowRecalculateQueueCount} ${timestamp}
 
+# HELP pawtograder_gradebook_row_recalculate_dlq_size Current number of messages in the gradebook row recalculate dead letter queue
+# TYPE pawtograder_gradebook_row_recalculate_dlq_size gauge
+pawtograder_gradebook_row_recalculate_dlq_size ${gradebookRowRecalculateDlqCount} ${timestamp}
+
 # HELP pawtograder_discord_queue_size Current number of messages in the discord async worker queue
 # TYPE pawtograder_discord_queue_size gauge
 pawtograder_discord_queue_size ${discordQueueCount} ${timestamp}
@@ -160,6 +188,16 @@ pawtograder_discord_queue_size ${discordQueueCount} ${timestamp}
 # HELP pawtograder_discord_dlq_size Current number of messages in the discord async worker dead letter queue
 # TYPE pawtograder_discord_dlq_size gauge
 pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
+
+# HELP pawtograder_notification_emails_queue_size Current number of messages in the notification email queue
+# TYPE pawtograder_notification_emails_queue_size gauge
+pawtograder_notification_emails_queue_size ${notificationEmailsQueueCount} ${timestamp}
+
+# HELP pawtograder_queue_oldest_message_seconds Age of the oldest message in each queue, including messages deferred by retry backoff
+# TYPE pawtograder_queue_oldest_message_seconds gauge
+${queueOldestSeconds
+  .map((q) => `pawtograder_queue_oldest_message_seconds{queue="${escapeLabel(q.queue)}"} ${q.seconds} ${timestamp}`)
+  .join("\n")}
 
 # HELP pawtograder_circuit_breaker_open Whether a circuit breaker is currently open (1 = open, 0 = closed)
 # TYPE pawtograder_circuit_breaker_open gauge

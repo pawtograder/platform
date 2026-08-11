@@ -2,6 +2,9 @@ import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+// Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
+// without this Sentry.init never ran and every capture was a silent no-op.
+import "../_shared/SentryInit.ts";
 import type {
   DiscordAsyncEnvelope,
   SendMessageArgs,
@@ -15,6 +18,7 @@ import type {
   AddGuildMemberArgs
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 // Declare EdgeRuntime for type safety
@@ -1359,25 +1363,43 @@ export async function runBatchHandler() {
   console.log(`[runBatchHandler] Creating Supabase client with URL: ${supabaseUrl.substring(0, 30)}...`);
   const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey);
 
-  const isRunning = true;
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts.
+  const run = await beginWorkerRun({
+    name: "discord_async_worker",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log(`[runBatchHandler] Another worker holds the lease; nothing to do`);
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
+  console.log(`[runBatchHandler] Running in ${run.mode} mode`);
+
   let iteration = 0;
-  while (isRunning) {
-    iteration++;
-    console.log(`[runBatchHandler] Iteration ${iteration}, processing batch...`);
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      if (!hasWork) {
-        console.log(`[runBatchHandler] No work found, sleeping for 15s`);
-        await new Promise((resolve) => setTimeout(resolve, 15000));
-      } else {
-        console.log(`[runBatchHandler] Work completed, continuing immediately`);
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      iteration++;
+      console.log(`[runBatchHandler] Iteration ${iteration}, processing batch...`);
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        if (!hasWork) {
+          console.log(`[runBatchHandler] No work found`);
+          if (!(await run.onIdle())) break;
+        } else {
+          console.log(`[runBatchHandler] Work completed, continuing immediately`);
+        }
+      } catch (e) {
+        console.error(`[runBatchHandler] Error in batch handler:`, e);
+        Sentry.captureException(e, scope);
+        await run.onError();
       }
-    } catch (e) {
-      console.error(`[runBatchHandler] Error in batch handler:`, e);
-      Sentry.captureException(e, scope);
-      console.log(`[runBatchHandler] Sleeping for 5s after error`);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 }
 
@@ -1414,7 +1436,26 @@ Deno.serve((req) => {
   if (!started) {
     console.log(`[serve] Starting batch handler`);
     started = true;
-    EdgeRuntime.waitUntil(runBatchHandler());
+    // Reset on exit so the flag does not stay true for the isolate's whole life, which would stop
+    // the worker restarting even once the underlying fault cleared. Unlike the notification and
+    // gradebook processors, this loop has no consecutive-error cap: batch errors are captured,
+    // delayed 5s, and retried indefinitely, so the only way out is a throw before the loop -- the
+    // missing-environment-variable check. `.catch` is what makes that throw visible: nothing
+    // consumes the promise handed to waitUntil, so without it the one error that can actually end
+    // this worker is an unhandled rejection and never reaches Sentry.
+    EdgeRuntime.waitUntil(
+      runBatchHandler()
+        .catch((e) => {
+          console.error(`[serve] Batch handler exited with an error:`, e);
+          const scope = new Sentry.Scope();
+          scope.setTag("function", "discord_async_worker");
+          scope.setTag("error_source", "run_batch_handler_startup");
+          Sentry.captureException(e, scope);
+        })
+        .finally(() => {
+          started = false;
+        })
+    );
   } else {
     console.log(`[serve] Batch handler already started, skipping`);
   }

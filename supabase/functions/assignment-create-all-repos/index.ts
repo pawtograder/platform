@@ -16,6 +16,13 @@ import {
   type StudentIdentity
 } from "../_shared/repoCreationStrategy.ts";
 import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
+import {
+  describeSettledSummary,
+  emptySettledSummary,
+  mergeSettledSummaries,
+  summarizeSettled,
+  type SettledSummary
+} from "../_shared/settledSummary.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -172,13 +179,23 @@ async function ensureExistingRepoCreated({
         console.error(`Error creating repository ${repo.repository}:`, createError);
         scope?.setTag("repo_creation_error", "failed_to_create_missing_repo");
         scope?.setTag("repository", repo.repository);
-        // Don't throw here - we want to continue processing other repos
+        // Rethrow. The per-repo isolation the old comment wanted is what the caller's
+        // `Promise.allSettled` already provides, so this no longer stops the other repositories --
+        // it only lets summarizeSettled see the failure. Swallowing it meant every settlement was
+        // `fulfilled`, so `ensuredSummary.failed` was always 0 and a run where GitHub 5xx'd on
+        // every pre-existing repo reported the same "All repository operations succeeded" as a
+        // clean one.
+        throw createError;
       }
     } else {
       // Some other error occurred while checking repo existence
       console.error(`Error checking repository ${repo.repository}:`, e);
       scope?.setTag("repo_check_error", "failed_to_check_repo_existence");
       scope?.setTag("repository", repo.repository);
+      // Rethrow for the same reason as the creation failure above: a repo whose existence we could
+      // not determine has NOT been ensured, and reporting it as ensured is the fail-open this pass
+      // exists to close.
+      throw e;
     }
   }
 }
@@ -220,10 +237,14 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   scope.setTag("repo_mode", assignment.repo_mode || "template_only_staff");
 
   // Modes 'none' (upload) and 'no_submission' (manual grading, no artifact)
-  // have no per-student repos to create.
+  // have no per-student repos to create. Return an EMPTY SUMMARY rather than
+  // undefined: handleRequest now reads `summary.failed`, so a bare `return`
+  // here crashes with a TypeError on exactly the assignments that have no work
+  // to do. `deno check` would flag it, but `npm run typecheck:functions` ends
+  // in `|| echo`, so a non-zero exit never fails CI.
   if (assignment.repo_mode === "none" || assignment.repo_mode === "no_submission") {
     console.log(`Assignment has repo_mode=${assignment.repo_mode}; skipping per-student repo creation`);
-    return;
+    return emptySettledSummary();
   }
 
   const branchProtection: BranchProtectionConfig = {
@@ -316,24 +337,31 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   }
 
   //Check that all existing repos in DB actually exist in GitHub, create them if they don't
+  // Summarized, not discarded: this is the same bare `allSettled` shape that settledSummary.ts was
+  // written for, and a run where GitHub 5xx'd on every pre-existing repo reported exactly the same
+  // success as a clean one.
+  let ensuredSummary: SettledSummary = emptySettledSummary();
   if (existingRepos && existingRepos.length > 0) {
     console.log(`Checking ${existingRepos.length} existing repositories in GitHub...`);
-    await Promise.allSettled(
-      existingRepos.map((repo) =>
-        rateLimiter.schedule(() =>
-          ensureExistingRepoCreated({
-            repo,
-            assignment,
-            adminSupabase,
-            courseId,
-            assignmentId,
-            scope,
-            assignmentForStrategy,
-            branchProtection,
-            sourceAssignmentRepos
-          })
+    ensuredSummary = summarizeSettled(
+      await Promise.allSettled(
+        existingRepos.map((repo) =>
+          rateLimiter.schedule(() =>
+            ensureExistingRepoCreated({
+              repo,
+              assignment,
+              adminSupabase,
+              courseId,
+              assignmentId,
+              scope,
+              assignmentForStrategy,
+              branchProtection,
+              sourceAssignmentRepos
+            })
+          )
         )
-      )
+      ),
+      { label: "ensure" }
     );
   }
 
@@ -433,64 +461,117 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     } catch (e) {
       console.log(`Error creating repo: ${repoName}`);
       console.error(e);
-      await adminSupabase.from("repositories").delete().eq("id", dbRepo.id);
-      throw new UserVisibleError(`Error creating repo: ${e}`);
+      // Keep the row. Deleting it orphaned any repo that GitHub had already created, and — because
+      // reconcile_stuck_repo_creations only scans rows with is_github_ready = false — it also hid
+      // the failure from the one mechanism that would have repaired it.
+      //
+      // Only a TERMINAL failure records creation_error, matching autograder-create-repos-for-student
+      // and github-user-sync: a recorded error parks the row for an instructor and the reconciler
+      // deliberately skips it, while NULL leaves it eligible for the 15-minute retry sweep.
+      if (e instanceof github.NonRetryableRepoError) {
+        await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo.id);
+      }
+      throw new UserVisibleError(`Error creating repo ${repoName}: ${e}`);
     }
   };
-  await Promise.allSettled(
-    reposToCreate.map((repo) =>
-      rateLimiter.schedule(() =>
-        createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
-      )
-    )
-  );
-  if (existingRepos) {
+  const createdSummary = summarizeSettled(
     await Promise.allSettled(
-      existingRepos.map((repo) =>
-        rateLimiter.schedule(async () => {
-          const [org, repoName] = repo.repository.split("/");
-          let student_github_usernames: (string | null | undefined)[] = [];
-          if (repo.assignment_groups?.assignment_groups_members) {
-            student_github_usernames = repo.assignment_groups.assignment_groups_members
-              .filter((member) => member.user_roles.github_org_confirmed)
-              .map((member) => member.user_roles.users.github_username)
-              .filter((username) => username); // Filter out falsy values
-          } else {
-            const github_username = repo.profiles?.user_roles?.users.github_username;
-            if (github_username && repo.profiles?.user_roles?.github_org_confirmed) {
-              student_github_usernames = [github_username];
+      reposToCreate.map((repo) =>
+        rateLimiter.schedule(() =>
+          createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
+        )
+      )
+    ),
+    { label: "create" }
+  );
+  let syncedSummary: SettledSummary = emptySettledSummary();
+  if (existingRepos) {
+    syncedSummary = summarizeSettled(
+      await Promise.allSettled(
+        existingRepos.map((repo) =>
+          rateLimiter.schedule(async () => {
+            const [org, repoName] = repo.repository.split("/");
+            let student_github_usernames: (string | null | undefined)[] = [];
+            if (repo.assignment_groups?.assignment_groups_members) {
+              student_github_usernames = repo.assignment_groups.assignment_groups_members
+                .filter((member) => member.user_roles.github_org_confirmed)
+                .map((member) => member.user_roles.users.github_username)
+                .filter((username) => username); // Filter out falsy values
+            } else {
+              const github_username = repo.profiles?.user_roles?.users.github_username;
+              if (github_username && repo.profiles?.user_roles?.github_org_confirmed) {
+                student_github_usernames = [github_username];
+              }
             }
-          }
 
-          // Deduplicate and filter out any remaining falsy values
-          const uniqueUsernames = [
-            ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
-          ];
+            // Deduplicate and filter out any remaining falsy values
+            const uniqueUsernames = [
+              ...new Set(student_github_usernames.filter((username): username is string => Boolean(username)))
+            ];
 
-          // Skip if no valid usernames
-          if (uniqueUsernames.length === 0) {
-            console.log(`No valid github usernames for repo ${repo.repository}`);
+            // Skip if no valid usernames
+            if (uniqueUsernames.length === 0) {
+              console.log(`No valid github usernames for repo ${repo.repository}`);
+              await adminSupabase
+                .from("repositories")
+                .update({
+                  is_github_ready: false
+                })
+                .eq("id", repo.id);
+              return;
+            }
+
+            const { removalsSkipped } = await github.syncRepoPermissions(
+              org,
+              repoName,
+              assignment.classes!.slug!,
+              uniqueUsernames,
+              scope
+            );
+            // A sync that could not read the staff roster skipped every removal, so it did only half
+            // the job. Leaving is_github_ready = false (with creation_error still NULL) is what keeps
+            // the row inside reconcile_stuck_repo_creations' 15-minute sweep; writing `true` here
+            // would make a half-done sync indistinguishable from a complete one and let a dropped
+            // student keep push access with nothing scheduled to fix it.
+            if (removalsSkipped) {
+              throw new Error(
+                `Staff roster unavailable while syncing ${repo.repository}; collaborator removals were skipped`
+              );
+            }
             await adminSupabase
               .from("repositories")
               .update({
-                is_github_ready: false
+                is_github_ready: true
               })
               .eq("id", repo.id);
-            return;
-          }
-
-          await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
-          await adminSupabase
-            .from("repositories")
-            .update({
-              is_github_ready: true
-            })
-            .eq("id", repo.id);
-        })
-      )
+          })
+        )
+      ),
+      { label: "sync" }
     );
   }
-  console.log("All repos created + synced");
+
+  const summary = mergeSettledSummaries([ensuredSummary, createdSummary, syncedSummary]);
+  if (summary.failed > 0) {
+    // Was `console.log("All repos created + synced")` unconditionally, which is how a run where
+    // every repo failed still reported success.
+    console.error(`Repo creation finished with failures: ${describeSettledSummary(summary)}`);
+    scope?.setTag("repo_creation_failed_count", String(summary.failed));
+    scope?.setContext("repo_creation", {
+      attempted: summary.attempted,
+      succeeded: summary.succeeded,
+      failed: summary.failed,
+      reasons: summary.reasons,
+      truncated_reasons: summary.truncatedReasons
+    });
+    Sentry.withScope((s) => {
+      s.setFingerprint(["assignment-create-all-repos-partial-failure"]);
+      Sentry.captureMessage(`assignment-create-all-repos: ${summary.failed}/${summary.attempted} failed`, s);
+    });
+  } else {
+    console.log(`All repos created + synced (${summary.succeeded}/${summary.attempted})`);
+  }
+  return summary;
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -542,13 +623,32 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("Source", "jwt");
 
     // Await the task completion
-    await createAllRepos(courseId, assignmentId, scope);
+    const summary = await createAllRepos(courseId, assignmentId, scope);
+
+    // This path waits for the work, so the caller is entitled to the real answer. Reporting
+    // "All repositories created successfully" while N students have no repo is the failure this
+    // fixes: the instructor moves on, and nobody looks again until someone cannot submit.
+    //
+    // Phrased in OPERATIONS, never "N of M repositories". The merged summary covers three passes
+    // (ensure, create, sync) and two of them iterate the same existingRepos, so `attempted` exceeds
+    // the number of repositories -- 20 existing + 5 new is 45 attempts over 25 repos. Calling that a
+    // repository count is the same lie describeBulkReleaseResult was written to stop telling.
+    if (summary.failed > 0) {
+      throw new UserVisibleError(
+        `${summary.failed} of ${summary.attempted} repository operations failed ` +
+          `(${summary.succeeded} succeeded; some repositories may have been created). ` +
+          describeSettledSummary(summary)
+      );
+    }
 
     return new Response(
       JSON.stringify({
-        message: "All repositories created successfully",
+        message: `All repository operations succeeded (${summary.succeeded}/${summary.attempted})`,
         courseId,
-        assignmentId
+        assignmentId,
+        attempted: summary.attempted,
+        succeeded: summary.succeeded,
+        failed: summary.failed
       }),
       {
         status: 200,

@@ -32,6 +32,7 @@ import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
+import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -57,7 +58,7 @@ function autograderScoreLabel(
 ): string {
   const results = submission.grader_results;
   if (results) {
-    return results.errors ? "Error" : `${results.score}/${results.max_score}`;
+    return graderResultIndicatesFailure(results.errors) ? "Error" : `${results.score}/${results.max_score}`;
   }
   // A retained rejection: the push-direct path keeps an oversized submission as an inactive
   // history row and attaches a student-visible workflow_run_error explaining why nothing was

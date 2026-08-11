@@ -5,8 +5,10 @@ import { emailTemplates } from "./emailTemplates.ts";
 import type { DiscussionThreadNotification, Notification, NotificationEnvelope } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { resolveEmailTransport, type EmailTransportDecision } from "../_shared/emailTransportConfig.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -24,6 +26,57 @@ if (Deno.env.get("SENTRY_DSN")) {
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
+}
+
+// Guard to prevent multiple concurrent batch handlers per runtime instance
+let started = false;
+
+// Resolved once per isolate, not once per email. `envFrom` is one-shot, so the SMTP environment
+// cannot change under a running pod — re-reading ~10 env vars and re-walking the decision tree for
+// every recipient of a digest fan-out is pure waste.
+let cachedEmailTransport: EmailTransportDecision | undefined;
+function emailTransport(): EmailTransportDecision {
+  cachedEmailTransport ??= resolveEmailTransport((key) => Deno.env.get(key));
+  return cachedEmailTransport;
+}
+
+/**
+ * Latch for the "SMTP_HOST unset and EMAIL_ENABLED unset" report, so a persistent missing Secret
+ * reports once per isolate instead of once per 15-second poll. Isolate-scoped on purpose: a fresh
+ * pod is a genuinely new occurrence and should report again, which is also what makes the signal
+ * track replica restarts rather than uptime. Paired with the transport cache above — since
+ * `envFrom` is one-shot, that verdict cannot change under a running pod either.
+ */
+let reportedMissingSmtpHost = false;
+
+/**
+ * Set once an archive has failed while email is explicitly disabled.
+ *
+ * The digest purge below deletes content permanently, so it must not run while any notification is
+ * known to be un-archived. Returning early from the failure branch was not enough on its own: that
+ * branch reports work-done, so `runBatchHandler` skips the idle sleep and calls `processBatch`
+ * again immediately -- and on that pass the un-archived messages are invisible, because the read
+ * that returned them already pushed `vt` an hour out. The batch therefore looks empty, no failure
+ * is observed, and the purge ran anyway milliseconds later. The guard has to outlive the iteration
+ * that set it.
+ *
+ * Isolate-scoped, like the SMTP report above, and deliberately never cleared: the messages stay
+ * hidden behind their visibility timeout for an hour, so nothing this isolate can observe proves
+ * the suppression completed. A fresh pod re-evaluates from scratch.
+ */
+let suppressionIncomplete = false;
+
+/**
+ * Local Inbucket is the one target where internal test addresses SHOULD receive mail.
+ *
+ * One derivation for every caller. `ignoreTLS` is set only for the Inbucket port, so this is the
+ * same signal the old `SMTP_PORT === "54325"` checks used — except that `resolveEmailTransport`
+ * TRIMS the value, so a Secret carrying a trailing newline no longer makes two code paths in this
+ * file disagree about the same send.
+ */
+function isInbucketTransport(): boolean {
+  const t = emailTransport();
+  return t.kind === "ready" && t.ignoreTLS;
 }
 
 export type QueueMessage<T> = {
@@ -476,11 +529,24 @@ async function sendEmailViaTransporter(
 ): Promise<boolean> {
   try {
     console.log(`Sending email to ${recipient} with subject ${subject}`);
+    // Resolved through the shared helper rather than read straight from the env, so the
+    // SMTP_FROM -> SMTP_ADMIN_EMAIL fallback applies here too. Reading SMTP_FROM directly meant
+    // mounting the chart's pawtograder-smtp Secret (which carries SMTP_ADMIN_EMAIL, not SMTP_FROM)
+    // produced a literal `From: Pawtograder <undefined>` and every send failed at the MTA.
+    //
+    // Throws rather than falling back to an empty sender: processBatch has already proved the
+    // config is ready before it built the transporter, so this cannot fire in practice — and if it
+    // somehow did, `From: Pawtograder <>` is the same malformed header in a new costume.
+    const resolved = emailTransport();
+    if (resolved.kind !== "ready") {
+      throw new Error(`Refusing to send: email transport is ${resolved.kind}`);
+    }
+    const defaultReplyTo = resolved.replyTo;
     await transporter.sendMail({
-      from: "Pawtograder <" + Deno.env.get("SMTP_FROM") + ">",
+      from: "Pawtograder <" + resolved.from + ">",
       to: recipient,
       cc: ccEmails,
-      replyTo: replyTo ?? Deno.env.get("SMTP_REPLY_TO"),
+      replyTo: replyTo ?? defaultReplyTo,
       subject: subject,
       text: body
     });
@@ -503,19 +569,38 @@ async function archiveMessage(
   adminSupabase: SupabaseClient<Database>,
   msgId: number,
   scope: Sentry.Scope
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await adminSupabase.schema("pgmq_public").rpc("archive", {
+    // The `error` FIELD, not just a throw. supabase-js resolves RPC failures rather than rejecting,
+    // so the try/catch alone never saw them: every archive "succeeded", the disabled-email path
+    // logged that it had archived the whole batch and returned work-done, and the messages were
+    // still in the queue with vt pushed out an hour. Returning a boolean rather than swallowing it
+    // is what lets the caller tell a real suppression from a failed one.
+    const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
       queue_name: "notification_emails",
       message_id: msgId
     });
+    if (error) {
+      throw error;
+    }
+    return true;
   } catch (error) {
-    scope.setContext("archive_error", {
+    // Clone before annotating. Callers pass long-lived scopes -- runBatchHandler's `scope` lives
+    // for the isolate, and `emailScope` spans a whole batch -- so setting `archive_error` on the
+    // caller's scope stamped one failed archive onto every later event from the same worker,
+    // including unrelated ones from subsequent polling iterations.
+    // Same defensive shape the digest paths below use: callers may hand in a scope stand-in
+    // without `clone`, and a failed archive must still report rather than throw a TypeError.
+    const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
+    const archiveScope: Sentry.Scope =
+      typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
+    archiveScope.setContext("archive_error", {
       msg_id: msgId,
       error_message: error instanceof Error ? error.message : String(error)
     });
-    Sentry.captureException(error, scope);
+    Sentry.captureException(error, archiveScope);
     console.error(`Failed to archive message ${msgId}: ${error}`);
+    return false;
   }
 }
 
@@ -584,8 +669,12 @@ async function sendEmail(params: {
       return;
     }
 
-    // Unless inbucket, skip internal test emails (but still archive them)
-    if (isInternalTestEmail(recipient.email) && Deno.env.get("SMTP_PORT") !== "54325") {
+    // Unless inbucket, skip internal test emails (but still archive them).
+    // Read through the resolved transport, not the raw env var: `resolveEmailTransport` TRIMS
+    // SMTP_PORT, so a Secret written with a trailing newline made this comparison disagree with the
+    // `transport.ignoreTLS` the digest paths use — mail really going to Inbucket while these
+    // recipients were skipped and archived unsent.
+    if (isInternalTestEmail(recipient.email) && !isInbucketTransport()) {
       skipReason = "internal_test_email";
       return;
     }
@@ -659,6 +748,54 @@ async function sendEmail(params: {
  * 4. Returns whether work was processed for polling decisions
  */
 export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
+  // BEFORE the read, deliberately. `read` sets vt = now() + 3600s on everything it returns, so a
+  // transport check placed after it buries 100 messages per attempt for an hour: the loop retries
+  // after 5s up to maxConsecutiveErrors, `.finally` clears `started`, and the next pg_cron poke
+  // restarts the cycle — ~1000 messages/minute made invisible, read_ct climbing without bound.
+  // Worse, `pawtograder_notification_emails_queue_size` counts only `vt <= now()`, so the backlog
+  // alert added alongside this code would read ~0 for the whole outage.
+  //
+  // Only the two "we cannot send" verdicts move up here. `explicitly_disabled` still runs after the
+  // read, because archiving is what it does and it needs the messages.
+  const transportPrecheck = emailTransport();
+  if (transportPrecheck.kind === "misconfigured") {
+    scope.setTag("email_config", "misconfigured");
+    scope.setContext("email_config", { missing: transportPrecheck.missing });
+    // One event, not two. This used to also `captureMessage` here before throwing, but the throw
+    // is caught by runBatchHandler and captured with this same scope, so a single misconfiguration
+    // opened two separately-grouped issues that had to be triaged together. The exception is the
+    // one to keep: it carries the tag and context set just above, and it is what actually stops
+    // the batch. The message names the variables rather than EMAIL_ENABLED, because
+    // `misconfigured` is also reachable with EMAIL_ENABLED unset (a host with no SMTP_FROM, or an
+    // unparseable SMTP_PORT), and asserting "EMAIL_ENABLED is set" sends whoever triages it
+    // looking for a variable that is not there.
+    throw new Error(`Email is enabled but misconfigured: missing ${transportPrecheck.missing.join(", ")}`);
+  }
+  if (transportPrecheck.kind === "disabled" && transportPrecheck.reason === "no_smtp_host") {
+    // Nobody asked for email to be off, the config is simply absent. Leave the queue untouched —
+    // envFrom is one-shot, so a pod that started before its SMTP Secret synced reads "no host" for
+    // its entire life, and a restart is the fix. The original defect was that this path was SILENT;
+    // the fingerprinted message is what closes that, and it collapses months of polling into one
+    // issue.
+    scope.setTag("email_disabled_reason", transportPrecheck.reason);
+    console.warn("Email deferred: SMTP_HOST unset and EMAIL_ENABLED unset; queue left untouched");
+    // Latched. This branch returns false, so the loop sleeps 15s and lands right back here for as
+    // long as the Secret is missing -- four events a minute per isolate, and the edge tier runs
+    // ~12 replicas, so one absent Secret is on the order of 69k events/day. The fingerprint
+    // collapses them into a single ISSUE but every event still bills against the quota, which is
+    // how an observability budget disappears while the queue is merely deferred. The report is
+    // what makes this condition visible at all, so it stays; it just does not need repeating on
+    // every idle poll. Console warning above is unlatched and remains the per-poll trace.
+    if (!reportedMissingSmtpHost) {
+      reportedMissingSmtpHost = true;
+      Sentry.withScope((s) => {
+        s.setFingerprint(["email-disabled-no-smtp-host"]);
+        Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
+      });
+    }
+    return false;
+  }
+
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "notification_emails",
     sleep_seconds: 3600, // 1 hour
@@ -672,6 +809,96 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
   }
 
   scope.setTag("queue_length", result.data?.length || 0);
+
+  // The `misconfigured` and `no_smtp_host` verdicts were already handled before the read above,
+  // so only `explicitly_disabled` and `ready` can reach here.
+  //
+  // OUTSIDE the non-empty check below, deliberately. A digest item's queue message is archived
+  // when the item is materialised, so a pending digest has no message left to read -- and if it
+  // is the only remaining work, `read` returns an empty batch. Running the disabled-email path
+  // only for a non-empty batch therefore skipped the digest purge in exactly the case it exists
+  // to cover, which is what the previous attempt at this fix got wrong. Archiving an empty list
+  // is a no-op, so hoisting the whole branch costs nothing and removes the dependency.
+  const transport = emailTransport();
+
+  if (transport.kind !== "ready") {
+    // Archive ONLY on an explicit EMAIL_ENABLED=false. That is the documented meaning of the
+    // switch ("false archives notifications without sending"), the operator chose it, and these
+    // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
+    // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
+    // depth up without bound.
+    const pendingNotifications = (result.data ?? []) as QueueMessage<Notification>[];
+    const archiveResults = await Promise.all(
+      pendingNotifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope))
+    );
+    const archiveFailures = archiveResults.filter((ok) => !ok).length;
+    if (archiveFailures > 0) {
+      // Reported as a failure, not folded into the success log. These messages are still in the
+      // queue with vt pushed an hour out, so claiming the batch was suppressed hides a backlog
+      // that the queue-size metric cannot see either -- the same invisibility the precheck above
+      // exists to avoid. Do NOT purge digest items in this case: the suppression did not fully
+      // happen, so discarding the digest content on top of it would lose data twice over.
+      suppressionIncomplete = true;
+      scope.setTag("archive_failures", String(archiveFailures));
+      Sentry.captureMessage(
+        `Email suppression incomplete: ${archiveFailures}/${pendingNotifications.length} notification(s) could not be archived`,
+        scope
+      );
+      console.error(
+        `Email explicitly disabled, but ${archiveFailures}/${pendingNotifications.length} archive(s) failed; those messages remain queued`
+      );
+      return true;
+    }
+
+    // Discard pending digest items too, not just the queue messages.
+    //
+    // Digest items are materialised further down this same function, and their queue message is
+    // archived at that moment -- so a pending digest has NO message left in the queue. Scoping
+    // this purge to the user/class combos present in `notifications` therefore missed almost
+    // exactly the rows it was meant to collect: the batch only ever contains users whose
+    // messages are still queued, and if a pending digest is the only remaining work the read
+    // returns nothing at all and the purge never runs.
+    //
+    // Unscoped is also the correct semantics, not merely the effective one. EMAIL_ENABLED is a
+    // process-wide environment variable, so there is no per-class or per-user disable to respect
+    // -- the earlier "one class's disable must not discard another's digest" reasoning described
+    // a situation that cannot arise. Every pending digest predates the switch and none of them
+    // may be delivered, so all of them go.
+    if (suppressionIncomplete) {
+      // An earlier poll in this isolate could not archive everything. Those messages are still
+      // queued behind their visibility timeout, so the suppression is incomplete and destroying
+      // digest content on top of it would lose data twice over.
+      scope.setTag("digest_purge", "skipped_incomplete_suppression");
+      console.warn("Email explicitly disabled, but an earlier archive failed in this worker; not purging digest items");
+      return pendingNotifications.length > 0;
+    }
+
+    const { error: purgeError } = await adminSupabase
+      .schema("public")
+      .from("discussion_digest_items")
+      .delete()
+      .gte("id", 0);
+    if (purgeError) {
+      // Reported, not thrown: the archive above already succeeded, and failing the batch here
+      // would re-deliver messages that are now gone from the queue. A leftover digest item is
+      // the pre-existing behaviour, so this degrades to it rather than to a stuck batch.
+      const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
+      const purgeScope: Sentry.Scope =
+        typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
+      purgeScope.setContext("digest_purge_error", { scope: "all_pending_digest_items" });
+      Sentry.captureException(purgeError, purgeScope);
+      console.error("Failed to purge pending discussion digest items while email is disabled", purgeError);
+    }
+
+    scope.setTag("email_disabled_reason", transport.kind === "disabled" ? transport.reason : transport.kind);
+    console.log(
+      `Email explicitly disabled; archived ${pendingNotifications.length} notification(s) and purged all pending discussion digest items`
+    );
+    // Work WAS done whenever there were messages. An empty batch with nothing purged is a
+    // genuinely idle poll and must still report false, or the loop never sleeps.
+    return pendingNotifications.length > 0;
+  }
+
   if (result.data && result.data.length > 0) {
     //Fetch all context: emails and course names
     const notifications = result.data as QueueMessage<Notification>[];
@@ -850,25 +1077,23 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       });
     }
 
-    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
-      // eslint-disable-next-line no-console
-      console.log("No SMTP host found, deferring email processing");
-      // Do not archive; allow messages to become visible again after VT expires.
-      return false;
-    }
-    const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
-    const isPostmarkEmail = Deno.env.get("SMTP_PORT") === "2525";
+    const isInbucketEmail = isInbucketTransport();
+
+    // `auth` is omitted entirely when there are no credentials, rather than passed with empty
+    // strings. `resolveEmailTransport` deliberately returns `ready` with `user`/`pass` as "" for
+    // the credential-free relays it supports -- Inbucket locally, and an IP-allowlisted relay in
+    // production -- and an `auth` object present at all makes nodemailer attempt LOGIN. Against a
+    // relay that merely ADVERTISES AUTH as optional, that authenticates with an empty username and
+    // password instead of sending anonymously, so every message fails.
+    const hasSmtpCredentials = Boolean(transport.user) || Boolean(transport.pass);
     const transporter = nodemailer.createTransport({
       pool: true,
-      host: Deno.env.get("SMTP_HOST") || "",
-      port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: isInbucketEmail || isPostmarkEmail ? false : true, // use TLS
-      requireTLS: isPostmarkEmail ? true : false,
-      ignoreTLS: isInbucketEmail,
-      auth: {
-        user: Deno.env.get("SMTP_USER") || "",
-        pass: Deno.env.get("SMTP_PASSWORD") || ""
-      }
+      host: transport.host,
+      port: transport.port,
+      secure: transport.secure,
+      requireTLS: transport.requireTLS,
+      ignoreTLS: transport.ignoreTLS,
+      ...(hasSmtpCredentials ? { auth: { user: transport.user, pass: transport.pass } } : {})
     });
 
     // Partition notifications for special handling of help request creation and discussion digests
@@ -1423,30 +1648,48 @@ export async function runBatchHandler() {
     console.log("Signal listeners not available in this environment");
   }
 
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      consecutiveErrors = 0; // Reset error count on successful processing
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts.
+  const run = await beginWorkerRun({
+    name: "notification_queue_processor",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log("Another email batch handler holds the lease; nothing to do");
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
 
-      // If there was work, check again immediately, otherwise wait 15 seconds
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  try {
+    while (isRunning && run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        consecutiveErrors = 0; // Reset error count on successful processing
+
+        // If there was work, check again immediately, otherwise idle
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (error) {
+        consecutiveErrors++;
+        scope.setTag("consecutive_errors", consecutiveErrors);
+        console.error(`Email batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+        Sentry.captureException(error, scope);
+
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          Sentry.captureMessage("Too many consecutive errors, stopping email batch handler", scope);
+          console.error("Too many consecutive errors, stopping email batch handler");
+          break;
+        }
+
+        await run.onError();
       }
-    } catch (error) {
-      consecutiveErrors++;
-      scope.setTag("consecutive_errors", consecutiveErrors);
-      console.error(`Email batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
-      Sentry.captureException(error, scope);
-
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        Sentry.captureMessage("Too many consecutive errors, stopping email batch handler", scope);
-        console.error("Too many consecutive errors, stopping email batch handler");
-        break;
-      }
-
-      // Wait before retrying on error
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 
   console.log("Email batch handler stopped");
@@ -1457,18 +1700,50 @@ Deno.serve((req) => {
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
   if (secret !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "Invalid secret" }), {
-      headers: { "Content-Type": "application/json" }
+    // 401, not a bare `new Response(...)`. Response defaults to 200, so a rejected poke read as a
+    // healthy worker: pg_cron's net.http_post logged success while no handler ever started and the
+    // email queue silently stopped draining. Same shape wrapRequestHandler's catch-all was just
+    // fixed for, and the same 401 + WWW-Authenticate the two async workers already return.
+    return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "WWW-Authenticate": 'Bearer realm="notification_queue_processor", error="invalid_token"'
+      }
     });
   }
 
-  EdgeRuntime.waitUntil(runBatchHandler());
+  // `started` is a same-isolate short-circuit ONLY, and it is not what bounds concurrency.
+  //
+  // It was written as though it prevented every pg_cron poke parking another infinite loop. That
+  // holds only under `edgeFunctions.policy: per_worker`, where the isolate is reused. Every
+  // deployed values file sets `per_request`, so each poke arrives on a FRESH isolate with
+  // `started` back to false and this check can never fire. The real bound is in
+  // _shared/workerRun.ts: a Redis lease when Redis is configured, and a wall-clock-bounded
+  // drain-and-exit when it is not. Both make an accumulating loop impossible; this flag just saves
+  // a Redis round-trip when the policy does happen to reuse isolates.
+  const already_running = started;
+  if (!started) {
+    started = true;
+    // Reset on exit. runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
+    // without this the flag would stay true forever and the worker would never restart even once
+    // the underlying fault cleared. That matters much more now that misconfigured SMTP throws.
+    EdgeRuntime.waitUntil(
+      runBatchHandler().finally(() => {
+        started = false;
+      })
+    );
+  } else {
+    console.log(`[serve] Batch handler already started, skipping`);
+  }
 
   // Return immediately to acknowledge the start request
   return Promise.resolve(
     new Response(
       JSON.stringify({
         message: "Email batch handler started",
+        already_running,
         timestamp: new Date().toISOString()
       }),
       {

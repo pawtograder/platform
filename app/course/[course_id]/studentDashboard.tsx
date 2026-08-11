@@ -37,6 +37,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 
 function SurveyDashboardCta({
   href,
@@ -328,7 +329,7 @@ export default async function StudentDashboard({
             let mostRecentSubmissionScoreAdvice = "In Progress";
             if (mostRecentSubmission) {
               if (mostRecentSubmission.grader_results) {
-                if (mostRecentSubmission.grader_results.errors) {
+                if (graderResultIndicatesFailure(mostRecentSubmission.grader_results.errors)) {
                   mostRecentSubmissionScoreAdvice = "Error";
                 } else {
                   mostRecentSubmissionScoreAdvice = `${mostRecentSubmission.grader_results?.score}/${mostRecentSubmission.grader_results?.max_score}`;

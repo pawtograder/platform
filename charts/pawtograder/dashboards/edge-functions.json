@@ -1,12 +1,18 @@
 {
   "uid": "pawtograder-edge-functions",
-  "title": "Pawtograder · Edge Functions",
-  "tags": ["pawtograder", "edge"],
+  "title": "Pawtograder \u00b7 Edge Functions",
+  "tags": [
+    "pawtograder",
+    "edge"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -32,10 +38,17 @@
       {
         "name": "fn",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
         "query": "label_values(deno_http_requests_total, function)",
         "refresh": 1,
-        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
         "includeAll": true,
         "multi": true
       },
@@ -43,11 +56,18 @@
         "name": "namespace",
         "label": "Namespace (logs)",
         "type": "query",
-        "datasource": { "type": "loki", "uid": "${loki}" },
+        "datasource": {
+          "type": "loki",
+          "uid": "${loki}"
+        },
         "query": "label_values(namespace)",
         "regex": "/pawtograder-.*/",
         "refresh": 1,
-        "current": { "selected": true, "text": "pawtograder-staging", "value": "pawtograder-staging" },
+        "current": {
+          "selected": true,
+          "text": "pawtograder-staging",
+          "value": "pawtograder-staging"
+        },
         "includeAll": false,
         "multi": false
       }
@@ -58,22 +78,42 @@
       "id": 1,
       "type": "stat",
       "title": "Invocations / s",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
           "expr": "sum(rate(deno_http_requests_total{function=~\"$fn\"}[1m]))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Error rate (5m)",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -86,9 +126,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.01 },
-              { "color": "red", "value": 0.05 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
             ]
           }
         }
@@ -98,33 +147,68 @@
       "id": 3,
       "type": "stat",
       "title": "P95 latency",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by(le) (rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Workers active",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(edge_runtime_workers_active)" }
+        {
+          "refId": "A",
+          "expr": "sum(edge_runtime_workers_active)"
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "none" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      }
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Invocations per function (RPS)",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -132,14 +216,26 @@
           "expr": "sum by(function)(rate(deno_http_requests_total[1m]))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
     },
     {
       "id": 11,
       "type": "timeseries",
       "title": "P50/P95/P99 latency by function",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "p50",
@@ -157,14 +253,26 @@
           "expr": "histogram_quantile(0.99, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
     },
     {
       "id": 20,
       "type": "table",
       "title": "Top errors by function",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -178,8 +286,16 @@
       "id": 30,
       "type": "timeseries",
       "title": "Web app's calls to edge functions",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -187,19 +303,141 @@
           "expr": "sum by(function, status)(rate(web_edge_function_invocation_total[1m]))"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Pod restarts (30m)",
+      "description": "A restart here kills PID 1, so every in-flight request on that pod dies at once and Kong returns 502 to the caller \u2014 including the grading runner. Spikes here line up with 502 spikes to the second.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", container=\"functions\"}[30m])",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Memory vs limit",
+      "description": "Fraction of the container memory limit. The OOM kill follows this crossing 1.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"} / on(namespace, pod, container) kube_pod_container_resource_limits{namespace=\"$namespace\", container=\"functions\", resource=\"memory\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        }
+      }
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "OOMKilled terminations",
+      "description": "1 while a pod's last termination reason was OOMKilled.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (pod) (kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\", container=\"functions\", reason=\"OOMKilled\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "type": "timeseries",
+      "title": "Working set memory vs pod age",
+      "description": "The diagnostic panel: if memory tracks pod AGE rather than request volume, the cause is long-lived isolates accumulating, not load \u2014 and scaling out on a memory target makes it worse, because every new pod starts the same climb.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"})",
+          "legendFormat": "mem {{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=\"$namespace\"})",
+          "legendFormat": "age {{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
     },
     {
       "id": 40,
       "type": "logs",
-      "title": "Logs — $namespace / $fn",
+      "title": "Logs \u2014 $namespace / $fn",
       "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function.",
-      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 38 },
-      "datasource": { "type": "loki", "uid": "${loki}" },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "loki", "uid": "${loki}" },
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
           "editorMode": "code",
           "queryType": "range",
           "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""

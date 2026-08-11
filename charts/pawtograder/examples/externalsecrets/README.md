@@ -43,7 +43,10 @@ does not consume is harmless, but a missing key breaks the pod that needs it.
   replication password is required.
 - **`pawtograder-s3`**: the object-store credentials the storage tier and the
   backup / verify / restore-drill Jobs use.
-- **`pawtograder-smtp`**: the four SMTP fields GoTrue reads by key. The sender
+- **`pawtograder-smtp`**: consumed by GoTrue **and**, when listed in
+  `edgeFunctions.envFromSecrets`, by the edge runtime's notification-email processor —
+  which accepts this Secret's `SMTP_PASS` / `SMTP_ADMIN_EMAIL` names directly, so the same
+  Secret serves both and no separate edge `smtp` bundle is required. The sender
   name is set from `auth.smtp.senderName` in values, not from this Secret.
 
 ## Structure

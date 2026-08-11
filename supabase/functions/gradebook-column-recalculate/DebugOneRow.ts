@@ -172,15 +172,26 @@ export async function debugOneRow(studentPrivateProfileId: string, columnSlugFil
 
     const versionAfter = (verAfter as unknown as { version?: number } | null)?.version ?? null;
     if (versionAfter === expectedVersion) {
-      // Mark as clean and not recalculating
-      await adminSupabase
+      // Mark as clean and not recalculating.
+      //
+      // Version-scoped, same as the batch path's recovery clear. Comparing versionAfter in JS and
+      // then clearing by primary key is a check-then-act: another worker can re-claim the row and
+      // bump the version in between, and the clear would release a claim this run does not hold.
+      // Folding the version into the predicate makes the release atomic with the check.
+      const { data: clearedRows } = await adminSupabase
         .from("gradebook_row_recalc_state")
         .update({ dirty: false, is_recalculating: false, updated_at: new Date().toISOString() })
         .eq("class_id", class_id)
         .eq("gradebook_id", gradebook_id)
         .eq("student_id", student_id)
-        .eq("is_private", is_private);
-      console.log(`Marked gradebook row as clean`);
+        .eq("is_private", is_private)
+        .eq("version", expectedVersion)
+        .select("student_id");
+      if ((clearedRows?.length ?? 0) > 0) {
+        console.log(`Marked gradebook row as clean`);
+      } else {
+        console.log(`Row was re-claimed at a newer version between the check and the clear; left alone`);
+      }
     } else {
       console.log(`Version changed during update (expected: ${expectedVersion}, got: ${versionAfter})`);
     }

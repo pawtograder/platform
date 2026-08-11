@@ -74,6 +74,7 @@ import {
   BRANCH_PROTECTION_RULESET_NAME,
   type BranchProtectionConfig,
   DEFAULT_BRANCH_PROTECTION,
+  isBranchProtectionUnsupportedError,
   planBranchProtectionAction,
   requestsNoBranchProtection
 } from "./branchProtection.ts";
@@ -901,7 +902,7 @@ export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.S
   // getRepoToCloneConsideringE2E. Answering "what is the head of the suffixed repo" is not
   // possible and not meaningful: the head of the SHARED fixture repo says nothing about the fake
   // sha an E2E push carries. Callers already treat `undefined` as "could not determine, assume
-  // current", which is the behaviour the E2E stub above relies on — but that stub is gated on
+  // current", which is the behavior the E2E stub above relies on — but that stub is gated on
   // PAWTOGRADER_GITHUB_STUB, a different flag from the E2E_MOCK_GITHUB / END_TO_END_SECRET setup
   // the webhook-driven suites use, so without this the new pre-insert and supersede checks issued
   // a real `GET /repos/...--<suffix>` that 404s, threw, and answered 500 for every push-direct
@@ -1822,6 +1823,14 @@ export async function applyBranchProtectionRuleset(
       // No rulesets endpoint available (very old plan tier) — treat as absent.
       existingRulesetId = null;
       existingRules = null;
+    } else if (isBranchProtectionUnsupportedError(e)) {
+      // Private repos in a free org can't use rulesets at all. Return instead of
+      // falling through: the create/update we'd attempt next is gated by the same
+      // plan and would fail identically. Expected on non-paid orgs, so it is a
+      // plain log — not a warning, and not a Sentry event.
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection rulesets unavailable on this GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
@@ -1901,17 +1910,12 @@ export async function applyBranchProtectionRuleset(
         scope?.setTag("ruleset_already_exists", "true");
         return;
       }
-      // Free GitHub accounts can't enable branch protection on private repos.
-      const message = (e.message || "").toLowerCase();
-      if (
-        message.includes("upgrade to github pro") ||
-        message.includes("upgrade your github plan") ||
-        message.includes("upgrade your account")
-      ) {
-        scope?.setTag("ruleset_unsupported_by_plan", "true");
-        console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
-        return;
-      }
+    }
+    // Free GitHub accounts can't enable branch protection on private repos.
+    if (isBranchProtectionUnsupportedError(e)) {
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     }
     throw e;
   }
@@ -2577,7 +2581,45 @@ export async function reinviteToOrgTeam(
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
-async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
+/**
+ * The team does not exist on GitHub at all.
+ *
+ * Distinct from {@link TeamMembersUnreadableError}: this is a stable configuration (a course whose
+ * staff team was never created), so callers degrade rather than fail. Membership is UNKNOWN, never
+ * empty — see the throw in {@link getTeamMembers}.
+ */
+export class TeamNotFoundError extends Error {
+  constructor(
+    readonly org: string,
+    readonly team_slug: string
+  ) {
+    super(`GitHub team ${org}/${team_slug} not found`);
+    this.name = "TeamNotFoundError";
+  }
+}
+
+/**
+ * The team EXISTS but its member list could not be read.
+ *
+ * This is the transient case, and it must fail closed. Treating it like an absent team degrades the
+ * sync to "skip every removal" and lets the caller record success, so a student dropped from the
+ * course keeps write access with nothing scheduled to retry. Separated from
+ * {@link TeamNotFoundError} so a course that legitimately has no staff team is not broken by
+ * failing closed on a condition that does not apply to it.
+ */
+export class TeamMembersUnreadableError extends Error {
+  constructor(
+    readonly org: string,
+    readonly team_slug: string,
+    /** Named to avoid shadowing `Error.cause`, which is a base-class member. */
+    readonly underlyingError: unknown
+  ) {
+    super(`GitHub team ${org}/${team_slug} exists but its members could not be read`);
+    this.name = "TeamMembersUnreadableError";
+  }
+}
+
+export async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
   try {
     const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
@@ -2585,17 +2627,73 @@ async function getTeamMembers(org: string, team_slug: string, octokit: Octokit):
     });
     return team.map((m) => m.login.toLowerCase());
   } catch (e) {
-    // If it's a 404 error from GitHub, add a breadcrumb and return empty array
     if (e && typeof e === "object" && "status" in e && (e as { status?: number }).status === 404) {
+      // Throw rather than return []. An empty list here reads as "no staff on this team", and that
+      // list is the only thing standing between syncRepoPermissions and DELETE-ing every staff
+      // member off every repo it touches. Worse, the caller caches the RESOLVED promise, so a
+      // successful [] would stick for the isolate's whole life while a throw self-evicts.
       Sentry.addBreadcrumb({
         category: "github.api",
         message: `404 Not Found when fetching team members for org: ${org}, team_slug: ${team_slug}`,
         level: "info"
       });
-      return [];
+      // WHICH 404 this is decides whether callers may degrade. A 404 on the members endpoint is
+      // ambiguous on its own: the team may not exist (a course whose staff team was never created
+      // — stable, and degrading is correct), or the team may exist while this particular read
+      // failed (transient, and degrading silently skips every removal while the caller records
+      // success). Probing the team itself is what separates them, and it costs one request on a
+      // path that is already failing.
+      let teamExists = false;
+      try {
+        await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+        teamExists = true;
+      } catch (probeError) {
+        if (
+          probeError &&
+          typeof probeError === "object" &&
+          "status" in probeError &&
+          (probeError as { status?: number }).status === 404
+        ) {
+          teamExists = false;
+        } else {
+          // The probe itself failed for some other reason, so we still do not know. Unknown must
+          // not resolve to the degradable verdict.
+          throw new TeamMembersUnreadableError(org, team_slug, probeError);
+        }
+      }
+      if (teamExists) {
+        throw new TeamMembersUnreadableError(org, team_slug, e);
+      }
+      throw new TeamNotFoundError(org, team_slug);
     }
     throw e;
   }
+}
+
+/**
+ * Collaborators to remove from a repo.
+ *
+ * `staffRoster === null` means the staff team could not be read. Fail closed and remove nobody:
+ * leaving a stale collaborator is fixed by the next sync, whereas stripping the teaching staff off
+ * every repo in a course is a manual, high-visibility recovery.
+ */
+export function computeCollaboratorRemovals({
+  existingUsernames,
+  desiredUsernames,
+  staffRoster,
+  adminExclusions
+}: {
+  existingUsernames: string[];
+  desiredUsernames: string[];
+  staffRoster: string[] | null;
+  adminExclusions: string[];
+}): string[] {
+  if (staffRoster === null) {
+    return [];
+  }
+  return existingUsernames.filter(
+    (u) => !desiredUsernames.includes(u) && !staffRoster.includes(u) && !adminExclusions.includes(u)
+  );
 }
 async function getOrgMembers(
   org: string,
@@ -2809,14 +2907,14 @@ export async function syncRepoPermissions(
   githubUsernamesMixedCase: string[],
   _scope?: Sentry.Scope,
   options: SyncRepoPermissionsOptions = {}
-): Promise<{ madeChanges: boolean }> {
+): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall(
       "syncRepoPermissions",
       { org, repo, courseSlug, githubUsernames: githubUsernamesMixedCase, options },
       _scope
     );
-    return { madeChanges: false };
+    return { madeChanges: false, removalsSkipped: false };
   }
   let madeChanges = false;
   const scope = _scope?.clone();
@@ -2840,16 +2938,46 @@ export async function syncRepoPermissions(
   // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
   // members/repo-access endpoints below, silently leaving repos without staff access.
   const team_slug = await resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit);
-  if (!staffTeamCache.has(org + "-" + courseSlug)) {
+  // JSON tuple, not `org + "-" + courseSlug`, for the same reason as teamSlugCache above: string
+  // concat is ambiguous and could serve one course's staff roster to another.
+  const staffCacheKey = JSON.stringify([org, courseSlug]);
+  if (!staffTeamCache.has(staffCacheKey)) {
     staffTeamCache.set(
-      org + "-" + courseSlug,
+      staffCacheKey,
       getTeamMembers(org, team_slug, octokit).catch((err) => {
-        staffTeamCache.delete(org + "-" + courseSlug);
+        staffTeamCache.delete(staffCacheKey);
         throw err;
       })
     );
   }
-  const staffTeamUsernames = await staffTeamCache.get(org + "-" + courseSlug);
+  // null means UNKNOWN. Distinct from [], which means "the team exists and has no members" and is
+  // a legitimate reason to remove collaborators.
+  let staffTeamUsernames: string[] | null = null;
+  try {
+    staffTeamUsernames = (await staffTeamCache.get(staffCacheKey)) ?? null;
+  } catch (err) {
+    // ONLY the "team does not exist at all" case degrades to an unknown roster and carries on.
+    // A 403 (secondary rate limit), 502, network error, or a members read that failed while the
+    // team DOES exist (TeamMembersUnreadableError) must still abort the sync: swallowing any of
+    // those would finish the run, skip every removal, and let the caller record
+    // is_github_ready = true — so a student dropped from the course keeps write access and nothing
+    // ever retries. That is the same "unknown read as benign" shape this guard exists to close,
+    // one level up.
+    //
+    // The distinction matters because `removalsSkipped` is inspected by only one of this
+    // function's callers. Failing closed on the transient case is what makes the other callers
+    // correct without each having to interpret a partial result; a course that genuinely has no
+    // staff team still degrades, so failing closed does not break it.
+    if (!(err instanceof TeamNotFoundError)) {
+      throw err;
+    }
+    scope?.setTag("staff_team_roster", "unavailable");
+    Sentry.withScope((s) => {
+      s.setFingerprint(["staff-team-roster-unavailable"]);
+      Sentry.captureException(err, s);
+    });
+    console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);
+  }
   if (!orgMembershipCache.has(org)) {
     orgMembershipCache.set(
       org,
@@ -3019,12 +3147,12 @@ export async function syncRepoPermissions(
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
-  const removeAccess = existingUsernames.filter(
-    (u) =>
-      !githubUsernames.includes(u) &&
-      !staffTeamUsernames?.includes(u) &&
-      !adminsThatShouldNotBeListedAsAdmins.includes(u)
-  );
+  const removeAccess = computeCollaboratorRemovals({
+    existingUsernames,
+    desiredUsernames: githubUsernames,
+    staffRoster: staffTeamUsernames,
+    adminExclusions: adminsThatShouldNotBeListedAsAdmins
+  });
   for (const username of newAccess) {
     madeChanges = true;
     const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
@@ -3062,7 +3190,13 @@ export async function syncRepoPermissions(
       username
     });
   }
-  return { madeChanges };
+  // `removalsSkipped` is REPORTED, not just logged. A run that could not read the staff roster
+  // performed only the additive half of the sync, and a caller that then writes
+  // is_github_ready = true makes that run indistinguishable from a complete one — so a student
+  // dropped from the course keeps push access and reconcile_stuck_repo_creations, which scans only
+  // is_github_ready = false, never revisits it. That is the outcome the TeamNotFoundError comment
+  // above rejects for a 403; the flag is what stops it happening for a 404.
+  return { madeChanges, removalsSkipped: staffTeamUsernames === null };
 }
 /**
  * Mark the user_role row for a specific (org, team_slug) as github_org_confirmed = true.

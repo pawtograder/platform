@@ -1067,10 +1067,24 @@ edgeFunctions:
   e2e:
     enabled: false
     mockGitHub: false
-  # Names of additional Secrets to envFrom into the edge-runtime pod
-  # (each marked optional, so absent secrets don't block startup). Use for
-  # integration credentials managed by ESO in your overlay.
+  # Names of additional Secrets to envFrom into the edge-runtime pod. Use for
+  # integration credentials managed by ESO in your overlay. Each is mounted
+  # optional: true — a Secret that is missing at pod start is skipped rather
+  # than blocking startup, because envFrom is one-shot and all-or-nothing: one
+  # absent Secret would otherwise put the whole edge tier in
+  # CreateContainerConfigError with no self-heal. A pod that boots before a
+  # Secret has synced therefore runs without those variables until it is
+  # rolled, so keep edgeFunctions.reloader enabled and rely on the consuming
+  # function to report missing config loudly (see edgeFunctions.email.enabled).
   envFromSecrets: []
+  email:
+    # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
+    # supabase/functions/_shared/emailTransportConfig.ts.
+    #
+    # Unset infers from SMTP_HOST, preserving today's behavior everywhere. "true" makes missing
+    # SMTP config a hard, reported failure instead of an indefinite silent deferral, so set it
+    # wherever email is supposed to work. "false" archives notifications without sending.
+    enabled: ""
   image:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
@@ -1078,6 +1092,19 @@ edgeFunctions:
   policy: per_worker # per_worker | per_request | oneshot. per_request gives each
                      # request its own isolate (no concurrent co-location → no shared-heap
                      # memory pile-up under bursts); per_worker co-locates for efficiency.
+  # NOTE for the pg_cron-poked background workers (notification-queue-processor,
+  # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
+  # module-level state to keep one poll loop per pod, because `per_request` gives every
+  # poke a fresh isolate and resets it. They bound themselves instead — a Redis lease
+  # when REDIS_URL / UPSTASH_* are set, and a wall-clock-bounded drain-and-exit when they
+  # are not. See supabase/functions/_shared/workerRun.ts. Consequences worth knowing:
+  #   * With Redis, ONE pod holds each worker's lease and keeps a resident loop, so that
+  #     pod carries one admission slot per worker for the isolate's life. Latency is the
+  #     loop's own idle interval (10–15s).
+  #   * Without Redis, each poke drains and exits, holding no slot between pokes, and new
+  #     work waits for the next cron tick instead. Safer, slower.
+  # Raising maxParallelism does not substitute for either: an unbounded loop consumes
+  # whatever you give it.
   # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
   # derives it from CPU cores, which is low on small pods and forces co-location.
   # Under per_request this is effectively the max concurrent requests per pod
@@ -1495,6 +1522,29 @@ monitoring:
     allowUnselectedRules: false
     backupMaxAgeHours: 36
     certExpiryWarningDays: 14
+    # Namespaces to watch for expiring cert-manager Certificates. Defaults to the release
+    # namespace, which is what the rule used to hardcode — and why it could never match: the
+    # wildcard TLS Certificate lives in the ingress controller's namespace, so the shipped expiry
+    # alert watched a set containing no certificates at all. Add the ingress namespace here.
+    certNamespaces: []
+    # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
+    notificationEmailBacklog: 500
+    # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
+    # queue. Scale-free, unlike the depth thresholds above, so it needs no per-term retuning.
+    queueOldestSeconds: 1200
+    # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
+    # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
+    # permanently and get silenced.
+    discordDlqGrowthPerHour: 20
+    # Growth in the gradebook row-recalculate DLQ over an hour above which
+    # PawtograderGradebookRecalcDLQGrowing fires. Much lower than the other DLQ thresholds: a message
+    # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
+    # stored score is stale with nothing left to recompute it.
+    gradebookRecalcDlqGrowthPerHour: 5
+    # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
+    edgeFunctionRestarts30m: 2
+    # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
+    edgeFunctionMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
@@ -1546,6 +1596,9 @@ monitoring:
     appBusiness:      true
     rateLimiting:     true
     edgeSoak:         true
+    # Depth AND oldest-message age for every pgmq queue, side by side. Depth alone cannot tell a
+    # busy queue from a stalled one, and depth thresholds need retuning each term; age does not.
+    queuesAndWorkers: true
 
   # Logs are NOT deployed by this chart. Log collection (Alloy
   # DaemonSet shipping into a central Loki) is a cluster-level concern

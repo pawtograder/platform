@@ -164,7 +164,33 @@ web:
 
 edgeFunctions:
   policy: per_request
-  maxParallelism: 16
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x edgeFunctions.worker.memoryLimitMb is the
+  # aggregate the runtime will admit, and nothing enforces it -- the runtime's protections are all
+  # per-isolate -- so once it exceeds the container limit the kernel OOM-kills PID 1 and every
+  # in-flight request dies at once (Kong then reports 502).
+  #
+  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
+  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
+  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
+  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below the admission budget.
+  # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
+  # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
+  maxParallelism: 8
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "4Gi"   }
+  # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
+  # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
+  # that as "no work found" -- deferring the email queue indefinitely with no error anywhere, which
+  # is why notification email had never worked here.
+  # The Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts those as
+  # well as the older SMTP_PASSWORD / SMTP_FROM names.
+  envFromSecrets:
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
   autoscaling:
     enabled: true
     minReplicas: 12

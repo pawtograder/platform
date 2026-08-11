@@ -18,13 +18,17 @@ import { Octokit, RequestError } from "npm:octokit";
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const {
   assertSourceNotEmpty,
+  computeCollaboratorRemovals,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
+  getTeamMembers,
   isRepoEmpty,
   isTeamAlreadyExistsError,
   NonRetryableRepoError,
   publicSupabaseUrl,
   resolveExistingTeamSlug,
+  TeamMembersUnreadableError,
+  TeamNotFoundError,
   toPublicSupabaseUrl
 } = await import("./GitHubWrapper.ts");
 
@@ -385,5 +389,127 @@ Deno.test("toPublicSupabaseUrl: no-op for URLs not on the internal origin", () =
       toPublicSupabaseUrl("https://codeload.github.com/o/r/tar.gz/sha"),
       "https://codeload.github.com/o/r/tar.gz/sha"
     )
+  );
+});
+
+// --- staff team roster: unknown must not read as empty ----------------------
+//
+// getTeamMembers used to return [] on 404, and that list is the only guard before
+// syncRepoPermissions removes collaborators. An unreadable staff team therefore stripped
+// every staff member from every repo the isolate touched.
+
+Deno.test("getTeamMembers: returns lowercased logins", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => [{ login: "Alice" }, { login: "BOB" }]
+  });
+  assertEquals(await getTeamMembers("org", "course-staff", octokit), ["alice", "bob"]);
+});
+
+Deno.test("getTeamMembers: members 404 + team absent throws TeamNotFoundError rather than returning []", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      throw requestError(404, "Not Found");
+    },
+    // The team itself is gone too, so this is the stable "never created" configuration and
+    // callers are allowed to degrade.
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamNotFoundError);
+});
+
+// A members 404 on a team that DOES exist is transient, and it must not degrade: that is the path
+// that skipped every removal while the caller recorded success, leaving a dropped student with
+// write access and nothing scheduled to retry.
+Deno.test("getTeamMembers: members 404 while the team exists throws TeamMembersUnreadableError", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams/{team_slug}": () => ({ data: { slug: "course-staff" } })
+  });
+  const err = await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamMembersUnreadableError);
+  assertEquals(err instanceof TeamNotFoundError, false);
+});
+
+// If the probe itself fails for some other reason we still do not know which case this is, and
+// unknown must not resolve to the degradable verdict.
+Deno.test(
+  "getTeamMembers: an inconclusive probe throws TeamMembersUnreadableError, not TeamNotFoundError",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /orgs/{org}/teams/{team_slug}/members": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /orgs/{org}/teams/{team_slug}": () => {
+        throw requestError(503, "Service Unavailable");
+      }
+    });
+    await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamMembersUnreadableError);
+  }
+);
+
+Deno.test("getTeamMembers: non-404 errors propagate unchanged", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  const err = await assertRejects(() => getTeamMembers("org", "course-staff", octokit));
+  assertEquals(err instanceof TeamNotFoundError, false);
+});
+
+Deno.test("getTeamMembers: a 404 is not remembered as an empty roster", async () => {
+  // The caller caches the resolved promise, so a 404 that resolved to [] would stick for the
+  // isolate's lifetime. Throwing lets the cache's .catch evict it and the next call succeed.
+  let calls = 0;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      calls++;
+      if (calls === 1) throw requestError(404, "Not Found");
+      return [{ login: "alice" }];
+    },
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamNotFoundError);
+  assertEquals(await getTeamMembers("org", "course-staff", octokit), ["alice"]);
+});
+
+Deno.test("computeCollaboratorRemovals: an unknown roster removes nobody", () => {
+  assertEquals(
+    computeCollaboratorRemovals({
+      existingUsernames: ["ta1", "ta2", "student"],
+      desiredUsernames: [],
+      staffRoster: null,
+      adminExclusions: []
+    }),
+    []
+  );
+});
+
+Deno.test("computeCollaboratorRemovals: an empty roster is a real answer and permits removal", () => {
+  assertEquals(
+    computeCollaboratorRemovals({
+      existingUsernames: ["stale"],
+      desiredUsernames: [],
+      staffRoster: [],
+      adminExclusions: []
+    }),
+    ["stale"]
+  );
+});
+
+Deno.test("computeCollaboratorRemovals: keeps desired, staff and excluded admins", () => {
+  assertEquals(
+    computeCollaboratorRemovals({
+      existingUsernames: ["student", "ta1", "orgadmin", "stale"],
+      desiredUsernames: ["student"],
+      staffRoster: ["ta1"],
+      adminExclusions: ["orgadmin"]
+    }),
+    ["stale"]
   );
 });

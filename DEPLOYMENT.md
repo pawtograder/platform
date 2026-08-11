@@ -471,13 +471,13 @@ Signup confirmation, magic-link, and password-recovery mail. Configured on the
 **auth** service. In the Helm chart, enable `auth.smtp.enabled=true` and provide
 the `pawtograder-smtp` Secret:
 
-| Var                | Meaning                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `SMTP_HOST`        | SMTP server hostname.                                         |
-| `SMTP_PORT`        | Port (e.g. `587`).                                            |
-| `SMTP_USER`        | SMTP username.                                                |
-| `SMTP_PASS`        | SMTP password (**note: `SMTP_PASS`, not `SMTP_PASSWORD`**).   |
-| `SMTP_ADMIN_EMAIL` | The `From:` address (e.g. `noreply@pawtograder.example.edu`). |
+| Var                | Meaning                                                                         |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `SMTP_HOST`        | SMTP server hostname.                                                           |
+| `SMTP_PORT`        | Port (e.g. `587`).                                                              |
+| `SMTP_USER`        | SMTP username.                                                                  |
+| `SMTP_PASS`        | SMTP password. The edge runtime reads this name too, so one Secret serves both. |
+| `SMTP_ADMIN_EMAIL` | The `From:` address (e.g. `noreply@pawtograder.example.edu`).                   |
 
 See the chart README ("Deploying staging" → SMTP) for the exact Secret/OpenBao
 shape.
@@ -487,16 +487,29 @@ shape.
 Help-request, regrade, and other in-app notification emails are sent by the
 `notification-queue-processor` Edge Function
 ([`supabase/functions/notification-queue-processor/index.ts`](./supabase/functions/notification-queue-processor/index.ts)).
-This uses the edge-functions `smtp` bundle (its own variable names):
+The simplest way to configure it is to mount the **same `pawtograder-smtp` Secret GoTrue uses**,
+by adding it to `edgeFunctions.envFromSecrets`. The function accepts both that Secret's variable
+names and the older edge-bundle names, so one Secret can serve both services:
 
-| Var             | Meaning                                                                    |
-| --------------- | -------------------------------------------------------------------------- |
-| `SMTP_HOST`     | SMTP server hostname. If unset/empty, notification email is skipped.       |
-| `SMTP_PORT`     | Port; defaults to `465` (TLS).                                             |
-| `SMTP_USER`     | SMTP username.                                                             |
-| `SMTP_PASSWORD` | SMTP password (**note: `SMTP_PASSWORD` here, vs `SMTP_PASS` for GoTrue**). |
-| `SMTP_FROM`     | `From:` address — sent as `Pawtograder <SMTP_FROM>`.                       |
-| `SMTP_REPLY_TO` | Default `Reply-To:` address.                                               |
+| Var             | Meaning                                                                                                                                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMAIL_ENABLED` | `true` to send. **Unset** infers from `SMTP_HOST` (the historical behavior). `true` with `SMTP_HOST` missing is a hard error — the function refuses and reports, rather than deferring the queue forever. `false` archives notifications without sending. |
+| `SMTP_HOST`     | SMTP server hostname.                                                                                                                                                                                                                                     |
+| `SMTP_PORT`     | Port; defaults to `465` (implicit TLS). `2525` selects STARTTLS (Postmark relay), `54325` local Inbucket.                                                                                                                                                 |
+| `SMTP_USER`     | SMTP username.                                                                                                                                                                                                                                            |
+| `SMTP_PASS`     | SMTP password. `SMTP_PASSWORD` is still accepted as a fallback for the legacy edge bundle.                                                                                                                                                                |
+| `SMTP_FROM`     | `From:` address — sent as `Pawtograder <SMTP_FROM>`. Falls back to `SMTP_ADMIN_EMAIL`, which is the name the `pawtograder-smtp` Secret actually carries.                                                                                                  |
+| `SMTP_REPLY_TO` | Default `Reply-To:` address. Optional.                                                                                                                                                                                                                    |
+
+> **Set `EMAIL_ENABLED=true` wherever email is meant to work.** Without it, a deployment that is
+> simply missing its SMTP configuration only defers: the processor finds no host, leaves the
+> messages queued, and reports one fingerprinted Sentry message. That keeps the backlog recoverable
+> once the config lands, but nothing fails. With `EMAIL_ENABLED=true` the same state throws, so a
+> missing `SMTP_HOST`, `SMTP_FROM` or `SMTP_PASS` stops the worker and pages instead of accumulating.
+> `EMAIL_ENABLED=false` is the only setting that discards queued email rather than deferring it.
+
+The older approach — populating a separate edge-functions `smtp` bundle — still works, but it
+requires keeping two copies of the same credentials in sync:
 
 ```sh
 scripts/setup-openbao-edge-functions.sh \

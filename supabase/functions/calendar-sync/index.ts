@@ -1,6 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+// Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
+// without this Sentry.init never ran and every capture was a silent no-op.
+import "../_shared/SentryInit.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 

@@ -22,6 +22,7 @@ import {
   NonRetryableUserError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -2603,17 +2604,36 @@ export async function runBatchHandler() {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const isRunning = true;
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
+  // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.
+  const run = await beginWorkerRun({
+    name: "github_async_worker",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log("[runBatchHandler] another worker holds the lease; nothing to do");
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
+
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        await run.onError();
       }
-    } catch (e) {
-      Sentry.captureException(e, scope);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 }
 
@@ -2644,7 +2664,25 @@ if (import.meta.main) {
 
     if (!started) {
       started = true;
-      EdgeRuntime.waitUntil(runBatchHandler());
+      // Reset on exit so the flag does not stay true for the isolate's whole life, which would
+      // stop the worker restarting even once the underlying fault cleared. Unlike the notification
+      // and gradebook processors, this loop has no consecutive-error cap: batch errors are
+      // captured, delayed 5s, and retried indefinitely. `.catch` is what makes an exit visible --
+      // nothing consumes the promise handed to waitUntil, so a rejection here would otherwise be
+      // an unhandled rejection that never reaches Sentry.
+      EdgeRuntime.waitUntil(
+        runBatchHandler()
+          .catch((e) => {
+            const scope = new Sentry.Scope();
+            scope.setTag("function", "github_async_worker");
+            scope.setTag("error_source", "run_batch_handler_startup");
+            Sentry.captureException(e, scope);
+            console.error("[serve] Batch handler exited with an error:", e);
+          })
+          .finally(() => {
+            started = false;
+          })
+      );
     }
 
     return new Response(

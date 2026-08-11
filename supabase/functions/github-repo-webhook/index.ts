@@ -31,6 +31,8 @@ import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
   computeHandoutFileHashesForCommit,
+  describeHandoutSeedResult,
+  isExpectedHandoutSeedSkip,
   seedHandoutFileHashes,
   type HandoutHashCaches
 } from "../_shared/handoutFileHashes.ts";
@@ -331,7 +333,7 @@ async function createPushDirectSubmission(
   // whose first delivery threw transiently came back after the deadline and was then treated as
   // late — silently skipped, or spending late tokens the student should not have needed. It is
   // also not student-controllable, which is the property that ruled out head_commit.timestamp
-  // (`git commit --date=...`). Falls back to now when absent, which is the previous behaviour.
+  // (`git commit --date=...`). Falls back to now when absent, which is the previous behavior.
   const pushedAtRaw = payload.repository?.pushed_at;
   const pushedAt =
     typeof pushedAtRaw === "number"
@@ -1992,7 +1994,7 @@ async function handlePushToStudentRepo(
     // records "superseded", so each of those scans would need to re-derive it. Not creating
     // the row removes the question, and takes the demote/re-promote/unwind machinery with it.
     //
-    // What is lost is a history entry for an intermediate commit, which is what the behaviour
+    // What is lost is a history entry for an intermediate commit, which is what the behavior
     // before this feature did anyway (only `#submit` pushes were recorded). The student's
     // newest push still becomes their submission, via its own delivery.
     if (!!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after) {
@@ -2079,7 +2081,7 @@ async function handlePushToStudentRepo(
     // actually installed.
     //
     // One API read, on `#submit` pushes only. A failure to determine it falls through to the
-    // dispatch below, which is the pre-existing behaviour.
+    // dispatch below, which is the pre-existing behavior.
     if (pushAssignment?.has_autograder !== false && pushRepoModeHasRepo && studentRepo.is_github_ready) {
       let workflowInstalled: boolean | undefined;
       try {
@@ -2230,6 +2232,7 @@ async function handlePushToGraderSolution(
     // previous webhook missed an update (e.g. the file was changed in a non-head
     // commit of a multi-commit push, or the >20-commit truncation hid it), an
     // instructor can force a re-sync by pushing any commit (e.g. touching README).
+    let configReconcileOk = true;
     try {
       console.log("Reconciling pawtograder.yml on push to main", { ymlTouched });
       const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
@@ -2261,6 +2264,12 @@ async function handlePushToGraderSolution(
           })
           .eq("id", autograder.id);
         if (updateError) {
+          // Clears the flag too. The pointer guard below is only as good as the set of failures
+          // that reach it, and a write that returns a PostgREST error (statement timeout, pool
+          // exhaustion, an RLS hiccup) leaves the config exactly as un-applied as a parse failure
+          // does. Logging it and letting the SHA advance is the precise thing the guard exists to
+          // prevent -- "this config is live" over a config that never landed.
+          configReconcileOk = false;
           Sentry.captureException(updateError, scope);
           console.error(updateError);
         }
@@ -2275,6 +2284,7 @@ async function handlePushToGraderSolution(
             .eq("id", autograder.id)
             .single();
           if (error) {
+            configReconcileOk = false;
             Sentry.captureException(error, scope);
             console.error(error);
           }
@@ -2289,11 +2299,27 @@ async function handlePushToGraderSolution(
       // configure-webhook flows do; an instructor editing pawtograder.yml through RepoFileEditor
       // arrives here instead of either of those.
       for (const autograder of autograders) {
-        const { data: handoutTarget } = await adminSupabase
+        const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
           .eq("id", autograder.id)
           .maybeSingle();
+        if (handoutTargetError) {
+          // A failed read is NOT "this assignment has no handout". Falling through to the
+          // `continue` below would skip the reseed while leaving configReconcileOk true, so the
+          // pointer would advance over hashes the config write above has already invalidated --
+          // the exact state the seedResult guard further down refuses. Same transient causes
+          // (statement timeout, pool exhaustion) as the update errors above.
+          configReconcileOk = false;
+          scope?.setTag("handout_target_lookup_failed", "true");
+          Sentry.captureException(handoutTargetError, scope);
+          console.error(
+            `Could not read the handout target for assignment ${autograder.id} after a grader-config push`,
+            handoutTargetError
+          );
+          continue;
+        }
+        // An assignment that genuinely has no template_repo is a steady state, not a failure.
         if (!handoutTarget?.template_repo) continue;
         const seedResult = await seedHandoutFileHashes({
           adminSupabase,
@@ -2303,36 +2329,72 @@ async function handlePushToGraderSolution(
           commitSha: handoutTarget.latest_template_sha,
           scope
         });
-        if (!seedResult.seeded) {
+        if (isExpectedHandoutSeedSkip(seedResult)) {
+          // Nothing to seed is not a failure. no_template_repo / no_commit_sha /
+          // no_submission_files are steady states of a healthy assignment -- there is no
+          // comparable file set, so no hash rows is the right answer, and there is nothing stale
+          // for the pointer guard to protect. Holding the pointer for these meant every later
+          // grader-config push on such an assignment pinned latest_autograder_sha and raised an
+          // incident, for a config that had in fact been saved correctly.
           console.log(
-            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+            `No handout file hashes to reseed for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
+          );
+        } else if (!seedResult.seeded) {
+          // A real failure: seedHandoutFileHashes swallows its own errors and returns
+          // { seeded: false } with the message as the reason, so this never reached the catch
+          // below — and the config write that INVALIDATED these hashes had already succeeded.
+          // Advancing latest_autograder_sha there announces "this config is live" over hashes
+          // still built from the OLD submissionFiles globs, which is the
+          // comparison-between-two-file-sets the comment above describes.
+          configReconcileOk = false;
+          scope?.setTag("handout_file_hash_reseed_failed", "true");
+          console.error(
+            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
           );
         }
       }
     } catch (err) {
-      // Don't fail the whole webhook if pawtograder.yml is missing/malformed —
-      // log it and continue so we still update the latest_autograder_sha below.
+      // Still don't fail the whole webhook if pawtograder.yml is missing/malformed — GitHub would
+      // redeliver the entire push forever. But do record that the reconcile failed, so the SHA
+      // pointer below is not advanced past a config that was never applied.
+      configReconcileOk = false;
       scope?.setTag("error_source", "pawtograder_yml_reconcile_failed");
       scope?.setTag("yml_touched_in_push", ymlTouched.toString());
       console.error("Failed to reconcile pawtograder.yml", err);
       Sentry.captureException(err, scope);
     }
-    // `payload.commits` is ordered oldest -> newest, so commits[0] is the FIRST
-    // (oldest) commit in the push, not the head. Use payload.after / head_commit
-    // so multi-commit pushes don't leave latest_autograder_sha stuck on an old SHA.
-    const newAutograderSha =
-      payload.after || payload.head_commit?.id || payload.commits.at(-1)?.id || payload.commits[0]?.id;
-    for (const autograder of autograders) {
-      const { error } = await adminSupabase
-        .from("autograder")
-        .update({
-          latest_autograder_sha: newAutograderSha
-        })
-        .eq("id", autograder.id)
-        .single();
-      if (error) {
-        Sentry.captureException(error, scope);
-        console.error(error);
+    if (!configReconcileOk) {
+      // latest_autograder_sha is what an instructor reads as "this config is live". Advancing it
+      // while `autograder.config` still holds the OLD yml is worse than not advancing: it reports
+      // that a fix has taken effect when grading is still running the previous configuration.
+      // Holding the pointer leaves the honest answer — the last good config is what is in force.
+      scope?.setTag("autograder_sha_pointer", "held");
+      console.error(
+        `Not advancing latest_autograder_sha for ${repoName}: pawtograder.yml reconcile failed. ` +
+          `The autograder still runs the last good config. Fix pawtograder.yml and push again.`
+      );
+      Sentry.withScope((s) => {
+        s.setFingerprint(["handout-pointer-held", "config"]);
+        Sentry.captureMessage(`Held latest_autograder_sha for ${repoName}: pawtograder.yml reconcile failed`, s);
+      });
+    } else {
+      // `payload.commits` is ordered oldest -> newest, so commits[0] is the FIRST
+      // (oldest) commit in the push, not the head. Use payload.after / head_commit
+      // so multi-commit pushes don't leave latest_autograder_sha stuck on an old SHA.
+      const newAutograderSha =
+        payload.after || payload.head_commit?.id || payload.commits.at(-1)?.id || payload.commits[0]?.id;
+      for (const autograder of autograders) {
+        const { error } = await adminSupabase
+          .from("autograder")
+          .update({
+            latest_autograder_sha: newAutograderSha
+          })
+          .eq("id", autograder.id)
+          .single();
+        if (error) {
+          Sentry.captureException(error, scope);
+          console.error(error);
+        }
       }
     }
   }
@@ -2425,11 +2487,14 @@ async function handlePushToTemplateRepo(
       currentHeadSha = await getDefaultBranchHeadSha(assignments[0].template_repo, scope);
     } catch (headErr) {
       // Never block history on this check: fall through and trust the payload, which is
-      // exactly the behaviour that existed before it.
+      // exactly the behavior that existed before it.
       scope?.setTag("template_head_lookup_failed", "true");
       Sentry.captureException(headErr, scope);
     }
   }
+  // Defaults true so the branches that never attempt a reconcile (no template repo, or no
+  // autograded assignments using it) keep advancing the pointer exactly as before.
+  let gradeYmlReconcileOk = true;
   if (!assignments[0].template_repo) {
     Sentry.captureMessage("No matching assignment found", scope);
   } else if (autogradedAssignments.length === 0) {
@@ -2450,6 +2515,11 @@ async function handlePushToTemplateRepo(
         content: string;
       };
       if (!file.content) {
+        // Holds the pointer, same as a throw would. An empty body means workflow_sha was never
+        // recomputed for this revision, so advancing latest_template_sha would report the handout
+        // as in sync while every student Actions run built from it fails the workflow-hash check.
+        // Only the catch below set the flag, and this branch does not throw.
+        gradeYmlReconcileOk = false;
         Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
       } else {
         // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
@@ -2474,8 +2544,10 @@ async function handlePushToTemplateRepo(
         }
       }
     } catch (err) {
-      // Don't fail the whole webhook if grade.yml is missing — log and continue
-      // so latest_template_sha still gets updated below.
+      // Still don't fail the whole webhook if grade.yml is missing — GitHub would redeliver
+      // forever. But record the failure so the pointer below is not advanced past a revision whose
+      // workflow hash was never reconciled.
+      gradeYmlReconcileOk = false;
       scope?.setTag("error_source", "grade_yml_reconcile_failed");
       scope?.setTag("workflow_touched_in_push", workflowTouched.toString());
       console.error("Failed to reconcile grade.yml workflow hash", err);
@@ -2500,6 +2572,25 @@ async function handlePushToTemplateRepo(
   // evade empty-submission detection. History and hashes are per-revision and
   // order-independent; only the "current head" pointer is not.
   const isStaleDelivery = !!currentHeadSha && !!pushedSha && currentHeadSha !== pushedSha;
+  // isStaleDelivery guards against out-of-order deliveries; it says nothing about whether the
+  // reconcile succeeded. A failed grade.yml reconcile must hold the pointer for the same reason:
+  // latest_template_sha is what the repositories page renders as "in sync", so advancing it past a
+  // revision we could not reconcile tells students to pull a handout state that was never applied.
+  const holdPointer = isStaleDelivery || !gradeYmlReconcileOk;
+  if (!gradeYmlReconcileOk) {
+    scope?.setTag("template_sha_pointer", "held");
+    console.error(
+      `Not advancing latest_template_sha for ${assignments[0].template_repo}: grade.yml reconcile failed. ` +
+        `Still recording this revision's history and hashes.`
+    );
+    Sentry.withScope((s) => {
+      s.setFingerprint(["handout-pointer-held", "grade-yml"]);
+      Sentry.captureMessage(
+        `Held latest_template_sha for ${assignments[0].template_repo}: grade.yml reconcile failed`,
+        s
+      );
+    });
+  }
   if (isStaleDelivery) {
     scope?.setTag("stale_template_push_delivery", "true");
     console.log(
@@ -2510,7 +2601,7 @@ async function handlePushToTemplateRepo(
   for (const assignment of assignments) {
     // Guarded around the pointer write ONLY — the assignment_handout_commits upsert
     // further down this same loop must still run for a stale delivery.
-    const { error: assignmentUpdateError } = isStaleDelivery
+    const { error: assignmentUpdateError } = holdPointer
       ? { error: null }
       : await adminSupabase
           .from("assignments")

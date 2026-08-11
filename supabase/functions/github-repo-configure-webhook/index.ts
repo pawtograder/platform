@@ -11,6 +11,7 @@ import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import {
+  describeHandoutSeedResult,
   seedHandoutFileHashes,
   computeHandoutFileHashesForCommit,
   HandoutHashCaches
@@ -132,7 +133,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         scope
       });
       if (!seedResult.seeded) {
-        console.log(`Not seeding handout file hashes for repo-only assignment ${assignment_id}: ${seedResult.reason}`);
+        console.log(
+          `Not seeding handout file hashes for repo-only assignment ${assignment_id}: ${describeHandoutSeedResult(seedResult)}`
+        );
       }
     }
   } else if (watch_type === "template_repo") {

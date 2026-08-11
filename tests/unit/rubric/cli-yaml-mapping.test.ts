@@ -569,6 +569,39 @@ describe("validateRubricYaml", () => {
     expect(bad.errors.some((e) => /negative/.test(e.message))).toBe(true);
   });
 
+  it("rejects negative criterion total_points, which no scoring mode makes meaningful", () => {
+    // total_points is a magnitude in all three modes: additive caps at it, the default
+    // subtracts the applied checks from it, deduction-only floors at -total_points. A
+    // negative value turns the deduction into a credit.
+    // chk_rubric_criteria_total_points_non_negative rejects it in the DB as well.
+    const bad = validateRubricYaml({
+      name: "r",
+      parts: [{ name: "p", criteria: [{ name: "c", total_points: -20, checks: [{ name: "k", points: 3 }] }] }]
+    });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) return;
+    expect(bad.errors.some((e) => e.path === "parts[0].criteria[0].total_points" && /negative/.test(e.message))).toBe(
+      true
+    );
+  });
+
+  it("accepts zero total_points and a deduction-only criterion whose deductions are positive", () => {
+    expect(
+      validateRubricYaml({
+        name: "r",
+        parts: [
+          {
+            name: "p",
+            criteria: [
+              { name: "deductions", total_points: 20, is_deduction_only: true, checks: [{ name: "k", points: 3 }] },
+              { name: "zero-weight", total_points: 0, checks: [{ name: "note", points: 0 }] }
+            ]
+          }
+        ]
+      }).ok
+    ).toBe(true);
+  });
+
   it("rejects the mutually exclusive grading modes the DB also forbids", () => {
     const bad = validateRubricYaml({
       name: "r",
