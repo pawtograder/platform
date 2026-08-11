@@ -85,6 +85,46 @@ assert_rendered_contains() {
   fi
 }
 
+# assert_edge_envfrom_optional "<label>" "<template>" <extra --set args...>
+# Every Secret listed in edgeFunctions.envFromSecrets must render optional: true.
+# envFrom is one-shot and all-or-nothing: a single absent Secret puts the whole
+# edge tier (grading included) into CreateContainerConfigError with no
+# self-heal, so a missing integration Secret must never gate startup. This
+# asserts the property directly on the rendered manifest so nothing — a flag, a
+# refactor — can quietly make those Secrets mandatory again.
+assert_edge_envfrom_optional() {
+  local label="$1" template="$2"; shift 2
+  local a=guardrail-envfrom-a b=guardrail-envfrom-b
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set "edgeFunctions.envFromSecrets={$a,$b}" \
+      "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local secret bad=0
+  for secret in "$a" "$b"; do
+    # The secretRef name line, then the line right after it, which must be the
+    # optional field. Anything else (absent, or optional: false) fails.
+    if ! grep -A1 -F "name: $secret" "$OUTFILE" | grep -qF "optional: true"; then
+      echo "FAIL [$label]: envFrom secretRef $secret does not render optional: true"
+      bad=1
+    fi
+  done
+  # Nothing else in this workload may be mandatory either, except the in-cluster
+  # Redis URL, which is deliberately optional: false (documented in the tpl) and
+  # only renders for a non-external redis.provider.
+  # Anchored to the field, so the tpl's explanatory comments (which mention the
+  # string) don't trip it.
+  if grep -qE '^[[:space:]]*optional: false' "$OUTFILE"; then
+    echo "FAIL [$label]: rendered a mandatory envFrom secretRef (optional: false)"
+    grep -B2 -E '^[[:space:]]*optional: false' "$OUTFILE"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
 echo "== baseline =="
 assert_renders "clean production baseline renders"
 
@@ -200,6 +240,17 @@ assert_rendered_contains "smtp-relay does not automount the SA token" \
   templates/smtp-relay.yaml "automountServiceAccountToken: false" \
   --set auth.smtp.enabled=true --set auth.smtp.relay.enabled=true \
   --set auth.smtp.relay.downstream=lxc.example.edu:2525
+
+echo "== edge-function envFrom Secrets are never mandatory =="
+assert_edge_envfrom_optional "edge-functions deployment envFrom is optional" \
+  templates/edge-functions.yaml
+assert_edge_envfrom_optional "edge-function channels envFrom is optional" \
+  templates/edge-functions-channels.yaml \
+  --set 'channels[0].name=canary' \
+  --set 'channels[0].web.image.tag=v1.0.0' \
+  --set 'channels[0].web.hostname=canary.pawtograder.example.com' \
+  --set 'channels[0].edgeFunctions.image.tag=v1.0.0' \
+  --set channelWildcardTlsSecret=wildcard-tls
 
 echo
 if [ "$FAILED" -ne 0 ]; then

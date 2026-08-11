@@ -39,6 +39,19 @@ function emailTransport(): EmailTransportDecision {
   return cachedEmailTransport;
 }
 
+/**
+ * Local Inbucket is the one target where internal test addresses SHOULD receive mail.
+ *
+ * One derivation for every caller. `ignoreTLS` is set only for the Inbucket port, so this is the
+ * same signal the old `SMTP_PORT === "54325"` checks used — except that `resolveEmailTransport`
+ * TRIMS the value, so a Secret carrying a trailing newline no longer makes two code paths in this
+ * file disagree about the same send.
+ */
+function isInbucketTransport(): boolean {
+  const t = emailTransport();
+  return t.kind === "ready" && t.ignoreTLS;
+}
+
 export type QueueMessage<T> = {
   msg_id: number;
   read_ct: number;
@@ -610,8 +623,12 @@ async function sendEmail(params: {
       return;
     }
 
-    // Unless inbucket, skip internal test emails (but still archive them)
-    if (isInternalTestEmail(recipient.email) && Deno.env.get("SMTP_PORT") !== "54325") {
+    // Unless inbucket, skip internal test emails (but still archive them).
+    // Read through the resolved transport, not the raw env var: `resolveEmailTransport` TRIMS
+    // SMTP_PORT, so a Secret written with a trailing newline made this comparison disagree with the
+    // `transport.ignoreTLS` the digest paths use — mail really going to Inbucket while these
+    // recipients were skipped and archived unsent.
+    if (isInternalTestEmail(recipient.email) && !isInbucketTransport()) {
       skipReason = "internal_test_email";
       return;
     }
@@ -685,6 +702,40 @@ async function sendEmail(params: {
  * 4. Returns whether work was processed for polling decisions
  */
 export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
+  // BEFORE the read, deliberately. `read` sets vt = now() + 3600s on everything it returns, so a
+  // transport check placed after it buries 100 messages per attempt for an hour: the loop retries
+  // after 5s up to maxConsecutiveErrors, `.finally` clears `started`, and the next pg_cron poke
+  // restarts the cycle — ~1000 messages/minute made invisible, read_ct climbing without bound.
+  // Worse, `pawtograder_notification_emails_queue_size` counts only `vt <= now()`, so the backlog
+  // alert added alongside this code would read ~0 for the whole outage.
+  //
+  // Only the two "we cannot send" verdicts move up here. `explicitly_disabled` still runs after the
+  // read, because archiving is what it does and it needs the messages.
+  const transportPrecheck = emailTransport();
+  if (transportPrecheck.kind === "misconfigured") {
+    scope.setTag("email_config", "misconfigured");
+    scope.setContext("email_config", { missing: transportPrecheck.missing });
+    // Names the variables, not EMAIL_ENABLED: `misconfigured` is also reachable with EMAIL_ENABLED
+    // unset (a host with no SMTP_FROM, or an unparseable SMTP_PORT), and asserting "EMAIL_ENABLED
+    // is set" sends whoever triages it looking for a variable that is not there.
+    Sentry.captureMessage(`Email is configured to send but ${transportPrecheck.missing.join(", ")} is not set`, scope);
+    throw new Error(`Email is enabled but misconfigured: missing ${transportPrecheck.missing.join(", ")}`);
+  }
+  if (transportPrecheck.kind === "disabled" && transportPrecheck.reason === "no_smtp_host") {
+    // Nobody asked for email to be off, the config is simply absent. Leave the queue untouched —
+    // envFrom is one-shot, so a pod that started before its SMTP Secret synced reads "no host" for
+    // its entire life, and a restart is the fix. The original defect was that this path was SILENT;
+    // the fingerprinted message is what closes that, and it collapses months of polling into one
+    // issue.
+    scope.setTag("email_disabled_reason", transportPrecheck.reason);
+    console.warn("Email deferred: SMTP_HOST unset and EMAIL_ENABLED unset; queue left untouched");
+    Sentry.withScope((s) => {
+      s.setFingerprint(["email-disabled-no-smtp-host"]);
+      Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
+    });
+    return false;
+  }
+
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "notification_emails",
     sleep_seconds: 3600, // 1 hour
@@ -876,59 +927,24 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       });
     }
 
+    // The `misconfigured` and `no_smtp_host` verdicts were already handled before the read above,
+    // so only `explicitly_disabled` and `ready` can reach here.
     const transport = emailTransport();
 
-    if (transport.kind === "misconfigured") {
-      // Throw rather than return false. The loop's own catch counts consecutive errors, reports
-      // each to Sentry, and stops after the limit — that is the loud refusal. Returning false read
-      // as "no work found", which is why a completely unconfigured mailer looked exactly like an
-      // empty queue for months.
-      scope.setTag("email_config", "misconfigured");
-      scope.setContext("email_config", { missing: transport.missing });
-      // Names the variables, not EMAIL_ENABLED: `misconfigured` is also reachable with EMAIL_ENABLED
-      // unset (a host with no SMTP_FROM, or an unparseable SMTP_PORT), and asserting "EMAIL_ENABLED
-      // is set" sends whoever triages it looking for a variable that is not there.
-      Sentry.captureMessage(`Email is configured to send but ${transport.missing.join(", ")} is not set`, scope);
-      throw new Error(`Email is enabled but misconfigured: missing ${transport.missing.join(", ")}`);
-    }
-
-    if (transport.kind === "disabled" && transport.reason === "explicitly_disabled") {
+    if (transport.kind !== "ready") {
       // Archive ONLY on an explicit EMAIL_ENABLED=false. That is the documented meaning of the
       // switch ("false archives notifications without sending"), the operator chose it, and these
       // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
       // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
       // depth up without bound.
-      for (const n of notifications) {
-        await archiveMessage(adminSupabase, n.msg_id, scope);
-      }
-      scope.setTag("email_disabled_reason", transport.reason);
+      await Promise.all(notifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope)));
+      scope.setTag("email_disabled_reason", transport.kind === "disabled" ? transport.reason : transport.kind);
       console.log(`Email explicitly disabled; archived ${notifications.length} notification(s)`);
       // Work WAS done. Reporting false here is what made this indistinguishable from an idle queue.
       return true;
     }
 
-    if (transport.kind === "disabled") {
-      // reason === "no_smtp_host": nobody asked for email to be off, the config is simply absent.
-      // Do NOT archive. envFrom is one-shot, so a pod that started before its SMTP Secret synced
-      // reads "no host" for its entire life — archiving there would delete the whole accumulated
-      // backlog within one poll cycle, irrecoverably, for a fault that a restart fixes. Leave the
-      // messages to become visible again after VT and let a correctly configured pod send them.
-      //
-      // The original defect was that this path was SILENT, not that it deferred; the fingerprinted
-      // message below is the fix for that, and it collapses months of polling into one issue.
-      scope.setTag("email_disabled_reason", transport.reason);
-      console.warn(`Email deferred: SMTP_HOST unset and EMAIL_ENABLED unset; ${notifications.length} left queued`);
-      Sentry.withScope((s) => {
-        s.setFingerprint(["email-disabled-no-smtp-host"]);
-        Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
-      });
-      return false;
-    }
-
-    // Local Inbucket is the one target where internal test addresses SHOULD receive mail.
-    // ignoreTLS is set only for the Inbucket port, so it is the same signal the old
-    // `SMTP_PORT === "54325"` check used.
-    const isInbucketEmail = transport.ignoreTLS;
+    const isInbucketEmail = isInbucketTransport();
 
     const transporter = nodemailer.createTransport({
       pool: true,
@@ -1529,8 +1545,17 @@ Deno.serve((req) => {
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
   if (secret !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "Invalid secret" }), {
-      headers: { "Content-Type": "application/json" }
+    // 401, not a bare `new Response(...)`. Response defaults to 200, so a rejected poke read as a
+    // healthy worker: pg_cron's net.http_post logged success while no handler ever started and the
+    // email queue silently stopped draining. Same shape wrapRequestHandler's catch-all was just
+    // fixed for, and the same 401 + WWW-Authenticate the two async workers already return.
+    return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "WWW-Authenticate": 'Bearer realm="notification_queue_processor", error="invalid_token"'
+      }
     });
   }
 

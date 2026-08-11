@@ -107,12 +107,27 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const allChecksRaw = useRubricChecksByRubric(reviewAssignment?.rubric_id);
   const allChecksForRubric = useMemo(() => allChecksRaw ?? [], [allChecksRaw]);
 
-  const assignedRubricPartIds = reviewAssignmentRubricParts.map((part) => part.rubric_part_id);
+  // Memoized for the same reason as groupMemberProfileIds below: a bare `.map()` is a fresh array
+  // every render, so the rubricPartIdsInScope memo it feeds never memoized, and neither did the main
+  // memo that depends on it — which recomputed computeRubricGradingCompletion on every keystroke and
+  // every realtime tick in the review UI.
+  const assignedRubricPartIds = useMemo(
+    () => reviewAssignmentRubricParts.map((part) => part.rubric_part_id),
+    [reviewAssignmentRubricParts]
+  );
 
   const rubricPartIdsInScope = useMemo(() => {
     const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricPartsList.map((p) => p.id);
     return partIds;
   }, [assignedRubricPartIds, rubricPartsList]);
+
+  // SCOPED parts, not the whole rubric. Blocking on a per-student part the grader was never assigned
+  // makes a correctly-scoped review assignment unfinishable: computeRubricGradingCompletion below
+  // already narrows to rubricPartIdsInScope, so the block check has to agree with it.
+  const rubricPartsInScope = useMemo(
+    () => rubricPartsList.filter((p) => rubricPartIdsInScope.includes(p.id)),
+    [rubricPartsList, rubricPartIdsInScope]
+  );
 
   const { group: groupRow, loaded: groupLoaded } = useAssignmentGroupWithMembersLoadState({
     assignment_group_id: submission.assignment_group_id ?? undefined
@@ -134,7 +149,7 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   );
 
   const gradeTargetsBlocked = perStudentEvaluationBlocked({
-    rubricParts: rubricPartsList,
+    rubricParts: rubricPartsInScope,
     gradeTargets,
     gradeTargetsLoaded: groupLoaded
   });
@@ -143,13 +158,27 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
   return useMemo(() => {
-    if (!reviewAssignment || !activeSubmissionReview || !allChecksForRubric.length) {
+    // See the matching note in useMissingRubricChecksForActiveReview: a rubric with no checks is a
+    // steady state (the assignment-creation trigger inserts empty grading and self-review rubrics),
+    // so it must not be reported as "cannot evaluate" — callers turn that into a button that is
+    // disabled forever.
+    if (!reviewAssignment || !activeSubmissionReview) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
         gradeTargetsBlocked: true
+      };
+    }
+
+    if (!allChecksForRubric.length) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: false
       };
     }
 

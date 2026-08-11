@@ -120,6 +120,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const asyncLowPriorityQueueCount = queueSizes?.[0]?.async_low_priority_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
     const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
+    const gradebookRowRecalculateDlqCount = queueSizes?.[0]?.gradebook_row_recalculate_dlq_queue_size || 0;
     const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
     const discordDlqQueueCount = queueSizes?.[0]?.discord_dlq_queue_size || 0;
     const notificationEmailsQueueCount = queueSizes?.[0]?.notification_emails_queue_size || 0;
@@ -132,6 +133,10 @@ async function generatePrometheusMetrics(): Promise<Response> {
       {
         queue: "gradebook_row_recalculate",
         seconds: queueSizes?.[0]?.gradebook_row_recalculate_oldest_seconds || 0
+      },
+      {
+        queue: "gradebook_row_recalculate_dlq",
+        seconds: queueSizes?.[0]?.gradebook_row_recalculate_dlq_oldest_seconds || 0
       },
       { queue: "discord_async_calls", seconds: queueSizes?.[0]?.discord_oldest_seconds || 0 },
       { queue: "discord_async_calls_dlq", seconds: queueSizes?.[0]?.discord_dlq_oldest_seconds || 0 },
@@ -171,6 +176,10 @@ pawtograder_async_dlq_size ${dlqQueueCount} ${timestamp}
 # HELP pawtograder_gradebook_row_recalculate_queue_size Current number of messages in the gradebook row recalculate queue
 # TYPE pawtograder_gradebook_row_recalculate_queue_size gauge
 pawtograder_gradebook_row_recalculate_queue_size ${gradebookRowRecalculateQueueCount} ${timestamp}
+
+# HELP pawtograder_gradebook_row_recalculate_dlq_size Current number of messages in the gradebook row recalculate dead letter queue
+# TYPE pawtograder_gradebook_row_recalculate_dlq_size gauge
+pawtograder_gradebook_row_recalculate_dlq_size ${gradebookRowRecalculateDlqCount} ${timestamp}
 
 # HELP pawtograder_discord_queue_size Current number of messages in the discord async worker queue
 # TYPE pawtograder_discord_queue_size gauge

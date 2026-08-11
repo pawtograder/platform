@@ -1068,21 +1068,15 @@ edgeFunctions:
     enabled: false
     mockGitHub: false
   # Names of additional Secrets to envFrom into the edge-runtime pod. Use for
-  # integration credentials managed by ESO in your overlay. See
-  # requireEnvFromSecrets for whether a missing one blocks startup.
+  # integration credentials managed by ESO in your overlay. Each is mounted
+  # optional: true — a Secret that is missing at pod start is skipped rather
+  # than blocking startup, because envFrom is one-shot and all-or-nothing: one
+  # absent Secret would otherwise put the whole edge tier in
+  # CreateContainerConfigError with no self-heal. A pod that boots before a
+  # Secret has synced therefore runs without those variables until it is
+  # rolled, so keep edgeFunctions.reloader enabled and rely on the consuming
+  # function to report missing config loudly (see edgeFunctions.email.enabled).
   envFromSecrets: []
-  # When true, the Secrets named in envFromSecrets mount with optional: false, so a pod refuses to
-  # start rather than booting without required config.
-  #
-  # envFrom is one-shot. A pod that starts before its Secret has synced runs WITHOUT those
-  # variables for its whole life and never re-reads them — which is exactly how notification email
-  # silently never worked in production: the SMTP Secret was simply not mounted, and the processor
-  # read that as "no work to do".
-  #
-  # Left false by default because on a fresh install ESO can lag the Deployment, and optional:false
-  # there means CreateContainerConfigError across the entire edge tier with no self-heal. Set true
-  # in environments where every listed Secret is provisioned ahead of the release.
-  requireEnvFromSecrets: false
   email:
     # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
     # supabase/functions/_shared/emailTransportConfig.ts.
@@ -1529,6 +1523,11 @@ monitoring:
     # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
     # permanently and get silenced.
     discordDlqGrowthPerHour: 20
+    # Growth in the gradebook row-recalculate DLQ over an hour above which
+    # PawtograderGradebookRecalcDLQGrowing fires. Much lower than the other DLQ thresholds: a message
+    # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
+    # stored score is stale with nothing left to recompute it.
+    gradebookRecalcDlqGrowthPerHour: 5
     # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.

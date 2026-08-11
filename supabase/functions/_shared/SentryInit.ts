@@ -25,10 +25,14 @@ let initialized = false;
  */
 export function initSentry(): void {
   if (initialized) return;
-  initialized = true;
 
   const dsn = Deno.env.get("SENTRY_DSN");
+  // Latch AFTER the DSN check, not before. Setting `initialized` first meant that an import-time
+  // call made with SENTRY_DSN absent — local dev, a test harness, any host that populates env after
+  // the module graph is evaluated — permanently installed no client and made every later
+  // initSentry() a no-op, which is exactly the silent-Sentry defect this module exists to fix.
   if (!dsn) return;
+  initialized = true;
 
   Sentry.init({
     beforeSend: normalizeEventFingerprint,

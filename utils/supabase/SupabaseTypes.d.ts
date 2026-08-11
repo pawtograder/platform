@@ -12789,6 +12789,8 @@ export type Database = {
           discord_queue_size: number;
           dlq_oldest_seconds: number;
           dlq_queue_size: number;
+          gradebook_row_recalculate_dlq_oldest_seconds: number;
+          gradebook_row_recalculate_dlq_queue_size: number;
           gradebook_row_recalculate_oldest_seconds: number;
           gradebook_row_recalculate_queue_size: number;
           notification_emails_oldest_seconds: number;

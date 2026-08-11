@@ -917,9 +917,10 @@ export default function AssignmentsTable({
       await tableController?.refetchAll();
       resetRowSelection();
 
-      // Report what the RPC actually changed. It filters on `s.is_active` and on the review not
-      // already being released, so selecting 40 can legitimately release 12 — and the old toast
-      // claimed all 40 regardless.
+      // Report what the RPC actually changed. It touches only each submission's grading review
+      // (never the self-review or meta-grading rounds) and filters on `s.is_active` and on the
+      // review not already being released, so selecting 40 can legitimately release 12 — and the
+      // old toast claimed all 40 regardless.
       const affected = typeof data === "number" ? data : 0;
       const message = describeBulkReleaseResult({ affected, selectedCount, action: "released" });
       toaster[message.status]({ title: message.title, description: message.description });
@@ -1008,7 +1009,7 @@ export default function AssignmentsTable({
                 }}
               >
                 {selectedCount === 0
-                  ? "Release selected submission reviews"
+                  ? "Release selected grading reviews"
                   : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
               <Button
@@ -1030,7 +1031,8 @@ export default function AssignmentsTable({
 
                     await tableController?.refetchAll();
                     resetRowSelection();
-                    // Same as the release path: report the RPC's ROW_COUNT, not the selection size.
+                    // Same as the release path: grading review only, and report the RPC's
+                    // ROW_COUNT rather than the selection size.
                     const affected = typeof data === "number" ? data : 0;
                     const message = describeBulkReleaseResult({
                       affected,
@@ -1052,7 +1054,7 @@ export default function AssignmentsTable({
                 }}
               >
                 {selectedCount === 0
-                  ? "Unrelease selected submission reviews"
+                  ? "Unrelease selected grading reviews"
                   : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
             </HStack>
@@ -1067,7 +1069,7 @@ export default function AssignmentsTable({
             </DialogHeader>
             <DialogBody>
               <Text>
-                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
+                {selectedIncompleteCount} selected grading review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
                 {selectedIncompleteCount === 1 ? "is" : "are"} incomplete. Releasing now will publish those grades
                 anyway.
               </Text>

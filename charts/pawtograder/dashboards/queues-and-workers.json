@@ -47,7 +47,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(max(pawtograder_async_queue_size) or vector(0)) + (max(pawtograder_async_low_priority_queue_size) or vector(0)) + (max(pawtograder_async_dlq_size) or vector(0)) + (max(pawtograder_gradebook_row_recalculate_queue_size) or vector(0)) + (max(pawtograder_discord_queue_size) or vector(0)) + (max(pawtograder_discord_dlq_size) or vector(0)) + (max(pawtograder_notification_emails_queue_size) or vector(0))",
+          "expr": "(max(pawtograder_async_queue_size) or vector(0)) + (max(pawtograder_async_low_priority_queue_size) or vector(0)) + (max(pawtograder_async_dlq_size) or vector(0)) + (max(pawtograder_gradebook_row_recalculate_queue_size) or vector(0)) + (max(pawtograder_gradebook_row_recalculate_dlq_size) or vector(0)) + (max(pawtograder_discord_queue_size) or vector(0)) + (max(pawtograder_discord_dlq_size) or vector(0)) + (max(pawtograder_notification_emails_queue_size) or vector(0))",
           "legendFormat": "queued"
         }
       ]
@@ -55,8 +55,8 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Oldest message (any queue)",
-      "description": "The scale-free health signal: depth needs a threshold tuned to enrollment and the deadline calendar, age does not.",
+      "title": "Oldest message (live queues)",
+      "description": "The scale-free health signal: depth needs a threshold tuned to enrollment and the deadline calendar, age does not. Excludes the DLQs (a poison message parks there forever, so its age would pin this stat) and async_calls_low_priority (drained only when async_calls is empty, so it is starved by design) - the same exclusions PawtograderQueueOldestMessageAging uses.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -70,7 +70,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(pawtograder_queue_oldest_message_seconds)",
+          "expr": "max(pawtograder_queue_oldest_message_seconds{queue!~\".*_dlq|async_calls_low_priority\"})",
           "legendFormat": "oldest"
         }
       ],
@@ -98,7 +98,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(max(pawtograder_async_dlq_size) or vector(0)) + (max(pawtograder_discord_dlq_size) or vector(0))",
+          "expr": "(max(pawtograder_async_dlq_size) or vector(0)) + (max(pawtograder_discord_dlq_size) or vector(0)) + (max(pawtograder_gradebook_row_recalculate_dlq_size) or vector(0))",
           "legendFormat": "dlq"
         }
       ]
@@ -164,16 +164,21 @@
         },
         {
           "refId": "E",
+          "expr": "max(pawtograder_gradebook_row_recalculate_dlq_size)",
+          "legendFormat": "Gradebook row recalc DLQ"
+        },
+        {
+          "refId": "F",
           "expr": "max(pawtograder_discord_queue_size)",
           "legendFormat": "Discord async worker"
         },
         {
-          "refId": "F",
+          "refId": "G",
           "expr": "max(pawtograder_discord_dlq_size)",
           "legendFormat": "Discord async DLQ"
         },
         {
-          "refId": "G",
+          "refId": "H",
           "expr": "max(pawtograder_notification_emails_queue_size)",
           "legendFormat": "Notification email"
         }
@@ -183,7 +188,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Oldest message age",
-      "description": "A healthy busy queue has high depth and LOW age. A stalled queue has rising age regardless of depth. Includes messages deferred by retry backoff, which is exactly where a poison message hides.",
+      "description": "A healthy busy queue has high depth and LOW age. A stalled queue has rising age regardless of depth. Includes messages deferred by retry backoff, which is exactly where a poison message hides. DLQs are excluded: nothing drains one on a schedule, so their age dwarfs the live queues on a shared axis - see 'Dead-letter growth (1h)' for those.",
       "gridPos": {
         "h": 9,
         "w": 12,
@@ -197,7 +202,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (queue) (pawtograder_queue_oldest_message_seconds)",
+          "expr": "max by (queue) (pawtograder_queue_oldest_message_seconds{queue!~\".*_dlq\"})",
           "legendFormat": "{{queue}}"
         }
       ],
@@ -232,6 +237,11 @@
           "refId": "B",
           "expr": "delta(max(pawtograder_discord_dlq_size)[1h:5m])",
           "legendFormat": "Discord async DLQ"
+        },
+        {
+          "refId": "C",
+          "expr": "delta(max(pawtograder_gradebook_row_recalculate_dlq_size)[1h:5m])",
+          "legendFormat": "Gradebook row recalc DLQ"
         }
       ]
     },
@@ -273,16 +283,21 @@
         },
         {
           "refId": "E",
+          "expr": "-1 * min(deriv(pawtograder_gradebook_row_recalculate_dlq_size[10m]))",
+          "legendFormat": "Gradebook row recalc DLQ"
+        },
+        {
+          "refId": "F",
           "expr": "-1 * min(deriv(pawtograder_discord_queue_size[10m]))",
           "legendFormat": "Discord async worker"
         },
         {
-          "refId": "F",
+          "refId": "G",
           "expr": "-1 * min(deriv(pawtograder_discord_dlq_size[10m]))",
           "legendFormat": "Discord async DLQ"
         },
         {
-          "refId": "G",
+          "refId": "H",
           "expr": "-1 * min(deriv(pawtograder_notification_emails_queue_size[10m]))",
           "legendFormat": "Notification email"
         }

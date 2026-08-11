@@ -18,6 +18,7 @@ import {
 import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
 import {
   describeSettledSummary,
+  emptySettledSummary,
   mergeSettledSummaries,
   summarizeSettled,
   type SettledSummary
@@ -233,7 +234,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   // in `|| echo`, so a non-zero exit never fails CI.
   if (assignment.repo_mode === "none" || assignment.repo_mode === "no_submission") {
     console.log(`Assignment has repo_mode=${assignment.repo_mode}; skipping per-student repo creation`);
-    return { attempted: 0, succeeded: 0, failed: 0, reasons: [], truncatedReasons: 0 } satisfies SettledSummary;
+    return emptySettledSummary();
   }
 
   const branchProtection: BranchProtectionConfig = {
@@ -329,7 +330,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   // Summarized, not discarded: this is the same bare `allSettled` shape that settledSummary.ts was
   // written for, and a run where GitHub 5xx'd on every pre-existing repo reported exactly the same
   // success as a clean one.
-  let ensuredSummary: SettledSummary = { attempted: 0, succeeded: 0, failed: 0, reasons: [], truncatedReasons: 0 };
+  let ensuredSummary: SettledSummary = emptySettledSummary();
   if (existingRepos && existingRepos.length > 0) {
     console.log(`Checking ${existingRepos.length} existing repositories in GitHub...`);
     ensuredSummary = summarizeSettled(
@@ -473,7 +474,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     ),
     { label: "create" }
   );
-  let syncedSummary: SettledSummary = { attempted: 0, succeeded: 0, failed: 0, reasons: [], truncatedReasons: 0 };
+  let syncedSummary: SettledSummary = emptySettledSummary();
   if (existingRepos) {
     syncedSummary = summarizeSettled(
       await Promise.allSettled(
@@ -510,7 +511,23 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
               return;
             }
 
-            await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+            const { removalsSkipped } = await github.syncRepoPermissions(
+              org,
+              repoName,
+              assignment.classes!.slug!,
+              uniqueUsernames,
+              scope
+            );
+            // A sync that could not read the staff roster skipped every removal, so it did only half
+            // the job. Leaving is_github_ready = false (with creation_error still NULL) is what keeps
+            // the row inside reconcile_stuck_repo_creations' 15-minute sweep; writing `true` here
+            // would make a half-done sync indistinguishable from a complete one and let a dropped
+            // student keep push access with nothing scheduled to fix it.
+            if (removalsSkipped) {
+              throw new Error(
+                `Staff roster unavailable while syncing ${repo.repository}; collaborator removals were skipped`
+              );
+            }
             await adminSupabase
               .from("repositories")
               .update({
@@ -601,15 +618,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // This path waits for the work, so the caller is entitled to the real answer. Reporting
     // "All repositories created successfully" while N students have no repo is the failure this
     // fixes: the instructor moves on, and nobody looks again until someone cannot submit.
+    //
+    // Phrased in OPERATIONS, never "N of M repositories". The merged summary covers three passes
+    // (ensure, create, sync) and two of them iterate the same existingRepos, so `attempted` exceeds
+    // the number of repositories -- 20 existing + 5 new is 45 attempts over 25 repos. Calling that a
+    // repository count is the same lie describeBulkReleaseResult was written to stop telling.
     if (summary.failed > 0) {
       throw new UserVisibleError(
-        `Created ${summary.succeeded} of ${summary.attempted} repositories. ${describeSettledSummary(summary)}`
+        `${summary.failed} of ${summary.attempted} repository operations failed ` +
+          `(${summary.succeeded} succeeded; some repositories may have been created). ` +
+          describeSettledSummary(summary)
       );
     }
 
     return new Response(
       JSON.stringify({
-        message: `All ${summary.succeeded} repositories created successfully`,
+        message: `All repository operations succeeded (${summary.succeeded}/${summary.attempted})`,
         courseId,
         assignmentId,
         attempted: summary.attempted,

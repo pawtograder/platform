@@ -2312,7 +2312,14 @@ async function handlePushToGraderSolution(
           scope
         });
         if (!seedResult.seeded) {
-          console.log(
+          // Holds the pointer too. seedHandoutFileHashes swallows its own errors and returns
+          // { seeded: false }, so this never reached the catch below — and the config write that
+          // INVALIDATED these hashes had already succeeded. Advancing latest_autograder_sha there
+          // announces "this config is live" over hashes still built from the OLD submissionFiles
+          // globs, which is the comparison-between-two-file-sets the comment above describes.
+          configReconcileOk = false;
+          scope?.setTag("handout_file_hash_reseed_failed", "true");
+          console.error(
             `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
           );
         }

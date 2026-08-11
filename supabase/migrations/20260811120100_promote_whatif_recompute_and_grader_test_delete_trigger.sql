@@ -235,6 +235,10 @@ $$;
 COMMENT ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests_delete() IS
   'Statement-level AFTER DELETE trigger on grader_result_tests: recompute affected grading reviews so removing autograder tests lowers the stored score. Skips the one shape that is a reset rather than a deletion -- a surviving grader_results row whose tests are now all gone -- because the AFTER INSERT trigger already covers the replacement and recomputing there commits a transient zero on the resubmit path. Also skips statements touching more than 10 distinct submissions, which are bulk teardowns that delete the reviews themselves.';
 
+-- Parity with the sibling trigger function (20260322130000): a SECURITY DEFINER function should not
+-- be executable by PUBLIC.
+REVOKE ALL ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests_delete() FROM PUBLIC;
+
 DROP TRIGGER IF EXISTS grader_result_tests_recalculate_submission_review_delete ON public.grader_result_tests;
 
 CREATE TRIGGER grader_result_tests_recalculate_submission_review_delete

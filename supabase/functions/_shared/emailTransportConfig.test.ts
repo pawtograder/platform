@@ -25,6 +25,18 @@ Deno.test("EMAIL_ENABLED accepts the usual spellings of false", () => {
   }
 });
 
+Deno.test("an unrecognized EMAIL_ENABLED is misconfigured, NOT a silent fall back to inference", () => {
+  // The trap: folding "disabled"/"none"/a typo into `undefined` sent it down the "unset infers from
+  // SMTP_HOST" row, and SMTP_HOST is supplied by the mounted Secret — so a deployment the operator
+  // believed they had switched off would start mailing students.
+  for (const raw of ["disabled", "none", "ture", "y", "enabled"]) {
+    assertEquals(resolveEmailTransport(env({ ...FULL, EMAIL_ENABLED: raw })), {
+      kind: "misconfigured",
+      missing: ["EMAIL_ENABLED"]
+    });
+  }
+});
+
 Deno.test("EMAIL_ENABLED=true with SMTP_HOST is ready", () => {
   assertEquals(resolveEmailTransport(env({ ...FULL, EMAIL_ENABLED: "true" })).kind, "ready");
 });
@@ -97,6 +109,17 @@ Deno.test("an unparseable SMTP_PORT is misconfigured rather than a NaN port", ()
     kind: "misconfigured",
     missing: ["SMTP_PORT"]
   });
+});
+
+Deno.test("a SMTP_PORT with trailing garbage is misconfigured, not silently truncated", () => {
+  // parseInt("587 (submission)") is 587 and parseInt("46 5") is 46, so a leading-digit guard alone
+  // lets a malformed Secret through as a plausible-looking port.
+  for (const raw of ["587 (submission)", "46 5", "465x", "4.65", "-465", "0x1d5"]) {
+    assertEquals(resolveEmailTransport(env({ ...FULL, SMTP_PORT: raw })), {
+      kind: "misconfigured",
+      missing: ["SMTP_PORT"]
+    });
+  }
 });
 
 Deno.test("whitespace around a value does not change the transport", () => {

@@ -363,13 +363,29 @@ export function useMissingRubricChecksForActiveReview() {
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
   return useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks?.length) {
+    // `gradeTargetsBlocked` means "completeness cannot be evaluated", and callers turn it into a
+    // permanently disabled button. It must therefore NOT be set for a rubric that simply has no
+    // checks: the assignment-creation trigger inserts an empty 'Grading Rubric' and an empty
+    // 'Self-Review Rubric' (20250721175659_regrading-reviews.sql), so `rubricChecks.length === 0` is
+    // the steady state for those, not a loading state. Reporting it as blocked left the grader
+    // staring at a spinner that never resolved, on a review with genuinely nothing missing.
+    if (!activeSubmissionReview) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
         missing_optional_criteria: [],
         gradeTargetsBlocked: true
+      };
+    }
+
+    if (!rubricChecks?.length) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: false
       };
     }
 

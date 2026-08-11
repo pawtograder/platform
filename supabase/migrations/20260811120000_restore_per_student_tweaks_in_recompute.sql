@@ -47,6 +47,7 @@ DECLARE
   v_per_student_tweaks jsonb;
   v_extra numeric;
   v_sum_per_student_tweaks numeric;
+  v_tweak_value numeric;
   r_tweak record;
 BEGIN
   IF p_submission_review_id IS NULL THEN
@@ -127,13 +128,26 @@ BEGIN
   -- targets, whereas per_student_grading_totals below only covers
   -- _grade_targets_for_submission. That asymmetry is the pre-existing behavior from
   -- 20260329120001; changing it is a grading change, not a restore.
+  --
+  -- NaN and out-of-range are handled explicitly, because neither is an
+  -- invalid_text_representation. `'NaN'::numeric` is a VALID cast, and Postgres orders NaN above
+  -- every other numeric -- so a single "NaN" entry made calculated_score NaN, and
+  -- `least(NaN, assignment_total_points)` then returned the assignment total, silently awarding full
+  -- marks under cap_score_to_assignment_points. `'1e999999'::numeric` raises 22003
+  -- numeric_value_out_of_range, which an invalid_text_representation-only handler does not catch, so
+  -- it escaped the trigger and aborted the caller's whole grading transaction -- the opposite of
+  -- "skipped rather than aborting the recompute".
   v_sum_per_student_tweaks := 0;
   IF v_per_student_tweaks IS NOT NULL AND jsonb_typeof(v_per_student_tweaks) = 'object' THEN
     FOR r_tweak IN SELECT value FROM jsonb_each(v_per_student_tweaks) AS e(k, value)
     LOOP
       BEGIN
-        v_sum_per_student_tweaks := v_sum_per_student_tweaks + coalesce((r_tweak.value #>> '{}')::numeric, 0);
-      EXCEPTION WHEN invalid_text_representation THEN
+        v_tweak_value := coalesce((r_tweak.value #>> '{}')::numeric, 0);
+        IF v_tweak_value = 'NaN'::numeric THEN
+          v_tweak_value := 0;
+        END IF;
+        v_sum_per_student_tweaks := v_sum_per_student_tweaks + v_tweak_value;
+      EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
         NULL;
       END;
     END LOOP;
@@ -299,7 +313,11 @@ BEGIN
         IF v_per_student_tweaks IS NOT NULL AND jsonb_typeof(v_per_student_tweaks) = 'object' THEN
           BEGIN
             v_extra := coalesce((nullif(trim(v_per_student_tweaks ->> v_student::text), ''))::numeric, 0);
-          EXCEPTION WHEN invalid_text_representation THEN
+            -- Same NaN / out-of-range reasoning as the sum above.
+            IF v_extra = 'NaN'::numeric THEN
+              v_extra := 0;
+            END IF;
+          EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
             v_extra := 0;
           END;
         END IF;

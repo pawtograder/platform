@@ -255,16 +255,27 @@ spec:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
                 optional: true
             {{- if $ctx.Values.edgeFunctions.envFromSecrets }}
-            # `optional` below is inverted from requireEnvFromSecrets. envFrom is one-shot: a pod
-            # that starts before its Secret has synced runs WITHOUT those variables for its entire
-            # life, with nothing to re-read them later. That is how notification email went dark
-            # and stayed dark. Where every listed Secret is provisioned ahead of the release,
-            # prefer a pod that refuses to start over one that silently runs half-configured.
+            # These are always optional: true, deliberately and permanently. envFrom is one-shot
+            # and all-or-nothing: if any named Secret is absent when the pod starts, the kubelet
+            # fails the container with CreateContainerConfigError and never retries the lookup on
+            # its own, so the ENTIRE edge tier — grading included — stays down until an operator
+            # notices. A list like this one inevitably names Secrets that are not guaranteed to
+            # exist in every environment (per-tier integrations, an ESO sync that lags a fresh
+            # install), and one absent Secret must not take the tier offline.
+            #
+            # The trade-off is real: a pod that boots before a Secret has synced runs WITHOUT
+            # those variables for its whole life, with nothing to re-read them later. That is how
+            # notification email went dark and stayed dark. Detect that case instead of trying to
+            # prevent it here — edgeFunctions.email.enabled makes missing SMTP config a loud
+            # runtime failure, and Reloader (edgeFunctions.reloader) rolls the Deployment when a
+            # referenced Secret changes. Secrets that genuinely must gate startup get their own
+            # explicit `optional: false` secretRef (see pawtograder-redis below), not a
+            # chart-wide switch over a list of unrelated names.
             {{- end }}
             {{- range $ctx.Values.edgeFunctions.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
-                optional: {{ not $ctx.Values.edgeFunctions.requireEnvFromSecrets }}
+                optional: true
             {{- end }}
             {{- if ne ($ctx.Values.redis.provider | default "external") "external" }}
             # In-cluster Redis URL (REDIS_URL): for provider=shared it's synced

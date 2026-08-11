@@ -492,7 +492,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       ...(checkRun.status as CheckRunStatus),
       completed_at: new Date().toISOString()
     };
-    await adminSupabase.from("repository_check_runs").update({ status: newStatus }).eq("id", checkRun.id);
+    const { error: checkRunError } = await adminSupabase
+      .from("repository_check_runs")
+      .update({ status: newStatus })
+      .eq("id", checkRun.id);
+    // Reported, not discarded: a dropped update leaves completed_at null and the GitHub check
+    // spinning for the rest of the run's life, which is precisely the state this helper exists to
+    // avoid. Not fatal -- the feedback itself is already written -- so report and carry on.
+    if (checkRunError) {
+      scope?.setTag("check_run_completion_failed", "true");
+      console.error(`Failed to mark check run ${checkRun.id} complete`, checkRunError);
+      Sentry.captureException(checkRunError, scope);
+    }
   }
   let repository_id: number | null = null;
   if (autograder_regression_test_id) {
@@ -731,7 +742,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               `test results. Your previous results for this submission were kept. Ask your instructor to ` +
               `check the autograder if this keeps happening.`
           };
-          await adminSupabase.from("grader_results").update({ errors: preservedErrors }).eq("id", existingResult.id);
+          // Checked, and throwing. This message is the ONLY thing that tells the student their run
+          // was discarded rather than lost; dropping the write silently is the exact fail-open shape
+          // this guard exists to close, and every other DB write in this handler throws on error.
+          const { error: preservedErrorsError } = await adminSupabase
+            .from("grader_results")
+            .update({ errors: preservedErrors })
+            .eq("id", existingResult.id);
+          if (preservedErrorsError) {
+            throw new UserVisibleError(
+              `Internal error: failed to record that an empty grading run was discarded: ${preservedErrorsError.message}`
+            );
+          }
 
           await recordWorkflowRunError({
             name: "Autograder run produced no results; previous feedback preserved",

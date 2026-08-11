@@ -5,7 +5,15 @@ import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
-import { selectVersionMismatchedRows, type GradebookRowBatchResult } from "../_shared/gradebookVersionMismatch.ts";
+import {
+  groupVersionScopedClears,
+  MAX_VERSION_MISMATCH_ATTEMPTS,
+  partitionVersionMismatchRetries,
+  selectVersionMismatchedRows,
+  versionMismatchBackoffSeconds,
+  versionMismatchRowKey,
+  type GradebookRowBatchResult
+} from "../_shared/gradebookVersionMismatch.ts";
 
 // Declare EdgeRuntime for type safety
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -41,75 +49,216 @@ type RowMessage = {
   gradebook_id: number;
   student_id: string;
   is_private: boolean;
+  /**
+   * How many times this row has already been re-enqueued by version-mismatch recovery.
+   *
+   * It has to live in the payload. `update_gradebook_rows_batch` archives every message id it is
+   * handed, unconditionally, so the recovery re-enqueue is a brand-new pgmq message whose `read_ct`
+   * starts at 0 — pgmq's own read counter can never bound this loop. Absent on messages enqueued by
+   * `enqueue_gradebook_row_recalculation`, which is the same as 0.
+   */
+  version_mismatch_attempt?: number;
 };
 
 const SCOPED_FETCH_THRESHOLD = 50;
 const MAX_BATCH_UPDATE_SIZE = 75; // Maximum number of students to update per RPC call
+const RECALC_QUEUE = "gradebook_row_recalculate";
+const RECALC_DLQ = "gradebook_row_recalculate_dlq";
 const workerId = crypto.randomUUID();
 
 // Helper to create unique row key for gradebook_row_recalc_state
 /**
- * Clear `is_recalculating` for rows that lost the optimistic-version race and re-enqueue them.
+ * Re-enqueue rows that lost the optimistic-version race, then release their `is_recalculating` claim.
  *
  * Shared by the bulk and scoped paths. It previously existed only in the scoped path, so a bulk
- * version conflict left the row flagged as recalculating with nothing scheduled to pick it up —
- * and because that flag gates new enqueues, the row never recalculated again.
+ * version conflict left the row flagged as recalculating with nothing scheduled to pick it up: the
+ * RPC had already archived every message for that row, so the row sat dirty and claimed with no
+ * message and no error anywhere.
+ *
+ * Three things have to be true for this to be safe, and none of them were:
+ *   - the clear must be scoped to the version the RPC observed, or it releases a claim a different
+ *     worker took in the meantime;
+ *   - the re-enqueue must be bounded, because the RPC archives the old message and `send_batch`
+ *     mints a new one with `read_ct` at 0, so pgmq's own retry limit does not apply;
+ *   - the hand-off must succeed before the claim is released, because (dirty, !is_recalculating) is
+ *     the one state `enqueue_gradebook_row_recalculation` will not enqueue for.
  */
 async function recoverVersionMismatchedRows({
   adminSupabase,
   classId,
   gradebook_id,
   results,
+  attemptByRow,
   workerId,
-  label
+  label,
+  scope
 }: {
   adminSupabase: SupabaseClient<Database>;
   classId: number;
   gradebook_id: number;
   results: GradebookRowBatchResult[];
+  /** Recovery attempts already recorded on the incoming message, keyed by versionMismatchRowKey. */
+  attemptByRow: Map<string, number>;
   workerId: string;
   label: string;
+  scope: Sentry.Scope;
 }): Promise<number> {
   const mismatchedRows = selectVersionMismatchedRows(results);
   if (mismatchedRows.length === 0) {
     return 0;
   }
 
-  console.log(
-    `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): Clearing is_recalculating for ${mismatchedRows.length} mismatched rows and re-enqueueing`
+  const { retries, dead } = partitionVersionMismatchRetries(mismatchedRows, (row) =>
+    Math.max(0, attemptByRow.get(versionMismatchRowKey(row.student_id, row.is_private)) ?? 0)
   );
 
-  // Clear is_recalculating but keep dirty=true
-  for (const row of mismatchedRows) {
-    const { error: clearError } = await adminSupabase
+  console.log(
+    `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): ${mismatchedRows.length} mismatched rows -> ${retries.reduce((n, r) => n + r.rows.length, 0)} retried, ${dead.length} dead-lettered`
+  );
+
+  // Hand the row off FIRST, clear the claim second.
+  //
+  // The order is the whole safety argument. `enqueue_gradebook_row_recalculation` refuses to enqueue
+  // for a row that is (dirty = true, is_recalculating = false) -- that is its "already queued, skip"
+  // branch. So clearing before a successful hand-off, and then failing the hand-off, produces the
+  // one state in which no future grade change will ever enqueue this row again: permanently stale,
+  // permanently silent. Clearing only after the message is durable means the worst case is a claim
+  // held slightly too long, which recovers on its own.
+  const handedOff: GradebookRowBatchResult[] = [];
+
+  for (const { attempt, rows } of retries) {
+    const delaySeconds = versionMismatchBackoffSeconds(attempt);
+    const { error: enqueueError } = await adminSupabase.schema("pgmq_public").rpc("send_batch", {
+      queue_name: RECALC_QUEUE,
+      messages: rows.map((row) => ({
+        class_id: classId,
+        gradebook_id,
+        student_id: row.student_id,
+        is_private: row.is_private,
+        version_mismatch_attempt: attempt
+      })),
+      sleep_seconds: delaySeconds
+    });
+    if (enqueueError) {
+      console.error(
+        `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to re-enqueue ${rows.length} rows on attempt ${attempt}; leaving is_recalculating set so future changes still enqueue`,
+        enqueueError
+      );
+      Sentry.captureException(enqueueError, scope);
+      continue;
+    }
+    console.log(
+      `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): re-enqueued ${rows.length} rows, attempt ${attempt}/${MAX_VERSION_MISMATCH_ATTEMPTS}, visible in ${delaySeconds}s`
+    );
+    handedOff.push(...rows);
+  }
+
+  if (dead.length > 0) {
+    // Past the ceiling. Route to the DLQ, matching github-async-worker/discord-async-worker: a
+    // sibling pgmq queue plus a Sentry event tagged dlq, so the row is a durable inspectable message
+    // and a paging-visible signal rather than a silent drop.
+    const { error: dlqError } = await adminSupabase.schema("pgmq_public").rpc("send_batch", {
+      queue_name: RECALC_DLQ,
+      messages: dead.map(({ row, attempt }) => ({
+        class_id: classId,
+        gradebook_id,
+        student_id: row.student_id,
+        is_private: row.is_private,
+        version_mismatch_attempt: attempt,
+        expected_version: row.expected_version ?? null,
+        current_version: row.current_version ?? null,
+        reason: "version_mismatch_retry_ceiling",
+        worker_id: workerId,
+        failed_at: new Date().toISOString()
+      })),
+      sleep_seconds: 0
+    });
+
+    const dlqScope = scope.clone();
+    dlqScope.setTag("dlq", "true");
+    dlqScope.setTag("queue", RECALC_DLQ);
+    dlqScope.setContext("dead_letter_queue", {
+      queue: RECALC_DLQ,
+      reason: "version_mismatch_retry_ceiling",
+      max_attempts: MAX_VERSION_MISMATCH_ATTEMPTS,
+      class_id: classId,
+      gradebook_id,
+      row_count: dead.length,
+      rows: dead.slice(0, 20).map(({ row, attempt }) => ({
+        student_id: row.student_id,
+        is_private: row.is_private,
+        attempt,
+        expected_version: row.expected_version ?? null,
+        current_version: row.current_version ?? null
+      })),
+      dlq_send_failed: Boolean(dlqError)
+    });
+
+    if (dlqError) {
+      console.error(
+        `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to dead-letter ${dead.length} rows`,
+        dlqError
+      );
+      Sentry.captureException(dlqError, dlqScope);
+    } else {
+      console.error(
+        `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): dead-lettered ${dead.length} rows after ${MAX_VERSION_MISMATCH_ATTEMPTS} attempts`
+      );
+      Sentry.captureMessage(
+        `Gradebook rows exceeded version-mismatch retry ceiling (${MAX_VERSION_MISMATCH_ATTEMPTS}); sent to ${RECALC_DLQ}`,
+        dlqScope
+      );
+    }
+
+    // Deliberately NOT added to handedOff, so their is_recalculating claim stays put. Releasing it
+    // while dirty stays true is the one combination enqueue_gradebook_row_recalculation skips, which
+    // would freeze the row for good; keeping the claim means the next real grade change still
+    // enqueues a message and the row can recover, while the DLQ entry records that we gave up.
+  }
+
+  if (handedOff.length === 0) {
+    return mismatchedRows.length;
+  }
+
+  // Clear is_recalculating, keeping dirty = true, scoped to the version the RPC actually observed.
+  //
+  // The version predicate is the point. Filtering on the primary key alone released whatever claim
+  // the row held at that instant -- including one another worker took in the window between the RPC
+  // returning and this statement landing -- and then two workers recalculated the same row with
+  // neither holding a claim. `current_version` comes back from the RPC precisely so this predicate
+  // can exist; when it no longer matches, the update touches nothing and the new claimant is left
+  // alone.
+  const { clears, withoutVersion } = groupVersionScopedClears(handedOff);
+  if (withoutVersion.length > 0) {
+    console.warn(
+      `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): ${withoutVersion.length} rows had no recalc-state version; nothing to clear`
+    );
+  }
+
+  for (const { is_private, version, student_ids } of clears) {
+    const { data: clearedRows, error: clearError } = await adminSupabase
       .from("gradebook_row_recalc_state")
       .update({ is_recalculating: false })
       .eq("class_id", classId)
       .eq("gradebook_id", gradebook_id)
-      .eq("student_id", row.student_id)
-      .eq("is_private", row.is_private);
+      .eq("is_private", is_private)
+      .eq("version", version)
+      .in("student_id", student_ids)
+      .select("student_id");
     // Checked, unlike the original: leaving the flag set is the exact stuck state this recovers.
     if (clearError) {
       console.error(`[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to clear state`, clearError);
-      Sentry.captureException(clearError);
+      Sentry.captureException(clearError, scope);
+      continue;
     }
-  }
-
-  // Re-enqueue via the queue so the worker re-processes with fresh data
-  const { error: enqueueError } = await adminSupabase.schema("pgmq_public").rpc("send_batch", {
-    queue_name: "gradebook_row_recalculate",
-    messages: mismatchedRows.map((row) => ({
-      class_id: classId,
-      gradebook_id,
-      student_id: row.student_id,
-      is_private: row.is_private
-    }))
-  });
-  // A dropped re-enqueue after the flag was already cleared leaves the row dirty but unqueued,
-  // which is silent until someone notices a stale grade.
-  if (enqueueError) {
-    console.error(`[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to re-enqueue`, enqueueError);
-    Sentry.captureException(enqueueError);
+    const clearedCount = clearedRows?.length ?? 0;
+    if (clearedCount < student_ids.length) {
+      // Expected under contention, not an error: the skipped rows were re-claimed at a newer
+      // version between the RPC and here, and that claim is the new owner's to release.
+      console.log(
+        `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): cleared ${clearedCount}/${student_ids.length} rows at version ${version} (is_private=${is_private}); the rest were re-claimed at a newer version`
+      );
+    }
   }
 
   return mismatchedRows.length;
@@ -154,6 +303,13 @@ async function processRowsAll(
     } else {
       // Add this message's ID to the duplicate list so it gets archived
       existing.duplicateMsgIds.push(msg.msg_id);
+      // Carry the highest recovery attempt across the duplicates. Only the primary message's
+      // payload survives deduplication, so dropping the counter here would silently reset the
+      // retry ceiling every time a row happened to be enqueued twice.
+      existing.primary.message.version_mismatch_attempt = Math.max(
+        existing.primary.message.version_mismatch_attempt ?? 0,
+        msg.message.version_mismatch_attempt ?? 0
+      );
       console.log(
         `[DEBUG] ${workerId} Found duplicate message for ${k}: msg_id ${msg.msg_id} added to duplicates (total duplicates: ${existing.duplicateMsgIds.length})`
       );
@@ -197,6 +353,14 @@ async function processRowsAll(
 
     const isBulk = rowEntries.length > SCOPED_FETCH_THRESHOLD;
     console.log(`${workerId} Processing ${rowEntries.length} rows for gradebook ${gradebook_id} (isBulk: ${isBulk})`);
+
+    // Recovery attempts already recorded on the incoming messages, so the ceiling survives the
+    // archive-and-resend cycle that resets pgmq's own read_ct. Shared by both paths below.
+    const attemptByRow = new Map<string, number>();
+    for (const entry of rowEntries) {
+      const key = versionMismatchRowKey(entry.msg.message.student_id, entry.msg.message.is_private);
+      attemptByRow.set(key, Math.max(attemptByRow.get(key) ?? 0, entry.msg.message.version_mismatch_attempt ?? 0));
+    }
 
     if (isBulk) {
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
@@ -431,6 +595,8 @@ async function processRowsAll(
               updated_count: number;
               version_matched: boolean;
               cleared: boolean;
+              expected_version?: number | null;
+              current_version?: number | null;
               error?: string;
             }>;
             archive_count?: number;
@@ -471,8 +637,10 @@ async function processRowsAll(
             classId,
             gradebook_id,
             results,
+            attemptByRow,
             workerId,
-            label: "bulk"
+            label: "bulk",
+            scope: gbScope
           });
         }
       } else {
@@ -672,6 +840,8 @@ async function processRowsAll(
               updated_count: number;
               version_matched: boolean;
               cleared: boolean;
+              expected_version?: number | null;
+              current_version?: number | null;
               error?: string;
             }>;
             archive_count?: number;
@@ -709,8 +879,10 @@ async function processRowsAll(
             classId,
             gradebook_id,
             results,
+            attemptByRow,
             workerId,
-            label: "scoped"
+            label: "scoped",
+            scope: gbScope
           });
         }
       } else {
@@ -849,8 +1021,17 @@ Deno.serve((req) => {
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
   if (secret !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "Invalid secret" }), {
-      headers: { "Content-Type": "application/json" }
+    // 401, not a bare `new Response(...)`. Response defaults to 200, so a rejected poke read as a
+    // healthy worker: pg_cron's net.http_post logged success while no handler ever started and the
+    // gradebook recalculation queue silently stopped draining. Same shape wrapRequestHandler's
+    // catch-all was just fixed for, and the same 401 the two async workers already return.
+    return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "WWW-Authenticate": 'Bearer realm="gradebook_column_recalculate", error="invalid_token"'
+      }
     });
   }
 

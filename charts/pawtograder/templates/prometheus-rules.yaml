@@ -259,7 +259,7 @@ spec:
         # keeping pace, so student-visible grades go stale.
         - alert: PawtograderRecalcStalled
           expr: |
-            max(pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"}) > 1000
+            max by (namespace) (pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"}) > 1000
           for: 3m
           labels:
             severity: critical
@@ -273,7 +273,7 @@ spec:
         # repeatedly and landing in the DLQ.
         - alert: PawtograderAsyncDLQGrowing
           expr: |
-            max(pawtograder_async_dlq_size{namespace="{{ $ns }}"}) > 200
+            max by (namespace) (pawtograder_async_dlq_size{namespace="{{ $ns }}"}) > 200
           for: 1m
           labels:
             severity: critical
@@ -285,7 +285,7 @@ spec:
         # Async worker queue has a large backlog — enqueue rate outpaces workers.
         - alert: PawtograderAsyncQueueBacklog
           expr: |
-            max(pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
+            max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
           for: 5m
           labels:
             severity: critical
@@ -298,7 +298,7 @@ spec:
         # hour means stuck/starved workers rather than a burst.
         - alert: PawtograderAsyncQueueStuck
           expr: |
-            max(pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
+            max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
           for: 1h
           labels:
             severity: critical
@@ -313,7 +313,7 @@ spec:
         # production was invisible to monitoring as well as to the code.
         - alert: PawtograderNotificationEmailBacklog
           expr: |
-            max(pawtograder_notification_emails_queue_size{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }}
+            max by (namespace) (pawtograder_notification_emails_queue_size{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }}
           for: 15m
           labels:
             severity: warning
@@ -334,11 +334,19 @@ spec:
         # DLQs are excluded. A dead-letter queue is where poison messages go to STAY -- nothing
         # drains it on a schedule -- so its oldest message is older than any threshold within hours
         # of the first permanent failure, and this rule would fire forever at severity: critical and
-        # get silenced, taking the six live queues down with it. DLQ health is a growth signal, which
-        # is what PawtograderAsyncDLQGrowing and PawtograderDiscordDLQGrowing measure.
+        # get silenced, taking the live queues down with it. Every DLQ name ends in `_dlq`, so the
+        # matcher below excludes new ones (gradebook_row_recalculate_dlq included) without an edit.
+        # DLQ health is a growth signal, which is what PawtograderAsyncDLQGrowing,
+        # PawtograderDiscordDLQGrowing and PawtograderGradebookRecalcDLQGrowing measure.
+        #
+        # async_calls_low_priority is excluded for the same reason. github-async-worker reads it ONLY
+        # when async_calls returned zero messages, four at a time, so on any busy day the bulk
+        # repo-analytics queue is starved by design and its oldest message ages past any threshold on
+        # a completely healthy system. Including it would produce a permanent critical that gets
+        # silenced -- exactly the shape the DLQ exclusion above rejects.
         - alert: PawtograderQueueOldestMessageAging
           expr: |
-            max by (queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
           for: 10m
           labels:
             severity: critical
@@ -361,7 +369,7 @@ spec:
         # cleaned the queue up. delta() is the gauge-safe form and is what "grew by" means here.
         - alert: PawtograderDiscordDLQGrowing
           expr: |
-            delta(max(pawtograder_discord_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }}
+            delta(max by (namespace) (pawtograder_discord_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }}
           for: 10m
           labels:
             severity: warning
@@ -372,6 +380,30 @@ spec:
               {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }} in the last
               hour — messages are failing repeatedly. A 403 from the bot (missing guild permissions)
               produces exactly this shape.
+        # Gradebook recalc dead-letter queue, same delta() shape and for the same reason.
+        #
+        # This queue was created with the version-mismatch retry ceiling and reported by nothing at
+        # all: no gauge, no rule, no panel, so a row that gave up was visible only in Sentry or by
+        # querying pgmq by hand.
+        #
+        # The threshold is far lower than the other two DLQs because the messages are not equivalent.
+        # A message lands here only after eight recovery attempts with backoff, and it represents a
+        # gradebook row whose stored score is now stale and will not be recomputed by anything —
+        # student-visible wrong grades, one per message. A handful an hour is already worth looking at.
+        - alert: PawtograderGradebookRecalcDLQGrowing
+          expr: |
+            delta(max by (namespace) (pawtograder_gradebook_row_recalculate_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.gradebookRecalcDlqGrowthPerHour | default 5 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder gradebook recalc DLQ is growing"
+            description: >-
+              The gradebook row-recalculate dead-letter queue in {{ $ns }} grew by more than
+              {{ .Values.monitoring.prometheusRules.gradebookRecalcDlqGrowthPerHour | default 5 }} in
+              the last hour — rows exhausted their version-mismatch retry budget, so their stored
+              scores are stale and nothing will recompute them. Inspect
+              pgmq.q_gradebook_row_recalculate_dlq and re-enqueue after fixing the contention source.
     - name: pawtograder.edgefunctions
       rules:
         # Edge-function pods being OOM-killed.

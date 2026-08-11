@@ -2849,14 +2849,14 @@ export async function syncRepoPermissions(
   githubUsernamesMixedCase: string[],
   _scope?: Sentry.Scope,
   options: SyncRepoPermissionsOptions = {}
-): Promise<{ madeChanges: boolean }> {
+): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall(
       "syncRepoPermissions",
       { org, repo, courseSlug, githubUsernames: githubUsernamesMixedCase, options },
       _scope
     );
-    return { madeChanges: false };
+    return { madeChanges: false, removalsSkipped: false };
   }
   let madeChanges = false;
   const scope = _scope?.clone();
@@ -3125,7 +3125,13 @@ export async function syncRepoPermissions(
       username
     });
   }
-  return { madeChanges };
+  // `removalsSkipped` is REPORTED, not just logged. A run that could not read the staff roster
+  // performed only the additive half of the sync, and a caller that then writes
+  // is_github_ready = true makes that run indistinguishable from a complete one — so a student
+  // dropped from the course keeps push access and reconcile_stuck_repo_creations, which scans only
+  // is_github_ready = false, never revisits it. That is the outcome the TeamNotFoundError comment
+  // above rejects for a 403; the flag is what stops it happening for a 404.
+  return { madeChanges, removalsSkipped: staffTeamUsernames === null };
 }
 /**
  * Mark the user_role row for a specific (org, team_slug) as github_org_confirmed = true.

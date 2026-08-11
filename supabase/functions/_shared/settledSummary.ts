@@ -23,6 +23,18 @@ export type SettledSummary = {
 
 const DEFAULT_MAX_REASONS = 10;
 
+/**
+ * The "nothing was attempted" summary.
+ *
+ * A factory rather than a shared constant so no caller can mutate `reasons` out from under another,
+ * and one definition rather than the four hand-written literals this replaced -- the point of
+ * `truncatedReasons` is that a caller can never imply full coverage of failures, which only holds if
+ * every construction site gains the next field too.
+ */
+export function emptySettledSummary(): SettledSummary {
+  return { attempted: 0, succeeded: 0, failed: 0, reasons: [], truncatedReasons: 0 };
+}
+
 export function summarizeSettled(
   results: PromiseSettledResult<unknown>[],
   { label, maxReasons = DEFAULT_MAX_REASONS }: { label?: string; maxReasons?: number } = {}
@@ -60,7 +72,7 @@ export function mergeSettledSummaries(
       reasons: [...acc.reasons, ...s.reasons],
       truncatedReasons: acc.truncatedReasons + s.truncatedReasons
     }),
-    { attempted: 0, succeeded: 0, failed: 0, reasons: [], truncatedReasons: 0 }
+    emptySettledSummary()
   );
   const shown = merged.reasons.slice(0, maxReasons);
   return {

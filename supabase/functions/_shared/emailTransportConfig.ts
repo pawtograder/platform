@@ -36,13 +36,23 @@ const INBUCKET_PORT = "54325";
 /** The only port that speaks TLS from the first byte. Everything else negotiates with STARTTLS. */
 const IMPLICIT_TLS_PORT = 465;
 
-function readBool(raw: string | undefined): boolean | undefined {
+/**
+ * `undefined` = the variable is genuinely unset (or empty). `null` = it is set to something this
+ * function does not recognize.
+ *
+ * The distinction matters: folding an unrecognized value into `undefined` sent it down the "unset
+ * infers from SMTP_HOST" row, and SMTP_HOST is now supplied by the mounted Secret — so
+ * `EMAIL_ENABLED: "disabled"` (or "none", or a typo like "ture") would have started sending mail
+ * from an environment the operator believed they had switched off. That is the same failure the
+ * chart template's `kindIs "bool"` guard exists to prevent, which only covers boolean `false`.
+ */
+function readBool(raw: string | undefined): boolean | undefined | null {
   if (raw === undefined) return undefined;
   const v = raw.trim().toLowerCase();
   if (v === "") return undefined;
   if (["1", "true", "yes", "on"].includes(v)) return true;
   if (["0", "false", "no", "off"].includes(v)) return false;
-  return undefined;
+  return null;
 }
 
 // TRIMMED, not raw. A Secret value written with `echo` carries a trailing newline, and an
@@ -85,6 +95,11 @@ export function resolveEmailTransport(readEnv: EnvReader): EmailTransportDecisio
     return { kind: "disabled", reason: "explicitly_disabled" };
   }
 
+  // An unrecognized value is a misconfiguration, never a fallback to inference. See readBool.
+  if (enabled === null) {
+    return { kind: "misconfigured", missing: ["EMAIL_ENABLED"] };
+  }
+
   if (enabled === true && !host) {
     return { kind: "misconfigured", missing: ["SMTP_HOST"] };
   }
@@ -103,7 +118,10 @@ export function resolveEmailTransport(readEnv: EnvReader): EmailTransportDecisio
 
   const portRaw = firstNonEmpty(readEnv, "SMTP_PORT") ?? String(IMPLICIT_TLS_PORT);
   const isInbucket = portRaw === INBUCKET_PORT;
-  const port = Number.parseInt(portRaw, 10);
+  // `/^\d+$/` before parseInt, because parseInt("587 (submission)") is 587 and
+  // parseInt("46 5") is 46 — a malformed Secret would pass every guard below as a
+  // plausible-looking port and then connect somewhere nobody asked for.
+  const port = /^\d+$/.test(portRaw) ? Number.parseInt(portRaw, 10) : Number.NaN;
 
   // SMTP_FROM is required unconditionally — there is no send without an envelope sender, and a
   // missing one is what produced the literal `From: Pawtograder <undefined>` this module exists to

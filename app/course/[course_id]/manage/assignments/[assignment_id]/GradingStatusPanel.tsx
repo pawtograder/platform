@@ -1,6 +1,7 @@
 "use client";
 
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
+import { describeReleaseAllResult, type BulkReleaseAction } from "@/lib/bulkReleaseMessage";
 import {
   DialogActionTrigger,
   DialogBody,
@@ -125,18 +126,19 @@ export default function GradingStatusPanel({
   const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
 
-  const runReleaseAll = async (rpc: ReleaseAllRpc, successVerb: string) => {
+  const runReleaseAll = async (rpc: ReleaseAllRpc, action: BulkReleaseAction) => {
     const { data, error } = await supabase.rpc(rpc, { assignment_id: assignmentId });
     if (error) {
       toaster.error({ title: "Error", description: error.message });
       return;
     }
     await onChanged?.();
-    const count = typeof data === "number" ? data : 0;
-    toaster.success({
-      title: "Success",
-      description: `${count} submission review(s) ${successVerb}`
-    });
+    // The RPC touches each submission's grading review only, and returns how many it actually
+    // changed — not how many submissions the assignment has. Share the per-submission bulk path's
+    // wording so both toasts count the same thing and both say which rounds were left alone.
+    const affected = typeof data === "number" ? data : 0;
+    const message = describeReleaseAllResult({ affected, action });
+    toaster[message.status]({ title: message.title, description: message.description });
   };
 
   const incompleteCount = counts.total - counts.graded;
@@ -195,7 +197,7 @@ export default function GradingStatusPanel({
                   label="Release all"
                   colorPalette="green"
                   confirmTitle="Release all grading reviews"
-                  confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+                  confirmBody="This will release the grading review for every submission in this assignment, making grades visible to all students. Self-review and meta-grading rounds are not affected. Continue?"
                   tooltip="Make grades visible to students for every submission in this assignment."
                   onConfirm={confirmReleaseAll}
                 />
@@ -203,7 +205,7 @@ export default function GradingStatusPanel({
                   label="Unrelease all"
                   colorPalette="red"
                   confirmTitle="Unrelease all grading reviews"
-                  confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+                  confirmBody="This will hide grades from all students for every submission in this assignment. Self-review and meta-grading rounds are not affected. Continue?"
                   tooltip="Hide grades from students again for every submission (reverses Release all)."
                   onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
                 />
