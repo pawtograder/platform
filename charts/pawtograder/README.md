@@ -344,6 +344,46 @@ docker build \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
+### Source map upload (optional)
+
+Every web bundle carries injected debug IDs, but a stack trace in Bugsink stays
+minified until the matching source maps are uploaded. That upload is off unless
+the build is given somewhere to send them:
+
+```sh
+docker build \
+  --build-arg NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://staging.pawtograder.net \
+  --build-arg NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN \
+  --build-arg SENTRY_URL=https://bugsink.example.edu \
+  --build-arg SENTRY_PROJECT=pawtograder-web \
+  --build-arg SENTRY_UPLOAD_ID=$(date +%s) \
+  --secret id=sentry_auth_token,env=BUGSINK_AUTH_TOKEN \
+  -t ghcr.io/pawtograder/web:$VERSION .
+```
+
+- **`sentry_auth_token`** is a BuildKit secret, never a build-arg, so it stays out
+  of the image layers and `docker history`. Create it in the Bugsink UI.
+- **`NEXT_PUBLIC_BUGSINK_DSN`** is what enables the bundler plugin that does the
+  upload, so it is required here even though it is otherwise about runtime error
+  reporting. Without it there are no reported errors to symbolicate, so a token
+  without a DSN is a misconfiguration and fails the build rather than reporting an
+  upload that never happens.
+- **`SENTRY_URL`** — your Bugsink base URL. Required whenever the token is
+  present: the bundler plugin reads a missing URL as sentry.io, so the build
+  fails rather than shipping your source maps to a third party.
+- **`SENTRY_PROJECT`** — Bugsink ≥ 2.2.0 rejects an upload naming a project slug
+  it does not have. `SENTRY_ORG` is accepted but ignored (Bugsink is single-org).
+- **`SENTRY_UPLOAD_ID`** — cache key for the layer that performs the upload.
+  BuildKit deliberately leaves secret *contents* out of the build cache, so
+  without a value that changes per build, a layer built before the token existed
+  can be replayed afterwards and upload nothing. Any changing non-secret value
+  works; in CI use the run id plus the run attempt, since re-running a run keeps
+  the same run id. The build refuses a token without one.
+
+Pass none of these and the build behaves exactly as it did before: maps are
+generated, debug IDs are injected, and the upload step is skipped with
+`sentry: no auth token supplied, skipping source map upload` in the log.
+
 ## Deployment skinning / branding
 
 Self-hosted deployments can re-brand the app — service name, tagline, logos, and
