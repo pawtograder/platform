@@ -18,7 +18,7 @@ export default function TestAssignmentPage() {
     resource: "assignments",
     id: Number.parseInt(assignment_id as string)
   });
-  const { private_profile_id, enterViewAs } = useClassProfiles();
+  const { private_profile_id, enterSelfPreview } = useClassProfiles();
   const { data: submissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -54,12 +54,10 @@ export default function TestAssignmentPage() {
   // routing the first through the second made the grading view reachable only by entering the
   // student preview and then exiting it.
   const previewAsStudent = (href: string) => {
-    // Record which assignment the preview belongs to, so it cannot follow the viewer to a
-    // different assignment (see isSelfViewAsScope).
-    enterViewAs(private_profile_id, {
-      redirectTo: href,
-      previewAssignmentId: Number.parseInt(assignment_id as string)
-    });
+    // Client state plus a soft navigation: this provider spans both pages, so the preview simply
+    // carries across. It is recorded against this assignment so it cannot follow the viewer to a
+    // different one (see isSelfViewAsScope).
+    enterSelfPreview(Number.parseInt(assignment_id as string), href);
   };
   return (
     <Box>

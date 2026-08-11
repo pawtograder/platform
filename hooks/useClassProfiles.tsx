@@ -7,18 +7,10 @@ import { UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/Databas
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
-import {
-  clearStalePreviewCookies,
-  clearViewAsCookie,
-  getViewAsTarget,
-  isPreviewOwnedByThisTab,
-  isSelfViewAsScope,
-  setViewAsCookie,
-  ViewAsTarget
-} from "@/lib/viewAs";
+import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -39,9 +31,9 @@ type ClassProfileContextType = {
   isReadOnly: boolean;
   /**
    * True when staff are previewing their *own* test-assignment work as a student rather than
-   * masquerading as an enrolled student. Only ever true inside the assignment the preview was
-   * entered from (see `isSelfViewAsScope`), and the surfaces that need a real student enrollment
-   * stay empty for it — so UI that offers a course-wide student view should branch on this.
+   * viewing an enrolled student. Client state, and only ever true inside the assignment the preview
+   * was opened from (see `isSelfViewAsScope`). The surfaces that need a real student enrollment stay
+   * empty for it, so UI offering a course-wide student view should branch on this.
    */
   isViewingAsSelf: boolean;
   /** The viewer's actual role in the course, unaffected by view-as. */
@@ -50,15 +42,13 @@ type ClassProfileContextType = {
   realPrivateProfileId: string;
   /** Display name of the student being viewed, when viewing as. */
   viewAsProfileName?: string;
+  /** Staff-only: enter read-only view as the given enrolled student's private profile id. */
+  enterViewAs: (studentPrivateProfileId: string, options?: { redirectTo?: string }) => void;
   /**
-   * Staff-only: enter read-only view as the given private profile id. Pass `previewAssignmentId`
-   * when the target is the viewer's own profile (the Test Assignment preview), so the synthetic
-   * identity stays confined to that assignment — see `isSelfViewAsScope`.
+   * Staff-only: preview your own work on one assignment as a student sees it. Client state, dropped
+   * as soon as you navigate outside that assignment — see `isSelfViewAsScope`.
    */
-  enterViewAs: (
-    studentPrivateProfileId: string,
-    options?: { redirectTo?: string; previewAssignmentId?: number }
-  ) => void;
+  enterSelfPreview: (assignmentId: number, redirectTo?: string) => void;
   /** Exit read-only student view and return to the instructor view. */
   exitViewAs: () => void;
 };
@@ -144,6 +134,7 @@ type UserRoleWithClassAndUser = GetResult<
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useAuthState();
   const userId = user?.id;
   const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
@@ -157,21 +148,22 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   // already knows whether a view-as session is active. Without this the provider
   // would briefly publish the real instructor identity on the first paint before the
   // effect ran and re-rendered with the student override.
-  const [viewAsTarget, setViewAsTarget] = useState<ViewAsTarget | null>(() =>
-    typeof course_id === "string" ? getViewAsTarget(course_id) : null
+  const [viewAsProfileId, setViewAsProfileId] = useState<string | null>(() =>
+    typeof course_id === "string" ? getViewAsCookie(course_id) : null
   );
-  const viewAsProfileId = viewAsTarget?.profileId ?? null;
   const [viewAsRole, setViewAsRole] = useState<UserRoleWithClassAndUser | null>(null);
-  // Whether this mount ever published the self-preview identity. Distinguishes "left the preview by
-  // a soft navigation" (needs a reload to rebuild controllers) from "loaded a page the preview never
-  // covered" (the server already rendered staff).
-  const publishedSelfPreviewRef = useRef(false);
-  // The course whose self-preview cookie this mount is responsible for. This provider also covers
-  // `/course` (the course list), so a soft navigation to the course picker or to another course
-  // leaves `course_id` absent or pointing elsewhere, and the scope-cleanup effect below can no
-  // longer reach the originating cookie. Without this, returning to that assignment later re-entered
-  // the preview silently, contradicting the banner's promise that navigating away ends it.
-  const selfPreviewCourseRef = useRef<string | null>(null);
+  // The Test Assignment self-preview. Client state, not a cookie: RLS still evaluates as staff, so
+  // the same rows are fetched either way and only the rendering differs. Keeping it here means it is
+  // per-tab by construction, needs no cleanup, and cannot be left behind anywhere.
+  //
+  // `entered` distinguishes "requested, still navigating to the assignment" from "active". It is
+  // requested from the Test Assignment page, which is itself outside the preview's scope, so without
+  // this the scope guard below would cancel it before the navigation landed.
+  const [selfPreview, setSelfPreview] = useState<{
+    assignmentId: number;
+    requestedFrom: string;
+    entered: boolean;
+  } | null>(null);
   // True while the (instructor, viewAsProfileId) → student role lookup is in flight.
   // We must not publish the real instructor identity during that window, or read-only
   // gates would briefly re-enable instructor write UI. Initialized to true when a
@@ -277,25 +269,31 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   // Re-read the per-course view-as cookie if course_id changes (e.g. navigating
   // between courses inside this provider).
   useEffect(() => {
-    // Leaving the course that owns a self-preview ends it, wherever the viewer went. Only the
-    // self-preview is cleared this way: viewing an enrolled student is course-wide and is meant to
-    // still be there when you come back to that course.
-    const previewCourse = selfPreviewCourseRef.current;
-    if (previewCourse && previewCourse !== (course_id as string | undefined)) {
-      clearViewAsCookie(previewCourse);
-      selfPreviewCourseRef.current = null;
-      publishedSelfPreviewRef.current = false;
-    }
-    // A full-document navigation to another course destroys the mount that held the ref above, so
-    // also sweep previews this tab left behind in other courses. Reading them back from the cookies
-    // is the only way a fresh mount can recognise them.
-    clearStalePreviewCookies(course_id as string | undefined);
     if (!course_id) {
-      setViewAsTarget(null);
+      setViewAsProfileId(null);
       return;
     }
-    setViewAsTarget(getViewAsTarget(course_id as string));
+    setViewAsProfileId(getViewAsCookie(course_id as string));
   }, [course_id]);
+
+  // The self-preview covers one assignment. The provider spans every `/course/**` route, so drop it
+  // as soon as the viewer navigates outside that assignment — otherwise the toggle would follow them
+  // onto pages it cannot represent (see isSelfViewAsScope). Nothing to clean up: it is only state.
+  useEffect(() => {
+    if (!selfPreview) return;
+    const inScope = !!course_id && isSelfViewAsScope(pathname ?? "", course_id as string, selfPreview.assignmentId);
+    if (inScope) {
+      if (!selfPreview.entered) {
+        setSelfPreview({ ...selfPreview, entered: true });
+      }
+      return;
+    }
+    // Out of scope: end an active preview, and abandon a requested one if the viewer went somewhere
+    // other than the assignment (so a navigation that never happened cannot arm itself later).
+    if (selfPreview.entered || pathname !== selfPreview.requestedFrom) {
+      setSelfPreview(null);
+    }
+  }, [pathname, course_id, selfPreview]);
 
   // When staff have an active view-as target, resolve the effective student role + profiles.
   // Until the lookup resolves we MUST keep the provider in a loading state — see
@@ -307,47 +305,10 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       setIsResolvingViewAs(false);
       return;
     }
+    // The self-preview is handled as client state above, so a cookie naming the viewer's own
+    // profile is meaningless here and must not resolve to anything.
     if (viewAsProfileId === realMyRole.private_profile_id) {
-      // Self view-as (the Test Assignment preview) is bounded to the assignment it was entered
-      // from — see isSelfViewAsScope. Outside it, drop the synthetic student identity and clear
-      // the cookie so returning to an assignment page does not silently re-enter student view.
-      if (!isSelfViewAsScope(pathname ?? "", course_id as string, viewAsTarget?.previewAssignmentId ?? null)) {
-        // Only the tab that opened the preview may end it. Another tab of the same course that
-        // simply lands on an out-of-scope page shares this cookie, and deleting it there would kill
-        // a preview that tab is still using. Dropping the synthetic identity locally is enough for
-        // this tab either way — the server already ignored the cookie on an out-of-scope path.
-        if (isPreviewOwnedByThisTab(viewAsTarget)) {
-          clearViewAsCookie(course_id as string);
-        }
-        setViewAsRole(null);
-        setViewAsTarget(null);
-        setIsResolvingViewAs(false);
-        // Reload only when this mount actually published the preview identity, i.e. we are leaving
-        // it by a soft navigation. The course/office-hours controllers were mounted from the server
-        // layout under the student role and that layout is reused across the transition, so
-        // swapping identity underneath them races their teardown — the same reason exitViewAs
-        // reloads. On a fresh document the server already ignored the out-of-scope cookie and
-        // rendered staff, so reloading would only cost a round trip.
-        //
-        // Guarded on the cookie being gone as well: if clearing ever failed, a reload would re-read
-        // it, re-enter this branch, and loop. Dropping the identity in memory is enough.
-        if (publishedSelfPreviewRef.current && typeof window !== "undefined" && !getViewAsTarget(course_id as string)) {
-          // Navigate to the path this effect is reacting to, not to window.location. During a soft
-          // navigation the router can publish the new pathname before the address bar commits, so
-          // reading window.location here may still yield the *previous* page — reloading that would
-          // cancel the navigation in flight and drop the viewer back where they started. Search and
-          // hash only belong to the destination once the two agree.
-          const destination =
-            window.location.pathname === pathname
-              ? `${window.location.pathname}${window.location.search}${window.location.hash}`
-              : (pathname ?? window.location.pathname);
-          window.location.assign(destination);
-        }
-        return;
-      }
-      publishedSelfPreviewRef.current = true;
-      selfPreviewCourseRef.current = course_id as string;
-      setViewAsRole({ ...realMyRole, role: "student" } as UserRoleWithClassAndUser);
+      setViewAsRole(null);
       setIsResolvingViewAs(false);
       return;
     }
@@ -377,13 +338,13 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [realMyRole, viewAsProfileId, viewAsTarget?.previewAssignmentId, course_id, pathname]);
+  }, [realMyRole, viewAsProfileId, course_id]);
 
   const enterViewAs = useCallback(
-    (studentPrivateProfileId: string, options?: { redirectTo?: string; previewAssignmentId?: number }) => {
+    (studentPrivateProfileId: string, options?: { redirectTo?: string }) => {
       if (!course_id) return;
       const redirectTo = options?.redirectTo;
-      setViewAsCookie(course_id as string, studentPrivateProfileId, options?.previewAssignmentId ?? null);
+      setViewAsCookie(course_id as string, studentPrivateProfileId);
       // Do a full document navigation rather than a soft client transition. The server
       // recomputes the effective identity from the cookie and every course/realtime
       // controller is rebuilt cleanly under the student identity. A soft transition
@@ -407,13 +368,33 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     [course_id]
   );
 
+  /**
+   * Staff-only: preview your own work on one assignment as a student would see it. No cookie and no
+   * document navigation — the preview is presentation, and this provider spans the Test Assignment
+   * page and the submission pages alike, so a soft navigation carries the state across.
+   */
+  const enterSelfPreview = useCallback(
+    (assignmentId: number, redirectTo?: string) => {
+      setSelfPreview({ assignmentId, requestedFrom: pathname ?? "", entered: false });
+      if (redirectTo) {
+        router.push(redirectTo);
+      }
+    },
+    [router, pathname]
+  );
+
   const exitViewAs = useCallback(() => {
     if (!course_id) return;
+    // The self-preview is only state, so dropping it needs no reload and no cookie work.
+    if (selfPreview) {
+      setSelfPreview(null);
+      return;
+    }
     clearViewAsCookie(course_id as string);
-    // Full reload for the same reason as enterViewAs: rebuild all controllers under the
-    // restored staff identity instead of racing a soft teardown/rebuild.
+    // Full reload for the same reason as enterViewAs: viewing an enrolled student really does change
+    // whose data the controllers hold, so rebuild them rather than racing a soft teardown/rebuild.
     window.location.assign(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-  }, [course_id]);
+  }, [course_id, selfPreview]);
 
   if (isLoading || isResolvingViewAs) {
     return <Skeleton height="100px" width="100%" />;
@@ -480,8 +461,13 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     );
   }
 
-  const isViewingAsStudent = (myRole.role === "instructor" || myRole.role === "grader") && !!viewAsRole;
-  const effectiveRole = isViewingAsStudent ? viewAsRole : myRole;
+  const isStaff = myRole.role === "instructor" || myRole.role === "grader";
+  const isViewingAsSelf = isStaff && selfPreview?.entered === true;
+  // The self-preview borrows the viewer's own role row and only relabels it, so every existing gate
+  // (useIsGraderOrInstructor, the masking hooks) responds without knowing this feature exists.
+  const selfPreviewRole = isViewingAsSelf ? ({ ...myRole, role: "student" } as UserRoleWithClassAndUser) : null;
+  const isViewingAsStudent = isStaff && (!!viewAsRole || isViewingAsSelf);
+  const effectiveRole = selfPreviewRole ?? (isViewingAsStudent && viewAsRole ? viewAsRole : myRole);
 
   return (
     <ClassProfileContext.Provider
@@ -495,11 +481,12 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         public_profile: effectiveRole.publicProfile,
         isViewingAsStudent,
         isReadOnly: isViewingAsStudent,
-        isViewingAsSelf: isViewingAsStudent ? viewAsRole.private_profile_id === myRole.private_profile_id : false,
+        isViewingAsSelf,
         realRole: myRole.role,
         realPrivateProfileId: myRole.private_profile_id,
-        viewAsProfileName: isViewingAsStudent ? (viewAsRole.privateProfile?.name ?? undefined) : undefined,
+        viewAsProfileName: isViewingAsSelf ? undefined : (viewAsRole?.privateProfile?.name ?? undefined),
         enterViewAs,
+        enterSelfPreview,
         exitViewAs
       }}
     >

@@ -1,216 +1,81 @@
 /**
  * Shared helpers for the instructor "view as student" (read-only) feature.
  *
- * The active view-as target is stored in a per-course cookie so that it can be read
- * identically on the server (role-branching pages/layouts) and on the client
- * (ClassProfileProvider). The cookie takes effect when the real user is an
- * instructor viewing an enrolled student, or when staff view their own test-assignment
- * submission through the student-facing UI.
+ * Two distinct things wear this name, and they need different mechanisms:
+ *
+ * 1. **Viewing an enrolled student** is a real identity switch: the server fetches *that student's*
+ *    data, so the target has to reach the server. It lives in a per-course cookie, read identically
+ *    on the server (role-branching pages/layouts) and on the client (ClassProfileProvider).
+ *
+ * 2. **The Test Assignment self-preview** is not an identity switch at all. RLS still evaluates as
+ *    staff, so the same rows are fetched either way; what changes is which of them the UI renders.
+ *    It is therefore client state in ClassProfileProvider, not a cookie — see
+ *    `isSelfViewAsScope` for the one thing that remains path-dependent.
+ *
+ * Conflating the two is what previously put a cross-tab-shared cookie in charge of a per-tab
+ * presentation toggle, and with it assignment ids, tab ids, ownership rules and a cookie sweep.
  */
 
-/**
- * The parsed cookie. `previewAssignmentId` is set only for the staff self-preview (Test
- * Assignment), and names the assignment the preview was entered from; viewing an enrolled student
- * is course-wide and carries none.
- */
-export type ViewAsTarget = {
-  profileId: string;
-  previewAssignmentId: number | null;
-  /**
-   * The browser tab that opened a self-preview, so a later mount can tell "the preview I started,
-   * which I have now navigated away from" apart from "a preview another tab is still using".
-   * `null` for course-wide targets, and for scoped cookies written before this was recorded.
-   */
-  previewTabId: string | null;
-};
+/** Profile ids are Postgres uuids; anything else did not come from this app. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function viewAsCookieName(courseId: number | string): string {
   return `view_as_${courseId}`;
 }
 
 /**
- * Cookie payload: `<profileId>` for an enrolled student, `<profileId>~<assignmentId>~<tabId>` for a
- * staff self-preview. A profile id is a UUID, so `~` cannot collide with one.
- *
- * `~` rather than a more obvious `:` because `encodeURIComponent` leaves it alone. The client reads
- * this value back through `decodeURIComponent` while the server reads it from `cookies()`, and a
- * delimiter that survives neither, one, nor both of those unchanged is a decoding bug waiting to
- * split the two apart — with the server silently deciding every path is out of scope.
+ * Validates the cookie payload: the private profile id of the enrolled student being viewed.
+ * Anything that is not a uuid is rejected here rather than handed to identity resolution, and an
+ * undecodable value (`decodeURIComponent` throws `URIError` on a bad percent escape) is treated the
+ * same way instead of propagating.
  */
-const VIEW_AS_DELIMITER = "~";
-
-/** Profile ids are Postgres uuids; anything else did not come from this app. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * `decodeURIComponent` throws `URIError` on an invalid percent escape, so a single malformed cookie
- * would otherwise abort whatever loop is reading them. An undecodable value is not one we wrote, so
- * report it as unparseable rather than propagating.
- */
-function safeDecodeURIComponent(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
-export function parseViewAsCookieValue(value: string | null | undefined): ViewAsTarget | null {
+export function parseViewAsCookieValue(value: string | null | undefined): string | null {
   if (!value) return null;
-  const parts = value.split(VIEW_AS_DELIMITER);
-  const [profileId, assignmentPart, tabPart] = parts;
-  // Validate the shape rather than passing anything non-empty to identity resolution.
-  if (!profileId || !UUID_RE.test(profileId)) return null;
-  if (parts.length === 1) {
-    return { profileId, previewAssignmentId: null, previewTabId: null };
-  }
-  // Reject anything else this function did not write. Salvaging a prefix out of an unexpected shape
-  // is how a scoped preview would quietly widen into a course-wide target.
-  if (parts.length > 3 || !/^\d+$/.test(assignmentPart ?? "")) return null;
-  // A two-part value predates tab tracking: treat it as owned by no tab, so any mount may clean it
-  // up rather than leaving it to resume later.
-  return {
-    profileId,
-    previewAssignmentId: Number(assignmentPart),
-    previewTabId: parts.length === 3 ? tabPart || null : null
-  };
-}
-
-const TAB_ID_KEY = "pawtograder_tab_id";
-
-/**
- * A per-tab identifier from `sessionStorage`, which is scoped to the tab and survives navigation
- * within it — exactly the lifetime a self-preview should have.
- */
-export function getTabId(): string | null {
-  if (typeof window === "undefined") return null;
+  let decoded: string;
   try {
-    const existing = window.sessionStorage.getItem(TAB_ID_KEY);
-    if (existing) return existing;
-    const created = Math.random().toString(36).slice(2, 10);
-    window.sessionStorage.setItem(TAB_ID_KEY, created);
-    return created;
+    decoded = decodeURIComponent(value);
   } catch {
-    // Private modes and blocked storage: fall back to no tab id, which makes previews cleanable by
-    // any mount rather than sticky.
     return null;
   }
+  return UUID_RE.test(decoded) ? decoded : null;
 }
 
-/** Client-only: read the current view-as target for a course, if any. */
-export function getViewAsTarget(courseId: number | string): ViewAsTarget | null {
+/** Client-only: read the enrolled student currently being viewed for a course, if any. */
+export function getViewAsCookie(courseId: number | string): string | null {
   if (typeof document === "undefined") return null;
   const name = viewAsCookieName(courseId);
   const match = document.cookie.split("; ").find((row) => row.startsWith(`${name}=`));
   if (!match) return null;
-  return parseViewAsCookieValue(safeDecodeURIComponent(match.slice(name.length + 1)));
+  return parseViewAsCookieValue(match.slice(name.length + 1));
 }
 
-/**
- * Client-only: set the view-as target for a course (session cookie). Pass
- * `previewAssignmentId` for the staff self-preview so the synthetic identity can be confined to
- * that assignment.
- */
-export function setViewAsCookie(
-  courseId: number | string,
-  profileId: string,
-  previewAssignmentId?: number | null
-): void {
+/** Client-only: set the enrolled student to view for a course (session cookie). */
+export function setViewAsCookie(courseId: number | string, profileId: string): void {
   if (typeof document === "undefined") return;
-  const value =
-    previewAssignmentId == null
-      ? profileId
-      : [profileId, previewAssignmentId, getTabId() ?? ""].join(VIEW_AS_DELIMITER);
   // Secure only on https, so the cookie is withheld from plaintext requests in deployed
   // environments without breaking local development, which is served over http.
   const secure = typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${viewAsCookieName(courseId)}=${encodeURIComponent(value)}; path=/; SameSite=Lax${secure}`;
+  document.cookie = `${viewAsCookieName(courseId)}=${encodeURIComponent(profileId)}; path=/; SameSite=Lax${secure}`;
 }
 
-/** Client-only: clear the view-as target for a course. */
+/** Client-only: stop viewing as an enrolled student for a course. */
 export function clearViewAsCookie(courseId: number | string): void {
   if (typeof document === "undefined") return;
   document.cookie = `${viewAsCookieName(courseId)}=; path=/; SameSite=Lax; max-age=0`;
 }
 
 /**
- * Whether this tab is the one that opened a scoped preview, and may therefore end it.
+ * Whether a path is still within the assignment a Test Assignment self-preview was opened from.
  *
- * Cookies are shared across tabs, so without this a tab that merely wanders onto an out-of-scope
- * page in the same course would delete a preview another tab is actively using. A target with no
- * recorded tab (written before tab tracking, or where storage was unavailable) is treated as owned,
- * so it can still be cleaned up rather than lingering forever.
- */
-export function isPreviewOwnedByThisTab(target: ViewAsTarget | null | undefined): boolean {
-  if (!target || target.previewAssignmentId == null) return false;
-  return target.previewTabId === null || target.previewTabId === getTabId();
-}
-
-/**
- * Client-only: end self-previews that this tab started in *other* courses, and report which courses
- * were cleared.
+ * The preview is client state, so leaving the page cannot strand anything — but the provider spans
+ * every `/course/**` route, so without this the toggle would follow the viewer to the gradebook or
+ * the assignments list. Those are the pages the preview cannot represent: it is the staff member's
+ * own profile, and anything keyed on a real `role = 'student'` enrollment has nothing to show for it
+ * (the student assignments dashboard RPC and `assignments_with_effective_due_dates` both do, which
+ * is what made the Assignments tab render an empty list in issue #892).
  *
- * A full-document navigation to another course destroys the provider that was tracking the preview,
- * so nothing in memory survives to clean up after it and the originating cookie would otherwise sit
- * there — silently resuming the preview if the viewer ever returned to that assignment, contrary to
- * the banner. A fresh mount can only recognise those cookies by reading them back.
- *
- * Restricted to previews carrying *this* tab's id (or none) so that a preview another tab is still
- * using survives: cookies are shared across tabs, so an unconditional sweep would end a colleague
- * tab's preview the moment any other tab opened a different course.
- *
- * Course-wide enrolled-student targets are never touched — they are meant to persist per course.
- */
-export function clearStalePreviewCookies(currentCourseId: number | string | undefined): string[] {
-  if (typeof document === "undefined") return [];
-  const cleared: string[] = [];
-  for (const row of document.cookie.split("; ")) {
-    const eq = row.indexOf("=");
-    if (eq <= 0) continue;
-    const name = row.slice(0, eq);
-    // Course ids are numeric; a `view_as_` cookie named anything else is not ours to clear.
-    const match = /^view_as_(\d+)$/.exec(name);
-    if (!match) continue;
-    const cookieCourseId = match[1];
-    if (currentCourseId !== undefined && cookieCourseId === String(currentCourseId)) {
-      // The course being rendered is handled by the provider's own scope check, which knows whether
-      // the current path is inside the preview.
-      continue;
-    }
-    // Undecodable or unparseable values are left alone rather than aborting the scan, so one bad
-    // cookie cannot stop the rest from being cleaned up.
-    const target = parseViewAsCookieValue(safeDecodeURIComponent(row.slice(eq + 1)));
-    if (!isPreviewOwnedByThisTab(target)) continue;
-    clearViewAsCookie(cookieCourseId);
-    cleared.push(cookieCourseId);
-  }
-  return cleared;
-}
-
-/**
- * Whether a path is within the scope where a staff *self* view-as applies — the assignment the
- * preview was entered from, and everything beneath it.
- *
- * Self view-as (the Test Assignment preview) is a synthetic student identity over the staff
- * member's own profile: the app fabricates `role: "student"` while keeping the instructor's
- * `private_profile_id`. Postgres never sees that fabrication, so any query keyed on a real
- * `user_roles` row with `role = 'student'` returns nothing for it — the student assignments
- * dashboard RPC and the `assignments_with_effective_due_dates` view both do. Navigating from a
- * test submission to the student Assignments tab therefore rendered a confidently empty list
- * (issue #892). Bounding the synthetic identity to the assignment it was created for keeps it on
- * the paths that work (they key on `profile_id` alone) and hands every other page back to the
- * real staff identity. Instructors who want a populated student view pick a real enrolled
- * student instead — that path has a real `user_roles` row and needs no scope limit.
- *
- * The match is against the *originating* assignment, not merely any assignment: accepting any
- * numeric segment would keep the preview alive through a deep link or global-search jump to a
- * different assignment, carrying its release-date exemption with it while the banner claimed the
- * preview covered only one assignment.
- *
- * A preview with no recorded assignment (a cookie written before this was tracked) is out of
- * scope everywhere, which degrades to the plain staff view rather than an unbounded preview.
- *
- * Only self view-as is scoped. Viewing as an enrolled student stays in effect course-wide.
+ * The match is against the *originating* assignment, so a deep link or global-search jump to a
+ * different assignment ends the preview rather than carrying it along.
  */
 export function isSelfViewAsScope(
   pathname: string,

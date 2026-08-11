@@ -370,7 +370,6 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("button", { name: "Commit History" })).toBeVisible();
     await expect(page.getByText("Student's Due Date:")).toBeVisible();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
-    await expectViewAsCookieCleared(page);
   });
 
   // Issue #883: the student release-date gate on the assignment layout also fired for staff
@@ -428,10 +427,6 @@ test.describe("Test Assignment student preview", () => {
     await page.locator(`a[href="/course/${course.id}/assignments"]`).filter({ visible: true }).first().click();
 
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/assignments`));
-    // Wait for the cookie to go before asserting the banner's absence. Leaving the preview is
-    // finished by the client, so a bare "not visible" check can pass against a page that simply has
-    // not hydrated yet — and the next navigation would abort the clearing mid-flight.
-    await expectViewAsCookieCleared(page);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
     await expect(page.getByText("No upcoming deadlines available")).toHaveCount(0);
 
@@ -502,7 +497,6 @@ test.describe("Test Assignment student preview", () => {
 
     // A different assignment, reached directly the way a deep link or search hit would.
     await page.goto(`/course/${course.id}/assignments/${unreleasedAssignmentId}`);
-    await expectViewAsCookieCleared(page);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
 
     // Returning to the assignment the preview belonged to does not silently resume it either:
@@ -526,9 +520,10 @@ test.describe("Test Assignment student preview", () => {
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
     await expectSubmissionTabSettled(page);
 
-    // The home link is a soft navigation to /course, keeping this provider mounted.
+    // The home link is a soft navigation to /course, keeping this provider mounted — the preview
+    // must still end, because it covers one assignment.
     await page.locator('a[href="/course"]').filter({ visible: true }).first().click();
-    await expectViewAsCookieCleared(page);
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
 
     await page.goto(`/course/${course.id}/assignments/${assignmentId}/submissions/${submissionId}`);
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);

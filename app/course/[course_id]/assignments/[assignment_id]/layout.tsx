@@ -27,13 +27,11 @@ export default async function AssignmentLayout({
     redirect("/");
   }
 
-  // Staff previewing their own test-assignment submissions are exempt: the release date gates
-  // *enrolled students* out of an assignment, and staff own the assignment they are testing.
-  // Applying it to them bounced the Manage → Test Assignment submission links to the dashboard
-  // for any assignment not yet released (issue #883). The student-facing content filters
-  // (grade release, rubric visibility, hidden autograder output) still apply.
+  // The release date gates *enrolled students* out of an assignment. Staff are exempt because they
+  // own it — including while previewing their own test submission, which no longer changes the
+  // server-side role at all (it is client state), so no special case is needed here (issue #883).
   const isStaff = role.role === "instructor" || role.role === "grader";
-  if (!isStaff && !role.isViewingAsSelf) {
+  if (!isStaff) {
     // Send staff masquerading as an enrolled student back to the course rather than the
     // all-courses dashboard, so the view-as banner (and its exit button) stays in reach.
     const blockedDestination = role.isViewingAs ? `/course/${course_id}` : "/";

@@ -1,9 +1,9 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { isSelfViewAsScope, parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
+import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
 import { createClient } from "@supabase/supabase-js";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import type {
   Assignment,
   AssignmentDueDateException,
@@ -140,13 +140,6 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
 export type EffectiveCourseIdentity = UserRoleData & {
   /** True when real staff are viewing the course as a student. */
   isViewingAs: boolean;
-  /**
-   * True when staff are previewing their *own* test-assignment work as a student, rather than
-   * masquerading as an enrolled student. These viewers keep staff-level access to the assignment
-   * itself (they own it) — only the student-facing content filters apply. Only ever true within
-   * the assignment the preview was entered from; see `isSelfViewAsScope`.
-   */
-  isViewingAsSelf: boolean;
   /** The viewer's actual role in the course (unchanged by view-as). */
   realRole: Database["public"]["Enums"]["app_role"];
   /** The target private profile id when viewing as, otherwise null. */
@@ -158,8 +151,10 @@ export type EffectiveCourseIdentity = UserRoleData & {
  * "view as student" cookie. When the real user is an instructor for the course and the
  * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
  * role/profile ids are the student's (so server-branching pages render the student view
- * scoped to that student). Staff can also view their own test-assignment submissions as
- * a synthetic student. Otherwise the viewer's real identity is returned unchanged.
+ * scoped to that student). Otherwise the viewer's real identity is returned unchanged.
+ *
+ * The Test Assignment self-preview is deliberately not here: it changes what the UI renders, not
+ * whose data is fetched, so it lives as client state in ClassProfileProvider.
  *
  * Auth/RLS identity is unaffected — the override is purely presentation/scoping. UI read-only
  * gates prevent writes while RLS remains the backstop for cross-profile data access.
@@ -176,7 +171,6 @@ export async function getEffectiveCourseIdentity(
   const base: EffectiveCourseIdentity = {
     ...realRole,
     isViewingAs: false,
-    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: null
   };
@@ -187,36 +181,16 @@ export async function getEffectiveCourseIdentity(
   }
 
   const cookieStore = await cookies();
-  const target = parseViewAsCookieValue(cookieStore.get(viewAsCookieName(course_id))?.value);
-  if (!target) {
+  const targetProfileId = parseViewAsCookieValue(cookieStore.get(viewAsCookieName(course_id))?.value);
+  if (!targetProfileId) {
     return base;
   }
-  const targetProfileId = target.profileId;
 
+  // The Test Assignment self-preview is client state, not a cookie: it changes what the UI renders,
+  // not whose data is fetched. A cookie naming the viewer's own profile is therefore not a view-as
+  // target and is ignored here.
   if (targetProfileId === realRole.private_profile_id) {
-    // Self view-as only applies inside the assignment it was entered from. Everywhere else the
-    // cookie is inert and the real staff identity is returned, so pages that key on a real
-    // student enrollment never render against a synthetic one (issue #892). The client provider
-    // clears the stale cookie once it observes the same thing.
-    //
-    // A missing x-pathname means middleware did not run for this request. Treat that as out of
-    // scope: the preview is a convenience, and failing it closed keeps the synthetic identity off
-    // pages that cannot serve it. In practice the header is always present — X-User-ID rides the
-    // same mechanism, and every caller of this function redirects away without it.
-    const pathname = (await headers()).get("x-pathname") ?? "";
-    if (!isSelfViewAsScope(pathname, course_id, target.previewAssignmentId)) {
-      return base;
-    }
-    return {
-      role: "student",
-      class_id: realRole.class_id,
-      public_profile_id: realRole.public_profile_id,
-      private_profile_id: realRole.private_profile_id,
-      isViewingAs: true,
-      isViewingAsSelf: true,
-      realRole: realRole.role,
-      viewAsProfileId: realRole.private_profile_id
-    };
+    return base;
   }
 
   if (realRole.role !== "instructor") {
@@ -246,7 +220,6 @@ export async function getEffectiveCourseIdentity(
     public_profile_id: targetRole.public_profile_id,
     private_profile_id: targetRole.private_profile_id,
     isViewingAs: true,
-    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: targetRole.private_profile_id
   };
