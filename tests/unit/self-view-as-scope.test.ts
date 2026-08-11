@@ -162,6 +162,17 @@ describe("clearStalePreviewCookies", () => {
     expect(document.cookie).toContain("view_as_12");
   });
 
+  it("ends the original's preview if a duplicated tab navigates to another course", () => {
+    // Documented trade-off, not an oversight. Duplicating a tab (or opening one that keeps an
+    // opener) copies sessionStorage, so both share this id and the sweep cannot tell "the preview I
+    // left behind" from "a preview a clone of me is still using". Distinguishing them needs live
+    // cross-tab signalling; with cookies alone the two are indistinguishable. The cost is one click
+    // to re-enter, and the duplicate navigating away is itself a reasonable "done previewing".
+    const tabId = getTabId();
+    document.cookie = `view_as_12=${profileId}~34~${tabId}; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual(["12"]);
+  });
+
   it("cleans up a scoped cookie that carries no tab id", () => {
     document.cookie = `view_as_12=${profileId}~34; path=/`;
     expect(clearStalePreviewCookies("99")).toEqual(["12"]);
