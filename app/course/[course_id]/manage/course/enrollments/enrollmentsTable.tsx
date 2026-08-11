@@ -147,9 +147,15 @@ export default function EnrollmentsTable() {
   const classSections = useClassSections();
   const course = useCourse();
   const discordServerConfigured = !!course?.discord_server_id;
-  const { byUserId: discordStateByUser } = useDiscordMembershipStatus(
-    discordServerConfigured ? Number(course_id) : undefined
-  );
+  const {
+    byUserId: discordStateByUser,
+    loading: discordStatusLoadingRaw,
+    error: discordStatusError
+  } = useDiscordMembershipStatus(discordServerConfigured ? Number(course_id) : undefined);
+  // A failed read is not a statement about the sync. Treating it as "still loading" keeps the column
+  // from asserting "Not checked yet" for the whole roster on the strength of an RPC that errored --
+  // which is what happens for any caller authorizeforclassgrader rejects, or on a transient failure.
+  const discordStatusUnknown = discordStatusLoadingRaw || discordStatusError !== null;
 
   const setSisSyncOptOut = useCallback(
     async (userRoleId: number, sis_sync_opt_out: boolean) => {
@@ -687,6 +693,16 @@ export default function EnrollmentsTable() {
                     </Text>
                   );
                 }
+                if (discordStatusUnknown) {
+                  // The status has not arrived yet. Rendering the label now would say "Not checked
+                  // yet" for the whole roster, which is a claim about the sync rather than about the
+                  // fetch, and is exactly the guess this column exists to avoid.
+                  return (
+                    <Text color="gray.400" fontSize="sm">
+                      &hellip;
+                    </Text>
+                  );
+                }
                 const label = discordStatusLabel(row.original, discordStateByUser);
                 const { color, icon } = DISCORD_STATUS_PRESENTATION[label];
                 return (
@@ -981,7 +997,8 @@ export default function EnrollmentsTable() {
       labSections,
       setSisSyncOptOut,
       discordServerConfigured,
-      discordStateByUser
+      discordStateByUser,
+      discordStatusUnknown
     ]
   );
 
@@ -1077,6 +1094,7 @@ export default function EnrollmentsTable() {
       "Lab Section",
       "GitHub Username",
       "GitHub Org Status",
+      ...(discordServerConfigured ? ["Discord Status"] : []),
       "SIS User ID",
       "SIS Linked",
       "SIS Sync Opt Out",
@@ -1143,6 +1161,16 @@ export default function EnrollmentsTable() {
       const githubOrgStatus =
         original.type === "invitation" ? "N/A" : original.github_org_confirmed ? "Joined" : "Not joined";
 
+      // Get Discord status, matching the column exactly so a filtered roster and its export agree --
+      // including the unknown case. Exporting before the read resolves (or after it failed) would
+      // otherwise write "Not checked yet" for the whole roster, which is a claim about the sync.
+      const discordStatus =
+        original.type === "invitation"
+          ? "N/A"
+          : discordStatusUnknown
+            ? "Unknown"
+            : discordStatusLabel(original, discordStateByUser);
+
       // Get SIS User ID
       const sisUserId =
         original.type === "invitation"
@@ -1175,6 +1203,7 @@ export default function EnrollmentsTable() {
         labSection,
         githubUsername,
         githubOrgStatus,
+        ...(discordServerConfigured ? [discordStatus] : []),
         sisUserId,
         sisLinked,
         sisOptOut,
@@ -1198,7 +1227,16 @@ export default function EnrollmentsTable() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }, [table, classSections, labSections, tagData, course_id]);
+  }, [
+    table,
+    classSections,
+    labSections,
+    tagData,
+    course_id,
+    discordServerConfigured,
+    discordStateByUser,
+    discordStatusUnknown
+  ]);
 
   return (
     <VStack align="start" w="100%">

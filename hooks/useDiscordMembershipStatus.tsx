@@ -42,7 +42,12 @@ export function useDiscordMembershipStatus(classId: number | undefined): Discord
 
   useEffect(() => {
     if (classId === undefined) {
+      // Reset every field, not just the rows. Leaving `loading` true would strand any consumer that
+      // renders nothing while loading, and a stale `error` from a previous class would keep the
+      // alerts suppressed after the caller had already stopped asking.
       setRows([]);
+      setError(null);
+      setLoading(false);
       return;
     }
 

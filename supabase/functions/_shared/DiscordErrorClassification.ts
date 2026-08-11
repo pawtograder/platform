@@ -77,10 +77,22 @@ export function parseDiscordApiError(error: unknown): { httpStatus?: number; cod
   };
 }
 
+/**
+ * True for a rate limit, which the worker handles with its own backoff rather than as terminal.
+ *
+ * Anchored on the wrapper's own rate-limit message and on the *parsed* HTTP status, never on a bare
+ * "429" substring. Snowflake IDs are 17-19 digits and the wrapper interpolates them into its error
+ * messages, so roughly one guild in sixty contains "429" somewhere in its ID -- enough that
+ * `No text channels found in guild 1142900000000000000 to create invite` would be classified
+ * retriable and retried forever, which is the exact failure mode this module exists to end.
+ */
+function isRateLimitMessage(message: string, httpStatus: number | undefined): boolean {
+  return message.includes("Discord rate limit") || httpStatus === 429;
+}
+
 /** True for a rate limit, which the worker handles with its own backoff rather than as terminal. */
 export function isRateLimitError(error: unknown): boolean {
-  const message = messageOf(error);
-  return message.includes("Discord rate limit") || message.includes("429");
+  return isRateLimitMessage(messageOf(error), parseDiscordApiError(error).httpStatus);
 }
 
 /**
@@ -94,7 +106,7 @@ export function classifyDiscordError(error: unknown): DiscordErrorClassification
   const message = messageOf(error);
   const { httpStatus, code } = parseDiscordApiError(error);
 
-  if (isRateLimitError(error)) {
+  if (isRateLimitMessage(message, httpStatus)) {
     return { terminal: false, httpStatus, code, reason: "rate limited" };
   }
 

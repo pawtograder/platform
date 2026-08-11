@@ -19,7 +19,12 @@ import type {
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
-import { classifyDiscordError, isBotPermissionProblem, isResourceGone } from "../_shared/DiscordErrorClassification.ts";
+import {
+  classifyDiscordError,
+  isBotPermissionProblem,
+  isRateLimitError,
+  isResourceGone
+} from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 // Declare EdgeRuntime for type safety
@@ -48,7 +53,13 @@ function toMsLatency(enqueuedAt: string): number {
   }
 }
 
-async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: number, scope: Sentry.Scope) {
+/** Returns whether the message actually left the queue. Callers that have no other way of ending a
+ * message need to know: an unarchived message reappears when its visibility timeout expires. */
+async function archiveMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
   console.log(`[archiveMessage] Archiving message ${msgId}`);
   try {
     const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
@@ -59,6 +70,7 @@ async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: nu
       throw error;
     }
     console.log(`[archiveMessage] Successfully archived message ${msgId}`);
+    return true;
   } catch (error) {
     console.error(`[archiveMessage] Failed to archive message ${msgId}:`, error);
     scope.setContext("archive_error", {
@@ -66,6 +78,7 @@ async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: nu
       error_message: error instanceof Error ? error.message : String(error)
     });
     Sentry.captureException(error, scope);
+    return false;
   }
 }
 
@@ -84,10 +97,12 @@ function parseRetryAfterSeconds(error: unknown): number | undefined {
 }
 
 function detectRateLimit(error: unknown): { isRateLimit: boolean; retryAfter?: number } {
-  const err = error as { message?: string };
-  const msg = err?.message || "";
-
-  if (msg.includes("rate limit") || msg.includes("429")) {
+  // Delegates to the shared classifier rather than keeping its own `msg.includes("429")` rule.
+  // The wrapper interpolates 17-19 digit snowflakes into its messages, so the bare substring made
+  // this disagree with classifyDiscordError about the same error: a timeout on
+  // `GET /guilds/1142900000000000000/members/…` was tagged rate_limit in Sentry and took the
+  // rate-limit backoff path, polluting the signal that genuine 429s are meant to raise.
+  if (isRateLimitError(error)) {
     return {
       isRateLimit: true,
       retryAfter: parseRetryAfterSeconds(error)
@@ -354,6 +369,8 @@ function reportTerminalFailure(
 // ============================================================================
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+/** Deadline for the raw membership-check fetch, matching DiscordWrapper's own fetch timeout. */
+const MEMBERSHIP_CHECK_TIMEOUT_MS = 10000;
 
 const SLASH_COMMANDS = [
   {
@@ -461,11 +478,22 @@ async function checkGuildMembership(
   discordUserId: string,
   botToken: string
 ): Promise<MembershipCheck> {
+  // This is a raw fetch rather than a DiscordWrapper call, so it has to supply its own deadline:
+  // without one a single stalled connection blocks the whole per-record loop, and because the batch
+  // is itself a queue message, pgmq redelivers it while the first run is still hanging.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MEMBERSHIP_CHECK_TIMEOUT_MS);
   try {
     const response = await fetch(`${DISCORD_API_BASE}/guilds/${guildId}/members/${discordUserId}`, {
       method: "GET",
-      headers: { Authorization: `Bot ${botToken}` }
+      headers: { Authorization: `Bot ${botToken}` },
+      signal: controller.signal
     });
+    // The body is never read on any branch. Left dangling it holds the connection out of the pool
+    // for one roster's worth of responses at a time, and Deno warns that response bodies were not
+    // consumed. Cancelling releases it immediately.
+    await response.body?.cancel();
+
     if (response.status === 200) return { result: "member" };
     if (response.status === 404) return { result: "not_member" };
     // 403 only. A 401 means the bot token is wrong or mid-rotation, which the classifier treats as
@@ -475,6 +503,8 @@ async function checkGuildMembership(
     return { result: "unknown" };
   } catch {
     return { result: "unknown" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -510,6 +540,11 @@ async function ensureInviteForUser(
   }
 
   try {
+    // Same courtesy delay the membership check uses. createGuildInvite is two Discord calls (list
+    // channels, then create), and a class where nobody has joined yet reaches here once per enrolled
+    // student back to back — enough to rate-limit the bot for every other class in the same run.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     const invite = await discord.createGuildInvite(record.discord_server_id, 604800, 5, scope); // 7 days, 5 uses
     const expiresAt = new Date(Date.now() + 604800 * 1000);
 
@@ -672,21 +707,17 @@ async function processBatchRoleSync(
     }
 
     if (membership.result === "forbidden") {
-      // The bot cannot read this guild's members, so it certainly cannot invite anyone into it. Record
-      // it against the student and remember the guild so the invite path below does not try either.
+      // The bot cannot read this guild's members, so it certainly cannot invite anyone into it.
+      // Remember the guild so the invite path below does not try either, and let the one-per-run
+      // Sentry summary below carry the signal.
+      //
+      // Deliberately NOT recorded against the student. A 403 on the member lookup is a fact about
+      // the bot's access to the guild and says nothing about any individual user, exactly as for
+      // `unknown` above. Writing cannot_invite here would overwrite the in_guild rows of students
+      // who *are* in the server, and the roster would then tell an instructor that students who
+      // joined weeks ago "cannot join until a Discord server admin grants it".
       const reason = `Discord returned ${membership.status} for the guild member lookup; the bot cannot read this server`;
       guildInviteFailures.set(record.discord_server_id, { reason });
-      await recordMembershipStatus(
-        adminSupabase,
-        {
-          classId: record.class_id,
-          userId: record.user_id,
-          guildId: record.discord_server_id,
-          state: "cannot_invite",
-          detail: reason
-        },
-        scope
-      );
       summary.cannot_invite++;
       continue;
     }
@@ -706,18 +737,22 @@ async function processBatchRoleSync(
           summary.errors++;
         } else {
           summary.synced++;
-          // Clears any not_joined or cannot_invite this user was carrying.
-          await recordMembershipStatus(
-            adminSupabase,
-            {
-              classId: record.class_id,
-              userId: record.user_id,
-              guildId: record.discord_server_id,
-              state: "in_guild"
-            },
-            scope
-          );
         }
+
+        // Recorded whether or not the enqueue succeeded: the membership check is what established
+        // that the user is in the guild, and a failed enqueue says nothing about that. Leaving it
+        // inside the success branch would strand a stale not_joined or cannot_invite on the roster
+        // for as long as the enqueue keeps failing.
+        await recordMembershipStatus(
+          adminSupabase,
+          {
+            classId: record.class_id,
+            userId: record.user_id,
+            guildId: record.discord_server_id,
+            state: "in_guild"
+          },
+          scope
+        );
       } catch (e) {
         console.error(`[processBatchRoleSync] Exception enqueueing sync:`, e);
         summary.errors++;
@@ -776,6 +811,24 @@ async function processBatchRoleSync(
     Sentry.captureMessage(
       `Discord bot cannot create invites in ${guildInviteFailures.size} guild(s); affected students cannot be invited until an admin grants access`,
       summaryScope
+    );
+  }
+
+  // A run where nothing could be checked has no other trace: the `unknown` branch records nothing
+  // and only increments a counter, and the invite summary above never fires because the loop never
+  // reaches the invite path. A revoked or rotated DISCORD_BOT_TOKEN produces exactly this shape --
+  // every lookup 401s -- and would otherwise cost one request per candidate per hour, silently.
+  if (summary.total > 0 && summary.errors === summary.total) {
+    const deadRunScope = scope.clone();
+    deadRunScope.setContext("discord_batch_role_sync_all_failed", {
+      total: summary.total,
+      errors: summary.errors
+    });
+    deadRunScope.setFingerprint(["discord-batch-role-sync", "all-membership-checks-failed"]);
+    deadRunScope.setLevel("error");
+    Sentry.captureMessage(
+      `Discord batch role sync could not check any of ${summary.total} candidates; the bot token or Discord API is likely unavailable`,
+      deadRunScope
     );
   }
 
@@ -1623,7 +1676,14 @@ export async function processEnvelope(
     const classification = classifyDiscordError(error);
     if (classification.terminal) {
       reportTerminalFailure(envelope, meta, error, classification, scope);
-      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      const archived = await archiveMessage(adminSupabase, meta.msg_id, scope);
+      if (!archived) {
+        // Archiving is the only thing ending this message: the terminal path deliberately does not
+        // requeue, so a swallowed archive failure would leave the message on the queue to be
+        // redelivered when its visibility timeout expires, fail terminally again, and loop with no
+        // retry ceiling. The DLQ is the backstop the retry path already relies on.
+        await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+      }
       return false;
     }
 

@@ -91,6 +91,25 @@ Deno.test("classifyDiscordError: a guild with no text channel is terminal despit
   assertEquals(result.reason, "guild has no text channel to invite into");
 });
 
+Deno.test("classifyDiscordError: a snowflake containing 429 does not make a terminal failure retriable", () => {
+  // The wrapper interpolates guild IDs into its messages, and 17-19 digit snowflakes routinely
+  // contain "429". Matching that as a rate limit would restore the unbounded retry this module
+  // exists to end.
+  const result = classifyDiscordError(
+    new Error("No text channels found in guild 1142900000000000000 to create invite")
+  );
+  assertEquals(result.terminal, true);
+  assertEquals(result.reason, "guild has no text channel to invite into");
+});
+
+Deno.test("isRateLimitError: a 429 inside an ID is not a rate limit; a real 429 status is", () => {
+  assertEquals(
+    isRateLimitError(new Error("No text channels found in guild 1142900000000000000 to create invite")),
+    false
+  );
+  assertEquals(isRateLimitError(new Error("Discord API error: 429 Too Many Requests - {}")), true);
+});
+
 Deno.test("classifyDiscordError: an unrecognised failure stays retriable", () => {
   // Misclassifying retriable as terminal silently drops work, so unknowns must fall this way.
   assertEquals(classifyDiscordError(new Error("connection reset")).terminal, false);

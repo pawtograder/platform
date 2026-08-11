@@ -166,7 +166,12 @@ $$;
 COMMENT ON FUNCTION public.get_discord_role_sync_candidates() IS
   'User-role records eligible for Discord role sync, scoped to active classes. Replaces the unscoped query the batch worker used to run against all 650 classes.';
 
-REVOKE ALL ON FUNCTION public.get_discord_role_sync_candidates() FROM PUBLIC;
+-- anon and authenticated are named explicitly. Supabase's default privileges GRANT EXECUTE to both
+-- at CREATE time as their own ACL entries, and `REVOKE ... FROM PUBLIC` removes only the PUBLIC
+-- entry -- it leaves those two intact. This function is SECURITY DEFINER and carries no
+-- authorization check of its own, so a PUBLIC-only revoke would leave every enrolled user's
+-- discord_id and every class's guild ID readable with nothing but the publishable anon key.
+REVOKE ALL ON FUNCTION public.get_discord_role_sync_candidates() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_discord_role_sync_candidates() TO service_role;
 
 -- ============================================================================
@@ -203,7 +208,11 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text) FROM PUBLIC;
+-- As above, and more sharply: this one WRITES. A PUBLIC-only revoke would let any anon caller forge
+-- or overwrite a membership row, flipping a student who is in the server to cannot_invite and
+-- putting attacker-authored text into `detail`, which the roster renders to instructors as the
+-- reason Discord gave.
+REVOKE ALL ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text) TO service_role;
 
 -- ============================================================================
@@ -275,7 +284,10 @@ $$;
 COMMENT ON FUNCTION public.get_discord_membership_status_for_class(bigint) IS
   'Where each checked student in a class stands with its Discord server, and why. Drives the roster-page surface for what used to be an invisible queue failure.';
 
-REVOKE ALL ON FUNCTION public.get_discord_membership_status_for_class(bigint) FROM PUBLIC;
+-- anon is revoked explicitly for the same reason. `authenticated` keeps EXECUTE because the
+-- function's own first statement enforces authorizeforclassgrader(), so the grant below is the
+-- intended audience rather than a leftover default.
+REVOKE ALL ON FUNCTION public.get_discord_membership_status_for_class(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_discord_membership_status_for_class(bigint) TO authenticated, service_role;
 
 -- ============================================================================
@@ -309,7 +321,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.invoke_discord_discussion_stats_update() FROM PUBLIC;
+-- Same explicit revoke: otherwise any anon caller can trigger the discussion-stats recompute at
+-- will, once per request.
+REVOKE ALL ON FUNCTION public.invoke_discord_discussion_stats_update() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.invoke_discord_discussion_stats_update() TO service_role;
 
 DO $$
