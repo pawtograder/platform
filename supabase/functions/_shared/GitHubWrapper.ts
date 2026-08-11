@@ -2577,7 +2577,13 @@ export async function reinviteToOrgTeam(
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
-/** The staff team could not be read, so its membership is UNKNOWN — not empty. */
+/**
+ * The team does not exist on GitHub at all.
+ *
+ * Distinct from {@link TeamMembersUnreadableError}: this is a stable configuration (a course whose
+ * staff team was never created), so callers degrade rather than fail. Membership is UNKNOWN, never
+ * empty — see the throw in {@link getTeamMembers}.
+ */
 export class TeamNotFoundError extends Error {
   constructor(
     readonly org: string,
@@ -2585,6 +2591,27 @@ export class TeamNotFoundError extends Error {
   ) {
     super(`GitHub team ${org}/${team_slug} not found`);
     this.name = "TeamNotFoundError";
+  }
+}
+
+/**
+ * The team EXISTS but its member list could not be read.
+ *
+ * This is the transient case, and it must fail closed. Treating it like an absent team degrades the
+ * sync to "skip every removal" and lets the caller record success, so a student dropped from the
+ * course keeps write access with nothing scheduled to retry. Separated from
+ * {@link TeamNotFoundError} so a course that legitimately has no staff team is not broken by
+ * failing closed on a condition that does not apply to it.
+ */
+export class TeamMembersUnreadableError extends Error {
+  constructor(
+    readonly org: string,
+    readonly team_slug: string,
+    /** Named to avoid shadowing `Error.cause`, which is a base-class member. */
+    readonly underlyingError: unknown
+  ) {
+    super(`GitHub team ${org}/${team_slug} exists but its members could not be read`);
+    this.name = "TeamMembersUnreadableError";
   }
 }
 
@@ -2606,6 +2633,33 @@ export async function getTeamMembers(org: string, team_slug: string, octokit: Oc
         message: `404 Not Found when fetching team members for org: ${org}, team_slug: ${team_slug}`,
         level: "info"
       });
+      // WHICH 404 this is decides whether callers may degrade. A 404 on the members endpoint is
+      // ambiguous on its own: the team may not exist (a course whose staff team was never created
+      // — stable, and degrading is correct), or the team may exist while this particular read
+      // failed (transient, and degrading silently skips every removal while the caller records
+      // success). Probing the team itself is what separates them, and it costs one request on a
+      // path that is already failing.
+      let teamExists = false;
+      try {
+        await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+        teamExists = true;
+      } catch (probeError) {
+        if (
+          probeError &&
+          typeof probeError === "object" &&
+          "status" in probeError &&
+          (probeError as { status?: number }).status === 404
+        ) {
+          teamExists = false;
+        } else {
+          // The probe itself failed for some other reason, so we still do not know. Unknown must
+          // not resolve to the degradable verdict.
+          throw new TeamMembersUnreadableError(org, team_slug, probeError);
+        }
+      }
+      if (teamExists) {
+        throw new TeamMembersUnreadableError(org, team_slug, e);
+      }
       throw new TeamNotFoundError(org, team_slug);
     }
     throw e;
@@ -2898,11 +2952,18 @@ export async function syncRepoPermissions(
   try {
     staffTeamUsernames = (await staffTeamCache.get(staffCacheKey)) ?? null;
   } catch (err) {
-    // ONLY the "team does not exist" case degrades to an unknown roster and carries on. A 403
-    // (secondary rate limit), 502 or network error must still abort the sync: swallowing it would
-    // finish the run, skip every removal, and let the caller record is_github_ready = true — so a
-    // student dropped from the course keeps write access and nothing ever retries. That is the same
-    // "unknown read as benign" shape this guard exists to close, one level up.
+    // ONLY the "team does not exist at all" case degrades to an unknown roster and carries on.
+    // A 403 (secondary rate limit), 502, network error, or a members read that failed while the
+    // team DOES exist (TeamMembersUnreadableError) must still abort the sync: swallowing any of
+    // those would finish the run, skip every removal, and let the caller record
+    // is_github_ready = true — so a student dropped from the course keeps write access and nothing
+    // ever retries. That is the same "unknown read as benign" shape this guard exists to close,
+    // one level up.
+    //
+    // The distinction matters because `removalsSkipped` is inspected by only one of this
+    // function's callers. Failing closed on the transient case is what makes the other callers
+    // correct without each having to interpret a partial result; a course that genuinely has no
+    // staff team still degrades, so failing closed does not break it.
     if (!(err instanceof TeamNotFoundError)) {
       throw err;
     }

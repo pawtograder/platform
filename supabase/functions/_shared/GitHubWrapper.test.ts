@@ -27,6 +27,7 @@ const {
   NonRetryableRepoError,
   publicSupabaseUrl,
   resolveExistingTeamSlug,
+  TeamMembersUnreadableError,
   TeamNotFoundError,
   toPublicSupabaseUrl
 } = await import("./GitHubWrapper.ts");
@@ -404,14 +405,50 @@ Deno.test("getTeamMembers: returns lowercased logins", async () => {
   assertEquals(await getTeamMembers("org", "course-staff", octokit), ["alice", "bob"]);
 });
 
-Deno.test("getTeamMembers: a 404 throws TeamNotFoundError rather than returning []", async () => {
+Deno.test("getTeamMembers: members 404 + team absent throws TeamNotFoundError rather than returning []", async () => {
   const octokit = fakeOctokit({
     "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      throw requestError(404, "Not Found");
+    },
+    // The team itself is gone too, so this is the stable "never created" configuration and
+    // callers are allowed to degrade.
+    "GET /orgs/{org}/teams/{team_slug}": () => {
       throw requestError(404, "Not Found");
     }
   });
   await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamNotFoundError);
 });
+
+// A members 404 on a team that DOES exist is transient, and it must not degrade: that is the path
+// that skipped every removal while the caller recorded success, leaving a dropped student with
+// write access and nothing scheduled to retry.
+Deno.test("getTeamMembers: members 404 while the team exists throws TeamMembersUnreadableError", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}/members": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams/{team_slug}": () => ({ data: { slug: "course-staff" } })
+  });
+  const err = await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamMembersUnreadableError);
+  assertEquals(err instanceof TeamNotFoundError, false);
+});
+
+// If the probe itself fails for some other reason we still do not know which case this is, and
+// unknown must not resolve to the degradable verdict.
+Deno.test(
+  "getTeamMembers: an inconclusive probe throws TeamMembersUnreadableError, not TeamNotFoundError",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /orgs/{org}/teams/{team_slug}/members": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /orgs/{org}/teams/{team_slug}": () => {
+        throw requestError(503, "Service Unavailable");
+      }
+    });
+    await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamMembersUnreadableError);
+  }
+);
 
 Deno.test("getTeamMembers: non-404 errors propagate unchanged", async () => {
   const octokit = fakeOctokit({
@@ -432,6 +469,9 @@ Deno.test("getTeamMembers: a 404 is not remembered as an empty roster", async ()
       calls++;
       if (calls === 1) throw requestError(404, "Not Found");
       return [{ login: "alice" }];
+    },
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
     }
   });
   await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamNotFoundError);
