@@ -74,6 +74,7 @@ import {
   BRANCH_PROTECTION_RULESET_NAME,
   type BranchProtectionConfig,
   DEFAULT_BRANCH_PROTECTION,
+  isBranchProtectionUnsupportedError,
   planBranchProtectionAction,
   requestsNoBranchProtection
 } from "./branchProtection.ts";
@@ -1822,6 +1823,14 @@ export async function applyBranchProtectionRuleset(
       // No rulesets endpoint available (very old plan tier) — treat as absent.
       existingRulesetId = null;
       existingRules = null;
+    } else if (isBranchProtectionUnsupportedError(e)) {
+      // Private repos in a free org can't use rulesets at all. Return instead of
+      // falling through: the create/update we'd attempt next is gated by the same
+      // plan and would fail identically. Expected on non-paid orgs, so it is a
+      // plain log — not a warning, and not a Sentry event.
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection rulesets unavailable on this GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
@@ -1901,17 +1910,12 @@ export async function applyBranchProtectionRuleset(
         scope?.setTag("ruleset_already_exists", "true");
         return;
       }
-      // Free GitHub accounts can't enable branch protection on private repos.
-      const message = (e.message || "").toLowerCase();
-      if (
-        message.includes("upgrade to github pro") ||
-        message.includes("upgrade your github plan") ||
-        message.includes("upgrade your account")
-      ) {
-        scope?.setTag("ruleset_unsupported_by_plan", "true");
-        console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
-        return;
-      }
+    }
+    // Free GitHub accounts can't enable branch protection on private repos.
+    if (isBranchProtectionUnsupportedError(e)) {
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     }
     throw e;
   }
