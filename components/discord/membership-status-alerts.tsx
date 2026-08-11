@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert } from "@/components/ui/alert";
+import DiscordReinviteButton from "@/components/discord/reinvite-button";
 import { useDiscordMembershipStatus, type DiscordMembershipRow } from "@/hooks/useDiscordMembershipStatus";
 import { Box, List, Stack, Text } from "@chakra-ui/react";
 
@@ -27,15 +28,46 @@ function remediationFor(row: DiscordMembershipRow): string {
   const code = row.discord_error_code;
 
   if (code === 10004) {
-    return "Discord does not recognise this server, so the server ID in the Discord settings is probably wrong or the bot is no longer a member of it. Check the Discord integration settings for this course.";
+    return "Discord does not recognize this server, so the server ID in the Discord settings is probably wrong or the bot is no longer a member of it. Check the Discord integration settings for this course.";
   }
   if (code === 10003) {
     return "The channel the bot tried to invite through no longer exists. Check the Discord integration settings for this course.";
+  }
+  // Checked before the null-code branch below. A guild with no text channel is reported by the
+  // wrapper after a *successful* channel listing, so there is no HTTP status or JSON code to record
+  // and the row lands with a null code -- but the bot's permissions are already correct, and telling
+  // an admin to grant channel access would send them to fix something that is not broken.
+  if (row.detail?.includes("No text channels found in guild")) {
+    return "The bot can read this server but it has no text channel to create an invite in. Add a text channel to the Discord server.";
   }
   if (code === null || code === undefined || PERMISSION_ERROR_CODES.has(code)) {
     return "The bot needs permission to view the server's channels before it can create invites, so these students cannot join until a Discord server admin grants it.";
   }
   return "This is a configuration problem rather than a missing permission, so granting the bot more access will not resolve it. The error above names the cause.";
+}
+
+/**
+ * Split `cannot_invite` rows by the cause recorded against them.
+ *
+ * `cannot_invite` is one state covering every terminal invite failure, so one class can hold rows
+ * with different causes at once — a wrong server ID for the guild the class moved off, a missing
+ * permission on the one it moved to. Reporting the first row's cause for all of them would name a
+ * remediation that is wrong for everyone else in the list.
+ */
+function groupByCause(rows: DiscordMembershipRow[]): { code: number | null; rows: DiscordMembershipRow[] }[] {
+  const groups = new Map<number | null, DiscordMembershipRow[]>();
+  for (const row of rows) {
+    const code = row.discord_error_code ?? null;
+    const existing = groups.get(code);
+    if (existing) {
+      existing.push(row);
+    } else {
+      groups.set(code, [row]);
+    }
+  }
+  return [...groups.entries()]
+    .map(([code, groupRows]) => ({ code, rows: groupRows }))
+    .sort((a, b) => b.rows.length - a.rows.length);
 }
 
 function StudentList({ rows }: { rows: DiscordMembershipRow[] }) {
@@ -69,7 +101,7 @@ function StudentList({ rows }: { rows: DiscordMembershipRow[] }) {
  * Renders nothing when there is nothing to act on.
  */
 export default function DiscordMembershipStatusAlerts({ classId }: { classId: number | undefined }) {
-  const { notJoined, cannotInvite, loading, error } = useDiscordMembershipStatus(classId);
+  const { notJoined, cannotInvite, loading, error, refresh } = useDiscordMembershipStatus(classId);
 
   if (loading || error) {
     // A failure to read this is not itself actionable for an instructor, and the roster it sits above
@@ -81,23 +113,26 @@ export default function DiscordMembershipStatusAlerts({ classId }: { classId: nu
     return null;
   }
 
+  const stuck = cannotInvite.length + notJoined.length;
+
   return (
     <Stack gap={3} mb={4}>
-      {cannotInvite.length > 0 && (
+      {groupByCause(cannotInvite).map(({ code, rows }) => (
         <Alert
+          key={code ?? "none"}
           status="error"
-          title={`The Discord bot cannot invite ${cannotInvite.length} ${cannotInvite.length === 1 ? "student" : "students"}`}
+          title={`The Discord bot cannot invite ${rows.length} ${rows.length === 1 ? "student" : "students"}`}
         >
           <Text>
             Discord refused the invite with{" "}
             <Text as="span" fontFamily="mono">
-              {cannotInvite[0].detail ?? "an error"}
+              {rows[0].detail ?? "an error"}
             </Text>
-            . {remediationFor(cannotInvite[0])} Until then their Pawtograder roles will not appear in Discord.
+            . {remediationFor(rows[0])} Until then their Pawtograder roles will not appear in Discord.
           </Text>
-          <StudentList rows={cannotInvite} />
+          <StudentList rows={rows} />
         </Alert>
-      )}
+      ))}
 
       {notJoined.length > 0 && (
         <Alert
@@ -110,6 +145,27 @@ export default function DiscordMembershipStatusAlerts({ classId }: { classId: nu
           </Text>
           <StudentList rows={notJoined} />
         </Alert>
+      )}
+
+      {/*
+       * One button rather than one per alert, because the retry is not scoped: it re-checks everyone
+       * in the class who is not recorded as being in the server. A button inside the cannot_invite
+       * alert reading "retry these 3" would queue all twelve, so the label states the real scope.
+       *
+       * This is the only thing that clears a cannot_invite row. The hourly sync is what recorded it,
+       * and for a class past its end date that sync no longer runs -- so without this an instructor
+       * who has just fixed the bot's permissions has a red alert and nothing to press. It also covers
+       * an expired invite, which leaves a student listed as not joined with a dead link.
+       */}
+      {classId !== undefined && (
+        <Box>
+          <DiscordReinviteButton
+            classId={classId}
+            rows={[...cannotInvite, ...notJoined]}
+            label={`Retry Discord for ${stuck} ${stuck === 1 ? "student" : "students"}`}
+            onQueued={refresh}
+          />
+        </Box>
       )}
     </Stack>
   );

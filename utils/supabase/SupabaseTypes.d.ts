@@ -2131,6 +2131,7 @@ export type Database = {
           guild_id: string;
           id: number;
           last_observed_at: string;
+          last_retry_requested_at: string | null;
           observed_count: number;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
@@ -2143,6 +2144,7 @@ export type Database = {
           guild_id: string;
           id?: number;
           last_observed_at?: string;
+          last_retry_requested_at?: string | null;
           observed_count?: number;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
@@ -2155,6 +2157,7 @@ export type Database = {
           guild_id?: string;
           id?: number;
           last_observed_at?: string;
+          last_retry_requested_at?: string | null;
           observed_count?: number;
           state?: Database["public"]["Enums"]["discord_membership_state"];
           user_id?: string;
@@ -12880,6 +12883,7 @@ export type Database = {
           discord_username: string;
           email: string;
           last_observed_at: string;
+          last_retry_requested_at: string;
           name: string;
           sortable_name: string;
           state: Database["public"]["Enums"]["discord_membership_state"];
@@ -13627,6 +13631,13 @@ export type Database = {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
       };
+      request_discord_reinvite: {
+        Args: { p_class_id: number; p_user_id?: string };
+        Returns: {
+          queued: number;
+          roles_repaired: number;
+        }[];
+      };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
@@ -13658,6 +13669,10 @@ export type Database = {
       retry_repository_creation: {
         Args: { p_repository_id: number };
         Returns: number;
+      };
+      rubric_check_options_non_negative: {
+        Args: { p_data: Json };
+        Returns: boolean;
       };
       safe_broadcast: {
         Args: {
