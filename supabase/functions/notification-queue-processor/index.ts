@@ -792,6 +792,86 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
   }
 
   scope.setTag("queue_length", result.data?.length || 0);
+
+  // The `misconfigured` and `no_smtp_host` verdicts were already handled before the read above,
+  // so only `explicitly_disabled` and `ready` can reach here.
+  //
+  // OUTSIDE the non-empty check below, deliberately. A digest item's queue message is archived
+  // when the item is materialised, so a pending digest has no message left to read -- and if it
+  // is the only remaining work, `read` returns an empty batch. Running the disabled-email path
+  // only for a non-empty batch therefore skipped the digest purge in exactly the case it exists
+  // to cover, which is what the previous attempt at this fix got wrong. Archiving an empty list
+  // is a no-op, so hoisting the whole branch costs nothing and removes the dependency.
+  const transport = emailTransport();
+
+  if (transport.kind !== "ready") {
+    // Archive ONLY on an explicit EMAIL_ENABLED=false. That is the documented meaning of the
+    // switch ("false archives notifications without sending"), the operator chose it, and these
+    // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
+    // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
+    // depth up without bound.
+    const pendingNotifications = (result.data ?? []) as QueueMessage<Notification>[];
+    const archiveResults = await Promise.all(
+      pendingNotifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope))
+    );
+    const archiveFailures = archiveResults.filter((ok) => !ok).length;
+    if (archiveFailures > 0) {
+      // Reported as a failure, not folded into the success log. These messages are still in the
+      // queue with vt pushed an hour out, so claiming the batch was suppressed hides a backlog
+      // that the queue-size metric cannot see either -- the same invisibility the precheck above
+      // exists to avoid. Do NOT purge digest items in this case: the suppression did not fully
+      // happen, so discarding the digest content on top of it would lose data twice over.
+      scope.setTag("archive_failures", String(archiveFailures));
+      Sentry.captureMessage(
+        `Email suppression incomplete: ${archiveFailures}/${pendingNotifications.length} notification(s) could not be archived`,
+        scope
+      );
+      console.error(
+        `Email explicitly disabled, but ${archiveFailures}/${pendingNotifications.length} archive(s) failed; those messages remain queued`
+      );
+      return true;
+    }
+
+    // Discard pending digest items too, not just the queue messages.
+    //
+    // Digest items are materialised further down this same function, and their queue message is
+    // archived at that moment -- so a pending digest has NO message left in the queue. Scoping
+    // this purge to the user/class combos present in `notifications` therefore missed almost
+    // exactly the rows it was meant to collect: the batch only ever contains users whose
+    // messages are still queued, and if a pending digest is the only remaining work the read
+    // returns nothing at all and the purge never runs.
+    //
+    // Unscoped is also the correct semantics, not merely the effective one. EMAIL_ENABLED is a
+    // process-wide environment variable, so there is no per-class or per-user disable to respect
+    // -- the earlier "one class's disable must not discard another's digest" reasoning described
+    // a situation that cannot arise. Every pending digest predates the switch and none of them
+    // may be delivered, so all of them go.
+    const { error: purgeError } = await adminSupabase
+      .schema("public")
+      .from("discussion_digest_items")
+      .delete()
+      .gte("id", 0);
+    if (purgeError) {
+      // Reported, not thrown: the archive above already succeeded, and failing the batch here
+      // would re-deliver messages that are now gone from the queue. A leftover digest item is
+      // the pre-existing behaviour, so this degrades to it rather than to a stuck batch.
+      const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
+      const purgeScope: Sentry.Scope =
+        typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
+      purgeScope.setContext("digest_purge_error", { scope: "all_pending_digest_items" });
+      Sentry.captureException(purgeError, purgeScope);
+      console.error("Failed to purge pending discussion digest items while email is disabled", purgeError);
+    }
+
+    scope.setTag("email_disabled_reason", transport.kind === "disabled" ? transport.reason : transport.kind);
+    console.log(
+      `Email explicitly disabled; archived ${pendingNotifications.length} notification(s) and purged all pending discussion digest items`
+    );
+    // Work WAS done whenever there were messages. An empty batch with nothing purged is a
+    // genuinely idle poll and must still report false, or the loop never sleeps.
+    return pendingNotifications.length > 0;
+  }
+
   if (result.data && result.data.length > 0) {
     //Fetch all context: emails and course names
     const notifications = result.data as QueueMessage<Notification>[];
@@ -968,76 +1048,6 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         discussion_notification: pref.discussion_notification,
         help_request_creation_notification: pref.help_request_creation_notification
       });
-    }
-
-    // The `misconfigured` and `no_smtp_host` verdicts were already handled before the read above,
-    // so only `explicitly_disabled` and `ready` can reach here.
-    const transport = emailTransport();
-
-    if (transport.kind !== "ready") {
-      // Archive ONLY on an explicit EMAIL_ENABLED=false. That is the documented meaning of the
-      // switch ("false archives notifications without sending"), the operator chose it, and these
-      // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
-      // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
-      // depth up without bound.
-      const archiveResults = await Promise.all(
-        notifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope))
-      );
-      const archiveFailures = archiveResults.filter((ok) => !ok).length;
-      if (archiveFailures > 0) {
-        // Reported as a failure, not folded into the success log. These messages are still in the
-        // queue with vt pushed an hour out, so claiming the batch was suppressed hides a backlog
-        // that the queue-size metric cannot see either -- the same invisibility the precheck above
-        // exists to avoid. Do NOT purge digest items in this case: the suppression did not fully
-        // happen, so discarding the digest content on top of it would lose data twice over.
-        scope.setTag("archive_failures", String(archiveFailures));
-        Sentry.captureMessage(
-          `Email suppression incomplete: ${archiveFailures}/${notifications.length} notification(s) could not be archived`,
-          scope
-        );
-        console.error(
-          `Email explicitly disabled, but ${archiveFailures}/${notifications.length} archive(s) failed; those messages remain queued`
-        );
-        return true;
-      }
-
-      // Discard pending digest items too, not just the queue messages.
-      //
-      // Digest items are materialised further down this same function, and their queue message is
-      // archived at that moment -- so a pending digest has NO message left in the queue. Scoping
-      // this purge to the user/class combos present in `notifications` therefore missed almost
-      // exactly the rows it was meant to collect: the batch only ever contains users whose
-      // messages are still queued, and if a pending digest is the only remaining work the read
-      // returns nothing at all and the purge never runs.
-      //
-      // Unscoped is also the correct semantics, not merely the effective one. EMAIL_ENABLED is a
-      // process-wide environment variable, so there is no per-class or per-user disable to respect
-      // -- the earlier "one class's disable must not discard another's digest" reasoning described
-      // a situation that cannot arise. Every pending digest predates the switch and none of them
-      // may be delivered, so all of them go.
-      const { error: purgeError } = await adminSupabase
-        .schema("public")
-        .from("discussion_digest_items")
-        .delete()
-        .gte("id", 0);
-      if (purgeError) {
-        // Reported, not thrown: the archive above already succeeded, and failing the batch here
-        // would re-deliver messages that are now gone from the queue. A leftover digest item is
-        // the pre-existing behaviour, so this degrades to it rather than to a stuck batch.
-        const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
-        const purgeScope: Sentry.Scope =
-          typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
-        purgeScope.setContext("digest_purge_error", { scope: "all_pending_digest_items" });
-        Sentry.captureException(purgeError, purgeScope);
-        console.error("Failed to purge pending discussion digest items while email is disabled", purgeError);
-      }
-
-      scope.setTag("email_disabled_reason", transport.kind === "disabled" ? transport.reason : transport.kind);
-      console.log(
-        `Email explicitly disabled; archived ${notifications.length} notification(s) and purged all pending discussion digest items`
-      );
-      // Work WAS done. Reporting false here is what made this indistinguishable from an idle queue.
-      return true;
     }
 
     const isInbucketEmail = isInbucketTransport();

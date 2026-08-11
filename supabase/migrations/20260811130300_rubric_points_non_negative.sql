@@ -56,16 +56,31 @@
 -- trade -- the alternative is propagating a rubric whose deduction-only criterion awards
 -- points -- and the two queries above find the rows to fix.
 
+-- `points >= 0` alone is not enough: Postgres numeric admits NaN and the infinities, and orders
+-- NaN ABOVE every real number -- so `'NaN'::numeric >= 0` and `'Infinity'::numeric >= 0` are both
+-- true and sailed through. Either one reaching a scoring column is worse than a negative: NaN
+-- poisons every sum it touches, and `least(Infinity, total_points)` silently returns the cap.
+-- (`-Infinity >= 0` is already false, but it is named for symmetry so the intent survives edits.)
 ALTER TABLE public.rubric_checks
   ADD CONSTRAINT chk_rubric_checks_points_non_negative
-  CHECK (points >= 0) NOT VALID;
+  CHECK (
+    points >= 0
+    AND points <> 'NaN'::numeric
+    AND points <> 'Infinity'::numeric
+    AND points <> '-Infinity'::numeric
+  ) NOT VALID;
 
 COMMENT ON CONSTRAINT chk_rubric_checks_points_non_negative ON public.rubric_checks IS
   'Check points are a magnitude; the criterion scoring mode (is_additive / is_deduction_only) supplies the sign. NOT VALID: enforced on write, not yet validated against legacy rows.';
 
 ALTER TABLE public.rubric_criteria
   ADD CONSTRAINT chk_rubric_criteria_total_points_non_negative
-  CHECK (total_points >= 0) NOT VALID;
+  CHECK (
+    total_points >= 0
+    AND total_points <> 'NaN'::numeric
+    AND total_points <> 'Infinity'::numeric
+    AND total_points <> '-Infinity'::numeric
+  ) NOT VALID;
 
 COMMENT ON CONSTRAINT chk_rubric_criteria_total_points_non_negative ON public.rubric_criteria IS
   'total_points is the cap in additive mode, the amount deducted from in the default mode, and the magnitude of the floor in deduction-only mode -- non-negative in all three. NOT VALID: enforced on write, not yet validated against legacy rows.';
@@ -110,8 +125,17 @@ BEGIN
       EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
         CONTINUE;
       END;
-      -- NaN is unordered against 0, so compare explicitly rather than relying on `< 0`.
-      IF v_points IS NOT NULL AND v_points = v_points AND v_points < 0 THEN
+      -- Reject non-finite values outright, and NOT via `v_points = v_points`: that idiom relies on
+      -- IEEE semantics where NaN <> NaN, but Postgres numeric defines NaN = NaN as TRUE, so it was
+      -- a no-op. Neither NaN nor Infinity is caught by `< 0` either -- Postgres orders NaN above
+      -- every real number and Infinity is plainly positive -- so both had to be named.
+      IF v_points IS NOT NULL
+         AND (
+           v_points = 'NaN'::numeric
+           OR v_points = 'Infinity'::numeric
+           OR v_points = '-Infinity'::numeric
+           OR v_points < 0
+         ) THEN
         RETURN false;
       END IF;
     END IF;

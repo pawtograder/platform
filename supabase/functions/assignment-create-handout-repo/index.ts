@@ -15,7 +15,7 @@ import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandl
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
-import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -328,7 +328,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   });
   scope.setTag("handout_hashes_seeded", String(seedResult.seeded));
   if (!seedResult.seeded) {
-    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${seedResult.reason}`);
+    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${describeHandoutSeedResult(seedResult)}`);
   }
 
   return {

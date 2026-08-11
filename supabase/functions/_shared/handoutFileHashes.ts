@@ -127,22 +127,41 @@ export async function computeHandoutFileHashesForCommit(params: {
  * from GitHub, and the next handout push recomputes them.
  */
 /**
- * `reason` values that mean "there was nothing to seed", not "seeding failed".
+ * The reasons that mean "there was nothing to seed", not "seeding failed".
  *
  * All three are steady states of a perfectly healthy assignment: no handout repository, a handout
  * that has no commit yet, or a config that declares no `submissionFiles` globs. There is no
  * comparable file set in any of them, so producing no hash rows is the correct outcome.
  *
- * Exported because the distinction is only safe to make here, next to the returns. A caller that
- * treats every `seeded: false` as a failure holds state back on assignments that were never going
- * to have hashes -- see the `latest_autograder_sha` guard in github-repo-webhook, where doing so
- * pinned the pointer on every subsequent push and reported an incident each time.
+ * A caller that treats every `seeded: false` as a failure holds state back on assignments that were
+ * never going to have hashes -- see the `latest_autograder_sha` guard in github-repo-webhook, where
+ * doing so pinned the pointer on every subsequent push and reported an incident each time.
  */
-export const EXPECTED_HANDOUT_SEED_SKIPS = ["no_template_repo", "no_commit_sha", "no_submission_files"] as const;
+export type HandoutSeedSkipReason = "no_template_repo" | "no_commit_sha" | "no_submission_files";
+
+/**
+ * Outcome of {@link seedHandoutFileHashes}.
+ *
+ * Skips and failures live in SEPARATE fields on purpose. They used to share one `reason` string,
+ * with the caught exception's message written into it -- so an error whose message happened to read
+ * `"no_commit_sha"` would have been classified as an expected skip and let the pointer advance over
+ * hashes that were never rebuilt. Making the two unrepresentable in the same field removes that by
+ * construction rather than by allowlist.
+ */
+export type HandoutSeedResult =
+  | { seeded: true }
+  | { seeded: false; skipReason: HandoutSeedSkipReason; failureReason?: undefined }
+  | { seeded: false; skipReason?: undefined; failureReason: string };
 
 /** True when a `{ seeded: false }` result is an expected skip rather than a failure. */
-export function isExpectedHandoutSeedSkip(reason: string | undefined): boolean {
-  return reason !== undefined && (EXPECTED_HANDOUT_SEED_SKIPS as readonly string[]).includes(reason);
+export function isExpectedHandoutSeedSkip(result: HandoutSeedResult): boolean {
+  return result.seeded === false && result.skipReason !== undefined;
+}
+
+/** Human-readable reason for logs, whichever kind of non-seeded result this is. */
+export function describeHandoutSeedResult(result: HandoutSeedResult): string {
+  if (result.seeded) return "seeded";
+  return result.skipReason ?? result.failureReason ?? "unknown";
 }
 
 export async function seedHandoutFileHashes(params: {
@@ -153,10 +172,10 @@ export async function seedHandoutFileHashes(params: {
   commitSha: string | null | undefined;
   scope?: Sentry.Scope;
   caches?: HandoutHashCaches;
-}): Promise<{ seeded: boolean; reason?: string }> {
+}): Promise<HandoutSeedResult> {
   const { adminSupabase, assignmentId, classId, templateRepo, commitSha, scope, caches } = params;
-  if (!templateRepo) return { seeded: false, reason: "no_template_repo" };
-  if (!commitSha) return { seeded: false, reason: "no_commit_sha" };
+  if (!templateRepo) return { seeded: false, skipReason: "no_template_repo" };
+  if (!commitSha) return { seeded: false, skipReason: "no_commit_sha" };
   try {
     const { data: graderConfig, error: graderConfigError } = await adminSupabase
       .from("autograder")
@@ -168,7 +187,7 @@ export async function seedHandoutFileHashes(params: {
     const expectedFiles = pawtograderConfig?.submissionFiles
       ? [...(pawtograderConfig.submissionFiles.files || []), ...(pawtograderConfig.submissionFiles.testFiles || [])]
       : [];
-    if (expectedFiles.length === 0) return { seeded: false, reason: "no_submission_files" };
+    if (expectedFiles.length === 0) return { seeded: false, skipReason: "no_submission_files" };
 
     const { file_hashes, combined_hash } = await computeHandoutFileHashesForCommit({
       templateRepo,
@@ -194,6 +213,6 @@ export async function seedHandoutFileHashes(params: {
     scope?.setTag("seed_handout_file_hashes_failed", "true");
     if (scope) Sentry.captureException(e, scope);
     else Sentry.captureException(e);
-    return { seeded: false, reason: e instanceof Error ? e.message : String(e) };
+    return { seeded: false, failureReason: e instanceof Error ? e.message : String(e) };
   }
 }

@@ -31,4 +31,12 @@ describe("graderResultIndicatesFailure", () => {
   it("an array payload is a failure, not a marker lookup", () => {
     expect(graderResultIndicatesFailure([{ is_warning: true }])).toBe(true);
   });
+
+  // `!errors` used to swallow these. They are not the warning marker, so by this file's own
+  // contract they are failures.
+  it("treats malformed falsy payloads as failures, not as absent", () => {
+    expect(graderResultIndicatesFailure(false)).toBe(true);
+    expect(graderResultIndicatesFailure(0)).toBe(true);
+    expect(graderResultIndicatesFailure("")).toBe(true);
+  });
 });

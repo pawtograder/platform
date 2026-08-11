@@ -31,6 +31,7 @@ import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
   computeHandoutFileHashesForCommit,
+  describeHandoutSeedResult,
   isExpectedHandoutSeedSkip,
   seedHandoutFileHashes,
   type HandoutHashCaches
@@ -2328,7 +2329,7 @@ async function handlePushToGraderSolution(
           commitSha: handoutTarget.latest_template_sha,
           scope
         });
-        if (!seedResult.seeded && isExpectedHandoutSeedSkip(seedResult.reason)) {
+        if (isExpectedHandoutSeedSkip(seedResult)) {
           // Nothing to seed is not a failure. no_template_repo / no_commit_sha /
           // no_submission_files are steady states of a healthy assignment -- there is no
           // comparable file set, so no hash rows is the right answer, and there is nothing stale
@@ -2336,7 +2337,7 @@ async function handlePushToGraderSolution(
           // grader-config push on such an assignment pinned latest_autograder_sha and raised an
           // incident, for a config that had in fact been saved correctly.
           console.log(
-            `No handout file hashes to reseed for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+            `No handout file hashes to reseed for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
           );
         } else if (!seedResult.seeded) {
           // A real failure: seedHandoutFileHashes swallows its own errors and returns
@@ -2348,7 +2349,7 @@ async function handlePushToGraderSolution(
           configReconcileOk = false;
           scope?.setTag("handout_file_hash_reseed_failed", "true");
           console.error(
-            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
           );
         }
       }

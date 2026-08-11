@@ -12,7 +12,10 @@
  * else — including every payload written before the marker existed — is a failure.
  */
 export function graderResultErrorsIndicateFailure(errors: unknown): boolean {
-  if (!errors) {
+  // Nullish only. `!errors` also swallowed `false`, `0` and `""` -- and since this file's whole
+  // contract is "anything that is not the explicit warning marker is a failure", a malformed falsy
+  // payload silently bypassed failure handling instead of being treated as one.
+  if (errors === null || errors === undefined) {
     return false;
   }
   if (
