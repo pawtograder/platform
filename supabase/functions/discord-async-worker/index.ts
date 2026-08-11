@@ -19,7 +19,7 @@ import type {
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
-import { classifyDiscordError, isBotPermissionProblem } from "../_shared/DiscordErrorClassification.ts";
+import { classifyDiscordError, isBotPermissionProblem, isResourceGone } from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 // Declare EdgeRuntime for type safety
@@ -312,13 +312,17 @@ function reportTerminalFailure(
   meta: { msg_id: number; enqueued_at: string },
   error: unknown,
   classification: { httpStatus?: number; code?: number; reason?: string },
-  scope: Sentry.Scope
+  parentScope: Sentry.Scope
 ) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   console.log(
     `[reportTerminalFailure] ${envelope.method} failed terminally (${classification.reason ?? "unclassified"}), not retrying: ${errorMessage}`
   );
 
+  // Cloned, so the terminal fingerprint and warning level cannot leak into any later event captured
+  // on the caller's scope — including the ones from the add_member_role path, which carries on after
+  // reporting a failed invite.
+  const scope = parentScope.clone();
   scope.setTag("terminal", "true");
   scope.setTag("discord_error_code", String(classification.code ?? "none"));
   scope.setContext("terminal_failure", {
@@ -464,9 +468,10 @@ async function checkGuildMembership(
     });
     if (response.status === 200) return { result: "member" };
     if (response.status === 404) return { result: "not_member" };
-    if (response.status === 401 || response.status === 403) {
-      return { result: "forbidden", status: response.status };
-    }
+    // 403 only. A 401 means the bot token is wrong or mid-rotation, which the classifier treats as
+    // retriable — calling it `forbidden` here would record every candidate as cannot_invite and tell
+    // instructors to change server permissions that are not the problem.
+    if (response.status === 403) return { result: "forbidden", status: response.status };
     return { result: "unknown" };
   } catch {
     return { result: "unknown" };
@@ -544,10 +549,18 @@ async function ensureInviteForUser(
     const classification = classifyDiscordError(error);
     const reason = error instanceof Error ? error.message : String(error);
 
-    if (isBotPermissionProblem(error)) {
-      // The bot's own configuration. Remember it for the rest of this run so the remaining users in
-      // this guild cost nothing, and record it against the user so an instructor sees who is stuck.
-      guildInviteFailures.set(record.discord_server_id, { code: classification.code, reason });
+    if (classification.terminal) {
+      // Any terminal cause belongs here, not just a permission one: Unknown Guild (10004), Unknown
+      // Channel (10003) and a malformed request are equally unfixable by retrying, and letting them
+      // fall through to the error path below would repeat the same doomed call every hour.
+      // isBotPermissionProblem only decides how the detail is worded.
+      const detail = isBotPermissionProblem(error)
+        ? reason
+        : `Discord rejected the invite request (${classification.reason ?? "terminal error"}): ${reason}`;
+
+      // Remember it for the rest of this run so the remaining users in this guild cost nothing, and
+      // record it against the user so an instructor sees who is stuck.
+      guildInviteFailures.set(record.discord_server_id, { code: classification.code, reason: detail });
       await recordMembershipStatus(
         adminSupabase,
         {
@@ -556,7 +569,7 @@ async function ensureInviteForUser(
           guildId: record.discord_server_id,
           state: "cannot_invite",
           discordErrorCode: classification.code,
-          detail: reason
+          detail
         },
         scope
       );
@@ -1257,8 +1270,18 @@ export async function processEnvelope(
         console.log(`[processEnvelope] Processing delete_channel: channel_id=${args.channel_id}`);
         Sentry.addBreadcrumb({ message: `Deleting Discord channel ${args.channel_id}`, level: "info" });
 
-        await discord.deleteChannel(args, scope);
-        console.log(`[processEnvelope] Successfully deleted channel`);
+        try {
+          await discord.deleteChannel(args, scope);
+          console.log(`[processEnvelope] Successfully deleted channel`);
+        } catch (error) {
+          if (!isResourceGone(error)) {
+            throw error;
+          }
+          // Already deleted in Discord, so the request has its intended outcome. Fall through to the
+          // local cleanup below: skipping it would leave discord_channels naming a channel that no
+          // longer exists, which later syncs would keep using.
+          console.log(`[processEnvelope] Channel ${args.channel_id} is already gone, reconciling tracking`);
+        }
 
         // Remove from discord_channels table
         if (envelope.class_id) {
@@ -1324,8 +1347,17 @@ export async function processEnvelope(
           level: "info"
         });
 
-        await discord.deleteRole(args, scope);
-        console.log(`[processEnvelope] Successfully deleted role`);
+        try {
+          await discord.deleteRole(args, scope);
+          console.log(`[processEnvelope] Successfully deleted role`);
+        } catch (error) {
+          if (!isResourceGone(error)) {
+            throw error;
+          }
+          // As with delete_channel: a stale discord_roles row can stop the server-connect trigger
+          // from creating a replacement, so the tracking row must go even though the API call failed.
+          console.log(`[processEnvelope] Role ${args.role_id} is already gone, reconciling tracking`);
+        }
 
         // Remove from discord_roles table if class_id is provided
         if (envelope.class_id) {
@@ -1375,7 +1407,7 @@ export async function processEnvelope(
               if (envelope.class_id && platformUserId) {
                 const expiresAt = new Date(Date.now() + 604800 * 1000); // 7 days
 
-                const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
+                const { error: storeError } = await adminSupabase.from("discord_invites").upsert(
                   {
                     user_id: platformUserId,
                     class_id: envelope.class_id,
@@ -1390,17 +1422,22 @@ export async function processEnvelope(
                   }
                 );
 
-                if (inviteError) {
-                  console.error(`[processEnvelope] Failed to store invite in database:`, inviteError);
+                if (storeError) {
+                  // An invite nobody can find is no invite at all: PendingInvites reads
+                  // discord_invites, so without the row the student never sees the URL. Rethrown so
+                  // the ordinary retry path gets another chance to persist it, rather than recording
+                  // a status that claims an invite is waiting when none is reachable.
+                  console.error(`[processEnvelope] Failed to store invite in database:`, storeError);
                   scope.setContext("invite_storage_error", {
-                    error_message: inviteError.message
+                    error_message: storeError.message,
+                    invite_code: invite.code
                   });
-                  Sentry.captureException(inviteError, scope);
-                } else {
-                  console.log(
-                    `[processEnvelope] Stored invite in database: user_id=${platformUserId}, class_id=${envelope.class_id}`
-                  );
+                  throw storeError;
                 }
+
+                console.log(
+                  `[processEnvelope] Stored invite in database: user_id=${platformUserId}, class_id=${envelope.class_id}`
+                );
 
                 await recordMembershipStatus(
                   adminSupabase,

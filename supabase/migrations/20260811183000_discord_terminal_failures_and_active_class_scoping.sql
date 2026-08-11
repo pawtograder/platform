@@ -114,6 +114,10 @@ USING (EXISTS (
   FROM public.user_roles ur
   WHERE ur.class_id = discord_membership_status.class_id
     AND ur.user_id = auth.uid()
+    -- A staff member whose enrollment has been disabled must lose access. `detail` can
+    -- carry an outstanding invite URL, and authorizeforclassgrader() excludes disabled
+    -- roles, so a policy that ignored the flag would be the looser of the two paths.
+    AND ur.disabled = false
     AND ur.role = ANY (ARRAY['instructor'::public.app_role, 'grader'::public.app_role])
 ));
 
@@ -241,6 +245,11 @@ BEGIN
     dms.last_observed_at
   FROM public.discord_membership_status dms
   JOIN public.users u ON u.user_id = dms.user_id
+  -- Restricted to the class's *current* server. The status table is keyed on guild_id, so
+  -- changing discord_server_id leaves the old guild's rows behind; without this join an
+  -- instructor would keep seeing failures from a server the class no longer uses, and two
+  -- rows for one student would race to define their state.
+  JOIN public.classes c ON c.id = dms.class_id AND c.discord_server_id = dms.guild_id
   LEFT JOIN public.user_roles ur
     ON ur.user_id = dms.user_id AND ur.class_id = dms.class_id AND ur.disabled = false
   LEFT JOIN public.profiles p ON p.id = ur.private_profile_id

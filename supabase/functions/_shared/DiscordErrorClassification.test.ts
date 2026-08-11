@@ -13,6 +13,7 @@ import {
   isBotPermissionProblem,
   isMemberNotFound,
   isRateLimitError,
+  isResourceGone,
   parseDiscordApiError
 } from "./DiscordErrorClassification.ts";
 
@@ -112,6 +113,21 @@ Deno.test("isBotPermissionProblem: separates the admin-action cause from the use
   assertEquals(isBotPermissionProblem(new Error('Discord API error: 403 Forbidden - {"code": 50013}')), true);
   assertEquals(isBotPermissionProblem(new Error("No text channels found in guild 9 to create invite")), true);
   assertEquals(isBotPermissionProblem(MEMBER_NOT_FOUND), false);
+});
+
+Deno.test("isResourceGone: true for the codes that mean a delete target no longer exists", () => {
+  assertEquals(isResourceGone(new Error('Discord API error: 404 Not Found - {"code": 10003}')), true); // channel
+  assertEquals(isResourceGone(new Error('Discord API error: 404 Not Found - {"code": 10008}')), true); // message
+  assertEquals(isResourceGone(new Error('Discord API error: 404 Not Found - {"code": 10011}')), true); // role
+  assertEquals(isResourceGone(new Error("Discord API error: 404 Not Found - Unknown error")), true);
+});
+
+Deno.test("isResourceGone: a 404 naming some other condition is not swallowed", () => {
+  // Unknown Member is a 404, but a delete_channel failing this way has not deleted the channel, so
+  // treating it as done would drop the tracking row while the resource still exists.
+  assertEquals(isResourceGone(MEMBER_NOT_FOUND), false);
+  assertEquals(isResourceGone(MISSING_ACCESS), false);
+  assertEquals(isResourceGone(new Error("Discord rate limit: retry after 200ms")), false);
 });
 
 Deno.test("isRateLimitError: matches the wrapper's rate-limit message", () => {

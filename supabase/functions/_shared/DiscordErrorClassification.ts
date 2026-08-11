@@ -134,6 +134,22 @@ export function isMemberNotFound(error: unknown): boolean {
 }
 
 /**
+ * True when Discord says the thing we were about to delete does not exist.
+ *
+ * For a delete that is the success case, not a failure: somebody removed the channel or role in
+ * Discord directly and the request has already achieved what it asked for. Callers use this to go on
+ * and drop their local tracking row, which would otherwise be left naming a resource that is gone.
+ */
+export function isResourceGone(error: unknown): boolean {
+  const { httpStatus, code } = parseDiscordApiError(error);
+  // Unknown channel, message and role respectively.
+  if (code === 10003 || code === 10008 || code === 10011) return true;
+  // A 404 with no parsable code is the same statement with less detail. Guarded on the code being
+  // absent so a 404 that names some *other* condition is not swallowed.
+  return httpStatus === 404 && code === undefined;
+}
+
+/**
  * True when the failure is the bot's own configuration rather than anything about the user — the
  * distinction instructors need, because this one needs an admin to fix it.
  */

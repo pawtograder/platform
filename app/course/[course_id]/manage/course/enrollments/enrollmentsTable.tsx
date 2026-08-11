@@ -100,6 +100,13 @@ const DISCORD_STATUS_PRESENTATION: Record<DiscordStatusLabel, { color: string; i
   "Not checked yet": { color: "gray.400", icon: FaQuestionCircle }
 };
 
+// Derived from the presentation map so the filter can never drift from the labels the column renders.
+// "N/A" is the value the column produces for a pending invitation row.
+const DISCORD_STATUS_FILTER_OPTIONS = [
+  ...Object.keys(DISCORD_STATUS_PRESENTATION).map((label) => ({ label, value: label })),
+  { label: "N/A", value: "N/A" }
+];
+
 /**
  * Where one student stands with the class's Discord server.
  *
@@ -1436,6 +1443,19 @@ export default function EnrollmentsTable() {
                                     { label: "N/A", value: "N/A" }
                                   ]}
                                   placeholder="Filter by GitHub org status..."
+                                />
+                              )}
+                              {header.id === "discord_status" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={DISCORD_STATUS_FILTER_OPTIONS}
+                                  placeholder="Filter by Discord status..."
                                 />
                               )}
                               {header.id === "tags" && (
