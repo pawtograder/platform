@@ -324,9 +324,14 @@ async function triggerBulkSubmissions(args: Args): Promise<void> {
   let nextIndex = 0;
 
   const dispatch = async (): Promise<void> => {
-    const taskStartTime = Date.now();
-
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Every attempt takes a paced slot, retries included. Pacing only first attempts would
+      // let a burst of retryable 5xxs double the request rate — the other workers keep
+      // admitting first attempts meanwhile — so `max_per_minute` would stop being an upper
+      // bound on GitHub requests at exactly the moment GitHub is asking us to back off.
+      await pacer.acquire();
+      // After the wait, so the reported latency is the request itself and not the pacing.
+      const requestStartTime = Date.now();
       try {
         await octokit.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
           owner,
@@ -334,7 +339,7 @@ async function triggerBulkSubmissions(args: Args): Promise<void> {
           workflow_id: WORKFLOW_NAME,
           ref
         });
-        durations.push(Date.now() - taskStartTime);
+        durations.push(Date.now() - requestStartTime);
         succeeded++;
         return;
       } catch (error) {
@@ -364,7 +369,6 @@ async function triggerBulkSubmissions(args: Args): Promise<void> {
       if (index >= args.totalSubmissions) {
         return;
       }
-      await pacer.acquire();
       await dispatch();
       completed++;
     }
