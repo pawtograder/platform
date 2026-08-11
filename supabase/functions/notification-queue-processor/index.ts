@@ -50,6 +50,23 @@ function emailTransport(): EmailTransportDecision {
 let reportedMissingSmtpHost = false;
 
 /**
+ * Set once an archive has failed while email is explicitly disabled.
+ *
+ * The digest purge below deletes content permanently, so it must not run while any notification is
+ * known to be un-archived. Returning early from the failure branch was not enough on its own: that
+ * branch reports work-done, so `runBatchHandler` skips the idle sleep and calls `processBatch`
+ * again immediately -- and on that pass the un-archived messages are invisible, because the read
+ * that returned them already pushed `vt` an hour out. The batch therefore looks empty, no failure
+ * is observed, and the purge ran anyway milliseconds later. The guard has to outlive the iteration
+ * that set it.
+ *
+ * Isolate-scoped, like the SMTP report above, and deliberately never cleared: the messages stay
+ * hidden behind their visibility timeout for an hour, so nothing this isolate can observe proves
+ * the suppression completed. A fresh pod re-evaluates from scratch.
+ */
+let suppressionIncomplete = false;
+
+/**
  * Local Inbucket is the one target where internal test addresses SHOULD receive mail.
  *
  * One derivation for every caller. `ignoreTLS` is set only for the Inbucket port, so this is the
@@ -821,6 +838,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       // that the queue-size metric cannot see either -- the same invisibility the precheck above
       // exists to avoid. Do NOT purge digest items in this case: the suppression did not fully
       // happen, so discarding the digest content on top of it would lose data twice over.
+      suppressionIncomplete = true;
       scope.setTag("archive_failures", String(archiveFailures));
       Sentry.captureMessage(
         `Email suppression incomplete: ${archiveFailures}/${pendingNotifications.length} notification(s) could not be archived`,
@@ -846,6 +864,15 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     // -- the earlier "one class's disable must not discard another's digest" reasoning described
     // a situation that cannot arise. Every pending digest predates the switch and none of them
     // may be delivered, so all of them go.
+    if (suppressionIncomplete) {
+      // An earlier poll in this isolate could not archive everything. Those messages are still
+      // queued behind their visibility timeout, so the suppression is incomplete and destroying
+      // digest content on top of it would lose data twice over.
+      scope.setTag("digest_purge", "skipped_incomplete_suppression");
+      console.warn("Email explicitly disabled, but an earlier archive failed in this worker; not purging digest items");
+      return pendingNotifications.length > 0;
+    }
+
     const { error: purgeError } = await adminSupabase
       .schema("public")
       .from("discussion_digest_items")
