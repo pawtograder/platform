@@ -4,19 +4,20 @@
  * TriggerBulkSubmissions - Deno script to trigger multiple grading workflows
  *
  * Usage:
- *   # Basic usage with defaults (10 submissions, 10 per minute)
+ *   # Basic usage with defaults (10 submissions, 60 per minute)
  *   deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts <submission_id>
  *
  *   # Custom parameters
- *   deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts <submission_id> <max_per_minute> <total_submissions>
+ *   deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts <submission_id> <max_per_minute> <total_submissions> [concurrency]
  *
- *   # Example: 5 submissions, 3 per minute
- *   deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts 123 3 5
+ *   # Example: 200 submissions at 120 per minute
+ *   deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts 123 120 200
  *
  * Parameters:
  *   submission_id: The submission ID to trigger (required)
- *   max_per_minute: Maximum submissions per minute (default: 10)
+ *   max_per_minute: Maximum submissions per minute (default: 60)
  *   total_submissions: Total number of submissions to make (default: 10)
+ *   concurrency: Maximum in-flight dispatches (default: derived from max_per_minute)
  *
  * Environment Variables (from .env.local):
  *   SUPABASE_URL: Supabase project URL
@@ -24,18 +25,32 @@
  *   GITHUB_APP_ID: GitHub App ID
  *   GITHUB_PRIVATE_KEY_STRING: GitHub App private key
  *
- * The script fetches the actual repository and SHA from the database
- * and triggers workflow requests asynchronously with controlled concurrency.
+ * The script fetches the actual repository and SHA from the database, creates the
+ * submission tag once, then issues one workflow dispatch per submission.
+ *
+ * Why this does not call `triggerWorkflow` from GitHubWrapper: that helper creates the
+ * tag object and ref on every call (three write requests per submission, two of which are
+ * redundant here because every iteration reuses the same repo and SHA), and it runs through
+ * the shared Redis-backed @octokit/plugin-throttling limiter. That limiter serializes writes
+ * at one per second across every edge replica, so it capped this script at ~20 submissions
+ * per minute no matter what was requested, and stole write budget from production while it
+ * ran. This script uses its own unthrottled installation client and paces itself, so
+ * `max_per_minute` is the real throughput knob.
+ *
+ * GitHub's secondary rate limit for content-creating requests is about 80 per minute per
+ * installation; above that expect 403s and retries.
  */
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
+import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
+import { Octokit } from "https://esm.sh/octokit?dts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 interface Args {
   submissionId: number;
   maxPerMinute: number;
   totalSubmissions: number;
+  concurrency: number;
 }
 
 interface SubmissionData {
@@ -44,100 +59,77 @@ interface SubmissionData {
   sha: string;
 }
 
-interface WorkflowResult {
-  index: number;
-  success: boolean;
-  error?: string;
-  timestamp: Date;
+const WORKFLOW_NAME = "grade.yml";
+const MAX_ATTEMPTS = 4;
+const SECONDARY_LIMIT_WARNING_THRESHOLD = 80;
+
+// Octokit defaults to 2022-11-28, which GitHub deprecated when 2026-03-10 shipped; every
+// request then comes back with Deprecation/Sunset headers and @octokit/request logs a
+// warning per call. Pinning the current version silences that and opts into its behavior:
+// `GET /rate_limit` drops the top-level `rate` property (read `resources.core` instead) and
+// workflow dispatches return 200 with the run details rather than an empty 204.
+const API_VERSION_HEADER = { "X-GitHub-Api-Version": "2026-03-10" };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Rate limiter class to control throughput
-class RateLimiter {
-  private tokens: number;
-  private lastRefill: number;
-  private readonly maxTokens: number;
-  private readonly refillRate: number; // tokens per millisecond
+function errorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown })?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Retry-After (seconds) or x-ratelimit-reset (epoch seconds) from a GitHub error response,
+ * converted to milliseconds to wait. GitHub sends one or the other on a 403/429.
+ */
+function retryDelayFromHeaders(error: unknown): number | undefined {
+  const headers = (error as { response?: { headers?: Record<string, string> } })?.response?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  const retryAfter = Number(headers["retry-after"]);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return retryAfter * 1000;
+  }
+  const reset = Number(headers["x-ratelimit-reset"]);
+  if (Number.isFinite(reset) && reset > 0) {
+    return Math.max(0, reset * 1000 - Date.now());
+  }
+  return undefined;
+}
+
+function isRetryable(error: unknown): boolean {
+  const status = errorStatus(error);
+  if (status === undefined) {
+    // Network-level failure (connection reset, DNS, timeout) — worth another try.
+    return true;
+  }
+  return status === 403 || status === 429 || status >= 500;
+}
+
+/**
+ * Evenly paced admission control. Each caller reserves the next slot synchronously, so
+ * concurrent workers can never claim the same one, then sleeps until that slot opens.
+ */
+class Pacer {
+  private nextSlot = Date.now();
+  private readonly intervalMs: number;
 
   constructor(maxPerMinute: number) {
-    this.maxTokens = maxPerMinute;
-    this.tokens = maxPerMinute;
-    this.lastRefill = Date.now();
-    this.refillRate = maxPerMinute / 60000; // Convert per minute to per millisecond
+    this.intervalMs = 60000 / maxPerMinute;
   }
 
   async acquire(): Promise<void> {
-    while (this.tokens < 1) {
-      this.refill();
-      if (this.tokens < 1) {
-        // Wait for next refill cycle
-        const waitTime = Math.ceil((1 - this.tokens) / this.refillRate);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
-    }
-    this.tokens--;
-  }
-
-  private refill(): void {
     const now = Date.now();
-    const timePassed = now - this.lastRefill;
-    const tokensToAdd = timePassed * this.refillRate;
-
-    this.tokens = Math.min(this.maxTokens, this.tokens + tokensToAdd);
-    this.lastRefill = now;
-  }
-}
-
-// Concurrency limiter class to control maximum concurrent requests
-class ConcurrencyLimiter {
-  private running = 0;
-  private readonly maxConcurrent: number;
-  private readonly queue: Array<() => Promise<void>> = [];
-
-  constructor(maxConcurrent: number) {
-    this.maxConcurrent = maxConcurrent;
-  }
-
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.running >= this.maxConcurrent) {
-      // Wait for a slot to become available
-      return new Promise((resolve, reject) => {
-        this.queue.push(async () => {
-          try {
-            const result = await fn();
-            resolve(result);
-          } catch (error) {
-            reject(error);
-          }
-        });
-      });
-    }
-
-    this.running++;
-    try {
-      const result = await fn();
-      return result;
-    } finally {
-      this.running--;
-      this.processQueue();
-    }
-  }
-
-  private processQueue(): void {
-    if (this.queue.length > 0 && this.running < this.maxConcurrent) {
-      const next = this.queue.shift();
-      if (next) {
-        this.running++;
-        next().finally(() => {
-          this.running--;
-          this.processQueue();
-        });
-      }
-    }
-  }
-
-  async waitForAll(): Promise<void> {
-    while (this.running > 0 || this.queue.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    const slot = Math.max(this.nextSlot, now);
+    this.nextSlot = slot + this.intervalMs;
+    if (slot > now) {
+      await sleep(slot - now);
     }
   }
 }
@@ -147,20 +139,21 @@ function parseArgs(): Args {
 
   if (args.length < 1) {
     console.error(
-      "Usage: deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts <submission_id> [max_per_minute] [total_submissions]"
+      "Usage: deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts <submission_id> [max_per_minute] [total_submissions] [concurrency]"
     );
     console.error("  submission_id: The submission ID to trigger");
-    console.error("  max_per_minute: Maximum submissions per minute (default: 10)");
+    console.error("  max_per_minute: Maximum submissions per minute (default: 60)");
     console.error("  total_submissions: Total number of submissions to make (default: 10)");
+    console.error("  concurrency: Maximum in-flight dispatches (default: derived from max_per_minute)");
     console.error("");
     console.error(
-      "Example: deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts 123 3 5"
+      "Example: deno run --allow-env --allow-net --env-file=.env.local supabase/functions/scripts/TriggerBulkSubmissions.ts 123 120 200"
     );
     Deno.exit(1);
   }
 
   const submissionId = parseInt(args[0]);
-  const maxPerMinute = args[1] ? parseInt(args[1]) : 10;
+  const maxPerMinute = args[1] ? parseInt(args[1]) : 60;
   const totalSubmissions = args[2] ? parseInt(args[2]) : 10;
 
   if (isNaN(submissionId) || submissionId <= 0) {
@@ -178,10 +171,21 @@ function parseArgs(): Args {
     Deno.exit(1);
   }
 
+  // Enough in-flight requests to keep the pacer saturated at ~2s per dispatch, plus headroom
+  // for the slow tail, capped by the number of submissions we actually have to send.
+  const defaultConcurrency = Math.ceil(maxPerMinute / 30) + 2;
+  const concurrency = args[3] ? parseInt(args[3]) : defaultConcurrency;
+
+  if (isNaN(concurrency) || concurrency <= 0) {
+    console.error("Error: concurrency must be a positive number");
+    Deno.exit(1);
+  }
+
   return {
     submissionId,
     maxPerMinute,
-    totalSubmissions
+    totalSubmissions,
+    concurrency: Math.min(concurrency, totalSubmissions)
   };
 }
 
@@ -201,7 +205,91 @@ async function getSubmissionData(submissionId: number): Promise<SubmissionData> 
     throw new Error(`Failed to fetch submission ${submissionId}: ${error?.message || "Submission not found"}`);
   }
 
-  return data;
+  if (!data.repository || !data.sha) {
+    throw new Error(`Submission ${submissionId} has no repository or SHA to trigger`);
+  }
+
+  return { id: data.id, repository: data.repository, sha: data.sha };
+}
+
+/**
+ * Installation-scoped client for one repo, without the shared production throttle. The
+ * token is minted up front so the concurrent dispatches below don't all stall on auth.
+ */
+async function getInstallationOctokit(owner: string, repo: string): Promise<Octokit> {
+  const appId = Deno.env.get("GITHUB_APP_ID");
+  const privateKey = Deno.env.get("GITHUB_PRIVATE_KEY_STRING");
+
+  if (!appId || !privateKey) {
+    throw new Error("Missing GITHUB_APP_ID or GITHUB_PRIVATE_KEY_STRING");
+  }
+
+  const appOctokit = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
+  appOctokit.request = appOctokit.request.defaults({ headers: API_VERSION_HEADER });
+  const { data: installation } = await appOctokit.request("GET /repos/{owner}/{repo}/installation", { owner, repo });
+
+  const octokit = new Octokit({
+    authStrategy: createAppAuth,
+    auth: { appId, privateKey, installationId: installation.id }
+  });
+  octokit.request = octokit.request.defaults({ headers: API_VERSION_HEADER });
+
+  // Reads `resources.core`, not `rate` — the latter is gone in 2026-03-10.
+  const { data: limits } = await octokit.request("GET /rate_limit");
+  console.log(`  Installation: ${installation.id}`);
+  console.log(`  Core rate limit remaining: ${limits.resources.core.remaining}/${limits.resources.core.limit}`);
+
+  return octokit;
+}
+
+/**
+ * Create the tag the workflow dispatches against, once for the whole run. Every submission
+ * reuses the same repo and SHA, so the tag only has to exist — re-creating it per dispatch
+ * (as `triggerWorkflow` does) just burns two write requests against the secondary limit.
+ */
+async function ensureSubmissionTag(octokit: Octokit, owner: string, repo: string, sha: string): Promise<string> {
+  const ref = `pawtograder-submit/${sha}`;
+
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", { owner, repo, ref: `tags/${ref}` });
+    console.log(`  Tag ${ref} already exists`);
+    return ref;
+  } catch (error) {
+    if (errorStatus(error) !== 404) {
+      throw error;
+    }
+  }
+
+  await octokit.request("POST /repos/{owner}/{repo}/git/tags", {
+    owner,
+    repo,
+    tag: ref,
+    message: "pawtograder submission",
+    object: sha,
+    type: "commit",
+    tagger: {
+      name: "pawtograder",
+      email: "khoury-pawtograder-app@ccs.neu.edu",
+      date: new Date().toISOString()
+    }
+  });
+
+  try {
+    await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+      owner,
+      repo,
+      ref: `refs/tags/${ref}`,
+      sha
+    });
+  } catch (error) {
+    // Another run may have created it between our GET and POST.
+    if (!errorMessage(error).includes("Reference already exists")) {
+      throw error;
+    }
+  }
+
+  console.log(`  Created tag ${ref}`);
+  return ref;
 }
 
 async function triggerBulkSubmissions(args: Args): Promise<void> {
@@ -209,85 +297,103 @@ async function triggerBulkSubmissions(args: Args): Promise<void> {
   console.log(`  Submission ID: ${args.submissionId}`);
   console.log(`  Target throughput: ${args.maxPerMinute} per minute`);
   console.log(`  Total submissions: ${args.totalSubmissions}`);
-  console.log(`  Max concurrent requests: 20`);
+  console.log(`  Max concurrent requests: ${args.concurrency}`);
 
-  // Fetch the actual submission data from the database
+  if (args.maxPerMinute > SECONDARY_LIMIT_WARNING_THRESHOLD) {
+    console.warn(
+      `  WARNING: ${args.maxPerMinute}/min exceeds GitHub's ~${SECONDARY_LIMIT_WARNING_THRESHOLD}/min secondary limit for content-creating requests; expect throttling`
+    );
+  }
+
   const submissionData = await getSubmissionData(args.submissionId);
+  const [owner, repo] = submissionData.repository.split("/");
   console.log(`  Repository: ${submissionData.repository}`);
   console.log(`  SHA: ${submissionData.sha}`);
 
-  const startTime = Date.now();
-  const results: WorkflowResult[] = [];
+  const octokit = await getInstallationOctokit(owner, repo);
+  const ref = await ensureSubmissionTag(octokit, owner, repo, submissionData.sha);
 
-  // Initialize rate limiter and concurrency limiter
-  const rateLimiter = new RateLimiter(args.maxPerMinute);
-  const concurrencyLimiter = new ConcurrencyLimiter(20);
+  const startTime = Date.now();
+  const durations: number[] = [];
+  const failures = new Map<string, number>();
+  let completed = 0;
+  let succeeded = 0;
+  let retried = 0;
+
+  const pacer = new Pacer(args.maxPerMinute);
+  let nextIndex = 0;
+
+  const dispatch = async (): Promise<void> => {
+    const taskStartTime = Date.now();
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await octokit.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
+          owner,
+          repo,
+          workflow_id: WORKFLOW_NAME,
+          ref
+        });
+        durations.push(Date.now() - taskStartTime);
+        succeeded++;
+        return;
+      } catch (error) {
+        if (attempt === MAX_ATTEMPTS || !isRetryable(error)) {
+          const key = `${errorStatus(error) ?? "network"}: ${errorMessage(error)}`;
+          failures.set(key, (failures.get(key) ?? 0) + 1);
+          return;
+        }
+        retried++;
+        const backoffMs = retryDelayFromHeaders(error) ?? 1000 * 2 ** (attempt - 1);
+        await sleep(backoffMs);
+      }
+    }
+  };
 
   console.log(`\nStarting asynchronous workflow triggers...`);
 
-  // Create all submission tasks
-  const tasks = Array.from({ length: args.totalSubmissions }, (_, index) => {
-    return async (): Promise<void> => {
-      const submissionIndex = index + 1;
-      const taskStartTime = Date.now();
+  const progressTimer = setInterval(() => {
+    const elapsedMinutes = (Date.now() - startTime) / 60000;
+    const rate = elapsedMinutes > 0 ? completed / elapsedMinutes : 0;
+    console.log(`  ${completed}/${args.totalSubmissions} dispatched (${rate.toFixed(1)}/min, ${succeeded} ok)`);
+  }, 5000);
 
-      try {
-        // Wait for rate limiter to allow this request
-        await rateLimiter.acquire();
-
-        console.log(`  [${submissionIndex}/${args.totalSubmissions}] Triggering workflow...`);
-
-        // Use the actual repository and SHA from the database
-        await triggerWorkflow(submissionData.repository, submissionData.sha, "grade.yml");
-
-        const duration = Date.now() - taskStartTime;
-        console.log(`  [${submissionIndex}/${args.totalSubmissions}] ✓ Success (${duration}ms)`);
-
-        results.push({
-          index: submissionIndex,
-          success: true,
-          timestamp: new Date()
-        });
-      } catch (error) {
-        const duration = Date.now() - taskStartTime;
-        console.error(`  [${submissionIndex}/${args.totalSubmissions}] ✗ Failed (${duration}ms):`, error);
-
-        results.push({
-          index: submissionIndex,
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-          timestamp: new Date()
-        });
+  const workers = Array.from({ length: args.concurrency }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= args.totalSubmissions) {
+        return;
       }
-    };
+      await pacer.acquire();
+      await dispatch();
+      completed++;
+    }
   });
 
-  // Execute all tasks with concurrency control
-  const executionPromises = tasks.map((task) => concurrencyLimiter.run(task));
-
-  // Wait for all tasks to complete
-  await Promise.all(executionPromises);
-  await concurrencyLimiter.waitForAll();
+  await Promise.all(workers);
+  clearInterval(progressTimer);
 
   const totalDuration = Date.now() - startTime;
-  const successfulSubmissions = results.filter((r) => r.success).length;
-  const failedSubmissions = results.filter((r) => !r.success).length;
-  const actualThroughput = (successfulSubmissions / totalDuration) * 60000; // per minute
+  const failedSubmissions = args.totalSubmissions - succeeded;
+  const actualThroughput = (succeeded / totalDuration) * 60000;
+  const sorted = durations.slice().sort((a, b) => a - b);
+  const percentile = (p: number) =>
+    sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] : 0;
 
   console.log(`\n=== Bulk submission trigger completed ===`);
   console.log(`  Total duration: ${totalDuration}ms`);
-  console.log(`  Successful: ${successfulSubmissions}/${args.totalSubmissions}`);
+  console.log(`  Successful: ${succeeded}/${args.totalSubmissions}`);
   console.log(`  Failed: ${failedSubmissions}/${args.totalSubmissions}`);
+  console.log(`  Retries: ${retried}`);
+  console.log(`  Dispatch latency: p50 ${percentile(0.5)}ms, p95 ${percentile(0.95)}ms`);
   console.log(`  Actual throughput: ${actualThroughput.toFixed(2)} per minute`);
   console.log(`  Target throughput: ${args.maxPerMinute} per minute`);
 
-  if (failedSubmissions > 0) {
-    console.log(`\nFailed submissions:`);
-    results
-      .filter((r) => !r.success)
-      .forEach((r) => {
-        console.log(`  [${r.index}]: ${r.error}`);
-      });
+  if (failures.size > 0) {
+    console.log(`\nFailures:`);
+    for (const [message, count] of [...failures].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${count}x ${message}`);
+    }
   }
 }
 
