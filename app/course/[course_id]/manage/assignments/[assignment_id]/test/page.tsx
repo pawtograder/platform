@@ -80,7 +80,11 @@ export default function TestAssignmentPage() {
           </Text>
         </Box>
       ) : (
-        <CreateStudentReposButton assignmentId={Number.parseInt(assignment_id as string)} forTestAssignment />
+        <CreateStudentReposButton
+          classId={Number.parseInt(course_id as string)}
+          assignmentId={Number.parseInt(assignment_id as string)}
+          forTestAssignment
+        />
       )}
       <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
         <Heading size="md">Submission History</Heading>
