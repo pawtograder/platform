@@ -217,8 +217,24 @@ export function perStudentEvaluationBlocked(input: {
   rubricParts: RubricPart[];
   gradeTargets: string[];
   gradeTargetsLoaded: boolean;
+  /**
+   * The same map `computeRubricGradingCompletion` reads. Required for the two to agree: without
+   * it, an `is_assign_to_student` part with nobody assigned blocked the whole review even though
+   * both the completion calculation and `validate_review_assignment_completion` treat that part as
+   * skipped — server-completable, permanently disabled in the UI, which is the never-resolving
+   * button this blocker exists to remove rather than create.
+   */
+  rubricPartStudentAssignments: Record<string, string | null> | null | undefined;
 }): boolean {
-  const hasPerStudentParts = input.rubricParts.some((p) => p.is_individual_grading || p.is_assign_to_student);
+  // `is_individual_grading` always needs targets — there is no per-part opt-out for it.
+  // `is_assign_to_student` only needs them when somebody is actually assigned, and an absent or
+  // empty assignment is exactly what `partAssignToStudentSkipped` calls skipped, so this reads the
+  // map the same way the completion calculation does rather than inventing a second rule.
+  const hasPerStudentParts = input.rubricParts.some(
+    (p) =>
+      p.is_individual_grading ||
+      (p.is_assign_to_student && !partAssignToStudentSkipped(p.id, input.rubricPartStudentAssignments))
+  );
   if (!hasPerStudentParts) {
     return false;
   }

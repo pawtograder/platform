@@ -748,6 +748,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           // grader_results.errors is the reliable channel here — unlike workflow_run_error it needs
           // no repository_id, so it also works for the regression-rerun shape.
           const preservedErrors: GraderResultErrors = {
+            // Marks this as a warning, not a failure. Every view that reads `grader_results.errors`
+            // treated any non-null value as authoritative failure state and rendered "Error" in
+            // place of the score — so without this marker the guard preserved the score and then
+            // hid it, which is the opposite of the point. `graderResultIndicatesFailure` in
+            // lib/graderResultStatus.ts is the reader; unmarked payloads stay failures.
+            is_warning: true,
             user_visible_message:
               `A grading run for this submission exited with code ${requestBody.ret_code} and produced no ` +
               `test results. Your previous results for this submission were kept. Ask your instructor to ` +

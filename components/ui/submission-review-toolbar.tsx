@@ -149,14 +149,15 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     [submission.assignment_group_id, submission.profile_id, groupMemberProfileIds]
   );
 
+  const rubricPartStudentAssignments =
+    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
+
   const gradeTargetsBlocked = perStudentEvaluationBlocked({
     rubricParts: rubricPartsInScope,
     gradeTargets,
-    gradeTargetsLoaded: groupLoaded
+    gradeTargetsLoaded: groupLoaded,
+    rubricPartStudentAssignments
   });
-
-  const rubricPartStudentAssignments =
-    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
   return useMemo(() => {
     // See the matching note in useMissingRubricChecksForActiveReview: a rubric with no checks is a

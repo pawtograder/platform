@@ -111,6 +111,7 @@ import {
   getSubmissionFilesOrResultsTab,
   linkToSubPage
 } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -1224,7 +1225,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                         ? "N/A"
                         : !historical_submission.grader_results
                           ? "In Progress"
-                          : historical_submission.grader_results && historical_submission.grader_results.errors
+                          : graderResultIndicatesFailure(historical_submission.grader_results.errors)
                             ? "Error"
                             : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
                     </Link>

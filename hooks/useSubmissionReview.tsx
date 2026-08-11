@@ -353,14 +353,15 @@ export function useMissingRubricChecksForActiveReview() {
   // Until the group's membership is known, per-student completion cannot be evaluated: the
   // underlying check degrades to "any one member's comment satisfies the whole group", which
   // produces a false all-clear.
+  const rubricPartStudentAssignments =
+    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
+
   const gradeTargetsBlocked = perStudentEvaluationBlocked({
     rubricParts,
     gradeTargets,
-    gradeTargetsLoaded: groupLoaded
+    gradeTargetsLoaded: groupLoaded,
+    rubricPartStudentAssignments
   });
-
-  const rubricPartStudentAssignments =
-    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
   return useMemo(() => {
     // `gradeTargetsBlocked` means "completeness cannot be evaluated", and callers turn it into a
