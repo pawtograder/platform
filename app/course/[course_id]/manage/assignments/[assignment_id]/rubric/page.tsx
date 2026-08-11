@@ -38,6 +38,7 @@ import {
   computeRubricPointsBreakdown,
   HydratedRubricToYamlRubric,
   maxPointsForCriterion,
+  NegativePointsError,
   resolveReferences,
   sanitizeHydratedRubricPoints,
   YamlRubricToHydratedRubric,
@@ -596,7 +597,9 @@ function InnerRubricPage() {
           .join(" ")} Rubric`;
       }
 
-      const hydrated = YamlRubricToHydratedRubric(newRubricBase, {
+      // Warnings ignored on purpose: the source here is the built-in defaultRubric template, which
+      // has no negative points.
+      const { rubric: hydrated } = YamlRubricToHydratedRubric(newRubricBase, {
         assignment_id: Number(currentAssignmentId),
         is_private: false,
         review_round: reviewRound
@@ -758,7 +761,7 @@ function InnerRubricPage() {
       ) {
         try {
           const parsed = YAML.parse(yamlValue) as YmlRubricType;
-          const hydratedFromYaml = YamlRubricToHydratedRubric(parsed, {
+          const { rubric: hydratedFromYaml, warnings: parseWarnings } = YamlRubricToHydratedRubric(parsed, {
             assignment_id: Number(assignment_id),
             is_private: false,
             review_round: activeReviewRound
@@ -782,13 +785,15 @@ function InnerRubricPage() {
             class_id: assignmentDetails.class_id
           };
 
-          const { rubric: sanitizedRubric, warnings } = sanitizeHydratedRubricPoints(mergedRubric);
-          setPointsWarnings(warnings);
-          setRubricForSidebar(sanitizedRubric);
-          if (warnings.length > 0 && viewModeRef.current === "source") {
-            skipActiveRubricYamlSyncRef.current = true;
-            setValue(YAML.stringify(HydratedRubricToYamlRubric(sanitizedRubric, { allRubrics: allHydratedRubrics })));
-          }
+          // The warnings come from the parse above. Sanitizing mergedRubric a second time here was
+          // pointless: its rubric_parts are hydratedFromYaml's, already absolutized, so that call
+          // could only ever return an empty warnings list and the banner never rendered.
+          setPointsWarnings(parseWarnings);
+          setRubricForSidebar(mergedRubric);
+          // The buffer is deliberately NOT rewritten. Overwriting the user's source with the
+          // absolutized values edits their text under the cursor mid-keystroke, and it would also
+          // erase the evidence before the save-time check could see it. Source mode's contract is
+          // "what you typed is what we save, and we tell you when it is wrong".
           setError(undefined);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Unknown YAML parsing error");
@@ -848,11 +853,11 @@ function InnerRubricPage() {
     (rubric: HydratedRubric): string => {
       skipActiveRubricYamlSyncRef.current = true;
       const { rubric: sanitized, warnings } = sanitizeHydratedRubricPoints(rubric);
-      if (viewModeRef.current === "gui") {
-        setPointsWarnings([]);
-      } else {
-        setPointsWarnings(warnings);
-      }
+      // No viewMode branch needed: this input is a GUI draft that RubricGuiEditor has already
+      // sanitized, so `warnings` is empty here, and the banner is gated on source mode at its
+      // render site anyway. The old branch also depended on flushPendingGuiSync running before
+      // persistViewMode("source"), which was a hazard waiting to be reordered.
+      setPointsWarnings(warnings);
       const yamlString = YAML.stringify(HydratedRubricToYamlRubric(sanitized, { allRubrics: allHydratedRubrics }));
       setValue(yamlString);
       setRubricForSidebar(sanitized);
@@ -921,11 +926,23 @@ function InnerRubricPage() {
         }
         try {
           const parsed = YAML.parse(liveValue) as YmlRubricType;
-          const hydrated = YamlRubricToHydratedRubric(parsed, {
+          const { rubric: hydrated, warnings: switchWarnings } = YamlRubricToHydratedRubric(parsed, {
             assignment_id: Number(assignment_id),
             is_private: false,
             review_round: activeReviewRound
           });
+          if (switchWarnings.length > 0) {
+            // Refuse rather than switch. Switching materializes the absolutized values into the
+            // GUI draft, and the next GUI -> source flush would then overwrite the user's own `-5`
+            // with `5` in their buffer — silently changing what they wrote.
+            toaster.error({
+              title: "Cannot switch to GUI",
+              description: new NegativePointsError(switchWarnings).message,
+              duration: 15000,
+              meta: { closable: true }
+            });
+            return;
+          }
           if (assignmentDetails) {
             hydrated.assignment_id = Number(assignment_id);
             hydrated.class_id = assignmentDetails.class_id;
@@ -1102,7 +1119,9 @@ function InnerRubricPage() {
       const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
       try {
         const parsedValue = YAML.parse(value);
-        const currentEditorActiveRubric = YamlRubricToHydratedRubric(parsedValue, {
+        // Warnings ignored: this is a pure diff for the unsaved-changes indicator. A buffer holding
+        // `-5` against a saved `5` correctly reports as changed.
+        const { rubric: currentEditorActiveRubric } = YamlRubricToHydratedRubric(parsedValue, {
           assignment_id: Number(assignment_id),
           is_private: false,
           review_round: initialActiveRubricSnapshot.review_round || "grading-review"
@@ -1260,17 +1279,32 @@ function InnerRubricPage() {
       }
 
       let parsedRubricFromEditor: HydratedRubric;
+      let negativePointsWarnings: PointsValidationWarning[];
       try {
-        parsedRubricFromEditor = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue), {
+        const parsed = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue), {
           assignment_id: Number(assignment_id),
           is_private: false,
           review_round: activeReviewRound
         });
+        parsedRubricFromEditor = parsed.rubric;
+        negativePointsWarnings = parsed.warnings;
         parsedRubricFromEditor.assignment_id = Number(assignment_id);
         parsedRubricFromEditor.class_id = assignmentDetails.class_id;
         parsedRubricFromEditor.review_round = activeReviewRound;
       } catch (e) {
         throw new Error(`Invalid YAML: ${(e as Error).message}`);
+      }
+
+      // Deliberately OUTSIDE the try above, or the catch would relabel a validation failure as
+      // "Invalid YAML".
+      //
+      // Blocking rather than absolutizing: update_rubric_full cascades a points change into every
+      // existing grading comment, so silently saving `-5` as `+5` rewrites grades that have already
+      // been issued — a 10-point swing the wrong way on every student who has that check. The CLI
+      // path already rejects this (supabase/functions/_shared/rubricYaml.ts); the web save path
+      // bypasses that validator, so the check has to exist here too.
+      if (negativePointsWarnings.length > 0) {
+        throw new NegativePointsError(negativePointsWarnings);
       }
 
       // Identify the existing rubric (if any) for this review round; the RPC
@@ -1645,17 +1679,28 @@ function InnerRubricPage() {
                     meta: { closable: true }
                   });
                 } catch (error) {
-                  Sentry.captureException(error);
-                  console.error(error);
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description:
-                      error instanceof Error
-                        ? `An unexpected error occurred: ${error.message}`
-                        : "An unknown error occurred during the save process.",
-                    duration: 15000,
-                    meta: { closable: true }
-                  });
+                  if (error instanceof NegativePointsError) {
+                    // A rubric-authoring mistake, not a fault: show the offending paths and do not
+                    // report it to Sentry as "an unexpected error occurred".
+                    toaster.error({
+                      title: "Cannot save rubric",
+                      description: error.message,
+                      duration: 15000,
+                      meta: { closable: true }
+                    });
+                  } else {
+                    Sentry.captureException(error);
+                    console.error(error);
+                    toaster.error({
+                      title: "Failed to save rubric",
+                      description:
+                        error instanceof Error
+                          ? `An unexpected error occurred: ${error.message}`
+                          : "An unknown error occurred during the save process.",
+                      duration: 15000,
+                      meta: { closable: true }
+                    });
+                  }
                 } finally {
                   setIsSaving(false);
                 }

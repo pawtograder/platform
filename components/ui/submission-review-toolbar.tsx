@@ -29,7 +29,7 @@ import {
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -47,7 +47,11 @@ import {
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
 import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
-import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
+import {
+  computeRubricGradingCompletion,
+  gradeTargetsForSubmission,
+  perStudentEvaluationBlocked
+} from "@/lib/rubricGradingCompletion";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import { useRouter } from "next/navigation";
@@ -110,10 +114,14 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     return partIds;
   }, [assignedRubricPartIds, rubricPartsList]);
 
-  const groupRow = useAssignmentGroupWithMembers({
+  const { group: groupRow, loaded: groupLoaded } = useAssignmentGroupWithMembersLoadState({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
-  const groupMemberProfileIds = (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id);
+  // Memoized: this was a fresh array every render, so the useMemo below never memoized.
+  const groupMemberProfileIds = useMemo(
+    () => (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id),
+    [groupRow]
+  );
 
   const gradeTargets = useMemo(
     () =>
@@ -125,6 +133,12 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     [submission.assignment_group_id, submission.profile_id, groupMemberProfileIds]
   );
 
+  const gradeTargetsBlocked = perStudentEvaluationBlocked({
+    rubricParts: rubricPartsList,
+    gradeTargets,
+    gradeTargetsLoaded: groupLoaded
+  });
+
   const rubricPartStudentAssignments =
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
@@ -134,29 +148,36 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
-        missing_optional_criteria: []
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true
       };
     }
 
-    const hasPerStudentParts = rubricPartsList?.some((p) => p.is_individual_grading || p.is_assign_to_student);
-    if (hasPerStudentParts && gradeTargets.length === 0) {
+    // Empty lists here mean "cannot evaluate", NOT "nothing missing" — this early return used to
+    // hand the dialog four empty arrays, which rendered an enabled "Mark Review Assignment as
+    // Complete" on a review whose per-student checks had never been examined.
+    if (gradeTargetsBlocked) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
-        missing_optional_criteria: []
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true
       };
     }
 
-    return computeRubricGradingCompletion({
-      rubricChecks: allChecksForRubric,
-      allCriteria: allCriteriaForRubric,
-      rubricParts: rubricPartsList,
-      comments,
-      rubricPartStudentAssignments,
-      gradeTargets,
-      rubricPartIdsInScope
-    });
+    return {
+      ...computeRubricGradingCompletion({
+        rubricChecks: allChecksForRubric,
+        allCriteria: allCriteriaForRubric,
+        rubricParts: rubricPartsList,
+        comments,
+        rubricPartStudentAssignments,
+        gradeTargets,
+        rubricPartIdsInScope
+      }),
+      gradeTargetsBlocked: false
+    };
   }, [
     reviewAssignment,
     activeSubmissionReview,
@@ -166,7 +187,8 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     comments,
     rubricPartStudentAssignments,
     gradeTargets,
-    rubricPartIdsInScope
+    rubricPartIdsInScope,
+    gradeTargetsBlocked
   ]);
 }
 
@@ -310,19 +332,15 @@ function CompleteReviewAssignmentDialog({
 export function CompleteReviewAssignmentButton() {
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
-  const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
+  // The optional lists are not consumed here — the dialog below renders only the required ones.
+  const { missing_required_checks, missing_required_criteria, gradeTargetsBlocked } =
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
 
-  if (
-    !reviewAssignment ||
-    !missing_required_checks ||
-    !missing_optional_checks ||
-    !missing_required_criteria ||
-    !missing_optional_criteria ||
-    reviewAssignment.completed_at
-  ) {
+  // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
+  // below are always arrays and so never gated anything.
+  if (!reviewAssignment || gradeTargetsBlocked || reviewAssignment.completed_at) {
     // Render a loading state or disabled button if already completed
     return (
       <Button variant="surface" loading={!reviewAssignment?.completed_at}>
@@ -360,8 +378,13 @@ export function CompleteReviewAssignmentButton() {
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
-  const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
-    useMissingRubricChecksForActiveReview();
+  const {
+    missing_required_checks,
+    missing_optional_checks,
+    missing_required_criteria,
+    missing_optional_criteria,
+    gradeTargetsBlocked
+  } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
@@ -411,16 +434,13 @@ export function CompleteReviewButton() {
     [activeSubmissionReview, nextIncompleteUrl, private_profile_id, router, submissionController.submission_reviews]
   );
 
-  if (
-    !activeSubmissionReview ||
-    !missing_required_checks ||
-    !missing_optional_checks ||
-    !missing_required_criteria ||
-    !missing_optional_criteria
-  ) {
-    // Render a loading state or disabled button
+  // The old guard tested the truthiness of `missing_*`, which are always arrays from a useMemo, so
+  // it never fired. The real not-ready case is group membership: until it loads we cannot tell an
+  // ungraded per-student check from a graded one, and the fallback counts one member's comment as
+  // covering the whole group — an all-clear on a review nobody has finished.
+  if (!activeSubmissionReview || gradeTargetsBlocked) {
     return (
-      <Button variant="surface" loading>
+      <Button variant="surface" loading disabled>
         Complete Review
       </Button>
     );

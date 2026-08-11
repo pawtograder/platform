@@ -2644,7 +2644,14 @@ if (import.meta.main) {
 
     if (!started) {
       started = true;
-      EdgeRuntime.waitUntil(runBatchHandler());
+      // Reset on exit: runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
+      // without this the flag stays true for the isolate's whole life, so the worker never
+      // restarts even once the underlying fault clears.
+      EdgeRuntime.waitUntil(
+        runBatchHandler().finally(() => {
+          started = false;
+        })
+      );
     }
 
     return new Response(

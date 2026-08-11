@@ -1,10 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { selectVersionMismatchedRows, type GradebookRowBatchResult } from "../_shared/gradebookVersionMismatch.ts";
 
 // Declare EdgeRuntime for type safety
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -23,6 +24,10 @@ if (Deno.env.get("SENTRY_DSN")) {
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
 }
+
+// Guard to prevent multiple concurrent batch handlers per runtime instance
+let started = false;
+
 export type QueueMessage<T> = {
   msg_id: number;
   read_ct: number;
@@ -43,6 +48,73 @@ const MAX_BATCH_UPDATE_SIZE = 75; // Maximum number of students to update per RP
 const workerId = crypto.randomUUID();
 
 // Helper to create unique row key for gradebook_row_recalc_state
+/**
+ * Clear `is_recalculating` for rows that lost the optimistic-version race and re-enqueue them.
+ *
+ * Shared by the bulk and scoped paths. It previously existed only in the scoped path, so a bulk
+ * version conflict left the row flagged as recalculating with nothing scheduled to pick it up —
+ * and because that flag gates new enqueues, the row never recalculated again.
+ */
+async function recoverVersionMismatchedRows({
+  adminSupabase,
+  classId,
+  gradebook_id,
+  results,
+  workerId,
+  label
+}: {
+  adminSupabase: SupabaseClient<Database>;
+  classId: number;
+  gradebook_id: number;
+  results: GradebookRowBatchResult[];
+  workerId: string;
+  label: string;
+}): Promise<number> {
+  const mismatchedRows = selectVersionMismatchedRows(results);
+  if (mismatchedRows.length === 0) {
+    return 0;
+  }
+
+  console.log(
+    `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): Clearing is_recalculating for ${mismatchedRows.length} mismatched rows and re-enqueueing`
+  );
+
+  // Clear is_recalculating but keep dirty=true
+  for (const row of mismatchedRows) {
+    const { error: clearError } = await adminSupabase
+      .from("gradebook_row_recalc_state")
+      .update({ is_recalculating: false })
+      .eq("class_id", classId)
+      .eq("gradebook_id", gradebook_id)
+      .eq("student_id", row.student_id)
+      .eq("is_private", row.is_private);
+    // Checked, unlike the original: leaving the flag set is the exact stuck state this recovers.
+    if (clearError) {
+      console.error(`[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to clear state`, clearError);
+      Sentry.captureException(clearError);
+    }
+  }
+
+  // Re-enqueue via the queue so the worker re-processes with fresh data
+  const { error: enqueueError } = await adminSupabase.schema("pgmq_public").rpc("send_batch", {
+    queue_name: "gradebook_row_recalculate",
+    messages: mismatchedRows.map((row) => ({
+      class_id: classId,
+      gradebook_id,
+      student_id: row.student_id,
+      is_private: row.is_private
+    }))
+  });
+  // A dropped re-enqueue after the flag was already cleared leaves the row dirty but unqueued,
+  // which is silent until someone notices a stale grade.
+  if (enqueueError) {
+    console.error(`[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to re-enqueue`, enqueueError);
+    Sentry.captureException(enqueueError);
+  }
+
+  return mismatchedRows.length;
+}
+
 function rowKey(classId: number, gradebookId: number, studentId: string, isPrivate: boolean): string {
   return `${classId}:${gradebookId}:${studentId}:${isPrivate}`;
 }
@@ -390,6 +462,18 @@ async function processRowsAll(
               `[DEBUG] ${workerId} BATCH_UPDATE (chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
             );
           }
+
+          // The bulk path used to compute versionMismatchCount only to log it. Recovery lived
+          // solely in the scoped path below, so a version conflict here left the row marked
+          // is_recalculating forever — which also blocks every future enqueue for that row.
+          await recoverVersionMismatchedRows({
+            adminSupabase,
+            classId,
+            gradebook_id,
+            results,
+            workerId,
+            label: "bulk"
+          });
         }
       } else {
         console.log(
@@ -620,36 +704,14 @@ async function processRowsAll(
             );
           }
 
-          // For version-mismatched rows: clear is_recalculating so new enqueues
-          // can proceed, then re-enqueue. Without this, rows stay permanently
-          // stuck in is_recalculating=true after a version conflict.
-          const mismatchedRows = results.filter((r) => !r.version_matched && !r.error && !r.cleared);
-          if (mismatchedRows.length > 0) {
-            console.log(
-              `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY: Clearing is_recalculating for ${mismatchedRows.length} mismatched rows and re-enqueueing`
-            );
-            // Clear is_recalculating but keep dirty=true
-            for (const row of mismatchedRows) {
-              await adminSupabase
-                .from("gradebook_row_recalc_state")
-                .update({ is_recalculating: false })
-                .eq("class_id", classId)
-                .eq("gradebook_id", gradebook_id)
-                .eq("student_id", row.student_id)
-                .eq("is_private", row.is_private);
-            }
-            // Re-enqueue via the queue so the worker re-processes with fresh data
-            const reEnqueueMessages = mismatchedRows.map((row) => ({
-              class_id: classId,
-              gradebook_id,
-              student_id: row.student_id,
-              is_private: row.is_private
-            }));
-            await adminSupabase.schema("pgmq_public").rpc("send_batch", {
-              queue_name: "gradebook_row_recalculate",
-              messages: reEnqueueMessages
-            });
-          }
+          await recoverVersionMismatchedRows({
+            adminSupabase,
+            classId,
+            gradebook_id,
+            results,
+            workerId,
+            label: "scoped"
+          });
         }
       } else {
         console.log(
@@ -792,13 +854,31 @@ Deno.serve((req) => {
     });
   }
 
-  EdgeRuntime.waitUntil(runBatchHandler());
+  // pg_cron pokes this endpoint twice a minute. Without a guard, every poke parked ANOTHER
+  // infinite poll loop on the same isolate via waitUntil — the loops never exit on their own, the
+  // 2s CPU limit never fires on a sleeping loop, and each one lived the full wall-clock budget.
+  // That is a large part of why memory here tracked uptime rather than load.
+  const already_running = started;
+  if (!started) {
+    started = true;
+    // Reset on exit: runBatchHandler breaks out of its loop after maxConsecutiveErrors, and without
+    // this the flag would stay true forever and the worker would never restart even once the
+    // underlying fault cleared.
+    EdgeRuntime.waitUntil(
+      runBatchHandler().finally(() => {
+        started = false;
+      })
+    );
+  } else {
+    console.log(`[serve] Batch handler already started, skipping`);
+  }
 
   // Return immediately to acknowledge the start request
   return Promise.resolve(
     new Response(
       JSON.stringify({
         message: "Gradebook batch handler started",
+        already_running,
         timestamp: new Date().toISOString()
       }),
       {

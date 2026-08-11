@@ -126,13 +126,30 @@ export const updateSession = async (request: NextRequest) => {
     }
 
     return response;
-  } catch {
-    // If you are here, a Supabase client could not be created!
-    // This is likely because you have not set up environment variables.
-    // Check out http://localhost:3000 for Next Steps.
+  } catch (e) {
+    // If you are here, a Supabase client could not be created, or the claims/deployment-channel
+    // lookup threw. Historically that meant missing environment variables locally; in production
+    // it is a Supabase incident.
+    //
+    // Fail closed on IDENTITY. This path used to forward `request.headers` verbatim, skipping the
+    // sanitized copy built at the top of the try — so a client-supplied `X-User-ID` survived, and
+    // downstream layouts treat that header as an authenticated identity. It is resolved through a
+    // service-role client (lib/ssrUtils.ts), which means RLS does not catch it either. The header
+    // is only ever legitimate when we set it ourselves from a verified claim.
+    const safeHeaders = new Headers(request.headers);
+    safeHeaders.delete("X-User-ID");
+
+    // Deliberately not a 503. With the header stripped every /course consumer already redirects on
+    // a missing user id, so this degrades to the landing page. The matcher covers /sign-in, / and
+    // /api/*, so refusing outright would turn a transient Supabase blip into a total outage —
+    // including the page users would need next.
+    //
+    // Reported, too: this was a bare `catch {}`, so the exception was swallowed with no Sentry and
+    // no log, which is why nobody knew the path was ever taken.
+    Sentry.captureException(e, { tags: { feature: "middleware-session" } });
     return NextResponse.next({
       request: {
-        headers: request.headers
+        headers: safeHeaders
       }
     });
   }

@@ -259,7 +259,7 @@ spec:
         # keeping pace, so student-visible grades go stale.
         - alert: PawtograderRecalcStalled
           expr: |
-            pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"} > 1000
+            max(pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"}) > 1000
           for: 3m
           labels:
             severity: critical
@@ -273,7 +273,7 @@ spec:
         # repeatedly and landing in the DLQ.
         - alert: PawtograderAsyncDLQGrowing
           expr: |
-            pawtograder_async_dlq_size{namespace="{{ $ns }}"} > 200
+            max(pawtograder_async_dlq_size{namespace="{{ $ns }}"}) > 200
           for: 1m
           labels:
             severity: critical
@@ -285,7 +285,7 @@ spec:
         # Async worker queue has a large backlog — enqueue rate outpaces workers.
         - alert: PawtograderAsyncQueueBacklog
           expr: |
-            pawtograder_async_queue_size{namespace="{{ $ns }}"} > 1000
+            max(pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
           for: 5m
           labels:
             severity: critical
@@ -298,7 +298,7 @@ spec:
         # hour means stuck/starved workers rather than a burst.
         - alert: PawtograderAsyncQueueStuck
           expr: |
-            pawtograder_async_queue_size{namespace="{{ $ns }}"} > 10
+            max(pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
           for: 1h
           labels:
             severity: critical
@@ -308,6 +308,138 @@ spec:
               The async worker queue in {{ $ns }} has held above 10 for 1h — the
               workers are stuck or starved rather than handling a burst. Check
               worker liveness.
+        # Notification email backlog. This queue had no gauge at all until the metrics function
+        # started reporting it, which is why an email pipeline that never delivered anything in
+        # production was invisible to monitoring as well as to the code.
+        - alert: PawtograderNotificationEmailBacklog
+          expr: |
+            max(pawtograder_notification_emails_queue_size{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder notification email queue is backing up"
+            description: >-
+              The notification email queue in {{ $ns }} has exceeded
+              {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }} for 15m.
+              Check that SMTP is configured and reachable — with EMAIL_ENABLED set, a
+              misconfiguration reports itself, but an unreachable relay still backs up here.
+        # Oldest-message age, one rule for every queue.
+        #
+        # Depth thresholds have to be tuned against enrollment and the deadline calendar, so they
+        # drift out of calibration and get raised until they stop firing. Age does not: a queue
+        # whose oldest message has been waiting twenty minutes is broken at any scale, in any week
+        # of the term. This is the queue signal that needs no seasonal retuning.
+        #
+        # DLQs are excluded. A dead-letter queue is where poison messages go to STAY -- nothing
+        # drains it on a schedule -- so its oldest message is older than any threshold within hours
+        # of the first permanent failure, and this rule would fire forever at severity: critical and
+        # get silenced, taking the six live queues down with it. DLQ health is a growth signal, which
+        # is what PawtograderAsyncDLQGrowing and PawtograderDiscordDLQGrowing measure.
+        - alert: PawtograderQueueOldestMessageAging
+          expr: |
+            max by (queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} is not draining"
+            description: >-
+              The oldest message in queue {{`{{ $labels.queue }}`}} ({{ $ns }}) has been waiting over
+              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s. Unlike a
+              depth alert this does not depend on volume — the queue has genuinely stopped moving.
+        # Discord dead-letter queue, as a RATE rather than a level.
+        #
+        # The gauge was already exported and had no rule at all; only the GitHub queue was watched.
+        # A rate is the right shape here: a single poison message parks in the DLQ indefinitely, so
+        # a level alert would fire forever and get silenced, while growth means new failures. The
+        # max() matters because every edge-function pod exports this gauge.
+        #
+        # delta(), not increase(): this is a GAUGE (see the # TYPE line in metrics/index.ts).
+        # increase() applies counter-reset correction, so draining the DLQ -- 50 -> 0 -- reads as a
+        # reset and adds the pre-reset value back, reporting ~50 of "growth" and paging whoever just
+        # cleaned the queue up. delta() is the gauge-safe form and is what "grew by" means here.
+        - alert: PawtograderDiscordDLQGrowing
+          expr: |
+            delta(max(pawtograder_discord_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Discord DLQ is growing"
+            description: >-
+              The Discord dead-letter queue in {{ $ns }} grew by more than
+              {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }} in the last
+              hour — messages are failing repeatedly. A 403 from the bot (missing guild permissions)
+              produces exactly this shape.
+    - name: pawtograder.edgefunctions
+      rules:
+        # Edge-function pods being OOM-killed.
+        #
+        # Repeated restarts here are not a nuisance: the kernel kills PID 1, so every in-flight
+        # request on that pod dies at once and Kong reports 502 to whoever was calling — including
+        # the grading runner. This had been happening continuously and alerted nobody, because no
+        # rule covered pod lifecycle at all.
+        #
+        # container="functions" is the CONTAINER name from _edge-functions-workload.tpl, not the
+        # workload name. kube-state-metrics labels by container, so container="edge-functions"
+        # matches zero series and every rule in this group would sit Inactive forever — pod-lifecycle
+        # monitoring that looks shipped and is dead on arrival.
+        - alert: PawtograderEdgeFunctionsRestarting
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}", container="functions"}[30m]) > {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge-function pods are restarting ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} restarted more than
+              {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
+              If the last termination reason is OOMKilled, check that maxParallelism x
+              EDGE_WORKER_MEMORY_LIMIT_MB fits inside the container memory limit.
+        # Gated on a RECENT restart, not on the reason alone. kube_pod_container_status_last_terminated_reason
+        # reflects the container's lastState, so it keeps reporting OOMKilled=1 for the rest of that
+        # container's life -- a single 03:00 kill would hold a critical alert firing for days after
+        # the workload recovered, get silenced, and hide the next real one. That is the same
+        # fire-forever shape the Discord DLQ rule above rejects. Joining on a restart within the last
+        # hour makes it self-resolve once the pod is stable.
+        - alert: PawtograderEdgeFunctionsOOMKilled
+          expr: |
+            (
+              max by (pod) (kube_pod_container_status_last_terminated_reason{namespace="{{ $ns }}", container="functions", reason="OOMKilled"}) > 0
+            )
+              and on (pod)
+            (
+              max by (pod) (increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}", container="functions"}[1h])) > 0
+            )
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge-function pod was OOM-killed ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} was terminated with OOMKilled. Every request in
+              flight on that pod failed. The admission budget (maxParallelism x per-isolate memory
+              limit) must fit inside the container memory limit, with headroom for a burst.
+        # Leading indicator for the above. Memory that climbs with UPTIME rather than load is the
+        # signature of long-lived isolates accumulating, and it is visible well before the kill.
+        - alert: PawtograderEdgeFunctionsMemoryHigh
+          expr: |
+            max by (pod) (
+              container_memory_working_set_bytes{namespace="{{ $ns }}", container="functions"}
+                / on(namespace, pod, container)
+              kube_pod_container_resource_limits{namespace="{{ $ns }}", container="functions", resource="memory"}
+            ) > {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder edge-function memory is near its limit ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
+              {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
+              memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and
@@ -331,7 +463,7 @@ spec:
         # A cert-manager Certificate (Studio/ingress TLS) is close to expiry.
         - alert: PawtograderCertificateExpiringSoon
           expr: |
-            (certmanager_certificate_expiration_timestamp_seconds{namespace="{{ .Release.Namespace }}"} - time())
+            (certmanager_certificate_expiration_timestamp_seconds{namespace=~"{{ join "|" (.Values.monitoring.prometheusRules.certNamespaces | default (list .Release.Namespace)) }}"} - time())
               < {{ .Values.monitoring.prometheusRules.certExpiryWarningDays | default 14 }} * 86400
           for: 1h
           labels:

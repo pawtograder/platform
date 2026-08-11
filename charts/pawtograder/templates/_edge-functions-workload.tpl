@@ -181,7 +181,7 @@ spec:
             # optional: true is deliberate. Externally-managed Secrets
             # (ESO/OpenBao/SealedSecrets) need this key added by hand, and a
             # missing *required* secretKeyRef crash-loops the entire edge tier.
-            # Optional degrades to exactly the pre-existing behaviour instead:
+            # Optional degrades to exactly the pre-existing behavior instead:
             # every function keeps working and only MCP/CLI fail, with
             # MCPAuth's "JWT_SECRET must be set" pointing at the cause.
             # Nothing else in this container reads JWT_SECRET and
@@ -226,6 +226,22 @@ spec:
             - name: GIT_COMMIT_SHA
               value: {{ . | quote }}
             {{- end }}
+            {{- $emailEnabled := $ctx.Values.edgeFunctions.email.enabled }}
+            {{- if or (kindIs "bool" $emailEnabled) $emailEnabled }}
+            # Explicit switch for notification email, consumed by
+            # supabase/functions/_shared/emailTransportConfig.ts. Leave unset to infer from
+            # SMTP_HOST (the historical behavior). Set "true" wherever email is meant to work: the
+            # processor then REFUSES loudly if SMTP config is missing, rather than treating an
+            # unconfigured mailer as an empty queue and deferring the backlog forever.
+            #
+            # `kindIs "bool"` first, NOT a bare `with`/`if`: Go templates treat the boolean false as
+            # empty, so `enabled: false` -- the natural reading of a key named `enabled` -- would
+            # skip this block entirely and never render EMAIL_ENABLED. The runtime would then fall
+            # back to inferring from SMTP_HOST, which the SMTP Secret now supplies, and the
+            # deployment would send mail from an environment the operator had just switched off.
+            - name: EMAIL_ENABLED
+              value: {{ $emailEnabled | toString | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
@@ -238,10 +254,17 @@ spec:
             - secretRef:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
                 optional: true
+            {{- if $ctx.Values.edgeFunctions.envFromSecrets }}
+            # `optional` below is inverted from requireEnvFromSecrets. envFrom is one-shot: a pod
+            # that starts before its Secret has synced runs WITHOUT those variables for its entire
+            # life, with nothing to re-read them later. That is how notification email went dark
+            # and stayed dark. Where every listed Secret is provisioned ahead of the release,
+            # prefer a pod that refuses to start over one that silently runs half-configured.
+            {{- end }}
             {{- range $ctx.Values.edgeFunctions.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
-                optional: true
+                optional: {{ not $ctx.Values.edgeFunctions.requireEnvFromSecrets }}
             {{- end }}
             {{- if ne ($ctx.Values.redis.provider | default "external") "external" }}
             # In-cluster Redis URL (REDIS_URL): for provider=shared it's synced

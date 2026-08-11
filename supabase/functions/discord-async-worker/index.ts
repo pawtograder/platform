@@ -2,6 +2,9 @@ import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
+// Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
+// without this Sentry.init never ran and every capture was a silent no-op.
+import "../_shared/SentryInit.ts";
 import type {
   DiscordAsyncEnvelope,
   SendMessageArgs,
@@ -1414,7 +1417,14 @@ Deno.serve((req) => {
   if (!started) {
     console.log(`[serve] Starting batch handler`);
     started = true;
-    EdgeRuntime.waitUntil(runBatchHandler());
+    // Reset on exit: runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
+    // without this the flag stays true for the isolate's whole life, so the worker never restarts
+    // even once the underlying fault clears.
+    EdgeRuntime.waitUntil(
+      runBatchHandler().finally(() => {
+        started = false;
+      })
+    );
   } else {
     console.log(`[serve] Batch handler already started, skipping`);
   }

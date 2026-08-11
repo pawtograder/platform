@@ -9,7 +9,15 @@
  * Run from supabase/functions:  deno test --no-check --allow-env _shared/HandlerUtils.test.ts
  */
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
-import { assertAuthLookupSucceeded, assertRoleLookupSucceeded, UserVisibleError } from "./HandlerUtils.ts";
+import {
+  assertAuthLookupSucceeded,
+  assertRoleLookupSucceeded,
+  IllegalArgumentError,
+  NotFoundError,
+  SecurityError,
+  UserVisibleError,
+  wrapRequestHandler
+} from "./HandlerUtils.ts";
 
 Deno.test("assertRoleLookupSucceeded: no error passes", () => {
   assertRoleLookupSucceeded(null, "Role lookup");
@@ -86,4 +94,50 @@ Deno.test("assertAuthLookupSucceeded: a transport failure with no status raises 
   // AuthRetryableFetchError and friends: we never reached the auth server, so we know nothing.
   const e = assertThrows(() => assertAuthLookupSucceeded({ message: "error sending request" }), UserVisibleError);
   assertEquals((e as UserVisibleError).status, 503);
+});
+
+// --- wrapRequestHandler status ladder ---------------------------------------
+//
+// Every typed branch set a status, but the catch-all for unclassified throws did not, and
+// `new Response(body)` defaults to 200. So a TypeError, an OOM, or anything else not one of our
+// error types was reported to the caller as a SUCCESSFUL request carrying an error object.
+
+function post(): Request {
+  return new Request("https://example.test/fn", { method: "POST", body: "{}" });
+}
+
+Deno.test("wrapRequestHandler: an unclassified throw is a 500, not a 200", async () => {
+  const res = await wrapRequestHandler(post(), () => {
+    throw new Error("boom");
+  });
+  assertEquals(res.status, 500);
+  const body = await res.json();
+  assertEquals(body.error.message, "Internal Server Error");
+});
+
+Deno.test("wrapRequestHandler: a non-Error throw is also a 500", async () => {
+  const res = await wrapRequestHandler(post(), () => {
+    throw "a bare string";
+  });
+  assertEquals(res.status, 500);
+});
+
+Deno.test("wrapRequestHandler: typed errors keep their own statuses", async () => {
+  const cases: [Error, number][] = [
+    [new SecurityError("nope"), 401],
+    [new IllegalArgumentError("bad"), 400],
+    [new NotFoundError("gone"), 404],
+    [new UserVisibleError("explained"), 500]
+  ];
+  for (const [err, status] of cases) {
+    const res = await wrapRequestHandler(post(), () => {
+      throw err;
+    });
+    assertEquals(res.status, status, err.constructor.name);
+  }
+});
+
+Deno.test("wrapRequestHandler: a successful handler is still 200", async () => {
+  const res = await wrapRequestHandler(post(), () => Promise.resolve({ ok: true }));
+  assertEquals(res.status, 200);
 });

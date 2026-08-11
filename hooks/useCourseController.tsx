@@ -57,6 +57,38 @@ export function useAssignmentGroupWithMembers({
   const assignmentGroup = useTableControllerValueById(assignmentGroupsWithMembers, assignment_group_id);
   return assignmentGroup;
 }
+
+/**
+ * The group row plus an explicit `loaded` flag.
+ *
+ * `useAssignmentGroupWithMembers` returns `undefined` both while the row is loading and when it
+ * genuinely does not exist, so a caller that branches on "no members" cannot tell the two apart.
+ * In rubric grading that ambiguity is dangerous: with an unknown membership the per-student
+ * completion check silently degrades to "any one member's comment counts for the whole group",
+ * which shows an all-clear on a review that has barely been graded.
+ *
+ * `assignmentGroupsWithMembers` is a full-list controller with members embedded in each row, so
+ * once it is ready a present row is authoritative and an absent row is authoritatively absent.
+ */
+export function useAssignmentGroupWithMembersLoadState({
+  assignment_group_id
+}: {
+  assignment_group_id: number | null | undefined;
+}): { group: ReturnType<typeof useAssignmentGroupWithMembers>; loaded: boolean } {
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const ready = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const group = useTableControllerValueById(assignmentGroupsWithMembers, assignment_group_id);
+  // A solo submission has nothing to wait for.
+  if (assignment_group_id == null) {
+    return { group: undefined, loaded: true };
+  }
+  // `ready` alone, deliberately. Folding `group !== undefined` in here would contradict the
+  // paragraph above: a group id that does not resolve — deleted group, row not visible under this
+  // grader's RLS — would report "still loading" forever, and every caller that gates on it would
+  // wait for a row that is never coming. `loaded` answers "has the list settled?"; whether the row
+  // exists is a separate question the caller can already see from `group`.
+  return { group, loaded: ready };
+}
 export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
   const { assignmentGroupsWithMembers } = useCourseController();
   const { private_profile_id } = useClassProfiles();

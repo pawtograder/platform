@@ -7,6 +7,7 @@ import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { resolveEmailTransport, type EmailTransportDecision } from "../_shared/emailTransportConfig.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -24,6 +25,18 @@ if (Deno.env.get("SENTRY_DSN")) {
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
+}
+
+// Guard to prevent multiple concurrent batch handlers per runtime instance
+let started = false;
+
+// Resolved once per isolate, not once per email. `envFrom` is one-shot, so the SMTP environment
+// cannot change under a running pod — re-reading ~10 env vars and re-walking the decision tree for
+// every recipient of a digest fan-out is pure waste.
+let cachedEmailTransport: EmailTransportDecision | undefined;
+function emailTransport(): EmailTransportDecision {
+  cachedEmailTransport ??= resolveEmailTransport((key) => Deno.env.get(key));
+  return cachedEmailTransport;
 }
 
 export type QueueMessage<T> = {
@@ -476,11 +489,24 @@ async function sendEmailViaTransporter(
 ): Promise<boolean> {
   try {
     console.log(`Sending email to ${recipient} with subject ${subject}`);
+    // Resolved through the shared helper rather than read straight from the env, so the
+    // SMTP_FROM -> SMTP_ADMIN_EMAIL fallback applies here too. Reading SMTP_FROM directly meant
+    // mounting the chart's pawtograder-smtp Secret (which carries SMTP_ADMIN_EMAIL, not SMTP_FROM)
+    // produced a literal `From: Pawtograder <undefined>` and every send failed at the MTA.
+    //
+    // Throws rather than falling back to an empty sender: processBatch has already proved the
+    // config is ready before it built the transporter, so this cannot fire in practice — and if it
+    // somehow did, `From: Pawtograder <>` is the same malformed header in a new costume.
+    const resolved = emailTransport();
+    if (resolved.kind !== "ready") {
+      throw new Error(`Refusing to send: email transport is ${resolved.kind}`);
+    }
+    const defaultReplyTo = resolved.replyTo;
     await transporter.sendMail({
-      from: "Pawtograder <" + Deno.env.get("SMTP_FROM") + ">",
+      from: "Pawtograder <" + resolved.from + ">",
       to: recipient,
       cc: ccEmails,
-      replyTo: replyTo ?? Deno.env.get("SMTP_REPLY_TO"),
+      replyTo: replyTo ?? defaultReplyTo,
       subject: subject,
       text: body
     });
@@ -850,24 +876,70 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       });
     }
 
-    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
-      // eslint-disable-next-line no-console
-      console.log("No SMTP host found, deferring email processing");
-      // Do not archive; allow messages to become visible again after VT expires.
+    const transport = emailTransport();
+
+    if (transport.kind === "misconfigured") {
+      // Throw rather than return false. The loop's own catch counts consecutive errors, reports
+      // each to Sentry, and stops after the limit — that is the loud refusal. Returning false read
+      // as "no work found", which is why a completely unconfigured mailer looked exactly like an
+      // empty queue for months.
+      scope.setTag("email_config", "misconfigured");
+      scope.setContext("email_config", { missing: transport.missing });
+      // Names the variables, not EMAIL_ENABLED: `misconfigured` is also reachable with EMAIL_ENABLED
+      // unset (a host with no SMTP_FROM, or an unparseable SMTP_PORT), and asserting "EMAIL_ENABLED
+      // is set" sends whoever triages it looking for a variable that is not there.
+      Sentry.captureMessage(`Email is configured to send but ${transport.missing.join(", ")} is not set`, scope);
+      throw new Error(`Email is enabled but misconfigured: missing ${transport.missing.join(", ")}`);
+    }
+
+    if (transport.kind === "disabled" && transport.reason === "explicitly_disabled") {
+      // Archive ONLY on an explicit EMAIL_ENABLED=false. That is the documented meaning of the
+      // switch ("false archives notifications without sending"), the operator chose it, and these
+      // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
+      // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
+      // depth up without bound.
+      for (const n of notifications) {
+        await archiveMessage(adminSupabase, n.msg_id, scope);
+      }
+      scope.setTag("email_disabled_reason", transport.reason);
+      console.log(`Email explicitly disabled; archived ${notifications.length} notification(s)`);
+      // Work WAS done. Reporting false here is what made this indistinguishable from an idle queue.
+      return true;
+    }
+
+    if (transport.kind === "disabled") {
+      // reason === "no_smtp_host": nobody asked for email to be off, the config is simply absent.
+      // Do NOT archive. envFrom is one-shot, so a pod that started before its SMTP Secret synced
+      // reads "no host" for its entire life — archiving there would delete the whole accumulated
+      // backlog within one poll cycle, irrecoverably, for a fault that a restart fixes. Leave the
+      // messages to become visible again after VT and let a correctly configured pod send them.
+      //
+      // The original defect was that this path was SILENT, not that it deferred; the fingerprinted
+      // message below is the fix for that, and it collapses months of polling into one issue.
+      scope.setTag("email_disabled_reason", transport.reason);
+      console.warn(`Email deferred: SMTP_HOST unset and EMAIL_ENABLED unset; ${notifications.length} left queued`);
+      Sentry.withScope((s) => {
+        s.setFingerprint(["email-disabled-no-smtp-host"]);
+        Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
+      });
       return false;
     }
-    const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
-    const isPostmarkEmail = Deno.env.get("SMTP_PORT") === "2525";
+
+    // Local Inbucket is the one target where internal test addresses SHOULD receive mail.
+    // ignoreTLS is set only for the Inbucket port, so it is the same signal the old
+    // `SMTP_PORT === "54325"` check used.
+    const isInbucketEmail = transport.ignoreTLS;
+
     const transporter = nodemailer.createTransport({
       pool: true,
-      host: Deno.env.get("SMTP_HOST") || "",
-      port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: isInbucketEmail || isPostmarkEmail ? false : true, // use TLS
-      requireTLS: isPostmarkEmail ? true : false,
-      ignoreTLS: isInbucketEmail,
+      host: transport.host,
+      port: transport.port,
+      secure: transport.secure,
+      requireTLS: transport.requireTLS,
+      ignoreTLS: transport.ignoreTLS,
       auth: {
-        user: Deno.env.get("SMTP_USER") || "",
-        pass: Deno.env.get("SMTP_PASSWORD") || ""
+        user: transport.user,
+        pass: transport.pass
       }
     });
 
@@ -1462,13 +1534,31 @@ Deno.serve((req) => {
     });
   }
 
-  EdgeRuntime.waitUntil(runBatchHandler());
+  // pg_cron pokes this endpoint twice a minute. Without a guard, every poke parked ANOTHER
+  // infinite poll loop on the same isolate via waitUntil — the loops never exit on their own, the
+  // 2s CPU limit never fires on a sleeping loop, and each one lived the full wall-clock budget.
+  // That is a large part of why memory here tracked uptime rather than load.
+  const already_running = started;
+  if (!started) {
+    started = true;
+    // Reset on exit. runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
+    // without this the flag would stay true forever and the worker would never restart even once
+    // the underlying fault cleared. That matters much more now that misconfigured SMTP throws.
+    EdgeRuntime.waitUntil(
+      runBatchHandler().finally(() => {
+        started = false;
+      })
+    );
+  } else {
+    console.log(`[serve] Batch handler already started, skipping`);
+  }
 
   // Return immediately to acknowledge the start request
   return Promise.resolve(
     new Response(
       JSON.stringify({
         message: "Email batch handler started",
+        already_running,
         timestamp: new Date().toISOString()
       }),
       {

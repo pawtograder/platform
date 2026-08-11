@@ -24,6 +24,7 @@ import {
   fetchDefaultGradeTargetStudentProfileId,
   fetchRubricCheckIdsRequiringTargetStudentProfileId
 } from "../_shared/rubricCommentTargetStudentProfileId.ts";
+import { hasGradeableContent, resolveGraderResultConflictVerdict } from "../_shared/graderResultVerdict.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
@@ -452,6 +453,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     }
     if (!repository_id) {
       //TODO: if you want to record errors for regression test runs, you need to pass in the repository_id somehow
+      // workflow_run_error.repository_id is NOT NULL, so this early return is correct — but it used
+      // to be silent, which meant an error we believed we had recorded simply did not exist. Report
+      // the drop rather than throwing: this runs from the outer catch, and throwing here would
+      // replace the real error with a reporting error.
+      scope?.setTag("workflow_run_error_dropped", "no_repository_id");
+      console.warn(`Dropping workflow_run_error "${name}": no repository_id (regression run?)`);
+      Sentry.withScope((s) => {
+        s.setFingerprint(["workflow-run-error-dropped-no-repository-id"]);
+        Sentry.captureMessage("workflow_run_error dropped: repository_id is null", s);
+      });
       return;
     }
     const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").insert({
@@ -469,6 +480,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       console.error(workflowRunErrorError);
       throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
     }
+  }
+  // Shared by the normal return and the preserve-existing-result guard below. If the guard
+  // returned without this, repository_check_runs.completed_at would stay null forever and the
+  // GitHub check would spin for the rest of the run's life.
+  async function completeCheckRunIfNeeded() {
+    if (!submission_id || isRegressionRerun || isE2ERun || !checkRun) {
+      return;
+    }
+    const newStatus: CheckRunStatus = {
+      ...(checkRun.status as CheckRunStatus),
+      completed_at: new Date().toISOString()
+    };
+    await adminSupabase.from("repository_check_runs").update({ status: newStatus }).eq("id", checkRun.id);
   }
   let repository_id: number | null = null;
   if (autograder_regression_test_id) {
@@ -675,8 +699,68 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           throw new UserVisibleError("Internal error: Existing grader result timestamp missing");
         }
 
-        if (!allowStaleOverwrite && Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
+        const conflictVerdict = resolveGraderResultConflictVerdict({
+          retCode: requestBody.ret_code,
+          gradeable: hasGradeableContent(requestBody.feedback),
+          allowStaleOverwrite,
+          existingAgeMs: Date.now() - existingCreatedAt,
+          resetWindowMs: RESET_WINDOW_MS
+        });
+
+        if (conflictVerdict === "reject_stale") {
           throw new SecurityError("Request to rewrite submission feedback is too old");
+        }
+
+        if (conflictVerdict === "preserve") {
+          // A failed run that produced nothing gradeable. Overwriting here would call
+          // resetExistingGraderResult, which deletes every test, test output, result output and
+          // workflow_run_error row for this submission before writing the empty payload — the real
+          // grade would be destroyed, not shadowed. Keep the result and record the failure beside it.
+          scope?.setTag("empty_grader_result_guard", "preserved");
+          scope?.setTag("grader_ret_code", String(requestBody.ret_code));
+          console.warn(
+            `Preserving existing grader result ${existingResult.id} for submission ${submission_id}: ` +
+              `incoming run exited ${requestBody.ret_code} with no gradeable content`
+          );
+
+          // grader_results.errors is the reliable channel here — unlike workflow_run_error it needs
+          // no repository_id, so it also works for the regression-rerun shape.
+          const preservedErrors: GraderResultErrors = {
+            user_visible_message:
+              `A grading run for this submission exited with code ${requestBody.ret_code} and produced no ` +
+              `test results. Your previous results for this submission were kept. Ask your instructor to ` +
+              `check the autograder if this keeps happening.`
+          };
+          await adminSupabase.from("grader_results").update({ errors: preservedErrors }).eq("id", existingResult.id);
+
+          await recordWorkflowRunError({
+            name: "Autograder run produced no results; previous feedback preserved",
+            data: {
+              type: "empty_grader_result_discarded",
+              ret_code: requestBody.ret_code ?? null,
+              grader_sha: requestBody.grader_sha ?? null,
+              existing_grader_result_id: existingResult.id
+            },
+            is_private: false
+          });
+
+          Sentry.withScope((s) => {
+            s.setFingerprint(["empty-grader-result-discarded"]);
+            Sentry.captureMessage("Discarded an empty failed grader result to preserve existing feedback", s);
+          });
+
+          await completeCheckRunIfNeeded();
+
+          return {
+            is_ok: true,
+            message: `Grading run produced no results; existing feedback for submission ${submission_id} was preserved`,
+            details_url: `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
+            // Nothing to upload: an empty payload declares no artifacts, so the runner's upload
+            // loop is a clean no-op.
+            artifacts: [],
+            supabase_url: publicSupabaseUrl(),
+            supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
+          };
         }
 
         const { error: updateExistingError } = await adminSupabase
@@ -881,21 +965,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
-    // Update the repository_check_runs status to completed (DB state only)
-    if (submission_id && !isRegressionRerun && !isE2ERun) {
-      if (checkRun) {
-        const newStatus: CheckRunStatus = {
-          ...(checkRun.status as CheckRunStatus),
-          completed_at: new Date().toISOString()
-        };
-        await adminSupabase
-          .from("repository_check_runs")
-          .update({
-            status: newStatus
-          })
-          .eq("id", checkRun.id);
-      }
-    }
+    await completeCheckRunIfNeeded();
     if (submission_id) {
       return {
         is_ok: true,

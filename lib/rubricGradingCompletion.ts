@@ -202,3 +202,25 @@ export function computeRubricGradingCompletion(input: {
     criteriaEvaluation
   };
 }
+
+/**
+ * Can per-student completion be evaluated at all right now?
+ *
+ * When a rubric has per-student parts but the grade targets are unknown — because the group's
+ * membership has not loaded, or the group genuinely has no members — `checkHasCommentForMode`
+ * falls through to its weakest branch and counts a per-student required check as satisfied if ANY
+ * single member has it. The missing-checks lists then come back short or empty, and the toolbar
+ * reports "All checks have been applied" on a review where most students have been graded for
+ * nothing. Callers should block instead of trusting that answer.
+ */
+export function perStudentEvaluationBlocked(input: {
+  rubricParts: RubricPart[];
+  gradeTargets: string[];
+  gradeTargetsLoaded: boolean;
+}): boolean {
+  const hasPerStudentParts = input.rubricParts.some((p) => p.is_individual_grading || p.is_assign_to_student);
+  if (!hasPerStudentParts) {
+    return false;
+  }
+  return !input.gradeTargetsLoaded || input.gradeTargets.length === 0;
+}

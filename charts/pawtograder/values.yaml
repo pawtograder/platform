@@ -1067,10 +1067,30 @@ edgeFunctions:
   e2e:
     enabled: false
     mockGitHub: false
-  # Names of additional Secrets to envFrom into the edge-runtime pod
-  # (each marked optional, so absent secrets don't block startup). Use for
-  # integration credentials managed by ESO in your overlay.
+  # Names of additional Secrets to envFrom into the edge-runtime pod. Use for
+  # integration credentials managed by ESO in your overlay. See
+  # requireEnvFromSecrets for whether a missing one blocks startup.
   envFromSecrets: []
+  # When true, the Secrets named in envFromSecrets mount with optional: false, so a pod refuses to
+  # start rather than booting without required config.
+  #
+  # envFrom is one-shot. A pod that starts before its Secret has synced runs WITHOUT those
+  # variables for its whole life and never re-reads them — which is exactly how notification email
+  # silently never worked in production: the SMTP Secret was simply not mounted, and the processor
+  # read that as "no work to do".
+  #
+  # Left false by default because on a fresh install ESO can lag the Deployment, and optional:false
+  # there means CreateContainerConfigError across the entire edge tier with no self-heal. Set true
+  # in environments where every listed Secret is provisioned ahead of the release.
+  requireEnvFromSecrets: false
+  email:
+    # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
+    # supabase/functions/_shared/emailTransportConfig.ts.
+    #
+    # Unset infers from SMTP_HOST, preserving today's behavior everywhere. "true" makes missing
+    # SMTP config a hard, reported failure instead of an indefinite silent deferral, so set it
+    # wherever email is supposed to work. "false" archives notifications without sending.
+    enabled: ""
   image:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
@@ -1495,6 +1515,24 @@ monitoring:
     allowUnselectedRules: false
     backupMaxAgeHours: 36
     certExpiryWarningDays: 14
+    # Namespaces to watch for expiring cert-manager Certificates. Defaults to the release
+    # namespace, which is what the rule used to hardcode — and why it could never match: the
+    # wildcard TLS Certificate lives in the ingress controller's namespace, so the shipped expiry
+    # alert watched a set containing no certificates at all. Add the ingress namespace here.
+    certNamespaces: []
+    # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
+    notificationEmailBacklog: 500
+    # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
+    # queue. Scale-free, unlike the depth thresholds above, so it needs no per-term retuning.
+    queueOldestSeconds: 1200
+    # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
+    # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
+    # permanently and get silenced.
+    discordDlqGrowthPerHour: 20
+    # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
+    edgeFunctionRestarts30m: 2
+    # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
+    edgeFunctionMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
@@ -1546,6 +1584,9 @@ monitoring:
     appBusiness:      true
     rateLimiting:     true
     edgeSoak:         true
+    # Depth AND oldest-message age for every pgmq queue, side by side. Depth alone cannot tell a
+    # busy queue from a stalled one, and depth thresholds need retuning each term; age does not.
+    queuesAndWorkers: true
 
   # Logs are NOT deployed by this chart. Log collection (Alloy
   # DaemonSet shipping into a central Loki) is a cluster-level concern
