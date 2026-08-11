@@ -26,6 +26,7 @@ import {
 } from "../_shared/rubricCommentTargetStudentProfileId.ts";
 import { hasGradeableContent, resolveGraderResultConflictVerdict } from "../_shared/graderResultVerdict.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { graderResultErrorsIndicateFailure } from "../_shared/graderResultStatus.ts";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
@@ -704,7 +705,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       if (isConflictError(insertResponse) && submission_id != null) {
         const { data: existingResult, error: existingResultError } = await adminSupabase
           .from("grader_results")
-          .select("id, created_at")
+          // `errors` too: the preserve branch below must not overwrite a real failure already
+          // recorded on this result with its own warning payload.
+          .select("id, created_at, errors")
           .eq("submission_id", submission_id)
           .single();
         if (existingResultError || !existingResult) {
@@ -759,17 +762,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               `test results. Your previous results for this submission were kept. Ask your instructor to ` +
               `check the autograder if this keeps happening.`
           };
-          // Checked, and throwing. This message is the ONLY thing that tells the student their run
-          // was discarded rather than lost; dropping the write silently is the exact fail-open shape
-          // this guard exists to close, and every other DB write in this handler throws on error.
-          const { error: preservedErrorsError } = await adminSupabase
-            .from("grader_results")
-            .update({ errors: preservedErrors })
-            .eq("id", existingResult.id);
-          if (preservedErrorsError) {
-            throw new UserVisibleError(
-              `Internal error: failed to record that an empty grading run was discarded: ${preservedErrorsError.message}`
+          // Never downgrade an existing failure to this warning. If the result being preserved
+          // already carries a real error -- a prior attempt that inserted the row and then failed
+          // partway, say -- overwriting it with `is_warning: true` would make
+          // graderResultIndicatesFailure report success and put that result's partial score back
+          // in front of students as though it were final. The warning is only safe to write over
+          // an absent or already-warning payload; otherwise the older, stronger verdict wins and
+          // the discarded run is recorded through the workflow_run_error and Sentry paths below,
+          // which run either way.
+          const existingErrorsAreFailure = graderResultErrorsIndicateFailure(existingResult.errors);
+          if (existingErrorsAreFailure) {
+            scope?.setTag("empty_grader_result_guard_kept_existing_error", "true");
+            console.warn(
+              `Not overwriting the existing failure on grader result ${existingResult.id}; ` +
+                `recording the discarded empty run alongside it instead`
             );
+          } else {
+            // Checked, and throwing. This message is the ONLY thing that tells the student their
+            // run was discarded rather than lost; dropping the write silently is the exact
+            // fail-open shape this guard exists to close, and every other DB write in this handler
+            // throws on error.
+            const { error: preservedErrorsError } = await adminSupabase
+              .from("grader_results")
+              .update({ errors: preservedErrors })
+              .eq("id", existingResult.id);
+            if (preservedErrorsError) {
+              throw new UserVisibleError(
+                `Internal error: failed to record that an empty grading run was discarded: ${preservedErrorsError.message}`
+              );
+            }
           }
 
           await recordWorkflowRunError({

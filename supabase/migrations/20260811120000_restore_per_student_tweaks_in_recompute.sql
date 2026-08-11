@@ -143,7 +143,15 @@ BEGIN
     LOOP
       BEGIN
         v_tweak_value := coalesce((r_tweak.value #>> '{}')::numeric, 0);
-        IF v_tweak_value = 'NaN'::numeric THEN
+        -- NaN AND the two infinities. Postgres accepts 'Infinity'/'-Infinity' as valid numeric
+        -- input, so neither raises invalid_text_representation nor equals NaN -- they slipped
+        -- through the handler below and reached the score. `least(Infinity, assignment_total_points)`
+        -- then returns the assignment total, silently awarding full marks under
+        -- cap_score_to_assignment_points, which is exactly the NaN failure this guard was written
+        -- for. Uncapped, an infinite total_score is stored instead.
+        IF v_tweak_value = 'NaN'::numeric
+           OR v_tweak_value = 'Infinity'::numeric
+           OR v_tweak_value = '-Infinity'::numeric THEN
           v_tweak_value := 0;
         END IF;
         v_sum_per_student_tweaks := v_sum_per_student_tweaks + v_tweak_value;
@@ -313,8 +321,10 @@ BEGIN
         IF v_per_student_tweaks IS NOT NULL AND jsonb_typeof(v_per_student_tweaks) = 'object' THEN
           BEGIN
             v_extra := coalesce((nullif(trim(v_per_student_tweaks ->> v_student::text), ''))::numeric, 0);
-            -- Same NaN / out-of-range reasoning as the sum above.
-            IF v_extra = 'NaN'::numeric THEN
+            -- Same NaN / infinity / out-of-range reasoning as the sum above.
+            IF v_extra = 'NaN'::numeric
+               OR v_extra = 'Infinity'::numeric
+               OR v_extra = '-Infinity'::numeric THEN
               v_extra := 0;
             END IF;
           EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN

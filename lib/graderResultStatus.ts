@@ -11,6 +11,10 @@
  * So the payload carries `is_warning: true` for that case, and this is the single place that
  * knows it. Anything else — including every legacy payload, which has no marker — stays a
  * failure, so the default is unchanged and only the explicitly-marked warning is excluded.
+ *
+ * Mirrored for Deno at `supabase/functions/_shared/graderResultStatus.ts`, which the edge function
+ * that WRITES the marker uses to avoid overwriting a real failure. The `@/` alias does not resolve
+ * under Deno, so the two are duplicated on purpose; if the marker changes, change both.
  */
 export function graderResultIndicatesFailure(errors: unknown): boolean {
   if (!errors) {
