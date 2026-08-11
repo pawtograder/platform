@@ -1092,6 +1092,19 @@ edgeFunctions:
   policy: per_worker # per_worker | per_request | oneshot. per_request gives each
                      # request its own isolate (no concurrent co-location → no shared-heap
                      # memory pile-up under bursts); per_worker co-locates for efficiency.
+  # NOTE for the pg_cron-poked background workers (notification-queue-processor,
+  # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
+  # module-level state to keep one poll loop per pod, because `per_request` gives every
+  # poke a fresh isolate and resets it. They bound themselves instead — a Redis lease
+  # when REDIS_URL / UPSTASH_* are set, and a wall-clock-bounded drain-and-exit when they
+  # are not. See supabase/functions/_shared/workerRun.ts. Consequences worth knowing:
+  #   * With Redis, ONE pod holds each worker's lease and keeps a resident loop, so that
+  #     pod carries one admission slot per worker for the isolate's life. Latency is the
+  #     loop's own idle interval (10–15s).
+  #   * Without Redis, each poke drains and exits, holding no slot between pokes, and new
+  #     work waits for the next cron tick instead. Safer, slower.
+  # Raising maxParallelism does not substitute for either: an unbounded loop consumes
+  # whatever you give it.
   # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
   # derives it from CPU cores, which is low on small pods and forces co-location.
   # Under per_request this is effectively the max concurrent requests per pod

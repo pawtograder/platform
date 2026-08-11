@@ -5,6 +5,7 @@ import { emailTemplates } from "./emailTemplates.ts";
 import type { DiscussionThreadNotification, Notification, NotificationEnvelope } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { resolveEmailTransport, type EmailTransportDecision } from "../_shared/emailTransportConfig.ts";
@@ -1610,30 +1611,48 @@ export async function runBatchHandler() {
     console.log("Signal listeners not available in this environment");
   }
 
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      consecutiveErrors = 0; // Reset error count on successful processing
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts.
+  const run = await beginWorkerRun({
+    name: "notification_queue_processor",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log("Another email batch handler holds the lease; nothing to do");
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
 
-      // If there was work, check again immediately, otherwise wait 15 seconds
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  try {
+    while (isRunning && run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        consecutiveErrors = 0; // Reset error count on successful processing
+
+        // If there was work, check again immediately, otherwise idle
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (error) {
+        consecutiveErrors++;
+        scope.setTag("consecutive_errors", consecutiveErrors);
+        console.error(`Email batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+        Sentry.captureException(error, scope);
+
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          Sentry.captureMessage("Too many consecutive errors, stopping email batch handler", scope);
+          console.error("Too many consecutive errors, stopping email batch handler");
+          break;
+        }
+
+        await run.onError();
       }
-    } catch (error) {
-      consecutiveErrors++;
-      scope.setTag("consecutive_errors", consecutiveErrors);
-      console.error(`Email batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
-      Sentry.captureException(error, scope);
-
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        Sentry.captureMessage("Too many consecutive errors, stopping email batch handler", scope);
-        console.error("Too many consecutive errors, stopping email batch handler");
-        break;
-      }
-
-      // Wait before retrying on error
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 
   console.log("Email batch handler stopped");
@@ -1658,10 +1677,15 @@ Deno.serve((req) => {
     });
   }
 
-  // pg_cron pokes this endpoint twice a minute. Without a guard, every poke parked ANOTHER
-  // infinite poll loop on the same isolate via waitUntil — the loops never exit on their own, the
-  // 2s CPU limit never fires on a sleeping loop, and each one lived the full wall-clock budget.
-  // That is a large part of why memory here tracked uptime rather than load.
+  // `started` is a same-isolate short-circuit ONLY, and it is not what bounds concurrency.
+  //
+  // It was written as though it prevented every pg_cron poke parking another infinite loop. That
+  // holds only under `edgeFunctions.policy: per_worker`, where the isolate is reused. Every
+  // deployed values file sets `per_request`, so each poke arrives on a FRESH isolate with
+  // `started` back to false and this check can never fire. The real bound is in
+  // _shared/workerRun.ts: a Redis lease when Redis is configured, and a wall-clock-bounded
+  // drain-and-exit when it is not. Both make an accumulating loop impossible; this flag just saves
+  // a Redis round-trip when the policy does happen to reuse isolates.
   const already_running = started;
   if (!started) {
     started = true;

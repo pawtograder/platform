@@ -22,6 +22,7 @@ import {
   NonRetryableUserError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -2603,17 +2604,36 @@ export async function runBatchHandler() {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const isRunning = true;
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
+  // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.
+  const run = await beginWorkerRun({
+    name: "github_async_worker",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log("[runBatchHandler] another worker holds the lease; nothing to do");
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
+
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        await run.onError();
       }
-    } catch (e) {
-      Sentry.captureException(e, scope);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 }
 

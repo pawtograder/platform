@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import {
@@ -952,15 +953,29 @@ export async function runBatchHandler() {
     console.log("Signal listeners not available in this environment");
   }
 
-  while (isRunning) {
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts.
+  const run = await beginWorkerRun({
+    name: "gradebook_column_recalculate",
+    scope,
+    idleSleepMs: 10000,
+    errorSleepMs: 5000
+  });
+  if (!run) {
+    console.log("Another gradebook batch handler holds the lease; nothing to do");
+    return;
+  }
+  scope.setTag("worker_run_mode", run.mode);
+
+  while (isRunning && run.shouldContinue()) {
+    await run.heartbeat();
+    if (!run.shouldContinue()) break;
     try {
       const hasWork = await processBatch(adminSupabase, scope);
       consecutiveErrors = 0; // Reset error count on successful processing
 
-      // If there was work, check again immediately, otherwise wait 10 seconds
+      // If there was work, check again immediately, otherwise idle
       if (!hasWork) {
-        // console.log("Waiting 10 seconds before next poll...");
-        await new Promise((resolve) => setTimeout(resolve, 10000));
+        if (!(await run.onIdle())) break;
       }
     } catch (error) {
       consecutiveErrors++;
@@ -974,11 +989,11 @@ export async function runBatchHandler() {
         break;
       }
 
-      // Wait before retrying on error
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await run.onError();
     }
   }
 
+  await run.release();
   console.log("Batch handler stopped");
 }
 
@@ -1001,10 +1016,15 @@ Deno.serve((req) => {
     });
   }
 
-  // pg_cron pokes this endpoint twice a minute. Without a guard, every poke parked ANOTHER
-  // infinite poll loop on the same isolate via waitUntil — the loops never exit on their own, the
-  // 2s CPU limit never fires on a sleeping loop, and each one lived the full wall-clock budget.
-  // That is a large part of why memory here tracked uptime rather than load.
+  // `started` is a same-isolate short-circuit ONLY, and it is not what bounds concurrency.
+  //
+  // It was written as though it prevented every pg_cron poke parking another infinite loop. That
+  // holds only under `edgeFunctions.policy: per_worker`, where the isolate is reused. Every
+  // deployed values file sets `per_request`, so each poke arrives on a FRESH isolate with
+  // `started` back to false and this check can never fire. The real bound is in
+  // _shared/workerRun.ts: a Redis lease when Redis is configured, and a wall-clock-bounded
+  // drain-and-exit when it is not. Both make an accumulating loop impossible; this flag just saves
+  // a Redis round-trip when the policy does happen to reuse isolates.
   const already_running = started;
   if (!started) {
     started = true;
