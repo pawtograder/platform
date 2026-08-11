@@ -126,6 +126,25 @@ export async function computeHandoutFileHashesForCommit(params: {
  * completing a larger operation that must not fail over a hash row. The rows are re-derivable
  * from GitHub, and the next handout push recomputes them.
  */
+/**
+ * `reason` values that mean "there was nothing to seed", not "seeding failed".
+ *
+ * All three are steady states of a perfectly healthy assignment: no handout repository, a handout
+ * that has no commit yet, or a config that declares no `submissionFiles` globs. There is no
+ * comparable file set in any of them, so producing no hash rows is the correct outcome.
+ *
+ * Exported because the distinction is only safe to make here, next to the returns. A caller that
+ * treats every `seeded: false` as a failure holds state back on assignments that were never going
+ * to have hashes -- see the `latest_autograder_sha` guard in github-repo-webhook, where doing so
+ * pinned the pointer on every subsequent push and reported an incident each time.
+ */
+export const EXPECTED_HANDOUT_SEED_SKIPS = ["no_template_repo", "no_commit_sha", "no_submission_files"] as const;
+
+/** True when a `{ seeded: false }` result is an expected skip rather than a failure. */
+export function isExpectedHandoutSeedSkip(reason: string | undefined): boolean {
+  return reason !== undefined && (EXPECTED_HANDOUT_SEED_SKIPS as readonly string[]).includes(reason);
+}
+
 export async function seedHandoutFileHashes(params: {
   adminSupabase: SupabaseClient<Database>;
   assignmentId: number;

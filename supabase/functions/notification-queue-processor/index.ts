@@ -1002,46 +1002,38 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 
       // Discard pending digest items too, not just the queue messages.
       //
-      // Digest items are materialised further down this same function, below this early return, so
-      // none accumulate WHILE email is disabled. What survives is the set materialised before the
-      // operator flipped the switch, whose flush is gated on a one-hour window and so had not gone
-      // out yet. Those rows have no queue message left to archive, so nothing else ever collects
-      // them: re-enabling email after a long disable delivered a digest assembled from content
-      // that old, which is not what "archives notifications without sending" promises. Scoped to
-      // the user/class combos in this batch rather than the whole table, so one class's disable
-      // cannot discard another's pending digest.
-      const digestCombos = new Map<string, { user_id: string; class_id: number }>();
-      for (const n of notifications) {
-        const userId = n.message.user_id as string | undefined;
-        const classId = n.message.class_id as number | undefined;
-        if (!userId || classId === undefined || classId === null) continue;
-        digestCombos.set(`${userId}|${classId}`, { user_id: userId, class_id: classId });
+      // Digest items are materialised further down this same function, and their queue message is
+      // archived at that moment -- so a pending digest has NO message left in the queue. Scoping
+      // this purge to the user/class combos present in `notifications` therefore missed almost
+      // exactly the rows it was meant to collect: the batch only ever contains users whose
+      // messages are still queued, and if a pending digest is the only remaining work the read
+      // returns nothing at all and the purge never runs.
+      //
+      // Unscoped is also the correct semantics, not merely the effective one. EMAIL_ENABLED is a
+      // process-wide environment variable, so there is no per-class or per-user disable to respect
+      // -- the earlier "one class's disable must not discard another's digest" reasoning described
+      // a situation that cannot arise. Every pending digest predates the switch and none of them
+      // may be delivered, so all of them go.
+      const { error: purgeError } = await adminSupabase
+        .schema("public")
+        .from("discussion_digest_items")
+        .delete()
+        .gte("id", 0);
+      if (purgeError) {
+        // Reported, not thrown: the archive above already succeeded, and failing the batch here
+        // would re-deliver messages that are now gone from the queue. A leftover digest item is
+        // the pre-existing behaviour, so this degrades to it rather than to a stuck batch.
+        const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
+        const purgeScope: Sentry.Scope =
+          typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
+        purgeScope.setContext("digest_purge_error", { scope: "all_pending_digest_items" });
+        Sentry.captureException(purgeError, purgeScope);
+        console.error("Failed to purge pending discussion digest items while email is disabled", purgeError);
       }
-      await Promise.all(
-        Array.from(digestCombos.values()).map(async ({ user_id, class_id }) => {
-          const { error: purgeError } = await adminSupabase
-            .schema("public")
-            .from("discussion_digest_items")
-            .delete()
-            .eq("user_id", user_id)
-            .eq("class_id", class_id);
-          if (purgeError) {
-            // Reported, not thrown: the archive above already succeeded, and failing the batch here
-            // would re-deliver messages that are now gone from the queue. A leftover digest item is
-            // the pre-existing behaviour, so this degrades to it rather than to a stuck batch.
-            const maybeClonable = scope as unknown as { clone?: () => Sentry.Scope };
-            const purgeScope: Sentry.Scope =
-              typeof maybeClonable.clone === "function" ? maybeClonable.clone!() : new Sentry.Scope();
-            purgeScope.setContext("digest_purge_error", { user_id, class_id });
-            Sentry.captureException(purgeError, purgeScope);
-            console.error(`Failed to purge pending digest items for ${user_id} in class ${class_id}`, purgeError);
-          }
-        })
-      );
 
       scope.setTag("email_disabled_reason", transport.kind === "disabled" ? transport.reason : transport.kind);
       console.log(
-        `Email explicitly disabled; archived ${notifications.length} notification(s) and purged pending digest items for ${digestCombos.size} user/class combination(s)`
+        `Email explicitly disabled; archived ${notifications.length} notification(s) and purged all pending discussion digest items`
       );
       // Work WAS done. Reporting false here is what made this indistinguishable from an idle queue.
       return true;

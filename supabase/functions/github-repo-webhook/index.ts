@@ -31,6 +31,7 @@ import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
   computeHandoutFileHashesForCommit,
+  isExpectedHandoutSeedSkip,
   seedHandoutFileHashes,
   type HandoutHashCaches
 } from "../_shared/handoutFileHashes.ts";
@@ -2327,12 +2328,23 @@ async function handlePushToGraderSolution(
           commitSha: handoutTarget.latest_template_sha,
           scope
         });
-        if (!seedResult.seeded) {
-          // Holds the pointer too. seedHandoutFileHashes swallows its own errors and returns
-          // { seeded: false }, so this never reached the catch below — and the config write that
-          // INVALIDATED these hashes had already succeeded. Advancing latest_autograder_sha there
-          // announces "this config is live" over hashes still built from the OLD submissionFiles
-          // globs, which is the comparison-between-two-file-sets the comment above describes.
+        if (!seedResult.seeded && isExpectedHandoutSeedSkip(seedResult.reason)) {
+          // Nothing to seed is not a failure. no_template_repo / no_commit_sha /
+          // no_submission_files are steady states of a healthy assignment -- there is no
+          // comparable file set, so no hash rows is the right answer, and there is nothing stale
+          // for the pointer guard to protect. Holding the pointer for these meant every later
+          // grader-config push on such an assignment pinned latest_autograder_sha and raised an
+          // incident, for a config that had in fact been saved correctly.
+          console.log(
+            `No handout file hashes to reseed for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+          );
+        } else if (!seedResult.seeded) {
+          // A real failure: seedHandoutFileHashes swallows its own errors and returns
+          // { seeded: false } with the message as the reason, so this never reached the catch
+          // below — and the config write that INVALIDATED these hashes had already succeeded.
+          // Advancing latest_autograder_sha there announces "this config is live" over hashes
+          // still built from the OLD submissionFiles globs, which is the
+          // comparison-between-two-file-sets the comment above describes.
           configReconcileOk = false;
           scope?.setTag("handout_file_hash_reseed_failed", "true");
           console.error(
