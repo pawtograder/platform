@@ -62,6 +62,33 @@ const HEARTBEAT_DIVISOR = 3;
  */
 const DEFAULT_BOUNDED_BUDGET_MS = 50_000;
 
+/**
+ * Renew ONLY if the key still holds our token, atomically.
+ *
+ * `SET key token PX ttl XX` is not sufficient and was the original bug: XX asserts only that the
+ * key EXISTS, never that its value is ours. Once our lease had expired and another isolate had
+ * taken the key, our renewal happily overwrote their token and left us believing we still held it
+ * -- so both loops continued, each stomping the other, which is precisely the accumulation the
+ * lease exists to prevent.
+ *
+ * `eval(script, keys[], args[])` is portable here: the ioredis compat proxy in Redis.ts translates
+ * that array form into ioredis's positional form, and the Upstash client takes it natively.
+ */
+const RENEW_IF_OWNED = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+else
+  return 0
+end`;
+
+/** Release only if the key still holds our token, atomically. */
+const RELEASE_IF_OWNED = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+else
+  return 0
+end`;
+
 export type WorkerRunMode = "leased" | "bounded";
 
 export interface WorkerRun {
@@ -92,6 +119,9 @@ export interface BeginWorkerRunOptions {
   redis?: RedisClient | null;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Timer seams, so tests drive renewal deterministically instead of on the wall clock. */
+  setIntervalFn?: (cb: () => void, ms: number) => number;
+  clearIntervalFn?: (handle: number) => void;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -174,26 +204,51 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   let lost = false;
   let lastHeartbeat = now();
   const heartbeatEvery = Math.max(1, Math.floor(ttl / HEARTBEAT_DIVISOR));
+  const setIntervalFn = opts.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms) as unknown as number);
+  const clearIntervalFn = opts.clearIntervalFn ?? ((h: number) => clearInterval(h));
+  let renewTimer: number | undefined;
+  const stopRenewTimer = () => {
+    if (renewTimer !== undefined) {
+      clearIntervalFn(renewTimer);
+      renewTimer = undefined;
+    }
+  };
 
   const renew = async (): Promise<void> => {
     if (lost) return;
     try {
-      // XX, so a lease that already expired and was taken by another isolate is NOT stolen back.
-      const result = await redis.set(key, token, { px: ttl, xx: true });
-      if (result === null || result === undefined || result === 0) {
+      // Compare-and-PEXPIRE, not `SET ... XX` -- see RENEW_IF_OWNED. A 0 means the key is no
+      // longer ours (expired and retaken, or deleted), which must stop this loop rather than
+      // reclaim it: reclaiming is how two loops end up alternating ownership indefinitely.
+      const result = await redis.eval(RENEW_IF_OWNED, [key], [token, String(ttl)]);
+      if (Number(result) !== 1) {
         lost = true;
+        stopRenewTimer();
         opts.scope?.setTag("worker_lease", "lost");
-        console.warn(`[workerRun] ${opts.name}: lease lost, stopping this loop`);
+        console.warn(`[workerRun] ${opts.name}: lease is no longer ours, stopping this loop`);
       }
     } catch (e) {
       // Treat an unreachable Redis as a lost lease. Continuing without a renewable lease is how a
       // second loop would appear elsewhere in the fleet, which is the thing being prevented.
       lost = true;
+      stopRenewTimer();
       opts.scope?.setTag("worker_lease", "renew_failed");
       Sentry.captureException(e, opts.scope);
     }
     lastHeartbeat = now();
   };
+
+  // Renew on an INDEPENDENT timer, not only between batches.
+  //
+  // The loop awaits `processBatch`, and some batches are genuinely long -- github-async-worker's
+  // `sync_repo_to_handout` can run for minutes against a 60s TTL. A heartbeat that only fires
+  // between iterations therefore lets the lease expire mid-batch, another poke acquires it, and the
+  // admission-slot exhaustion this lease was added to prevent comes back for any workload with slow
+  // batches. The timer keeps renewing while the batch is in flight; `heartbeat()` remains as a
+  // cheap belt-and-braces check for callers that drive time themselves (the tests do).
+  renewTimer = setIntervalFn(() => {
+    void renew();
+  }, heartbeatEvery);
 
   return {
     mode: "leased",
@@ -211,14 +266,13 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
       await renew();
     },
     release: async () => {
+      stopRenewTimer();
       if (lost) return;
       try {
-        // Compare-then-delete. The gap between GET and DEL is a race in principle, but reaching it
-        // requires our lease to have expired AND another isolate to have taken it in that window --
-        // in which case renew() would already have marked us lost. TTL expiry is the real safety
-        // net; this only shortens the handover after a clean exit.
-        const current = await redis.get(key);
-        if (current === token) await redis.del(key);
+        // Atomic compare-and-delete, so a lease that expired and was retaken by another isolate is
+        // never deleted out from under its new owner. TTL expiry remains the backstop if this
+        // isolate dies without running finally.
+        await redis.eval(RELEASE_IF_OWNED, [key], [token]);
       } catch (e) {
         // The lease expires on its own; a failed release is not worth failing the run over.
         opts.scope?.setTag("worker_lease", "release_failed");
