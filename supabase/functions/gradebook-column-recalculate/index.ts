@@ -6,7 +6,6 @@ import * as Sentry from "npm:@sentry/deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import {
-  groupVersionScopedClears,
   MAX_VERSION_MISMATCH_ATTEMPTS,
   partitionVersionMismatchRetries,
   selectVersionMismatchedRows,
@@ -68,20 +67,29 @@ const workerId = crypto.randomUUID();
 
 // Helper to create unique row key for gradebook_row_recalc_state
 /**
- * Re-enqueue rows that lost the optimistic-version race, then release their `is_recalculating` claim.
+ * Re-enqueue rows that lost the optimistic-version race, keeping their `is_recalculating` claim
+ * held until the retry itself completes.
  *
  * Shared by the bulk and scoped paths. It previously existed only in the scoped path, so a bulk
  * version conflict left the row flagged as recalculating with nothing scheduled to pick it up: the
  * RPC had already archived every message for that row, so the row sat dirty and claimed with no
  * message and no error anywhere.
  *
- * Three things have to be true for this to be safe, and none of them were:
- *   - the clear must be scoped to the version the RPC observed, or it releases a claim a different
- *     worker took in the meantime;
+ * Two things have to be true for this to be safe, and neither was:
  *   - the re-enqueue must be bounded, because the RPC archives the old message and `send_batch`
  *     mints a new one with `read_ct` at 0, so pgmq's own retry limit does not apply;
- *   - the hand-off must succeed before the claim is released, because (dirty, !is_recalculating) is
- *     the one state `enqueue_gradebook_row_recalculation` will not enqueue for.
+ *   - the claim must OUTLIVE the hand-off. A retry is enqueued with backoff, so there is a delay
+ *     window before the new message is even visible. Releasing the claim on hand-off put the row
+ *     into (dirty = true, is_recalculating = false) for that whole window, and that is the one
+ *     state `enqueue_gradebook_row_recalculation` refuses to enqueue for: a grade change landing
+ *     in the window neither queued another pass nor bumped `version`, so the delayed retry saw no
+ *     mismatch, committed scores computed from pre-change inputs, and cleared `dirty`. Holding the
+ *     claim is also exactly what the dead-letter branch below does, and for the same reason.
+ *
+ * A held claim is the normal state for a queued row -- `enqueue_gradebook_row_recalculation` sets
+ * (dirty = true, is_recalculating = true) whenever it enqueues -- and it is self-healing: with the
+ * claim set, the gating rules ALLOW re-enqueue, so a later change still queues work even if the
+ * retry message is somehow lost. The batch RPC releases the claim when the retry finally succeeds.
  */
 async function recoverVersionMismatchedRows({
   adminSupabase,
@@ -116,16 +124,13 @@ async function recoverVersionMismatchedRows({
     `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): ${mismatchedRows.length} mismatched rows -> ${retries.reduce((n, r) => n + r.rows.length, 0)} retried, ${dead.length} dead-lettered`
   );
 
-  // Hand the row off FIRST, clear the claim second.
+  // Hand the row off and KEEP the claim.
   //
-  // The order is the whole safety argument. `enqueue_gradebook_row_recalculation` refuses to enqueue
-  // for a row that is (dirty = true, is_recalculating = false) -- that is its "already queued, skip"
-  // branch. So clearing before a successful hand-off, and then failing the hand-off, produces the
-  // one state in which no future grade change will ever enqueue this row again: permanently stale,
-  // permanently silent. Clearing only after the message is durable means the worst case is a claim
-  // held slightly too long, which recovers on its own.
-  const handedOff: GradebookRowBatchResult[] = [];
-
+  // `enqueue_gradebook_row_recalculation` refuses to enqueue for a row that is
+  // (dirty = true, is_recalculating = false) -- its "already queued, skip" branch -- and allows
+  // re-enqueue when the claim is held. Releasing the claim here therefore silenced exactly the
+  // changes that need to invalidate the pending retry, for the whole backoff delay. Holding it
+  // costs nothing: it is the state every queued row is already in.
   for (const { attempt, rows } of retries) {
     const delaySeconds = versionMismatchBackoffSeconds(attempt);
     const { error: enqueueError } = await adminSupabase.schema("pgmq_public").rpc("send_batch", {
@@ -150,7 +155,6 @@ async function recoverVersionMismatchedRows({
     console.log(
       `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): re-enqueued ${rows.length} rows, attempt ${attempt}/${MAX_VERSION_MISMATCH_ATTEMPTS}, visible in ${delaySeconds}s`
     );
-    handedOff.push(...rows);
   }
 
   if (dead.length > 0) {
@@ -210,56 +214,18 @@ async function recoverVersionMismatchedRows({
       );
     }
 
-    // Deliberately NOT added to handedOff, so their is_recalculating claim stays put. Releasing it
-    // while dirty stays true is the one combination enqueue_gradebook_row_recalculation skips, which
+    // Their is_recalculating claim stays put, like the retried rows above. Releasing it while
+    // dirty stays true is the one combination enqueue_gradebook_row_recalculation skips, which
     // would freeze the row for good; keeping the claim means the next real grade change still
     // enqueues a message and the row can recover, while the DLQ entry records that we gave up.
   }
 
-  if (handedOff.length === 0) {
-    return mismatchedRows.length;
-  }
-
-  // Clear is_recalculating, keeping dirty = true, scoped to the version the RPC actually observed.
-  //
-  // The version predicate is the point. Filtering on the primary key alone released whatever claim
-  // the row held at that instant -- including one another worker took in the window between the RPC
-  // returning and this statement landing -- and then two workers recalculated the same row with
-  // neither holding a claim. `current_version` comes back from the RPC precisely so this predicate
-  // can exist; when it no longer matches, the update touches nothing and the new claimant is left
-  // alone.
-  const { clears, withoutVersion } = groupVersionScopedClears(handedOff);
-  if (withoutVersion.length > 0) {
-    console.warn(
-      `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): ${withoutVersion.length} rows had no recalc-state version; nothing to clear`
-    );
-  }
-
-  for (const { is_private, version, student_ids } of clears) {
-    const { data: clearedRows, error: clearError } = await adminSupabase
-      .from("gradebook_row_recalc_state")
-      .update({ is_recalculating: false })
-      .eq("class_id", classId)
-      .eq("gradebook_id", gradebook_id)
-      .eq("is_private", is_private)
-      .eq("version", version)
-      .in("student_id", student_ids)
-      .select("student_id");
-    // Checked, unlike the original: leaving the flag set is the exact stuck state this recovers.
-    if (clearError) {
-      console.error(`[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): failed to clear state`, clearError);
-      Sentry.captureException(clearError, scope);
-      continue;
-    }
-    const clearedCount = clearedRows?.length ?? 0;
-    if (clearedCount < student_ids.length) {
-      // Expected under contention, not an error: the skipped rows were re-claimed at a newer
-      // version between the RPC and here, and that claim is the new owner's to release.
-      console.log(
-        `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY (${label}): cleared ${clearedCount}/${student_ids.length} rows at version ${version} (is_private=${is_private}); the rest were re-claimed at a newer version`
-      );
-    }
-  }
+  // The claim is deliberately NOT cleared for handed-off rows, for the same reason the
+  // dead-lettered rows above keep theirs. The retry message is durable and the batch RPC releases
+  // the claim when that retry succeeds; until then the row stays (dirty = true,
+  // is_recalculating = true), which is both the state every queued row is in and the state that
+  // lets a concurrent grade change enqueue another pass and bump `version`, so a stale retry loses
+  // the race instead of committing over it.
 
   return mismatchedRows.length;
 }

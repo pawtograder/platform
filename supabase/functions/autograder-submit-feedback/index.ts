@@ -465,17 +465,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       });
       return;
     }
-    const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").insert({
-      run_number: Number.parseInt(run_id),
-      run_attempt: Number.parseInt(run_attempt),
-      class_id: class_id,
-      autograder_regression_test_id: autograder_regression_test_id ?? null,
-      submission_id: submission_id ?? null,
-      repository_id: repository_id ?? null,
-      name,
-      data,
-      is_private
-    });
+    // Upsert, ignoring duplicates, rather than a bare insert. `workflow_run_error` carries
+    // UNIQUE (repository_id, run_number, run_attempt, name), and this runs on paths that a client
+    // legitimately retries -- a network retry of the same feedback request re-records the same
+    // error for the same run attempt. As a plain insert that raised 23505, and the throw below
+    // then replaced the real outcome with the recording failure: the preserved-result path
+    // returned 500 before completing the check run, so the retry could never converge and the
+    // check spun for the rest of the run's life. Recording the same error twice conveys nothing,
+    // so collapsing the duplicate is the correct semantics, not just the convenient one.
+    const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").upsert(
+      {
+        run_number: Number.parseInt(run_id),
+        run_attempt: Number.parseInt(run_attempt),
+        class_id: class_id,
+        autograder_regression_test_id: autograder_regression_test_id ?? null,
+        submission_id: submission_id ?? null,
+        repository_id: repository_id ?? null,
+        name,
+        data,
+        is_private
+      },
+      { onConflict: "repository_id,run_number,run_attempt,name", ignoreDuplicates: true }
+    );
     if (workflowRunErrorError) {
       console.error(workflowRunErrorError);
       throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);

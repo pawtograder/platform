@@ -40,6 +40,15 @@ function emailTransport(): EmailTransportDecision {
 }
 
 /**
+ * Latch for the "SMTP_HOST unset and EMAIL_ENABLED unset" report, so a persistent missing Secret
+ * reports once per isolate instead of once per 15-second poll. Isolate-scoped on purpose: a fresh
+ * pod is a genuinely new occurrence and should report again, which is also what makes the signal
+ * track replica restarts rather than uptime. Paired with the transport cache above — since
+ * `envFrom` is one-shot, that verdict cannot change under a running pod either.
+ */
+let reportedMissingSmtpHost = false;
+
+/**
  * Local Inbucket is the one target where internal test addresses SHOULD receive mail.
  *
  * One derivation for every caller. `ignoreTLS` is set only for the Inbucket port, so this is the
@@ -742,10 +751,20 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     // issue.
     scope.setTag("email_disabled_reason", transportPrecheck.reason);
     console.warn("Email deferred: SMTP_HOST unset and EMAIL_ENABLED unset; queue left untouched");
-    Sentry.withScope((s) => {
-      s.setFingerprint(["email-disabled-no-smtp-host"]);
-      Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
-    });
+    // Latched. This branch returns false, so the loop sleeps 15s and lands right back here for as
+    // long as the Secret is missing -- four events a minute per isolate, and the edge tier runs
+    // ~12 replicas, so one absent Secret is on the order of 69k events/day. The fingerprint
+    // collapses them into a single ISSUE but every event still bills against the quota, which is
+    // how an observability budget disappears while the queue is merely deferred. The report is
+    // what makes this condition visible at all, so it stays; it just does not need repeating on
+    // every idle poll. Console warning above is unlatched and remains the per-poll trace.
+    if (!reportedMissingSmtpHost) {
+      reportedMissingSmtpHost = true;
+      Sentry.withScope((s) => {
+        s.setFingerprint(["email-disabled-no-smtp-host"]);
+        Sentry.captureMessage("Notification email deferred: SMTP_HOST unset and EMAIL_ENABLED unset", s);
+      });
+    }
     return false;
   }
 

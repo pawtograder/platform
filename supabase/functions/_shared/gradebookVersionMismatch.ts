@@ -95,38 +95,3 @@ export function partitionVersionMismatchRetries<T extends GradebookRowBatchResul
 
   return { retries, dead };
 }
-
-/**
- * Group rows into the smallest set of version-scoped clear statements.
- *
- * The clear has to carry `version = current_version`, and `current_version` differs per row, so it
- * cannot collapse to a single `.in("student_id", ...)` the way an unguarded clear could. Grouping by
- * (is_private, current_version) keeps it at one statement per distinct version rather than one per
- * row — normally one or two, versus the up-to-75 sequential round trips a naive per-row loop costs
- * inside a poll loop at a deadline.
- *
- * Rows with no `current_version` have no state row and therefore no claim to release; they are
- * returned separately rather than swept into a clear with a guessed version.
- */
-export function groupVersionScopedClears<T extends GradebookRowBatchResult>(
-  rows: T[]
-): {
-  clears: Array<{ is_private: boolean; version: number; student_ids: string[] }>;
-  withoutVersion: T[];
-} {
-  const groups = new Map<string, { is_private: boolean; version: number; student_ids: string[] }>();
-  const withoutVersion: T[] = [];
-
-  for (const row of rows) {
-    if (row.current_version === null || row.current_version === undefined) {
-      withoutVersion.push(row);
-      continue;
-    }
-    const key = `${row.is_private}:${row.current_version}`;
-    const group = groups.get(key) ?? { is_private: row.is_private, version: row.current_version, student_ids: [] };
-    group.student_ids.push(row.student_id);
-    groups.set(key, group);
-  }
-
-  return { clears: Array.from(groups.values()), withoutVersion };
-}

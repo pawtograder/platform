@@ -11,7 +11,6 @@
  */
 import { assertEquals, assertNotEquals } from "jsr:@std/assert@^1";
 import {
-  groupVersionScopedClears,
   MAX_VERSION_MISMATCH_ATTEMPTS,
   partitionVersionMismatchRetries,
   selectVersionMismatchedRows,
@@ -44,48 +43,6 @@ Deno.test("selectVersionMismatchedRows picks only rows that lost the race and we
     selectVersionMismatchedRows(rows).map((r) => r.student_id),
     ["mismatched"]
   );
-});
-
-Deno.test("groupVersionScopedClears collapses one statement per (is_private, version)", () => {
-  const { clears, withoutVersion } = groupVersionScopedClears([
-    row({ student_id: "a", current_version: 5 }),
-    row({ student_id: "b", current_version: 5 }),
-    row({ student_id: "c", current_version: 6 }),
-    row({ student_id: "d", current_version: 5, is_private: false })
-  ]);
-  assertEquals(withoutVersion.length, 0);
-  assertEquals(clears.length, 3);
-  assertEquals(
-    clears.find((c) => c.version === 5 && c.is_private)!.student_ids,
-    ["a", "b"],
-    "same version and privacy must batch into a single UPDATE"
-  );
-  assertEquals(clears.find((c) => c.version === 6)!.student_ids, ["c"]);
-  assertEquals(clears.find((c) => !c.is_private)!.student_ids, ["d"]);
-});
-
-// A row with no version cannot be cleared safely: there is nothing to scope the predicate to, and
-// guessing one is how the original bug released a claim it did not hold.
-Deno.test("groupVersionScopedClears refuses to clear rows with no current_version", () => {
-  const { clears, withoutVersion } = groupVersionScopedClears([
-    row({ student_id: "no-state", current_version: null }),
-    row({ student_id: "undefined-state", current_version: undefined }),
-    row({ student_id: "ok", current_version: 9 })
-  ]);
-  assertEquals(
-    withoutVersion.map((r) => r.student_id),
-    ["no-state", "undefined-state"]
-  );
-  assertEquals(clears.length, 1);
-  assertEquals(clears[0].student_ids, ["ok"]);
-});
-
-// Version 0 is a real version (the column defaults to 0), so it must not be treated as absent.
-Deno.test("groupVersionScopedClears treats version 0 as a version, not as missing", () => {
-  const { clears, withoutVersion } = groupVersionScopedClears([row({ current_version: 0 })]);
-  assertEquals(withoutVersion.length, 0);
-  assertEquals(clears.length, 1);
-  assertEquals(clears[0].version, 0);
 });
 
 Deno.test("partitionVersionMismatchRetries increments the attempt carried in the payload", () => {
