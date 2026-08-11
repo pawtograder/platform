@@ -71,6 +71,66 @@ COMMENT ON CONSTRAINT chk_rubric_criteria_total_points_non_negative ON public.ru
   'total_points is the cap in additive mode, the amount deducted from in the default mode, and the magnitude of the floor in deduction-only mode -- non-negative in all three. NOT VALID: enforced on write, not yet validated against legacy rows.';
 
 -- ---------------------------------------------------------------------------
+-- Option points, at the TABLE level.
+--
+-- The RPC guard below and the rubricYaml validator cover the editor and the CLI import, but
+-- neither is on the path `pawtograder assignments copy` takes: supabase/functions/cli/utils/rubric.ts
+-- INSERTs rubric_checks directly, `data` included, so a legacy rubric holding a negative option
+-- value copied through unchanged. Selecting that option later writes a negative-point comment and
+-- inverts the criterion's scoring mode, which is the same outcome the column constraints above
+-- exist to prevent -- so the invariant belongs where no write path can miss it.
+--
+-- A CHECK cannot contain a subquery, and walking a jsonb array needs one, so the predicate lives
+-- in an IMMUTABLE function. It is pure (jsonb in, boolean out, no catalog or GUC reads), which is
+-- what makes it safe to call from a CHECK.
+--
+-- Non-numeric junk in an option's points is deliberately NOT this constraint's business: it is
+-- already unreachable through every writer, and raising 22P02 from a CHECK would turn a malformed
+-- legacy row into an un-updatable one. Only a value that parses AND is negative fails.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.rubric_check_options_non_negative(p_data jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $function$
+DECLARE
+  v_option jsonb;
+  v_points numeric;
+BEGIN
+  IF p_data IS NULL OR jsonb_typeof(p_data->'options') <> 'array' THEN
+    RETURN true;
+  END IF;
+  FOR v_option IN SELECT * FROM jsonb_array_elements(p_data->'options')
+  LOOP
+    IF jsonb_typeof(v_option) = 'object' AND v_option->>'points' IS NOT NULL THEN
+      BEGIN
+        v_points := (v_option->>'points')::numeric;
+      EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+        CONTINUE;
+      END;
+      -- NaN is unordered against 0, so compare explicitly rather than relying on `< 0`.
+      IF v_points IS NOT NULL AND v_points = v_points AND v_points < 0 THEN
+        RETURN false;
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN true;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.rubric_check_options_non_negative(jsonb) IS
+  'True when no option inside a rubric check''s data holds a negative points value. Backs chk_rubric_checks_option_points_non_negative; IMMUTABLE and pure so it is usable from a CHECK, which cannot contain the subquery that walking the jsonb array requires.';
+
+ALTER TABLE public.rubric_checks
+  ADD CONSTRAINT chk_rubric_checks_option_points_non_negative
+  CHECK (public.rubric_check_options_non_negative(data)) NOT VALID;
+
+COMMENT ON CONSTRAINT chk_rubric_checks_option_points_non_negative ON public.rubric_checks IS
+  'An option''s points become a comment''s points when a grader selects it, so a negative there inverts the criterion scoring mode exactly as a negative check points does. Reaches the direct-INSERT copy path that the update_rubric_full guard cannot. NOT VALID: enforced on write, not yet validated against legacy rows.';
+
+-- ---------------------------------------------------------------------------
 -- update_rubric_full: reject negative points by name, before any write.
 --
 -- The write path for both the web rubric editor and `pawtograder rubrics import`. Without

@@ -551,12 +551,21 @@ async function archiveMessage(
   adminSupabase: SupabaseClient<Database>,
   msgId: number,
   scope: Sentry.Scope
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await adminSupabase.schema("pgmq_public").rpc("archive", {
+    // The `error` FIELD, not just a throw. supabase-js resolves RPC failures rather than rejecting,
+    // so the try/catch alone never saw them: every archive "succeeded", the disabled-email path
+    // logged that it had archived the whole batch and returned work-done, and the messages were
+    // still in the queue with vt pushed out an hour. Returning a boolean rather than swallowing it
+    // is what lets the caller tell a real suppression from a failed one.
+    const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
       queue_name: "notification_emails",
       message_id: msgId
     });
+    if (error) {
+      throw error;
+    }
+    return true;
   } catch (error) {
     // Clone before annotating. Callers pass long-lived scopes -- runBatchHandler's `scope` lives
     // for the isolate, and `emailScope` spans a whole batch -- so setting `archive_error` on the
@@ -573,6 +582,7 @@ async function archiveMessage(
     });
     Sentry.captureException(error, archiveScope);
     console.error(`Failed to archive message ${msgId}: ${error}`);
+    return false;
   }
 }
 
@@ -969,7 +979,26 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       // messages are the EMAIL fan-out only — the in-app notification already exists. Deferring
       // instead would re-deliver the same messages every 15s forever, driving read_ct and queue
       // depth up without bound.
-      await Promise.all(notifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope)));
+      const archiveResults = await Promise.all(
+        notifications.map((n) => archiveMessage(adminSupabase, n.msg_id, scope))
+      );
+      const archiveFailures = archiveResults.filter((ok) => !ok).length;
+      if (archiveFailures > 0) {
+        // Reported as a failure, not folded into the success log. These messages are still in the
+        // queue with vt pushed an hour out, so claiming the batch was suppressed hides a backlog
+        // that the queue-size metric cannot see either -- the same invisibility the precheck above
+        // exists to avoid. Do NOT purge digest items in this case: the suppression did not fully
+        // happen, so discarding the digest content on top of it would lose data twice over.
+        scope.setTag("archive_failures", String(archiveFailures));
+        Sentry.captureMessage(
+          `Email suppression incomplete: ${archiveFailures}/${notifications.length} notification(s) could not be archived`,
+          scope
+        );
+        console.error(
+          `Email explicitly disabled, but ${archiveFailures}/${notifications.length} archive(s) failed; those messages remain queued`
+        );
+        return true;
+      }
 
       // Discard pending digest items too, not just the queue messages.
       //
@@ -1020,6 +1049,13 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 
     const isInbucketEmail = isInbucketTransport();
 
+    // `auth` is omitted entirely when there are no credentials, rather than passed with empty
+    // strings. `resolveEmailTransport` deliberately returns `ready` with `user`/`pass` as "" for
+    // the credential-free relays it supports -- Inbucket locally, and an IP-allowlisted relay in
+    // production -- and an `auth` object present at all makes nodemailer attempt LOGIN. Against a
+    // relay that merely ADVERTISES AUTH as optional, that authenticates with an empty username and
+    // password instead of sending anonymously, so every message fails.
+    const hasSmtpCredentials = Boolean(transport.user) || Boolean(transport.pass);
     const transporter = nodemailer.createTransport({
       pool: true,
       host: transport.host,
@@ -1027,10 +1063,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       secure: transport.secure,
       requireTLS: transport.requireTLS,
       ignoreTLS: transport.ignoreTLS,
-      auth: {
-        user: transport.user,
-        pass: transport.pass
-      }
+      ...(hasSmtpCredentials ? { auth: { user: transport.user, pass: transport.pass } } : {})
     });
 
     // Partition notifications for special handling of help request creation and discussion digests
