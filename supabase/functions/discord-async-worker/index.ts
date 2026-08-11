@@ -638,22 +638,31 @@ async function processBatchRoleSync(
 
   // Cache membership checks per guild/user
   const membershipCache = new Map<string, MembershipCheck>();
+  // A 403 is a fact about the guild, not the user, so it is cached at guild scope. Keyed per user it
+  // would still cost one failing request per enrolled student: hundreds an hour for one broken guild,
+  // which is the same unbounded work this change exists to remove.
+  const forbiddenGuilds = new Map<string, number>();
   // Guilds whose invite creation has already failed this run, so the failure costs one call, not one
   // call per enrolled student.
   const guildInviteFailures = new Map<string, { code?: number; reason: string }>();
 
   for (const record of records) {
     const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
+    const knownForbidden = forbiddenGuilds.get(record.discord_server_id);
 
-    // Check membership if not cached
-    if (!membershipCache.has(cacheKey)) {
+    // Check membership if not cached, and never for a guild already known to be unreadable this run.
+    if (knownForbidden === undefined && !membershipCache.has(cacheKey)) {
       const membership = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
       membershipCache.set(cacheKey, membership);
+      if (membership.result === "forbidden") {
+        forbiddenGuilds.set(record.discord_server_id, membership.status);
+      }
       // Small delay to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    const membership = membershipCache.get(cacheKey)!;
+    const membership: MembershipCheck =
+      knownForbidden !== undefined ? { result: "forbidden", status: knownForbidden } : membershipCache.get(cacheKey)!;
 
     if (membership.result === "unknown") {
       // Nothing was learned about this user, so nothing is recorded and nothing is enqueued. The next
@@ -1462,7 +1471,10 @@ export async function processEnvelope(
                 throw inviteError;
               }
 
-              // The bot cannot build an invite. Only an admin can change that, so record it and stop.
+              // No invite exists, and retrying will not produce one. That is cannot_invite regardless
+              // of the exact cause: recording not_joined here would put the student under the alert
+              // that says an invite is waiting for them, which would be false. The cause is carried in
+              // discord_error_code and detail so the roster can say what actually needs doing.
               if (envelope.class_id && platformUserId) {
                 await recordMembershipStatus(
                   adminSupabase,
@@ -1470,9 +1482,11 @@ export async function processEnvelope(
                     classId: envelope.class_id,
                     userId: platformUserId,
                     guildId: args.guild_id,
-                    state: isBotPermissionProblem(inviteError) ? "cannot_invite" : "not_joined",
+                    state: "cannot_invite",
                     discordErrorCode: classification.code,
-                    detail: reason
+                    detail: isBotPermissionProblem(inviteError)
+                      ? reason
+                      : `Discord rejected the invite request (${classification.reason ?? "terminal error"}): ${reason}`
                   },
                   scope
                 );

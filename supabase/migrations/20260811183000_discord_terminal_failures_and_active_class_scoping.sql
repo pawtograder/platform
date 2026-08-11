@@ -250,8 +250,19 @@ BEGIN
   -- instructor would keep seeing failures from a server the class no longer uses, and two
   -- rows for one student would race to define their state.
   JOIN public.classes c ON c.id = dms.class_id AND c.discord_server_id = dms.guild_id
-  LEFT JOIN public.user_roles ur
-    ON ur.user_id = dms.user_id AND ur.class_id = dms.class_id AND ur.disabled = false
+  -- An active enrollment is required, not merely preferred. get_discord_role_sync_candidates()
+  -- skips disabled roles, so once a student drops, their last recorded status is never refreshed
+  -- again -- a LEFT JOIN would list them as still needing Discord access forever, and with a null
+  -- profile the roster would fall back to showing their email. LATERAL with LIMIT 1 so a user
+  -- holding more than one active role in the class cannot duplicate their row.
+  JOIN LATERAL (
+    SELECT ur.private_profile_id
+    FROM public.user_roles ur
+    WHERE ur.user_id = dms.user_id
+      AND ur.class_id = dms.class_id
+      AND ur.disabled = false
+    LIMIT 1
+  ) ur ON true
   LEFT JOIN public.profiles p ON p.id = ur.private_profile_id
   WHERE dms.class_id = p_class_id
   -- The enum is ordered by how much attention the state needs, so DESC puts cannot_invite
