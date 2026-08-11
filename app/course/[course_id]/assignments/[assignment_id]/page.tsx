@@ -10,6 +10,7 @@ import SelfReviewNotice from "@/components/ui/self-review-notice";
 import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { isOwnRepositoryForAssignment } from "@/lib/ownRepositoryForAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
@@ -104,9 +105,17 @@ export default function AssignmentPage() {
       );
   }, [private_profile_id, assignment_id]);
   const assignmentGroup = useFindTableControllerValue(assignmentGroupsWithMembers, ourAssignmentGroupPredicate);
+  // Scope to *this* viewer's repository, the same way submissionsFilters below picks the group repo
+  // or the individual one — see isOwnRepositoryForAssignment for why assignment_id alone was not
+  // enough.
   const repositoriesPredicate = useMemo(() => {
-    return (repository: Repository) => repository.assignment_id === Number(assignment_id);
-  }, [assignment_id]);
+    return (repository: Repository) =>
+      isOwnRepositoryForAssignment(repository, {
+        assignmentId: Number(assignment_id),
+        assignmentGroupId: assignmentGroup?.id ?? null,
+        profileId: private_profile_id
+      });
+  }, [assignment_id, assignmentGroup, private_profile_id]);
   const repositories = useListTableControllerValues(repositoriesController, repositoriesPredicate);
   const submissionsFilters = useMemo(() => {
     const filters: CrudFilter[] = [];
