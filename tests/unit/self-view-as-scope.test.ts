@@ -119,6 +119,18 @@ describe("parseViewAsCookieValue", () => {
     // More segments than this module ever writes: reject rather than salvage a prefix.
     expect(parseViewAsCookieValue(`${profileId}~34~tab~extra`)).toBeNull();
   });
+
+  it("rejects a profile id that is not a uuid rather than passing it to identity resolution", () => {
+    expect(parseViewAsCookieValue("not-a-uuid")).toBeNull();
+    expect(parseViewAsCookieValue("not-a-uuid~34~tab")).toBeNull();
+    // A uuid-shaped value with the wrong length must not squeak through.
+    expect(parseViewAsCookieValue("39dab5f1-3685-4d1a-8e9a-4b3abaee697")).toBeNull();
+    expect(parseViewAsCookieValue(`${profileId.toUpperCase()}`)).toEqual({
+      profileId: profileId.toUpperCase(),
+      previewAssignmentId: null,
+      previewTabId: null
+    });
+  });
 });
 
 describe("clearStalePreviewCookies", () => {
@@ -171,6 +183,22 @@ describe("clearStalePreviewCookies", () => {
     const tabId = getTabId();
     document.cookie = `view_as_12=${profileId}~34~${tabId}; path=/`;
     expect(clearStalePreviewCookies("99")).toEqual(["12"]);
+  });
+
+  it("keeps scanning past a cookie whose value cannot be decoded", () => {
+    // decodeURIComponent throws URIError on an invalid percent escape; that used to abort the whole
+    // sweep, leaving every later cookie in place.
+    const tabId = getTabId();
+    document.cookie = `view_as_11=%E0%A4%A; path=/`;
+    document.cookie = `view_as_12=${profileId}~34~${tabId}; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual(["12"]);
+    // The undecodable one is left as-is rather than guessed at.
+    expect(document.cookie).toContain("view_as_11");
+  });
+
+  it("ignores view_as cookies whose course id is not numeric", () => {
+    document.cookie = `view_as_bogus=${profileId}~34; path=/`;
+    expect(clearStalePreviewCookies("99")).toEqual([]);
   });
 
   it("cleans up a scoped cookie that carries no tab id", () => {

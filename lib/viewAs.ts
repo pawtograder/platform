@@ -39,11 +39,28 @@ export function viewAsCookieName(courseId: number | string): string {
  */
 const VIEW_AS_DELIMITER = "~";
 
+/** Profile ids are Postgres uuids; anything else did not come from this app. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `decodeURIComponent` throws `URIError` on an invalid percent escape, so a single malformed cookie
+ * would otherwise abort whatever loop is reading them. An undecodable value is not one we wrote, so
+ * report it as unparseable rather than propagating.
+ */
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 export function parseViewAsCookieValue(value: string | null | undefined): ViewAsTarget | null {
   if (!value) return null;
   const parts = value.split(VIEW_AS_DELIMITER);
   const [profileId, assignmentPart, tabPart] = parts;
-  if (!profileId) return null;
+  // Validate the shape rather than passing anything non-empty to identity resolution.
+  if (!profileId || !UUID_RE.test(profileId)) return null;
   if (parts.length === 1) {
     return { profileId, previewAssignmentId: null, previewTabId: null };
   }
@@ -86,7 +103,7 @@ export function getViewAsTarget(courseId: number | string): ViewAsTarget | null 
   const name = viewAsCookieName(courseId);
   const match = document.cookie.split("; ").find((row) => row.startsWith(`${name}=`));
   if (!match) return null;
-  return parseViewAsCookieValue(decodeURIComponent(match.slice(name.length + 1)));
+  return parseViewAsCookieValue(safeDecodeURIComponent(match.slice(name.length + 1)));
 }
 
 /**
@@ -139,7 +156,8 @@ export function clearStalePreviewCookies(currentCourseId: number | string | unde
     const eq = row.indexOf("=");
     if (eq <= 0) continue;
     const name = row.slice(0, eq);
-    const match = /^view_as_(.+)$/.exec(name);
+    // Course ids are numeric; a `view_as_` cookie named anything else is not ours to clear.
+    const match = /^view_as_(\d+)$/.exec(name);
     if (!match) continue;
     const cookieCourseId = match[1];
     if (currentCourseId !== undefined && cookieCourseId === String(currentCourseId)) {
@@ -147,7 +165,9 @@ export function clearStalePreviewCookies(currentCourseId: number | string | unde
       // the current path is inside the preview.
       continue;
     }
-    const target = parseViewAsCookieValue(decodeURIComponent(row.slice(eq + 1)));
+    // Undecodable or unparseable values are left alone rather than aborting the scan, so one bad
+    // cookie cannot stop the rest from being cleaned up.
+    const target = parseViewAsCookieValue(safeDecodeURIComponent(row.slice(eq + 1)));
     if (!target || target.previewAssignmentId == null) continue;
     if (target.previewTabId !== null && target.previewTabId !== thisTab) continue;
     clearViewAsCookie(cookieCourseId);

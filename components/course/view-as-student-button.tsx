@@ -74,7 +74,10 @@ export function ViewAsStudentButton() {
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await supabase
           .from("user_roles")
-          .select("private_profile_id, profiles!private_profile_id(name, sortable_name)")
+          // Email as well as name: two students can share a display name, and a profile with no
+          // name at all would otherwise be an unidentifiable row. It also lets an instructor find
+          // someone by typing their email, which is how they are usually identified.
+          .select("private_profile_id, profiles!private_profile_id(name, sortable_name), users(email)")
           .eq("class_id", Number(course_id))
           .eq("role", "student")
           .eq("disabled", false)
@@ -90,11 +93,22 @@ export function ViewAsStudentButton() {
           return;
         }
         collected.push(
-          ...(data ?? []).map((row) => ({
-            label: row.profiles?.name ?? "Student",
-            value: row.private_profile_id,
-            sortKey: row.profiles?.sortable_name ?? row.profiles?.name ?? ""
-          }))
+          ...(data ?? []).map((row) => {
+            const name = row.profiles?.name?.trim();
+            const email = row.users?.email?.trim();
+            // Never fall back to a bare "Student": an unlabelled row cannot be chosen deliberately.
+            const label = [
+              name || email || `Student ${row.private_profile_id.slice(0, 8)}`,
+              name && email ? `(${email})` : null
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return {
+              label,
+              value: row.private_profile_id,
+              sortKey: row.profiles?.sortable_name ?? name ?? email ?? ""
+            };
+          })
         );
         if (!data || data.length < pageSize) {
           break;
