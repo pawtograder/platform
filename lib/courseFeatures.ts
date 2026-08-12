@@ -145,7 +145,11 @@ export function courseFeatureEffectiveEnabled(
   // through a cast. A non-array value would make `.find` throw — inside a Server Component that
   // takes down the whole page — so treat anything that is not an array as "no entries".
   const row = Array.isArray(features) ? features.find((f) => f?.name === name) : undefined;
-  return row?.enabled ?? defaultWhenMissing;
+  // `enabled` is checked for being an actual boolean, not merely truthy. The column is unconstrained
+  // jsonb, so an entry can hold `"false"` — a string, which is truthy — and returning it raw made
+  // this disagree with the SQL side, which falls back to the default for anything that is not a JSON
+  // boolean. A gate that says enabled while the worker refuses to act is worse than either answer.
+  return typeof row?.enabled === "boolean" ? row.enabled : defaultWhenMissing;
 }
 
 export function courseFeatureEnabled(

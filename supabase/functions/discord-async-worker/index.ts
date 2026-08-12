@@ -296,6 +296,9 @@ async function sendToDeadLetterQueue(
 
 type DiscordMembershipState = Database["public"]["Enums"]["discord_membership_state"];
 
+/** Discord error code for "that user is not in this guild", which a removal is trying to achieve. */
+const DISCORD_UNKNOWN_MEMBER = 10007;
+
 /** Attempts for the membership-status write, which the caller has no way to retry. */
 const STATUS_WRITE_ATTEMPTS = 3;
 
@@ -754,6 +757,26 @@ async function ensureInviteForUser(
   guildInviteFailures: Map<string, { code?: number; reason: string }>,
   scope: Sentry.Scope
 ): Promise<"created" | "not_offered" | "cannot_invite" | "error"> {
+  // Checked before the cached guild failure below. A staff invite that failed earlier in this run
+  // populates guildInviteFailures for the guild, and every later student would then be recorded
+  // cannot_invite -- a red permissions alert for invitations the course has deliberately switched
+  // off, with the outcome depending on the order candidates happen to arrive in.
+  if (!record.student_join_enabled && record.role === "student") {
+    await recordMembershipStatus(
+      adminSupabase,
+      {
+        classId: record.class_id,
+        userId: record.user_id,
+        observedDiscordId: record.discord_id,
+        guildId: record.discord_server_id,
+        state: "not_joined",
+        detail: "Student Discord invitations are turned off for this course"
+      },
+      scope
+    );
+    return "not_offered";
+  }
+
   const knownFailure = guildInviteFailures.get(record.discord_server_id);
   if (knownFailure) {
     await recordMembershipStatus(
@@ -770,31 +793,6 @@ async function ensureInviteForUser(
       scope
     );
     return "cannot_invite";
-  }
-
-  // Students only. The candidate query returns every active user_role, and the flag is a property of
-  // the class, so gating on it alone withheld invitations from graders and instructors as well --
-  // staff whose route to an invitation is the manage/discord page, which this feature says nothing
-  // about. The flag is named for students and applies to them.
-  //
-  // For a student whose course has not opted in there is no invitation to create and nothing to act
-  // on. Recorded rather than skipped silently: they are genuinely not in the server, the roster
-  // should say so, and the detail keeps the instructor alert from claiming a link is waiting on a
-  // dashboard that is not showing one.
-  if (!record.student_join_enabled && record.role === "student") {
-    await recordMembershipStatus(
-      adminSupabase,
-      {
-        classId: record.class_id,
-        userId: record.user_id,
-        observedDiscordId: record.discord_id,
-        guildId: record.discord_server_id,
-        state: "not_joined",
-        detail: "Student Discord invitations are turned off for this course"
-      },
-      scope
-    );
-    return "not_offered";
   }
 
   try {
@@ -1699,7 +1697,17 @@ export async function processEnvelope(
         if (envelope.class_id) {
           console.log(`[processEnvelope] Removing channel from tracking table`);
           try {
-            await adminSupabase.from("discord_channels").delete().eq("discord_channel_id", args.channel_id);
+            // The result is inspected: PostgREST resolves with `{ error }` rather than throwing, so
+            // the catch below never fired for a database failure. A stale discord_channels row looks
+            // current, can stop a replacement being created, and routes later messages at a channel
+            // that no longer exists -- which is the reconciliation this branch exists to perform.
+            const { error: channelTrackingError } = await adminSupabase
+              .from("discord_channels")
+              .delete()
+              .eq("discord_channel_id", args.channel_id);
+            if (channelTrackingError) {
+              throw channelTrackingError;
+            }
             console.log(`[processEnvelope] Successfully removed channel from tracking`);
           } catch (e) {
             console.error(`[processEnvelope] Failed to remove channel from tracking:`, e);
@@ -1722,6 +1730,28 @@ export async function processEnvelope(
           message: `Creating Discord role ${args.name} in guild ${args.guild_id}`,
           level: "info"
         });
+
+        // Superseded envelopes are dropped before any Discord call. A class that moves from guild A
+        // to guild B leaves A's create_role messages queued, and the server-change trigger only
+        // clears the tracking rows -- so the old worker would create a role in A and store it, and
+        // because the replacement stores with ON CONFLICT DO NOTHING the stale row can win, leaving
+        // the class pairing guild B with a role from A and B's role deleted as surplus.
+        if (envelope.class_id) {
+          const { data: classRow, error: classLookupError } = await adminSupabase
+            .from("classes")
+            .select("discord_server_id")
+            .eq("id", envelope.class_id)
+            .maybeSingle();
+          if (classLookupError) {
+            throw classLookupError;
+          }
+          if (classRow?.discord_server_id !== args.guild_id) {
+            console.log(
+              `[processEnvelope] Dropping create_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${classRow?.discord_server_id ?? "no server"}`
+            );
+            return true;
+          }
+        }
 
         const result = await discord.createRole(args, scope);
         console.log(`[processEnvelope] Successfully created role, id=${result.id}`);
@@ -1756,6 +1786,12 @@ export async function processEnvelope(
             try {
               await discord.deleteRole({ guild_id: args.guild_id, role_id: result.id }, scope);
             } catch (raceCleanupError) {
+              // Already gone is the outcome this was trying to reach, exactly as on the rollback
+              // path below. Without this the loser dead-letters an operation that left no orphan.
+              if (isResourceGone(raceCleanupError)) {
+                console.log(`[processEnvelope] Surplus role ${result.id} was already gone`);
+                return true;
+              }
               scope.setContext("role_race_cleanup_failed", {
                 discord_role_id: result.id,
                 guild_id: args.guild_id,
@@ -1885,7 +1921,16 @@ export async function processEnvelope(
         if (envelope.class_id) {
           console.log(`[processEnvelope] Removing role from tracking table`);
           try {
-            await adminSupabase.from("discord_roles").delete().eq("discord_role_id", args.role_id);
+            // As for channels above: `{ error }` rather than a throw. A stale discord_roles row is
+            // worse here, because the create trigger skips while any row exists, so it blocks the
+            // repair that would replace it.
+            const { error: roleTrackingError } = await adminSupabase
+              .from("discord_roles")
+              .delete()
+              .eq("discord_role_id", args.role_id);
+            if (roleTrackingError) {
+              throw roleTrackingError;
+            }
             console.log(`[processEnvelope] Successfully removed role from tracking`);
           } catch (e) {
             console.error(`[processEnvelope] Failed to remove role from tracking:`, e);
@@ -1941,10 +1986,12 @@ export async function processEnvelope(
                 throw roleLookupError;
               }
 
-              // Unknown role type: treat it as staff rather than as a student, so a lookup miss
-              // withholds nothing. The student case is the one the flag exists to switch off, and
-              // erring the other way would silently stop invitations a course had opted in to.
-              const isStudentEnvelope = roleRow?.role_type === "student";
+              // Fail closed. An envelope can outlive its discord_roles row -- the server-change
+              // trigger deletes them while older messages are still queued -- and treating an
+              // unidentifiable role as staff let a course with student invitations switched off
+              // create one anyway, possibly for the guild it had just left. An opt-out that a stale
+              // message can bypass is not an opt-out.
+              const isStudentEnvelope = roleRow?.role_type !== "grader" && roleRow?.role_type !== "instructor";
 
               const { data: joinEnabled, error: joinFlagError } = isStudentEnvelope
                 ? await adminSupabase.rpc("discord_student_join_enabled", { p_class_id: envelope.class_id })
@@ -2165,8 +2212,20 @@ export async function processEnvelope(
           level: "info"
         });
 
-        await discord.removeMemberRole(args, scope);
-        console.log(`[processEnvelope] remove_member_role completed successfully`);
+        try {
+          await discord.removeMemberRole(args, scope);
+          console.log(`[processEnvelope] remove_member_role completed successfully`);
+        } catch (error) {
+          // Unknown Member is the desired end state, not a failure: the user left the server before
+          // their queued removal ran, which is what an ordinary drop looks like. isResourceGone
+          // deliberately excludes 10007 because for a delete_channel or delete_role it would mean
+          // something else, so this is checked here rather than there -- otherwise every departure
+          // dead-letters and the DLQ alert fires for work nobody needs to do.
+          if (classifyDiscordError(error).code !== DISCORD_UNKNOWN_MEMBER) {
+            throw error;
+          }
+          console.log(`[processEnvelope] User ${args.user_id} is not in guild ${args.guild_id}; removal already done`);
+        }
         return true;
       }
 
