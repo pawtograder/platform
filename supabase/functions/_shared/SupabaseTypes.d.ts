@@ -12599,6 +12599,10 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      discord_student_join_enabled: {
+        Args: { p_class_id: number };
+        Returns: boolean;
+      };
       dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
@@ -12914,6 +12918,7 @@ export type Database = {
           discord_id: string;
           discord_server_id: string;
           role: Database["public"]["Enums"]["app_role"];
+          student_join_enabled: boolean;
           user_id: string;
         }[];
       };

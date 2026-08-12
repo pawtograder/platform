@@ -10,7 +10,8 @@ export const COURSE_FEATURES = {
   SURVEYS: "surveys",
   POLLS: "polls",
   GRADEBOOK_WHAT_IF: "gradebook-what-if",
-  SUGGESTED_DUE_DATE: "suggested-due-date"
+  SUGGESTED_DUE_DATE: "suggested-due-date",
+  DISCORD_STUDENT_JOIN: "discord-student-join"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -107,6 +108,19 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Present the suggested due date as the due date",
     ariaLabel: "Enable suggested due date emphasis for this course"
+  },
+  {
+    name: COURSE_FEATURES.DISCORD_STUDENT_JOIN,
+    title: "Student Discord invitations",
+    description:
+      "When enabled, students see their invitation to this course's Discord server on their dashboard, and the sync creates one for any student who is not in the server yet. When disabled, no invitations are created and students are not shown one — role syncing for students already in the server is unaffected. Requires a Discord server to be configured for the course.",
+    // Off unless a course opts in. Before this flag existed no student-facing route to a Discord
+    // invitation existed at all, so defaulting on would newly invite every student of every course
+    // that happens to have a server configured -- a change nobody asked for, made on their behalf.
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Let students join this course's Discord server",
+    ariaLabel: "Enable student Discord invitations for this course"
   }
 ];
 

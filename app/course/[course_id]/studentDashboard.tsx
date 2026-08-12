@@ -109,7 +109,11 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
-  const discordConfigured = Boolean(course?.discord_server_id);
+  // Both halves are required: a server has to be configured, and the course has to have opted in.
+  // The flag defaults off, so a course that already had a server keeps the behaviour it had before
+  // this panel existed -- students saw no invitation, because there was no route to one.
+  const discordConfigured =
+    Boolean(course?.discord_server_id) && courseFeatureEnabled(course?.features, COURSE_FEATURES.DISCORD_STUDENT_JOIN);
 
   // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
   // first paint instead of flipping once the client course controller hydrates.
@@ -195,9 +199,10 @@ export default async function StudentDashboard({
        * waiting, no action is needed" was describing a link the student had no way to open. Renders
        * nothing when there is no unused, unexpired invite.
        *
-       * Gated on the course actually having a Discord server, because the component polls every 30
-       * seconds: mounted unconditionally it would cost two permanently useless requests per minute
-       * per open dashboard for every course that does not use Discord, which is most of them.
+       * Gated on the DISCORD_STUDENT_JOIN feature and on the course having a Discord server. The
+       * feature gate is the point: joining a course Discord is opt-in per course, and this panel is
+       * the only place a student can reach their invitation. The server check also keeps the
+       * component's 30-second poll off dashboards that could never have anything to show.
        *
        * Also hidden when an instructor is viewing as a student. PendingInvites scopes itself with
        * useAuthState(), not with the profile being viewed, so it would show the instructor their own

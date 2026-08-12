@@ -578,3 +578,86 @@ COMMENT ON FUNCTION public.get_discord_membership_status_for_class(bigint) IS
 
 REVOKE ALL ON FUNCTION public.get_discord_membership_status_for_class(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_discord_membership_status_for_class(bigint) TO authenticated, service_role;
+
+-- ============================================================================
+-- 7. Student Discord invitations are opt-in per course
+-- ============================================================================
+
+-- Whether this course lets students join its Discord server.
+--
+-- Mirrors courseFeatureEnabled() in lib/courseFeatures.ts: classes.features is a bare jsonb array of
+-- {name, enabled}, with no default and no CHECK, so a missing entry means the feature's own default
+-- and a non-array value means no entries at all. This one defaults OFF -- before the dashboard panel
+-- existed there was no student-facing route to an invitation, so defaulting on would newly invite
+-- every student of every course that happens to have a server configured.
+CREATE OR REPLACE FUNCTION public.discord_student_join_enabled(p_class_id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT COALESCE(
+    (
+      SELECT (f ->> 'enabled')::boolean
+      FROM public.classes c,
+           LATERAL jsonb_array_elements(
+             CASE WHEN jsonb_typeof(c.features) = 'array' THEN c.features ELSE '[]'::jsonb END
+           ) AS f
+      WHERE c.id = p_class_id
+        AND f ->> 'name' = 'discord-student-join'
+      LIMIT 1
+    ),
+    false
+  );
+$$;
+
+COMMENT ON FUNCTION public.discord_student_join_enabled(bigint) IS
+  'True when a course has opted in to student Discord invitations. Defaults false. The worker checks this before creating an invite, so a course that has not opted in produces none.';
+
+REVOKE ALL ON FUNCTION public.discord_student_join_enabled(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.discord_student_join_enabled(bigint) TO authenticated, service_role;
+
+-- The candidate query carries the flag, so the worker does not need a query per class. Dropped
+-- first because adding a column changes the return type.
+DROP FUNCTION IF EXISTS public.get_discord_role_sync_candidates();
+
+CREATE OR REPLACE FUNCTION public.get_discord_role_sync_candidates()
+RETURNS TABLE (
+  user_id uuid,
+  class_id bigint,
+  -- The enum, not text: the worker feeds this straight back into
+  -- enqueue_discord_role_sync(), which takes an app_role.
+  role public.app_role,
+  discord_id text,
+  discord_server_id text,
+  -- When false the worker still checks membership and syncs roles for students who are already in
+  -- the server; it just does not create an invitation for the ones who are not.
+  student_join_enabled boolean
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT
+    ur.user_id,
+    c.id AS class_id,
+    ur.role,
+    u.discord_id,
+    c.discord_server_id,
+    public.discord_student_join_enabled(c.id) AS student_join_enabled
+  FROM public.user_roles ur
+  JOIN public.classes c ON c.id = ur.class_id
+  JOIN public.users u ON u.user_id = ur.user_id
+  WHERE ur.disabled = false
+    AND u.discord_id IS NOT NULL
+    AND c.discord_server_id IS NOT NULL
+    AND public.is_class_active(c.archived, c.end_date);
+$$;
+
+COMMENT ON FUNCTION public.get_discord_role_sync_candidates() IS
+  'User-role records eligible for Discord role sync, scoped to active classes, with whether each class has opted in to student invitations.';
+
+REVOKE ALL ON FUNCTION public.get_discord_role_sync_candidates() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_discord_role_sync_candidates() TO service_role;

@@ -4,6 +4,9 @@ import { Alert } from "@/components/ui/alert";
 import DiscordReinviteButton from "@/components/discord/reinvite-button";
 import { useDiscordMembershipStatus, type DiscordMembershipRow } from "@/hooks/useDiscordMembershipStatus";
 import { Box, List, Stack, Text } from "@chakra-ui/react";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+import { useCourse } from "@/hooks/useCourseController";
+import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 
 /** How many names to spell out before falling back to a count. */
 const NAMES_SHOWN = 10;
@@ -123,6 +126,13 @@ export default function DiscordMembershipStatusAlerts({
   classId: number | undefined;
   alwaysOfferRetry?: boolean;
 }) {
+  // Cast as dynamicCourseNav does: classes.features is jsonb, and courseFeatureEnabled already
+  // treats anything that is not an array of entries as "no entries".
+  const course = useCourse() as CourseWithFeatures;
+  // The panel is staff-facing, so it reports the course's setting rather than obeying it: an
+  // instructor looking at students who are not in the server needs to know that nothing is inviting
+  // them, which is otherwise invisible from here.
+  const studentJoinEnabled = courseFeatureEnabled(course?.features, COURSE_FEATURES.DISCORD_STUDENT_JOIN);
   const { notJoined, cannotInvite, byUserId, loading, error, refresh } = useDiscordMembershipStatus(classId);
 
   if (loading || error) {
@@ -179,8 +189,9 @@ export default function DiscordMembershipStatusAlerts({
           title={`${notJoined.length} ${notJoined.length === 1 ? "student has" : "students have"} not joined the Discord server`}
         >
           <Text>
-            Each has an invite waiting on their course dashboard, and their roles sync automatically once they use it —
-            no action is needed unless you want to remind them.
+            {studentJoinEnabled
+              ? "Each has an invite waiting on their course dashboard, and their roles sync automatically once they use it — no action is needed unless you want to remind them."
+              : "Student Discord invitations are turned off for this course, so no invite has been created and students are not shown one. Turn on “Let students join this course's Discord server” in Feature flags if you want them to join."}
           </Text>
           <StudentList rows={notJoined} />
         </Alert>

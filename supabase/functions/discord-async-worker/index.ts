@@ -631,6 +631,8 @@ type UserRoleRecord = {
   role: Database["public"]["Enums"]["app_role"];
   discord_id: string;
   discord_server_id: string;
+  /** Whether this course has opted in to student Discord invitations. Defaults false. */
+  student_join_enabled: boolean;
 };
 
 type BatchSyncResult = {
@@ -742,7 +744,7 @@ async function ensureInviteForUser(
   record: UserRoleRecord,
   guildInviteFailures: Map<string, { code?: number; reason: string }>,
   scope: Sentry.Scope
-): Promise<"created" | "cannot_invite" | "error"> {
+): Promise<"created" | "not_offered" | "cannot_invite" | "error"> {
   const knownFailure = guildInviteFailures.get(record.discord_server_id);
   if (knownFailure) {
     await recordMembershipStatus(
@@ -759,6 +761,26 @@ async function ensureInviteForUser(
       scope
     );
     return "cannot_invite";
+  }
+
+  // The course has not opted in to student invitations, so there is no invitation to create and
+  // nothing for a student to act on. Recorded rather than skipped silently: they are genuinely not
+  // in the server, the roster should say so, and the detail keeps the instructor alert from claiming
+  // a link is waiting on a dashboard that is not showing one.
+  if (!record.student_join_enabled) {
+    await recordMembershipStatus(
+      adminSupabase,
+      {
+        classId: record.class_id,
+        userId: record.user_id,
+        observedDiscordId: record.discord_id,
+        guildId: record.discord_server_id,
+        state: "not_joined",
+        detail: "Student Discord invitations are turned off for this course"
+      },
+      scope
+    );
+    return "not_offered";
   }
 
   try {
@@ -876,7 +898,9 @@ async function processBatchRoleSync(
             class_id: record.class_id,
             role: record.role,
             discord_id: record.discord_id,
-            discord_server_id: record.discord_server_id
+            discord_server_id: record.discord_server_id,
+            // The RPC computes this per class; false unless the course has opted in.
+            student_join_enabled: record.student_join_enabled === true
           }
         ]
       : []
@@ -1100,6 +1124,10 @@ async function processBatchRoleSync(
     const inviteResult = await ensureInviteForUser(adminSupabase, record, guildInviteFailures, scope);
     if (inviteResult === "created") {
       summary.invite_created++;
+    } else if (inviteResult === "not_offered") {
+      // Counted as an ordinary not-in-guild outcome. The course has not opted in, so no invitation
+      // was owed and nothing failed.
+      summary.not_in_guild++;
     } else if (inviteResult === "cannot_invite") {
       summary.cannot_invite++;
     } else {
@@ -1879,6 +1907,40 @@ export async function processEnvelope(
             const platformUserId = envelope.class_id
               ? await lookupUserIdByDiscordId(adminSupabase, args.user_id)
               : null;
+
+            // The course must have opted in to student invitations. The batch path checks the same
+            // flag; this handler is reachable independently -- the user_roles trigger, a Discord
+            // relink, the manual retry -- so without it a course with the feature off would still
+            // accumulate invitations nobody can see.
+            if (envelope.class_id) {
+              const { data: joinEnabled, error: joinFlagError } = await adminSupabase.rpc(
+                "discord_student_join_enabled",
+                { p_class_id: envelope.class_id }
+              );
+              if (joinFlagError) {
+                // Not assumed either way: creating an invite a course has switched off is as wrong
+                // as withholding one it wants, so the envelope retries rather than guessing.
+                throw joinFlagError;
+              }
+              if (!joinEnabled) {
+                console.log(`[processEnvelope] Student invitations are off for class ${envelope.class_id}`);
+                if (platformUserId) {
+                  await recordMembershipStatus(
+                    adminSupabase,
+                    {
+                      classId: envelope.class_id,
+                      userId: platformUserId,
+                      observedDiscordId: args.user_id,
+                      guildId: args.guild_id,
+                      state: "not_joined",
+                      detail: "Student Discord invitations are turned off for this course"
+                    },
+                    scope
+                  );
+                }
+                return true;
+              }
+            }
 
             // Reuse an invite the student already has, the way the batch path does. Without this,
             // anything that re-enqueues add_member_role -- the manual retry most of all, which exists

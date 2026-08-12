@@ -29,6 +29,7 @@
 --  15. an in-flight write from the superseded account       -> discarded, current account still accepted
 --  16. two workers claiming an invite for one user           -> one row, the loser learns the winning URL
 --  17. roles created in parallel                             -> the existing-user sync still fires once all three exist
+--  18. the student-join course feature flag                  -> defaults off, survives malformed features
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -374,6 +375,37 @@ SELECT public.sync_discord_users_if_roles_complete(1) AS fired;
 INSERT INTO public.discord_roles (class_id, role_type, discord_role_id) VALUES (1, 'instructor', 'r-i');
 \echo '-- all three (expect: t) --'
 SELECT public.sync_discord_users_if_roles_complete(1) AS fired;
+
+-- ---------------------------------------------------------------------------
+-- 18. Student Discord invitations are opt-in per course.
+--
+-- Mirrors courseFeatureEnabled() in lib/courseFeatures.ts against a bare jsonb column: a missing
+-- entry means the feature default (off, for this one), and a non-array value means no entries rather
+-- than an error. The worker reads this before creating an invitation, so a course that has not
+-- opted in produces none.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 18. the student-join feature flag ==='
+UPDATE public.classes SET discord_server_id = 'guild-test-1' WHERE id = 1;
+
+UPDATE public.classes SET features = NULL WHERE id = 1;
+\echo '-- no features at all, so the default applies (expect: f) --'
+SELECT public.discord_student_join_enabled(1) AS enabled;
+
+UPDATE public.classes SET features = '[{"name":"discord-student-join","enabled":false}]'::jsonb WHERE id = 1;
+\echo '-- explicitly off (expect: f) --'
+SELECT public.discord_student_join_enabled(1) AS enabled;
+
+UPDATE public.classes SET features = '{"not-an-array":true}'::jsonb WHERE id = 1;
+\echo '-- malformed features must not raise (expect: f) --'
+SELECT public.discord_student_join_enabled(1) AS enabled;
+
+UPDATE public.classes SET features = '[{"name":"discord-student-join","enabled":true}]'::jsonb WHERE id = 1;
+\echo '-- opted in (expect: t) --'
+SELECT public.discord_student_join_enabled(1) AS enabled;
+
+\echo '-- and the candidate query carries it per class (expect: t) --'
+SELECT DISTINCT student_join_enabled FROM public.get_discord_role_sync_candidates() WHERE class_id = 1;
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.
