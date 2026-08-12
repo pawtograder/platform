@@ -28,6 +28,7 @@
 --  14. relinking a different Discord account                -> the stale observation is cleared
 --  15. an in-flight write from the superseded account       -> discarded, current account still accepted
 --  16. two workers claiming an invite for one user           -> one row, the loser learns the winning URL
+--  17. roles created in parallel                             -> the existing-user sync still fires once all three exist
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -278,8 +279,12 @@ SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- and a row now exists so the throttle applies to them too (expect: t) --'
-SELECT last_retry_requested_at IS NOT NULL AS stamped
+-- No row is invented for them. Seeding one meant choosing a state before anything was observed, and
+-- not_joined is what the alerts read as "an invite is waiting, no action needed" -- false when
+-- written, and false for good if the worker never gets there. They are throttled from the worker's
+-- first real outcome instead, about a minute later.
+\echo '-- and no status row was invented for them (expect: 0) --'
+SELECT count(*) AS invented_rows
 FROM public.discord_membership_status
 WHERE class_id = 1 AND user_id = :'student';
 
@@ -349,6 +354,26 @@ SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeC'
 UPDATE public.discord_invites SET used = true
 WHERE user_id = :'student' AND class_id = 1 AND guild_id = 'guild-test-1';
 SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeD', 'https://D', now() + INTERVAL '7 days');
+
+-- ---------------------------------------------------------------------------
+-- 17. The existing-user sync fires only once all three class roles exist.
+--
+-- trigger_sync_existing_users_on_role_creation counts inside the same transaction as the INSERT that
+-- fired it, and processBatch runs create_role envelopes in parallel, so concurrent inserts cannot see
+-- each other and all three triggers can count fewer than three. The worker calls this after its row
+-- is committed, where the siblings are visible.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 17. the existing-user sync gate ==='
+DELETE FROM public.discord_roles WHERE class_id = 1;
+INSERT INTO public.discord_roles (class_id, role_type, discord_role_id)
+VALUES (1, 'student', 'r-s'), (1, 'grader', 'r-g');
+\echo '-- two of three roles (expect: f) --'
+SELECT public.sync_discord_users_if_roles_complete(1) AS fired;
+
+INSERT INTO public.discord_roles (class_id, role_type, discord_role_id) VALUES (1, 'instructor', 'r-i');
+\echo '-- all three (expect: t) --'
+SELECT public.sync_discord_users_if_roles_complete(1) AS fired;
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.

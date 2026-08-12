@@ -348,17 +348,28 @@ async function claimInvite(
   throw lastError;
 }
 
-/** Best-effort revoke. Reported rather than thrown: the caller is already handling a failure. */
+/**
+ * Revoke an invite, or make it somebody's job to.
+ *
+ * A 404 is success -- the invite is already gone, which is the state this is trying to reach.
+ * Anything else means a live invite nobody can reach, and swallowing it archived the message with
+ * only a Sentry event behind it. Thrown as non-retriable because retrying re-runs createGuildInvite
+ * and produces another one, so the choice is a dead-letter row naming this invite or a growing pile.
+ */
 async function revokeInvite(code: string, scope: Sentry.Scope): Promise<void> {
   try {
     await discord.deleteInvite(code, scope);
   } catch (e) {
+    if (classifyDiscordError(e).httpStatus === 404) {
+      console.log(`[revokeInvite] Invite ${code} was already gone`);
+      return;
+    }
     console.error(`[revokeInvite] Failed to revoke invite ${code}:`, e);
     scope.setContext("invite_revoke_failed", {
       invite_code: code,
       error_message: e instanceof Error ? e.message : String(e)
     });
-    Sentry.captureMessage(`Discord invite ${code} left live and untracked`, { level: "error" });
+    throw new NonRetriableWorkerError(`Discord invite ${code} is live and could not be revoked`, { cause: e });
   }
 }
 
@@ -1755,6 +1766,25 @@ export async function processEnvelope(
             throw trackingError;
           }
           console.log(`[processEnvelope] Successfully stored role tracking`);
+
+          // Outside the insert's transaction, so this sees the sibling create_role workers the
+          // trigger on discord_roles could not. Without it a class whose three roles are created
+          // concurrently ends with all three rows and nobody assigned to them.
+          const { data: synced, error: syncError } = await adminSupabase.rpc("sync_discord_users_if_roles_complete", {
+            p_class_id: envelope.class_id
+          });
+          if (syncError) {
+            // Not fatal to this envelope: the role itself is created and tracked. Reported so a class
+            // that ends up with roles and no assignments is visible rather than merely quiet.
+            console.error(`[processEnvelope] Failed to run the existing-user sync check:`, syncError);
+            scope.setContext("role_sync_check_error", {
+              class_id: envelope.class_id,
+              error_message: syncError.message
+            });
+            Sentry.captureException(syncError, scope);
+          } else if (synced) {
+            console.log(`[processEnvelope] All Discord roles present for class ${envelope.class_id}, synced users`);
+          }
         }
 
         console.log(`[processEnvelope] create_role completed successfully`);

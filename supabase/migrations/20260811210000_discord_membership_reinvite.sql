@@ -164,17 +164,19 @@ BEGIN
       UPDATE public.discord_membership_status
       SET last_retry_requested_at = now()
       WHERE id = v_row.status_id;
-    ELSE
-      -- No row yet -- a user who has never been checked, reachable only through the
-      -- single-user branch above. Recording the request now means the throttle applies to
-      -- them too, instead of the button being unlimited for exactly the users whose state
-      -- is unknown. state is seeded to not_joined because that is what a pending check
-      -- means to a reader; the worker overwrites it with the real answer within the minute.
-      INSERT INTO public.discord_membership_status (class_id, user_id, guild_id, state, detail, last_retry_requested_at)
-      VALUES (p_class_id, v_row.user_id, v_guild_id, 'not_joined', 'Membership retry requested; awaiting the next sync.', now())
-      ON CONFLICT (class_id, user_id, guild_id) DO UPDATE
-      SET last_retry_requested_at = now();
     END IF;
+
+    -- Deliberately no row is created for a user who has none. Seeding one meant choosing a state
+    -- before anything had been observed, and `not_joined` is what the alerts read as "an invite is
+    -- waiting on their dashboard, no action needed" -- false the moment it is written, and false
+    -- indefinitely if the worker never gets there. The enum has no value for "queued, not yet
+    -- checked", and inventing one would have to reach the roster column and its filter as well.
+    --
+    -- The cost is that such a user is not throttled until the worker records their first real
+    -- outcome, about a minute later. Pressing again before then re-enqueues an add_member_role,
+    -- which is idempotent at the Discord end and can no longer mint a duplicate invite now that
+    -- claim_discord_invite() decides that centrally. A brief unthrottled window is the cheaper error
+    -- than telling staff an invite exists when none does.
 
     v_queued := v_queued + 1;
   END LOOP;
@@ -288,6 +290,50 @@ AFTER UPDATE OF discord_id ON public.users
 FOR EACH ROW
 WHEN (NEW.discord_id IS DISTINCT FROM OLD.discord_id)
 EXECUTE FUNCTION public.clear_discord_membership_status_on_identity_change();
+
+-- ============================================================================
+-- 3a. Fire the existing-user sync once a class's roles are all present
+-- ============================================================================
+
+-- trigger_sync_existing_users_on_role_creation counts the three role types inside the same
+-- transaction as the INSERT that fired it, and processBatch runs up to four create_role envelopes in
+-- parallel. Concurrent inserts cannot see each other, so all three triggers can count fewer than
+-- three, none of them calls sync_existing_users_after_roles_created, and no later insert ever fires
+-- it again -- the roles exist and nobody is assigned to them, which is the state the repair is
+-- supposed to end.
+--
+-- Called by the worker after its tracking row is committed, so this sees the siblings the trigger
+-- could not. Whichever worker finishes last observes three and fires the sync. More than one may
+-- observe three and fire it twice; that costs a duplicate enqueue, and add_member_role is idempotent
+-- at the Discord end, which is the cheaper end of the trade against never firing at all.
+CREATE OR REPLACE FUNCTION public.sync_discord_users_if_roles_complete(p_class_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_role_count integer;
+BEGIN
+  SELECT COUNT(DISTINCT dr.role_type) INTO v_role_count
+  FROM public.discord_roles dr
+  WHERE dr.class_id = p_class_id
+    AND dr.role_type IN ('student', 'grader', 'instructor');
+
+  IF v_role_count < 3 THEN
+    RETURN false;
+  END IF;
+
+  PERFORM public.sync_existing_users_after_roles_created(p_class_id);
+  RETURN true;
+END;
+$$;
+
+COMMENT ON FUNCTION public.sync_discord_users_if_roles_complete(bigint) IS
+  'Runs the existing-user Discord sync once all three class roles exist. Called after a create_role worker commits, because the insert trigger counts inside its own transaction and concurrent creations cannot see each other.';
+
+REVOKE ALL ON FUNCTION public.sync_discord_users_if_roles_complete(bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.sync_discord_users_if_roles_complete(bigint) TO service_role;
 
 -- ============================================================================
 -- 3b. Claim the one invite slot per (user, class, guild)

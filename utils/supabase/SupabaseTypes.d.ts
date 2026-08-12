@@ -13765,6 +13765,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      sync_discord_users_if_roles_complete: {
+        Args: { p_class_id: number };
+        Returns: boolean;
+      };
       sync_existing_users_after_roles_created: {
         Args: { p_class_id: number };
         Returns: undefined;
