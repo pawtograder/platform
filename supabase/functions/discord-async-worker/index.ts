@@ -423,6 +423,15 @@ const DISCORD_API_BASE = "https://discord.com/api/v10";
 /** Deadline for the raw membership-check fetch, matching DiscordWrapper's own fetch timeout. */
 const MEMBERSHIP_CHECK_TIMEOUT_MS = 10000;
 
+/**
+ * How many membership checks may tell us nothing in a row before the run is abandoned.
+ *
+ * One inconclusive lookup is ordinary and should not cost the rest of the roster its sync. Three in
+ * a row is an outage or a bad token, and continuing means one failing request per enrollment -- at
+ * up to MEMBERSHIP_CHECK_TIMEOUT_MS each -- before archiving as though the sweep had succeeded.
+ */
+const MAX_CONSECUTIVE_UNKNOWN = 3;
+
 const SLASH_COMMANDS = [
   {
     name: "sync-roles",
@@ -519,7 +528,7 @@ type MembershipCheck =
   /** Discord is rate limiting this route. Nothing else in the run will fare better. */
   | { result: "rate_limited"; retryAfterMs: number }
   /** The check failed for a reason that says nothing about the user. */
-  | { result: "unknown" };
+  | { result: "unknown"; cause: string; status?: number };
 
 /**
  * Whether the bot sees a user in a guild.
@@ -586,9 +595,9 @@ async function checkGuildMembership(
     // retriable — calling it `forbidden` here would record every candidate as cannot_invite and tell
     // instructors to change server permissions that are not the problem.
     if (response.status === 403) return { result: "forbidden", status: response.status };
-    return { result: "unknown" };
-  } catch {
-    return { result: "unknown" };
+    return { result: "unknown", cause: `HTTP ${response.status}`, status: response.status };
+  } catch (error) {
+    return { result: "unknown", cause: error instanceof Error ? error.message : String(error) };
   } finally {
     clearTimeout(timer);
   }
@@ -779,6 +788,9 @@ async function processBatchRoleSync(
   // Guilds whose invite creation has already failed this run, so the failure costs one call, not one
   // call per enrolled student.
   const guildInviteFailures = new Map<string, { code?: number; reason: string }>();
+  // Consecutive membership checks that told us nothing. Distinguishes one bad request from an
+  // outage; see the `unknown` branch below.
+  let consecutiveUnknown = 0;
 
   for (const record of records) {
     const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
@@ -845,11 +857,32 @@ async function processBatchRoleSync(
     }
 
     if (membership.result === "unknown") {
-      // Nothing was learned about this user, so nothing is recorded and nothing is enqueued. The next
-      // run will check again.
+      // Nothing was learned about this user, so nothing is recorded and nothing is enqueued.
       summary.errors++;
+
+      // A 401 is bot-wide: the token is wrong or mid-rotation, so no candidate in any class will
+      // fare better. Abandoning immediately is the difference between one failed request and one
+      // per enrollment, every hour, until someone notices.
+      if (membership.status === 401) {
+        throw new Error(`Discord rejected the bot token (401) on the guild member lookup: ${membership.cause}`);
+      }
+
+      // Anything else transient -- a 5xx, a network error, a 10s timeout -- is only bot-wide if it
+      // keeps happening. Three in a row is enough to stop rather than spend the rest of the roster
+      // discovering the same outage one 10-second timeout at a time. Thrown so processEnvelope
+      // requeues the batch with backoff instead of archiving a sweep that checked almost nobody.
+      consecutiveUnknown++;
+      if (consecutiveUnknown >= MAX_CONSECUTIVE_UNKNOWN) {
+        throw new Error(
+          `Discord membership lookups failed ${consecutiveUnknown} times in a row (${membership.cause}); ` +
+            `abandoned batch role sync after ${summary.synced + summary.not_in_guild} of ${records.length} records`
+        );
+      }
       continue;
     }
+
+    // Any decisive answer clears the run of failures, so only a genuine streak trips the check above.
+    consecutiveUnknown = 0;
 
     if (membership.result === "forbidden") {
       // The bot cannot read this guild's members, so it certainly cannot invite anyone into it.
@@ -1526,20 +1559,48 @@ export async function processEnvelope(
           console.log(
             `[processEnvelope] Storing role tracking: class_id=${envelope.class_id}, role_type=${envelope.role_type}`
           );
-          try {
-            await adminSupabase.from("discord_roles").insert({
-              class_id: envelope.class_id,
-              discord_role_id: result.id,
-              role_type: envelope.role_type
-            });
-            console.log(`[processEnvelope] Successfully stored role tracking`);
-          } catch (e) {
-            console.error(`[processEnvelope] Failed to store role tracking:`, e);
+          // The result is inspected rather than caught: PostgREST resolves with `{ error }` instead
+          // of throwing, so the previous try/catch could never fire for a database failure. The role
+          // existed in Discord, the tracking row did not, and the message archived as a success --
+          // after which the repair path saw neither a row nor a queued message and made another role.
+          //
+          // Upsert on the unique (class_id, role_type), so a concurrent writer that got there first
+          // resolves instead of failing.
+          const { error: trackingError } = await adminSupabase
+            .from("discord_roles")
+            .upsert(
+              { class_id: envelope.class_id, discord_role_id: result.id, role_type: envelope.role_type },
+              { onConflict: "class_id,role_type" }
+            );
+
+          if (trackingError) {
+            console.error(`[processEnvelope] Failed to store role tracking:`, trackingError);
             scope.setContext("role_tracking_error", {
-              error_message: e instanceof Error ? e.message : String(e)
+              error_message: trackingError.message,
+              discord_role_id: result.id
             });
-            Sentry.captureException(e, scope);
+
+            // Compensate before rethrowing. Retrying create_role makes another Discord role, so
+            // without this every attempt stacks one more untracked role in the guild -- exactly what
+            // failing loudly is meant to prevent.
+            try {
+              await discord.deleteRole({ guild_id: args.guild_id, role_id: result.id }, scope);
+              console.log(`[processEnvelope] Rolled back untracked Discord role ${result.id}`);
+            } catch (rollbackError) {
+              console.error(`[processEnvelope] Could not roll back role ${result.id}:`, rollbackError);
+              scope.setContext("role_rollback_failed", {
+                discord_role_id: result.id,
+                guild_id: args.guild_id,
+                error_message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+              });
+              Sentry.captureMessage(`Discord role ${result.id} left untracked in guild ${args.guild_id}`, {
+                level: "error"
+              });
+            }
+
+            throw trackingError;
           }
+          console.log(`[processEnvelope] Successfully stored role tracking`);
         }
 
         console.log(`[processEnvelope] create_role completed successfully`);

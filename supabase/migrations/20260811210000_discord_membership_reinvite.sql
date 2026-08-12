@@ -105,6 +105,18 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Serialize the whole retry per class, for the rest of this transaction.
+  --
+  -- Every phase below is read-then-write. The throttle predicate reads
+  -- last_retry_requested_at and the loop body writes it, so two staff pressing the button at
+  -- the same moment both saw an unthrottled row and both enqueued add_member_role for the
+  -- same users. The worker handles those messages in parallel and creates a Discord invite
+  -- per message before upserting the one tracking row, so the loser's invite stays live in
+  -- Discord with no record of it -- the orphan-invite shape this branch has been removing
+  -- everywhere else. A class-scoped lock is the right grain: this function is a per-class
+  -- operation, and it also covers the role-repair phase further down.
+  PERFORM pg_advisory_xact_lock(hashtext('discord_reinvite:' || p_class_id::text));
+
   FOR v_row IN
     SELECT ur.user_id, ur.role, dms.id AS status_id,
            EXISTS (
@@ -124,10 +136,13 @@ BEGIN
       -- keeps the returned count honest.
       AND u.discord_id IS NOT NULL
       AND (p_user_id IS NULL OR ur.user_id = p_user_id)
-      -- A class-wide retry targets only the students who need one. A retry aimed at a
-      -- single user runs whatever their recorded state is, including no state at all,
-      -- because that is the case an instructor uses it for.
-      AND (p_user_id IS NOT NULL OR (dms.id IS NOT NULL AND dms.state <> 'in_guild'))
+      -- A class-wide retry targets everyone not recorded as being in the server, which
+      -- includes users with no row at all. Requiring a row excluded exactly the students the
+      -- sync has never reached -- and for a class outside the active-class window that is
+      -- permanent, because the hourly batch will never create one, while the settings page
+      -- reported there was nothing to queue. A retry aimed at a single user runs whatever
+      -- their state is, including none, because that is the case it exists for.
+      AND (p_user_id IS NOT NULL OR dms.id IS NULL OR dms.state <> 'in_guild')
       -- Throttle. The work this queues is one Discord member lookup plus, at most, an
       -- invite creation, so the window only has to stop a button being held down; it is
       -- not the five-day email throttle the GitHub resend banner needs.
@@ -200,16 +215,12 @@ BEGIN
   -- Re-create them. The worker writes the discord_roles row when it succeeds, so the next
   -- press of the button finds the role and queues the users skipped above.
   FOREACH v_role_type IN ARRAY v_missing_roles LOOP
-    -- Serialized per (class, role type) for the rest of this transaction. The check below is
-    -- read-then-write, so without the lock two staff pressing the button at the same moment
-    -- both see an empty queue and both enqueue. create_role is not idempotent at the Discord
-    -- end -- it creates the role and only then inserts the row, while discord_roles allows one
-    -- row per (class_id, role_type) -- so the loser leaves an untracked role in the guild that
-    -- nothing in Pawtograder ever refers to again.
-    PERFORM pg_advisory_xact_lock(hashtext('discord_create_role:' || p_class_id::text || ':' || v_role_type));
-
-    -- Users are left un-stamped on this path, so nothing throttles a second press while the
-    -- worker is still working. This is what stops that becoming a second Discord role.
+    -- Users are left un-stamped on the missing-role path, so nothing throttles a second press
+    -- while the worker is still working. This is what stops that becoming a second Discord
+    -- role: create_role is not idempotent at the Discord end -- it creates the role and only
+    -- then inserts the row, while discord_roles allows one row per (class_id, role_type) -- so
+    -- a duplicate leaves an untracked role in the guild that nothing refers to again.
+    -- Concurrent callers are handled by the class-scoped lock taken above.
     IF EXISTS (
       SELECT 1
       FROM pgmq.q_discord_async_calls q

@@ -23,6 +23,7 @@
 --  10. everyone in_guild but a class role missing            -> repair still runs
 --  11. an `admin` enrollment                                 -> never enqueued as a Discord role
 --  12. a caller naming their own id for a class they are not in -> access denied, nothing enqueued
+--  13. a linked user with no status row at all              -> included in a class-wide retry
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -243,6 +244,40 @@ SELECT DISTINCT message ->> 'role_type' AS role_type
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1
 ORDER BY 1;
+
+-- ---------------------------------------------------------------------------
+-- 13. A linked user the sync has never reached is included in a class-wide retry.
+--
+-- The predicate used to require a discord_membership_status row, which excluded exactly the students
+-- nothing had checked yet. For a class outside the active-class window that is permanent -- the
+-- hourly batch will never create the row -- so the settings page reported nothing to queue for the
+-- users most in need of it.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 13. a linked user with no status row is retried ==='
+UPDATE public.classes SET discord_server_id = 'guild-test-1' WHERE id = 1;
+DELETE FROM public.discord_membership_status WHERE class_id = 1;
+DELETE FROM public.discord_roles WHERE class_id = 1;
+INSERT INTO public.discord_roles (class_id, role_type, discord_role_id) VALUES (1, 'student', 'role-test-student');
+UPDATE public.users SET discord_id = 'discord-test-student' WHERE user_id = :'student';
+-- Scenario 11 promoted this enrollment to admin to prove admin is excluded from repair. Put it
+-- back, or the retry below skips the user for having no Discord role rather than for the reason
+-- under test.
+UPDATE public.user_roles SET role = 'student' WHERE class_id = 1 AND user_id = :'student';
+
+\echo '-- status rows for the class (expect: 0) --'
+SELECT count(*) AS status_rows FROM public.discord_membership_status WHERE class_id = 1;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+\echo '-- expect: queued 1, for a user with no recorded state at all --'
+SELECT * FROM public.request_discord_reinvite(1, NULL);
+RESET ROLE;
+
+\echo '-- and a row now exists so the throttle applies to them too (expect: t) --'
+SELECT last_retry_requested_at IS NOT NULL AS stamped
+FROM public.discord_membership_status
+WHERE class_id = 1 AND user_id = :'student';
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.
