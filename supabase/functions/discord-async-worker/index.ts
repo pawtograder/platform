@@ -287,6 +287,9 @@ async function sendToDeadLetterQueue(
 
 type DiscordMembershipState = Database["public"]["Enums"]["discord_membership_state"];
 
+/** Attempts for the membership-status write, which the caller has no way to retry. */
+const STATUS_WRITE_ATTEMPTS = 3;
+
 /**
  * Record where a user stands with a class's Discord server.
  *
@@ -306,20 +309,35 @@ async function recordMembershipStatus(
   scope: Sentry.Scope
 ): Promise<void> {
   try {
-    const { error } = await adminSupabase.rpc("record_discord_membership_status", {
-      p_class_id: args.classId,
-      p_user_id: args.userId,
-      p_guild_id: args.guildId,
-      p_state: args.state,
-      p_discord_error_code: args.discordErrorCode,
-      p_detail: args.detail
-    });
-    if (error) {
-      throw error;
+    // Retried in place, because the caller cannot retry it. Every call site has already performed
+    // the Discord side -- an invite created, a membership observed -- so throwing would repeat that
+    // mutation, and swallowing on the first failure loses the outcome entirely. For a class reached
+    // by a manual retry there is no hourly pass behind it: the row is the only record there will
+    // ever be. This touches nothing but the database, so retrying is free of side effects.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= STATUS_WRITE_ATTEMPTS; attempt++) {
+      const { error } = await adminSupabase.rpc("record_discord_membership_status", {
+        p_class_id: args.classId,
+        p_user_id: args.userId,
+        p_guild_id: args.guildId,
+        p_state: args.state,
+        p_discord_error_code: args.discordErrorCode,
+        p_detail: args.detail
+      });
+
+      if (!error) {
+        console.log(
+          `[recordMembershipStatus] Recorded ${args.state} for user ${args.userId} in class ${args.classId} (guild ${args.guildId})`
+        );
+        return;
+      }
+
+      lastError = error;
+      if (attempt < STATUS_WRITE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+      }
     }
-    console.log(
-      `[recordMembershipStatus] Recorded ${args.state} for user ${args.userId} in class ${args.classId} (guild ${args.guildId})`
-    );
+    throw lastError;
   } catch (e) {
     // Failing to record the state must not turn a terminal outcome back into a retry loop, so this
     // is reported and swallowed.
@@ -422,6 +440,21 @@ function reportTerminalFailure(
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 /** Deadline for the raw membership-check fetch, matching DiscordWrapper's own fetch timeout. */
 const MEMBERSHIP_CHECK_TIMEOUT_MS = 10000;
+
+/**
+ * A failure the worker itself knows cannot be retried, whatever Discord said.
+ *
+ * `classifyDiscordError` reads Discord's own status and codes, so it cannot see a condition the
+ * handler created -- a Discord resource that exists but could neither be recorded nor removed, where
+ * another attempt would make a second one before failing the same way. Following the GitHub worker's
+ * `NonRetryableGitHubError`, which the outer catch branches on with `instanceof`.
+ */
+class NonRetriableWorkerError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options as ErrorOptions);
+    this.name = "NonRetriableWorkerError";
+  }
+}
 
 /**
  * How many membership checks may tell us nothing in a row before the run is abandoned.
@@ -1564,14 +1597,37 @@ export async function processEnvelope(
           // existed in Discord, the tracking row did not, and the message archived as a success --
           // after which the repair path saw neither a row nor a queued message and made another role.
           //
-          // Upsert on the unique (class_id, role_type), so a concurrent writer that got there first
-          // resolves instead of failing.
-          const { error: trackingError } = await adminSupabase
+          // ON CONFLICT DO NOTHING, not an overwrite. Two create_role envelopes for the same class
+          // and role type each create their own Discord role, and the RPC's class lock does not
+          // reach them: the server-connect trigger enqueues without it, and processBatch handles
+          // messages in parallel. Overwriting the row would leave the first worker's role in the
+          // guild with nothing referring to it. Whoever inserted first wins; the loser deletes the
+          // role it just made, below.
+          const { data: trackingRows, error: trackingError } = await adminSupabase
             .from("discord_roles")
             .upsert(
               { class_id: envelope.class_id, discord_role_id: result.id, role_type: envelope.role_type },
-              { onConflict: "class_id,role_type" }
-            );
+              { onConflict: "class_id,role_type", ignoreDuplicates: true }
+            )
+            .select("discord_role_id");
+
+          if (!trackingError && (trackingRows === null || trackingRows.length === 0)) {
+            // Another worker got there first. Its role is the tracked one, so this one is surplus.
+            console.log(`[processEnvelope] Lost the create_role race for class ${envelope.class_id}, removing surplus`);
+            try {
+              await discord.deleteRole({ guild_id: args.guild_id, role_id: result.id }, scope);
+            } catch (raceCleanupError) {
+              scope.setContext("role_race_cleanup_failed", {
+                discord_role_id: result.id,
+                guild_id: args.guild_id,
+                error_message: raceCleanupError instanceof Error ? raceCleanupError.message : String(raceCleanupError)
+              });
+              Sentry.captureMessage(`Surplus Discord role ${result.id} left in guild ${args.guild_id}`, {
+                level: "error"
+              });
+            }
+            return true;
+          }
 
           if (trackingError) {
             console.error(`[processEnvelope] Failed to store role tracking:`, trackingError);
@@ -1593,9 +1649,15 @@ export async function processEnvelope(
                 guild_id: args.guild_id,
                 error_message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
               });
-              Sentry.captureMessage(`Discord role ${result.id} left untracked in guild ${args.guild_id}`, {
-                level: "error"
-              });
+
+              // Not retriable. A retry re-runs createRole before reaching this cleanup, so a rollback
+              // outage would leave one untracked role in the guild per attempt before the envelope
+              // finally dead-letters. Once both the tracking write and its compensation have failed,
+              // the only safe move is to stop and let a human look at the one role already made.
+              throw new NonRetriableWorkerError(
+                `Discord role ${result.id} was created in guild ${args.guild_id} but could not be tracked or removed`,
+                { cause: trackingError }
+              );
             }
 
             throw trackingError;
@@ -1886,7 +1948,7 @@ export async function processEnvelope(
     // state; the operations that reach here have no such record, so the DLQ row is their only durable
     // evidence and the growth signal PawtograderDiscordDLQGrowing is built on.
     const classification = classifyDiscordError(error);
-    if (classification.terminal) {
+    if (classification.terminal || error instanceof NonRetriableWorkerError) {
       reportTerminalFailure(envelope, meta, error, classification, scope, "dead-lettered");
 
       const copied = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);

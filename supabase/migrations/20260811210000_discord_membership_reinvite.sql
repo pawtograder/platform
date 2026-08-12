@@ -250,7 +250,43 @@ REVOKE ALL ON FUNCTION public.request_discord_reinvite(bigint, uuid) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.request_discord_reinvite(bigint, uuid) TO authenticated, service_role;
 
 -- ============================================================================
--- 3. Surface the retry timestamp to the roster
+-- 3. Forget what was observed when the Discord account changes
+-- ============================================================================
+
+-- discord_membership_status is keyed on (class, user, guild) and records nothing about *which*
+-- Discord account was checked, so a state observed for one account is silently reused for the next.
+-- Unlinking only hides the row -- the instructor read filters on discord_id IS NOT NULL -- so linking
+-- a different account brings the old row back: a stale in_guild then excludes that user from
+-- class-wide retries as already in the server, permanently for a class outside the active sync
+-- window, because nothing else will ever rewrite the row.
+--
+-- Deleting on any change of discord_id is the smaller fix than widening the key. The row is a cache
+-- of one observation, the next sync re-observes within the hour for an active class, and a manual
+-- retry covers the rest. It also clears the rows a plain unlink leaves behind.
+CREATE OR REPLACE FUNCTION public.clear_discord_membership_status_on_identity_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.discord_membership_status WHERE user_id = NEW.user_id;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.clear_discord_membership_status_on_identity_change() IS
+  'Drops a user''s recorded Discord membership when their linked account changes, so an observation of one Discord account is never reused for another.';
+
+DROP TRIGGER IF EXISTS clear_discord_membership_status_on_identity_change ON public.users;
+CREATE TRIGGER clear_discord_membership_status_on_identity_change
+AFTER UPDATE OF discord_id ON public.users
+FOR EACH ROW
+WHEN (NEW.discord_id IS DISTINCT FROM OLD.discord_id)
+EXECUTE FUNCTION public.clear_discord_membership_status_on_identity_change();
+
+-- ============================================================================
+-- 4. Surface the retry timestamp to the roster
 -- ============================================================================
 
 -- Unchanged except for the added last_retry_requested_at column, which the UI uses to

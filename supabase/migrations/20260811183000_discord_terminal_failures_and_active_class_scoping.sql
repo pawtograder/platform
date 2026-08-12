@@ -328,7 +328,11 @@ GRANT EXECUTE ON FUNCTION public.invoke_discord_discussion_stats_update() TO ser
 
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+  -- pg_net as well as pg_cron, which is what the scheduler this replaces required. The job body now
+  -- goes through call_edge_function_internal(), which calls net.http_post unconditionally, so
+  -- scheduling it where pg_net is absent trades an unscheduled job for one that fails every hour.
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+     AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_net') THEN
     PERFORM cron.unschedule('discord-discussion-stats-update')
     WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'discord-discussion-stats-update');
 

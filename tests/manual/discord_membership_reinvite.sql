@@ -24,6 +24,7 @@
 --  11. an `admin` enrollment                                 -> never enqueued as a Discord role
 --  12. a caller naming their own id for a class they are not in -> access denied, nothing enqueued
 --  13. a linked user with no status row at all              -> included in a class-wide retry
+--  14. relinking a different Discord account                -> the stale observation is cleared
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -278,6 +279,31 @@ RESET ROLE;
 SELECT last_retry_requested_at IS NOT NULL AS stamped
 FROM public.discord_membership_status
 WHERE class_id = 1 AND user_id = :'student';
+
+-- ---------------------------------------------------------------------------
+-- 14. Relinking a different Discord account forgets what was observed for the old one.
+--
+-- The status row records the Pawtograder user and the guild, not which Discord account was checked,
+-- and the instructor read only hides rows while discord_id is null. So unlinking an account recorded
+-- as in_guild and linking a different one brought the old row back, and a class-wide retry then
+-- skipped that user as already in the server -- permanently, for a class outside the active window.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 14. relinking a different account clears the stale observation ==='
+UPDATE public.classes SET discord_server_id = 'guild-test-1' WHERE id = 1;
+DELETE FROM public.discord_membership_status WHERE class_id = 1;
+UPDATE public.users SET discord_id = 'acct-A' WHERE user_id = :'student';
+INSERT INTO public.discord_membership_status (class_id, user_id, guild_id, state)
+VALUES (1, :'student', 'guild-test-1', 'in_guild');
+
+\echo '-- recorded in_guild for the first account (expect: 1) --'
+SELECT count(*) AS rows_for_first_account FROM public.discord_membership_status WHERE user_id = :'student';
+
+UPDATE public.users SET discord_id = NULL WHERE user_id = :'student';
+UPDATE public.users SET discord_id = 'acct-B' WHERE user_id = :'student';
+
+\echo '-- after unlink and relink of a different account (expect: 0) --'
+SELECT count(*) AS rows_after_relink FROM public.discord_membership_status WHERE user_id = :'student';
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.

@@ -117,7 +117,7 @@ export default function DiscordMembershipStatusAlerts({
   classId: number | undefined;
   alwaysOfferRetry?: boolean;
 }) {
-  const { notJoined, cannotInvite, loading, error, refresh } = useDiscordMembershipStatus(classId);
+  const { notJoined, cannotInvite, byUserId, loading, error, refresh } = useDiscordMembershipStatus(classId);
 
   if (loading || error) {
     // A failure to read this is not itself actionable for an instructor, and the roster it sits above
@@ -129,11 +129,19 @@ export default function DiscordMembershipStatusAlerts({
     if (!alwaysOfferRetry || classId === undefined) {
       return null;
     }
+    // An empty result has two meanings and they must not be conflated. Rows present and none of them
+    // a problem is a real all-clear; no rows at all means the sync has not looked -- a newly
+    // configured class before its first pass, or one outside the active-class window, where nothing
+    // will ever create them. Saying "every linked student is in the server" there would present an
+    // absence of observations as confirmed membership, the same guess the roster column exists to
+    // avoid, and the retry RPC treats those users as eligible precisely because they are unchecked.
+    const nothingChecked = byUserId.size === 0;
     return (
       <Box mb={4}>
         <Text fontSize="sm" color="fg.muted">
-          Every linked student is in the Discord server. If roles are missing there, retrying re-creates this
-          course&apos;s Discord roles.
+          {nothingChecked
+            ? "No Discord membership has been checked for this course yet. Retrying checks every linked student and re-creates the course's Discord roles if they are missing."
+            : "No Discord membership problems are recorded for this course. If roles are missing in the server, retrying re-creates them."}
         </Text>
         <DiscordReinviteButton classId={classId} rows={[]} label="Retry Discord setup" onQueued={refresh} />
       </Box>
