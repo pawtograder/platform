@@ -428,9 +428,14 @@ SELECT count(*) AS candidates FROM public.get_discord_role_sync_candidates();
 \echo ''
 \echo '=== 19. moving a class to a different Discord server ==='
 UPDATE public.classes SET discord_server_id = 'guild-A' WHERE id = 1;
+-- Set after the server, because the trigger clears it whenever the server changes.
+UPDATE public.classes SET discord_channel_group_id = 'A-category' WHERE id = 1;
 DELETE FROM public.discord_roles WHERE class_id = 1;
+DELETE FROM public.discord_channels WHERE class_id = 1;
 INSERT INTO public.discord_roles (class_id, role_type, discord_role_id)
 VALUES (1, 'student', 'A-student'), (1, 'grader', 'A-grader'), (1, 'instructor', 'A-instructor');
+INSERT INTO public.discord_channels (class_id, discord_channel_id, channel_type)
+VALUES (1, 'A-channel', 'operations');
 \echo '-- roles tracked against guild A (expect: 3) --'
 SELECT count(*) AS rows_for_a FROM public.discord_roles WHERE class_id = 1;
 
@@ -440,6 +445,19 @@ UPDATE public.classes SET discord_server_id = 'guild-B' WHERE id = 1;
 \echo '-- no role id from the old guild survives (expect: 0) --'
 SELECT count(*) FILTER (WHERE discord_role_id LIKE 'A-%') AS stale_rows
 FROM public.discord_roles WHERE class_id = 1;
+
+-- Channels matter more than roles: the create trigger skips replacements while they exist, so the
+-- message enqueuers keep selecting guild A's channel ids by class and type and post course activity
+-- into the server the class left, for as long as the bot is still in it.
+\echo '-- and no channel or category from the old guild survives (expect: 0, null) --'
+SELECT (SELECT count(*) FROM public.discord_channels WHERE class_id = 1) AS stale_channels,
+       (SELECT discord_channel_group_id FROM public.classes WHERE id = 1) AS stale_category;
+
+-- And a role created in the old guild cannot be stored after the move, however it raced.
+\echo '-- storing a role for the old guild is refused (expect: stored f, superseded t) --'
+SELECT * FROM public.store_discord_role_if_current(1, 'student', 'A-late-role', 'guild-A');
+\echo '-- while the current guild is accepted (expect: stored t, superseded f) --'
+SELECT * FROM public.store_discord_role_if_current(1, 'student', 'B-role', 'guild-B');
 
 \echo '-- and a fresh set is enqueued for the new guild (expect: guild-B x3) --'
 SELECT DISTINCT message ->> 'role_type' AS role_type, message -> 'args' ->> 'guild_id' AS guild

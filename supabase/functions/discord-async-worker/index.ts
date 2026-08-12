@@ -795,6 +795,32 @@ async function ensureInviteForUser(
     return "cannot_invite";
   }
 
+  // Re-read rather than trusting the snapshot the candidate query took at the start of the run. A
+  // large roster spends minutes in this loop, and an instructor who switches the feature off during
+  // it would otherwise keep having invitations created for the rest of the sweep. The envelope path
+  // already reads the flag immediately before doing invitation work.
+  const { data: stillEnabled, error: flagRecheckError } = await adminSupabase.rpc("discord_student_join_enabled", {
+    p_class_id: record.class_id
+  });
+  if (flagRecheckError) {
+    throw flagRecheckError;
+  }
+  if (!stillEnabled && record.role === "student") {
+    await recordMembershipStatus(
+      adminSupabase,
+      {
+        classId: record.class_id,
+        userId: record.user_id,
+        observedDiscordId: record.discord_id,
+        guildId: record.discord_server_id,
+        state: "not_joined",
+        detail: "Student Discord invitations are turned off for this course"
+      },
+      scope
+    );
+    return "not_offered";
+  }
+
   try {
     // Same courtesy delay the membership check uses. createGuildInvite is two Discord calls (list
     // channels, then create), and a class where nobody has joined yet reaches here once per enrolled
@@ -1766,46 +1792,39 @@ export async function processEnvelope(
           // existed in Discord, the tracking row did not, and the message archived as a success --
           // after which the repair path saw neither a row nor a queued message and made another role.
           //
-          // ON CONFLICT DO NOTHING, not an overwrite. Two create_role envelopes for the same class
-          // and role type each create their own Discord role, and the RPC's class lock does not
-          // reach them: the server-connect trigger enqueues without it, and processBatch handles
-          // messages in parallel. Overwriting the row would leave the first worker's role in the
-          // guild with nothing referring to it. Whoever inserted first wins; the loser deletes the
-          // role it just made, below.
-          const { data: trackingRows, error: trackingError } = await adminSupabase
-            .from("discord_roles")
-            .upsert(
-              { class_id: envelope.class_id, discord_role_id: result.id, role_type: envelope.role_type },
-              { onConflict: "class_id,role_type", ignoreDuplicates: true }
-            )
-            .select("discord_role_id");
+          // Revalidated and inserted in one statement. The preflight check above cannot cover the
+          // Discord call that sits between it and this write, so a class that moves servers midway
+          // would otherwise have guild A's role stored after the trigger cleared the rows -- and
+          // because this stores without overwriting, that stale row would win and guild B's role be
+          // removed as surplus.
+          const { data: storeRows, error: trackingError } = await adminSupabase.rpc("store_discord_role_if_current", {
+            p_class_id: envelope.class_id,
+            p_role_type: envelope.role_type,
+            p_discord_role_id: result.id,
+            p_guild_id: args.guild_id
+          });
+          const storeResult = storeRows?.[0];
 
-          if (!trackingError && (trackingRows === null || trackingRows.length === 0)) {
-            // Another worker got there first. Its role is the tracked one, so this one is surplus.
-            console.log(`[processEnvelope] Lost the create_role race for class ${envelope.class_id}, removing surplus`);
+          if (!trackingError && storeResult && !storeResult.stored) {
+            // Either the class has moved on, or another worker tracked its role first. Both mean
+            // this role is surplus and belongs to nobody, so it is removed rather than left in the
+            // guild with nothing referring to it.
+            const why = storeResult.superseded ? "the class changed server" : "another worker won the race";
+            console.log(`[processEnvelope] Discarding role ${result.id}: ${why}`);
             try {
               await discord.deleteRole({ guild_id: args.guild_id, role_id: result.id }, scope);
-            } catch (raceCleanupError) {
-              // Already gone is the outcome this was trying to reach, exactly as on the rollback
-              // path below. Without this the loser dead-letters an operation that left no orphan.
-              if (isResourceGone(raceCleanupError)) {
-                console.log(`[processEnvelope] Surplus role ${result.id} was already gone`);
-                return true;
+            } catch (surplusError) {
+              if (!isResourceGone(surplusError)) {
+                scope.setContext("role_surplus_cleanup_failed", {
+                  discord_role_id: result.id,
+                  guild_id: args.guild_id,
+                  reason: why
+                });
+                throw new NonRetriableWorkerError(
+                  `Surplus Discord role ${result.id} could not be removed from guild ${args.guild_id}`,
+                  { cause: surplusError }
+                );
               }
-              scope.setContext("role_race_cleanup_failed", {
-                discord_role_id: result.id,
-                guild_id: args.guild_id,
-                error_message: raceCleanupError instanceof Error ? raceCleanupError.message : String(raceCleanupError)
-              });
-
-              // Same treatment as a failed rollback below, and for the same reason: retrying would
-              // create a third role, but archiving as a success leaves a surplus one in the guild
-              // with only a Sentry event behind it. Dead-lettered so there is a durable row naming
-              // the role an operator has to remove.
-              throw new NonRetriableWorkerError(
-                `Surplus Discord role ${result.id} could not be removed from guild ${args.guild_id} after losing a create_role race`,
-                { cause: raceCleanupError }
-              );
             }
             return true;
           }
@@ -1952,6 +1971,27 @@ export async function processEnvelope(
           message: `Adding role ${args.role_id} to user ${args.user_id} in guild ${args.guild_id}`,
           level: "info"
         });
+
+        // Superseded envelopes are dropped before any Discord call, as create_role now does. An
+        // add_member_role for guild A outlives a move to guild B: applied, it grants an obsolete
+        // role in the server the class left, and if the user is absent it mints a live invitation
+        // into that server which the current-guild filters then hide from everyone.
+        if (envelope.class_id) {
+          const { data: currentClass, error: currentClassError } = await adminSupabase
+            .from("classes")
+            .select("discord_server_id")
+            .eq("id", envelope.class_id)
+            .maybeSingle();
+          if (currentClassError) {
+            throw currentClassError;
+          }
+          if (currentClass?.discord_server_id !== args.guild_id) {
+            console.log(
+              `[processEnvelope] Dropping add_member_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${currentClass?.discord_server_id ?? "no server"}`
+            );
+            return true;
+          }
+        }
 
         try {
           // First check if user is in the guild

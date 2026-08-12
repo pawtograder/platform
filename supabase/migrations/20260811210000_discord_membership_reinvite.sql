@@ -688,12 +688,28 @@ SET search_path = ''
 AS $$
 BEGIN
   DELETE FROM public.discord_roles WHERE class_id = NEW.id;
+
+  -- Channels matter more than roles here. discord_channels has no guild column either, and the
+  -- create trigger skips replacements while the scheduling/operations rows exist, so the message
+  -- enqueuers go on selecting channel ids by class and type -- posting course activity into the
+  -- server the class deliberately left, for as long as the bot is still in it. That is an audience
+  -- problem, not just a broken integration.
+  DELETE FROM public.discord_channels WHERE class_id = NEW.id;
+
+  -- Tracked messages name message ids inside those channels, so an update would edit content in the
+  -- old guild. Dropped so later updates post fresh messages in the new one.
+  DELETE FROM public.discord_messages WHERE class_id = NEW.id;
+
+  -- The category the channels were created under, which is likewise an id in the old guild. BEFORE
+  -- trigger, so assigning to NEW is what persists.
+  NEW.discord_channel_group_id := NULL;
+
   RETURN NEW;
 END;
 $$;
 
 COMMENT ON FUNCTION public.clear_discord_roles_on_server_change() IS
-  'Drops a class''s tracked Discord roles when its server changes, so role ids from the previous guild are not reused against the new one. discord_roles has no guild key, so the rows are otherwise indistinguishable from current ones.';
+  'Drops a class''s tracked Discord roles, channels, messages and channel group when its server changes. None of those tables carries a guild key, so rows from the previous guild are otherwise indistinguishable from current ones -- and stale channels would keep receiving course activity in the server the class left.';
 
 DROP TRIGGER IF EXISTS clear_discord_roles_on_server_change ON public.classes;
 CREATE TRIGGER clear_discord_roles_on_server_change
@@ -701,3 +717,56 @@ BEFORE UPDATE OF discord_server_id ON public.classes
 FOR EACH ROW
 WHEN (NEW.discord_server_id IS DISTINCT FROM OLD.discord_server_id)
 EXECUTE FUNCTION public.clear_discord_roles_on_server_change();
+
+-- ============================================================================
+-- 9. Store a created role only while the class still uses that server
+-- ============================================================================
+
+-- The create_role handler checks the class's current server before calling Discord, but the Discord
+-- call sits between that check and the insert, so a move can commit in between: the worker then
+-- stores guild A's role after the server-change trigger has cleared the rows, and because the
+-- replacement stores with ON CONFLICT DO NOTHING the stale row wins and guild B's role is deleted as
+-- surplus -- permanently pairing the class with a role it cannot use.
+--
+-- Revalidating and inserting in one statement closes that. `stored` false with `superseded` false
+-- means another worker got there first, which the caller compensates the same way.
+CREATE OR REPLACE FUNCTION public.store_discord_role_if_current(
+  p_class_id bigint,
+  p_role_type text,
+  p_discord_role_id text,
+  p_guild_id text
+)
+RETURNS TABLE (stored boolean, superseded boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_current_guild text;
+  v_inserted boolean := false;
+BEGIN
+  -- FOR UPDATE, so a server change cannot commit between this read and the insert below.
+  SELECT c.discord_server_id INTO v_current_guild
+  FROM public.classes c
+  WHERE c.id = p_class_id
+  FOR UPDATE;
+
+  IF v_current_guild IS DISTINCT FROM p_guild_id THEN
+    RETURN QUERY SELECT false, true;
+    RETURN;
+  END IF;
+
+  INSERT INTO public.discord_roles (class_id, role_type, discord_role_id)
+  VALUES (p_class_id, p_role_type, p_discord_role_id)
+  ON CONFLICT (class_id, role_type) DO NOTHING;
+
+  GET DIAGNOSTICS v_inserted = ROW_COUNT;
+  RETURN QUERY SELECT v_inserted, false;
+END;
+$$;
+
+COMMENT ON FUNCTION public.store_discord_role_if_current(bigint, text, text, text) IS
+  'Records a newly created Discord role only if the class still uses the guild it was created in, and only if no role of that type is tracked yet. Returns whether it was stored and whether the envelope was superseded, so the worker can revoke a role it should not keep.';
+
+REVOKE ALL ON FUNCTION public.store_discord_role_if_current(bigint, text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.store_discord_role_if_current(bigint, text, text, text) TO service_role;

@@ -135,6 +135,14 @@ export default function DiscordMembershipStatusAlerts({
   const studentJoinEnabled = courseFeatureEnabled(course?.features, COURSE_FEATURES.DISCORD_STUDENT_JOIN);
   const { notJoined, cannotInvite, byUserId, loading, error, refresh } = useDiscordMembershipStatus(classId);
 
+  // Turning the feature on does not create the invitations that were skipped while it was off. Those
+  // users carry a not_joined row recorded with this detail and no discord_invites row, so reading
+  // the flag alone would tell staff an invite is waiting for a student whose dashboard is empty --
+  // and on a class the hourly sync no longer covers, that stays wrong until somebody retries.
+  const awaitingFirstInvite = notJoined.filter((row) =>
+    row.detail?.includes("Student Discord invitations are turned off")
+  ).length;
+
   if (loading || error) {
     // A failure to read this is not itself actionable for an instructor, and the roster it sits above
     // is still usable, so it stays quiet.
@@ -189,9 +197,11 @@ export default function DiscordMembershipStatusAlerts({
           title={`${notJoined.length} ${notJoined.length === 1 ? "student has" : "students have"} not joined the Discord server`}
         >
           <Text>
-            {studentJoinEnabled
-              ? "Each has an invite waiting on their course dashboard, and their roles sync automatically once they use it — no action is needed unless you want to remind them."
-              : "Student Discord invitations are turned off for this course, so no invite has been created and students are not shown one. Turn on “Let students join this course's Discord server” in Feature flags if you want them to join."}
+            {!studentJoinEnabled
+              ? "Student Discord invitations are turned off for this course, so no invite has been created and students are not shown one. Turn on “Let students join this course's Discord server” in Feature flags if you want them to join."
+              : awaitingFirstInvite > 0
+                ? `${awaitingFirstInvite === notJoined.length ? "None of these students has" : `${awaitingFirstInvite} of these students have`} an invite yet — they were checked while invitations were turned off. The next sync creates one; use the retry below if this course has finished for the term.`
+                : "Each has an invite waiting on their course dashboard, and their roles sync automatically once they use it — no action is needed unless you want to remind them."}
           </Text>
           <StudentList rows={notJoined} />
         </Alert>

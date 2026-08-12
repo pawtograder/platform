@@ -13747,6 +13747,18 @@ export type Database = {
         Args: { p_survey_id: string; p_survey_logical_id: string };
         Returns: undefined;
       };
+      store_discord_role_if_current: {
+        Args: {
+          p_class_id: number;
+          p_discord_role_id: string;
+          p_guild_id: string;
+          p_role_type: string;
+        };
+        Returns: {
+          stored: boolean;
+          superseded: boolean;
+        }[];
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
