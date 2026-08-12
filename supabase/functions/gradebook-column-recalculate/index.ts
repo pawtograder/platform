@@ -957,7 +957,15 @@ export async function runBatchHandler() {
   const run = await beginWorkerRun({
     name: "gradebook_column_recalculate",
     scope,
-    idleSleepMs: 10000,
+    // Poll far more often than the other workers, because this queue is the one a human is waiting
+    // on: a grade edit enqueues a row and the instructor expects the dependent columns to move.
+    // That used to be immediate — every direct poke from `invoke_gradebook_recalculation_background_task`
+    // started a drain — but under a lease the pokes are turned away and the resident holder's idle
+    // sleep becomes the floor on recalculation latency. At 10s that is a visible regression in the
+    // app and the difference between passing and failing for the gradebook specs' 90s budget. The
+    // cost is one extra `pgmq_public.read` per second on an indexed empty queue, from a loop that is
+    // already resident and already holding its admission slot.
+    idleSleepMs: 1000,
     errorSleepMs: 5000
   });
   scope.setTag("worker_run_mode", run.mode);

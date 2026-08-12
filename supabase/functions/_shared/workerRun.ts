@@ -93,6 +93,21 @@ const DEFAULT_BOUNDED_BUDGET_MS = 50_000;
  * still frees its slot at TTL rather than holding it for the isolate's life.
  */
 const MAX_BOUNDED_HELPERS = 1;
+/**
+ * How long a helper slot survives without being handed back.
+ *
+ * Deliberately much shorter than the lease TTL, and NOT tied to it. A helper releases its slot when
+ * it finishes, so this only governs the abnormal exit — the isolate the runtime recycles mid-drain,
+ * which in the edge runtime is routine rather than exceptional. At the lease TTL that left the only
+ * slot claimed by a dead helper for a full minute, and with the holder stalled too, nothing drained
+ * for that whole window: the first CI run after the scope fix still showed 20 gaps over 30 seconds
+ * with a 94-second worst case, which is what the specs' 90-second budget was losing to.
+ *
+ * The failure mode of it being too short is two helpers overlapping briefly, which is bounded and
+ * harmless. The failure mode of it being too long is nothing draining at all. Those are not
+ * comparable, so this errs short.
+ */
+const HELPER_SLOT_TTL_MS = 15_000;
 /** `DEPLOY_KIND` for the CI e2e job. The only deployment kind with no k8s rollout behind it. */
 const E2E_LOCAL_KIND = "e2e-local";
 
@@ -153,6 +168,8 @@ export interface BeginWorkerRunOptions {
   /** How long to sleep after a batch threw. */
   errorSleepMs: number;
   leaseTtlMs?: number;
+  /** Lifetime of a helper-pool slot. Short on purpose; see HELPER_SLOT_TTL_MS. */
+  helperSlotTtlMs?: number;
   boundedBudgetMs?: number;
   /** Test seams. */
   redis?: RedisClient | null;
@@ -380,7 +397,7 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
     for (let i = 1; i <= MAX_BOUNDED_HELPERS; i++) {
       const hKey = helperKey(opts.name, leaseScope, i);
       try {
-        const got = await redis.set(hKey, token, { px: ttl, nx: true });
+        const got = await redis.set(hKey, token, { px: opts.helperSlotTtlMs ?? HELPER_SLOT_TTL_MS, nx: true });
         if (got !== null && got !== undefined && got !== 0) {
           return boundedRun("lease_held_elsewhere", { key: hKey, token });
         }

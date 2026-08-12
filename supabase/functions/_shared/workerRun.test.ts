@@ -10,9 +10,12 @@ function fakeRedis(opts: { failAcquire?: boolean; failRenew?: boolean } = {}) {
     get setCalls() {
       return setCalls;
     },
+    /** px used for each key, so tests can assert a helper slot outlives less than a lease. */
+    ttls: new Map<string, number>(),
     // deno-lint-ignore no-explicit-any
     set(key: string, value: string, o?: any) {
       setCalls++;
+      if (typeof o?.px === "number") this.ttls.set(key, o.px);
       if (o?.nx) {
         if (opts.failAcquire) throw new Error("redis down");
         if (store.has(key)) return Promise.resolve(null);
@@ -183,6 +186,20 @@ Deno.test("a helper hands its slot back on release", async () => {
   await helper.release();
   assertEquals(redis.store.has(`${LEASE_KEY}:helper-1`), false);
   assertEquals((await beginWorkerRun({ ...base, redis })).mode, "bounded", "the freed slot is reusable");
+});
+
+// A helper that dies without releasing holds the only slot until its key expires, so that expiry
+// has to be quick. At the lease TTL, one dead helper plus a stalled holder meant nothing drained
+// for a minute -- the ~94s worst-case gap seen in CI.
+Deno.test("a helper slot expires much sooner than a lease", async () => {
+  const redis = fakeRedis();
+  await beginWorkerRun({ ...base, redis, leaseTtlMs: 60_000 });
+  const helper = await beginWorkerRun({ ...base, redis, leaseTtlMs: 60_000 });
+  assertEquals(helper.mode, "bounded");
+  const leaseTtl = redis.ttls.get(LEASE_KEY)!;
+  const helperTtl = redis.ttls.get(`${LEASE_KEY}:helper-1`)!;
+  assertEquals(leaseTtl, 60_000);
+  assertEquals(helperTtl < leaseTtl / 2, true, `helper slot ttl ${helperTtl} should be well under ${leaseTtl}`);
 });
 
 // Helper slots are never renewed, so a hung helper frees its slot at TTL rather than for the life
