@@ -18,6 +18,8 @@
 --   5. a student retrying themselves                                 -> allowed
 --   6. a student retrying the whole class                            -> access denied
 --   7. class with no discord_server_id                               -> queued 0, no error
+--   8. three presses while a class role is missing                   -> one create_role, not three
+--   9. a user who unlinks Discord                                    -> drops out of the instructor read
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -53,6 +55,12 @@ SELECT set_config('test.student', :'student', true);
 
 INSERT INTO public.discord_membership_status (class_id, user_id, guild_id, state, discord_error_code, detail)
 VALUES (1, :'student', 'guild-test-1', 'cannot_invite', 50001, 'Missing Access');
+
+-- Setting discord_server_id above fires the class-connect trigger, which enqueues create_role for
+-- all three role types plus two create_channel messages. Cleared so that scenario 2 measures what
+-- request_discord_reinvite() enqueues rather than what connecting the server already did -- the
+-- function now declines to duplicate an outstanding create_role, which is scenario 8.
+DELETE FROM pgmq.q_discord_async_calls WHERE (message ->> 'class_id')::bigint = 1;
 
 \echo ''
 \echo '=== 1. anon is denied (expect: permission denied) ==='
@@ -132,6 +140,63 @@ UPDATE public.classes SET discord_server_id = NULL WHERE id = 1;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
 SELECT * FROM public.request_discord_reinvite(1, NULL);
+RESET ROLE;
+
+-- ---------------------------------------------------------------------------
+-- 8. Repeated presses must not queue duplicate role creations.
+--
+-- Users are deliberately left un-stamped on the missing-role path, so nothing throttles a second
+-- press while the worker is still working. create_role is not idempotent at the Discord end -- it
+-- creates the role and only then inserts the row, and discord_roles allows one row per
+-- (class_id, role_type) -- so a duplicate leaves an untracked role in the guild forever.
+--
+-- The queue is cleared first because connecting a Discord server to a class already enqueues
+-- create_role for all three role types plus two create_channel messages. Without clearing, the
+-- function's correct decision to defer to those is indistinguishable from it doing nothing.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 8. repeated presses do not duplicate create_role ==='
+UPDATE public.classes SET discord_server_id = 'guild-test-1' WHERE id = 1;
+DELETE FROM public.discord_roles WHERE class_id = 1;
+DELETE FROM pgmq.q_discord_async_calls WHERE (message ->> 'class_id')::bigint = 1;
+UPDATE public.discord_membership_status SET last_retry_requested_at = NULL WHERE class_id = 1;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+\echo '-- press 1 (expect: roles_repaired 1) --'
+SELECT * FROM public.request_discord_reinvite(1, NULL);
+\echo '-- presses 2 and 3 (expect: roles_repaired 0) --'
+SELECT * FROM public.request_discord_reinvite(1, NULL);
+SELECT * FROM public.request_discord_reinvite(1, NULL);
+RESET ROLE;
+
+\echo '-- create_role messages on the queue (expect: 1) --'
+SELECT count(*) AS create_role_msgs
+FROM pgmq.q_discord_async_calls
+WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1;
+
+-- ---------------------------------------------------------------------------
+-- 9. A user who unlinks Discord drops out of the instructor read.
+--
+-- get_discord_role_sync_candidates() requires discord_id IS NOT NULL, so an unlinked user's last
+-- recorded state can never be refreshed or cleared, and nothing deletes the row. Without the same
+-- filter on the read, the alerts kept naming them as having an invite waiting on the same page where
+-- the roster column read "Not linked" from users.discord_id.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 9. unlinking Discord removes the row from the instructor read ==='
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+\echo '-- while linked (expect: 1) --'
+SELECT count(*) AS rows_while_linked FROM public.get_discord_membership_status_for_class(1);
+RESET ROLE;
+
+UPDATE public.users SET discord_id = NULL WHERE user_id = :'student';
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+\echo '-- after unlinking (expect: 0) --'
+SELECT count(*) AS rows_after_unlink FROM public.get_discord_membership_status_for_class(1);
 RESET ROLE;
 
 ROLLBACK;

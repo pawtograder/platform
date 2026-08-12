@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import { canRetryAny } from "@/components/discord/reinvite-button";
+import { canRetryAny, msUntilRetryable } from "@/components/discord/reinvite-button";
 import type { DiscordMembershipRow } from "@/hooks/useDiscordMembershipStatus";
 
 // Only last_retry_requested_at matters to the helper; the rest of the row is irrelevant here.
@@ -38,5 +38,35 @@ describe("canRetryAny", () => {
   // An empty group means there is nothing the button could queue, so it must not offer to.
   it("blocks a retry for an empty group", () => {
     expect(canRetryAny([])).toBe(false);
+  });
+});
+
+// The throttle is a comparison against Date.now() evaluated during render. Without a scheduled
+// re-render the button stays disabled for as long as the instructor leaves the page open, so the
+// moment they can act again never arrives on screen. These pin the wait the timer is set from.
+describe("msUntilRetryable", () => {
+  it("returns null when a retry is already possible", () => {
+    expect(msUntilRetryable([row(null)])).toBeNull();
+    expect(msUntilRetryable([row(minutesAgo(6))])).toBeNull();
+  });
+
+  it("returns null for an empty group, since no timer is needed", () => {
+    expect(msUntilRetryable([])).toBeNull();
+  });
+
+  it("returns the remaining wait for a throttled row", () => {
+    const now = Date.now();
+    const wait = msUntilRetryable([row(new Date(now - 60 * 1000).toISOString())], now);
+    expect(wait).toBe(4 * 60 * 1000);
+  });
+
+  // The button enables as soon as *any* row is eligible, so the timer has to fire for the earliest.
+  it("returns the earliest expiry when rows are throttled by different amounts", () => {
+    const now = Date.now();
+    const wait = msUntilRetryable(
+      [row(new Date(now - 60 * 1000).toISOString()), row(new Date(now - 4 * 60 * 1000).toISOString())],
+      now
+    );
+    expect(wait).toBe(60 * 1000);
   });
 });

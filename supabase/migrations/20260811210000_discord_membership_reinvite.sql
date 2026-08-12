@@ -157,7 +157,24 @@ BEGIN
   -- Re-create whichever class roles were missing. The worker writes the discord_roles row
   -- when it succeeds, so the next press of the button finds the role and queues the users
   -- that were skipped above.
+  --
+  -- Skipped when one is already waiting on the queue. Users are deliberately left un-stamped
+  -- on this path, so nothing throttles a second press while the worker is still working, and
+  -- create_role is not idempotent at the Discord end: it creates the role and only then
+  -- inserts the row, while discord_roles allows one row per (class_id, role_type). Two
+  -- presses a few seconds apart would leave a second, untracked role in the guild that
+  -- nothing in Pawtograder ever refers to again.
   FOREACH v_role_type IN ARRAY v_missing_roles LOOP
+    IF EXISTS (
+      SELECT 1
+      FROM pgmq.q_discord_async_calls q
+      WHERE q.message ->> 'method' = 'create_role'
+        AND (q.message ->> 'class_id')::bigint = p_class_id
+        AND q.message ->> 'role_type' = v_role_type
+    ) THEN
+      CONTINUE;
+    END IF;
+
     PERFORM public.enqueue_discord_role_creation(p_class_id, v_role_type, v_guild_id);
     v_repaired := v_repaired + 1;
   END LOOP;
@@ -225,7 +242,12 @@ BEGIN
     dms.last_observed_at,
     dms.last_retry_requested_at
   FROM public.discord_membership_status dms
-  JOIN public.users u ON u.user_id = dms.user_id
+  -- Linked accounts only, matching get_discord_role_sync_candidates(). A user who unlinks
+  -- Discord drops out of the candidate query, so their last recorded state can never be
+  -- refreshed or cleared -- and nothing deletes the row. Without this filter the alerts kept
+  -- naming them as having an invite waiting, on the same page where the roster column
+  -- correctly reads "Not linked" from users.discord_id, so the two contradicted each other.
+  JOIN public.users u ON u.user_id = dms.user_id AND u.discord_id IS NOT NULL
   -- Restricted to the class's *current* server. The status table is keyed on guild_id, so
   -- changing discord_server_id leaves the old guild's rows behind; without this join an
   -- instructor would keep seeing failures from a server the class no longer uses, and two

@@ -140,8 +140,8 @@ export default function DiscordMembershipStatusAlerts({ classId }: { classId: nu
           title={`${notJoined.length} ${notJoined.length === 1 ? "student has" : "students have"} not joined the Discord server`}
         >
           <Text>
-            Each has an invite waiting. Their roles sync automatically once they join — no action is needed unless you
-            want to remind them.
+            Each has an invite waiting on their course dashboard, and their roles sync automatically once they use it —
+            no action is needed unless you want to remind them.
           </Text>
           <StudentList rows={notJoined} />
         </Alert>

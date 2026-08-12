@@ -3,7 +3,7 @@
 import { createClient } from "@/utils/supabase/client";
 import type { DiscordMembershipRow } from "@/hooks/useDiscordMembershipStatus";
 import { Button } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toaster } from "../ui/toaster";
 
 /**
@@ -14,11 +14,23 @@ import { toaster } from "../ui/toaster";
 const RETRY_THROTTLE_MS = 5 * 60 * 1000;
 
 /** True when at least one of these rows is outside the throttle window, so a retry would do something. */
-export function canRetryAny(rows: DiscordMembershipRow[]): boolean {
+export function canRetryAny(rows: DiscordMembershipRow[], now: number = Date.now()): boolean {
   return rows.some(
-    (row) =>
-      !row.last_retry_requested_at || Date.now() - new Date(row.last_retry_requested_at).getTime() > RETRY_THROTTLE_MS
+    (row) => !row.last_retry_requested_at || now - new Date(row.last_retry_requested_at).getTime() > RETRY_THROTTLE_MS
   );
+}
+
+/**
+ * Milliseconds until the earliest row leaves the throttle window, or null when one already has.
+ *
+ * Needed because the throttle is a comparison against Date.now() evaluated during render: without a
+ * scheduled re-render, an instructor who leaves the page open after a retry sees the button disabled
+ * indefinitely, and the moment they can act again never arrives on screen.
+ */
+export function msUntilRetryable(rows: DiscordMembershipRow[], now: number = Date.now()): number | null {
+  if (rows.length === 0 || canRetryAny(rows, now)) return null;
+  const waits = rows.map((row) => new Date(row.last_retry_requested_at!).getTime() + RETRY_THROTTLE_MS - now);
+  return Math.max(0, Math.min(...waits));
 }
 
 /**
@@ -49,7 +61,16 @@ export default function DiscordReinviteButton({
   onQueued?: () => void;
 }) {
   const [running, setRunning] = useState(false);
+  // Bumped by the timer below purely to force a re-evaluation of the throttle.
+  const [, setTick] = useState(0);
   const throttled = !canRetryAny(rows);
+
+  useEffect(() => {
+    const wait = msUntilRetryable(rows);
+    if (wait === null) return;
+    const timer = setTimeout(() => setTick((t) => t + 1), wait + 1000);
+    return () => clearTimeout(timer);
+  }, [rows]);
 
   const run = async () => {
     setRunning(true);

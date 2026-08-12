@@ -82,6 +82,40 @@ async function archiveMessage(
   }
 }
 
+/**
+ * Remove a message from the queue outright.
+ *
+ * The fallback for when `archive` fails and the payload is already safe in the dead letter queue.
+ * Archiving is preferred everywhere else because it keeps the message for inspection, but a message
+ * that cannot be archived and is not deleted is redelivered every time its visibility timeout
+ * expires, with no retry ceiling on the terminal path to stop it.
+ */
+async function deleteMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const { error } = await adminSupabase.schema("pgmq_public").rpc("delete", {
+      queue_name: "discord_async_calls",
+      message_id: msgId
+    });
+    if (error) {
+      throw error;
+    }
+    console.log(`[deleteMessage] Deleted message ${msgId} after archiving failed`);
+    return true;
+  } catch (error) {
+    console.error(`[deleteMessage] Failed to delete message ${msgId}:`, error);
+    scope.setContext("delete_error", {
+      msg_id: msgId,
+      error_message: error instanceof Error ? error.message : String(error)
+    });
+    Sentry.captureException(error, scope);
+    return false;
+  }
+}
+
 function parseRetryAfterSeconds(error: unknown): number | undefined {
   const err = error as { message?: string };
   const msg = err?.message || "";
@@ -463,6 +497,8 @@ type MembershipCheck =
   | { result: "not_member" }
   /** The bot cannot read this guild at all, which no student can resolve. */
   | { result: "forbidden"; status: number }
+  /** Discord is rate limiting this route. Nothing else in the run will fare better. */
+  | { result: "rate_limited"; retryAfterMs: number }
   /** The check failed for a reason that says nothing about the user. */
   | { result: "unknown" };
 
@@ -489,6 +525,9 @@ async function checkGuildMembership(
       headers: { Authorization: `Bot ${botToken}` },
       signal: controller.signal
     });
+    // Read before the body is discarded below. Discord sends seconds, possibly fractional.
+    const retryAfterHeader = response.status === 429 ? response.headers.get("retry-after") : null;
+
     // The body is never read on any branch. Left dangling it holds the connection out of the pool
     // for one roster's worth of responses at a time, and Deno warns that response bodies were not
     // consumed. Cancelling releases it immediately.
@@ -496,6 +535,13 @@ async function checkGuildMembership(
 
     if (response.status === 200) return { result: "member" };
     if (response.status === 404) return { result: "not_member" };
+    if (response.status === 429) {
+      const parsed = retryAfterHeader ? Number.parseFloat(retryAfterHeader) : Number.NaN;
+      // A minute when Discord does not say. Guessing short would resume straight back into the
+      // window; the caller abandons the run either way, so erring long costs only a later retry.
+      const retryAfterMs = Number.isFinite(parsed) && parsed >= 0 ? Math.ceil(parsed * 1000) : 60_000;
+      return { result: "rate_limited", retryAfterMs };
+    }
     // 403 only. A 401 means the bot token is wrong or mid-rotation, which the classifier treats as
     // retriable — calling it `forbidden` here would record every candidate as cannot_invite and tell
     // instructors to change server permissions that are not the problem.
@@ -688,6 +734,21 @@ async function processBatchRoleSync(
     // Check membership if not cached, and never for a guild already known to be unreadable this run.
     if (knownForbidden === undefined && !membershipCache.has(cacheKey)) {
       const membership = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
+
+      // Abandon the whole run. This route is rate limited per bot, not per guild or per user, so
+      // every remaining candidate would get the same 429 after a 50ms pause -- hundreds of requests
+      // that deepen the window rather than wait it out, and none of them learn anything. Thrown so
+      // the envelope takes processEnvelope's existing rate-limit path: the message is requeued with
+      // backoff derived from the delay Discord asked for, instead of the batch reporting success and
+      // archiving with most of the roster unchecked. The message wording is what detectRateLimit and
+      // parseRetryAfterSeconds match on.
+      if (membership.result === "rate_limited") {
+        throw new Error(
+          `Discord rate limit: retry after ${membership.retryAfterMs}ms on the guild member lookup ` +
+            `(abandoned batch role sync after ${summary.synced + summary.not_in_guild} of ${records.length} records)`
+        );
+      }
+
       membershipCache.set(cacheKey, membership);
       if (membership.result === "forbidden") {
         forbiddenGuilds.set(record.discord_server_id, membership.status);
@@ -1682,7 +1743,15 @@ export async function processEnvelope(
         // requeue, so a swallowed archive failure would leave the message on the queue to be
         // redelivered when its visibility timeout expires, fail terminally again, and loop with no
         // retry ceiling. The DLQ is the backstop the retry path already relies on.
-        await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        const copied = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+
+        // Copying to the DLQ is not by itself an ending: the original is still on the queue, so
+        // without this the message would be redelivered and copied again on every cycle, growing the
+        // very table the fallback was meant to protect. Once the payload is safe in the DLQ, deleting
+        // the original loses nothing, and archive has already proved it cannot do it.
+        if (copied && !(await deleteMessage(adminSupabase, meta.msg_id, scope))) {
+          Sentry.captureMessage(`Terminal message ${meta.msg_id} could not be archived or deleted`, { level: "error" });
+        }
       }
       return false;
     }
@@ -1701,7 +1770,12 @@ export async function processEnvelope(
       console.log(`[processEnvelope] Retry count >= 5, sending to DLQ`);
       const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
       if (dlqSuccess) {
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        // Same reasoning as the terminal path above: this branch does not requeue, so it never
+        // increments retry_count. A failed archive here means the message comes back, lands on
+        // `>= 5` again, and writes another DLQ copy every cycle.
+        if (!(await archiveMessage(adminSupabase, meta.msg_id, scope))) {
+          await deleteMessage(adminSupabase, meta.msg_id, scope);
+        }
       } else {
         console.error(`[processEnvelope] Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
         scope.setContext("dlq_archive_skipped", {

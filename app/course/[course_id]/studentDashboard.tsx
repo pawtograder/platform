@@ -27,6 +27,7 @@ import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-sum
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
+import PendingInvites from "@/components/discord/pending-invites";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
@@ -185,6 +186,15 @@ export default async function StudentDashboard({
       </Heading>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      {/*
+       * The student's own outstanding Discord invite, alongside the GitHub equivalent above.
+       * PendingInvites has always supported this mode -- without showAll it filters to the signed-in
+       * user, and discord_invites_user_select grants exactly that row -- but it was only ever mounted
+       * on the staff-only manage/discord page. So the instructor alert saying "each has an invite
+       * waiting, no action is needed" was describing a link the student had no way to open. Renders
+       * nothing when there is no unused, unexpired invite.
+       */}
+      <PendingInvites classId={course_id} />
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {incompleteSurveysForBanner.length > 0 && (
