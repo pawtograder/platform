@@ -83,6 +83,11 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   }, [user, classId, showAll]);
 
   if (loading) {
+    // Silent for the student view, which is mounted unconditionally on the course dashboard and
+    // resolves to nothing for most students: a placeholder there would flash "Loading Discord
+    // invites..." on every dashboard load, including for courses with no Discord server at all.
+    // The staff listing is a section someone navigated to on purpose, so it says what it is doing.
+    if (!showAll) return null;
     return (
       <Box p={4}>
         <Text fontSize="sm" color="fg.muted">
