@@ -54,19 +54,25 @@ function remediationFor(row: DiscordMembershipRow): string {
  * permission on the one it moved to. Reporting the first row's cause for all of them would name a
  * remediation that is wrong for everyone else in the list.
  */
-function groupByCause(rows: DiscordMembershipRow[]): { code: number | null; rows: DiscordMembershipRow[] }[] {
-  const groups = new Map<number | null, DiscordMembershipRow[]>();
+function groupByCause(rows: DiscordMembershipRow[]): { key: string; rows: DiscordMembershipRow[] }[] {
+  // Keyed on the remediation, not the Discord code. Several terminal failures carry no JSON code at
+  // all -- a 403 whose body did not parse, and "No text channels found in guild", which the wrapper
+  // reports after a *successful* channel listing -- so grouping by code put them together under
+  // null and gave the whole group one row's advice. That is how an instructor gets told to add a
+  // text channel for students whose actual problem is a missing permission. Rows that need the same
+  // action now group together whatever code they carry.
+  const groups = new Map<string, DiscordMembershipRow[]>();
   for (const row of rows) {
-    const code = row.discord_error_code ?? null;
-    const existing = groups.get(code);
+    const key = remediationFor(row);
+    const existing = groups.get(key);
     if (existing) {
       existing.push(row);
     } else {
-      groups.set(code, [row]);
+      groups.set(key, [row]);
     }
   }
   return [...groups.entries()]
-    .map(([code, groupRows]) => ({ code, rows: groupRows }))
+    .map(([key, groupRows]) => ({ key, rows: groupRows }))
     .sort((a, b) => b.rows.length - a.rows.length);
 }
 
@@ -152,9 +158,9 @@ export default function DiscordMembershipStatusAlerts({
 
   return (
     <Stack gap={3} mb={4}>
-      {groupByCause(cannotInvite).map(({ code, rows }) => (
+      {groupByCause(cannotInvite).map(({ key, rows }) => (
         <Alert
-          key={code ?? "none"}
+          key={key}
           status="error"
           title={`The Discord bot cannot invite ${rows.length} ${rows.length === 1 ? "student" : "students"}`}
         >

@@ -310,11 +310,11 @@ SELECT count(*) AS rows_after_relink FROM public.discord_membership_status WHERE
 -- before the relink, and records its result afterwards, would recreate a row describing an account
 -- nobody uses -- an in_guild there excludes the new account from class-wide retries indefinitely.
 \echo '-- an in-flight write from the superseded account is discarded (expect: 0) --'
-SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'in_guild', NULL, NULL, 'acct-A');
+SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'in_guild', 'acct-A');
 SELECT count(*) AS rows_after_stale_write FROM public.discord_membership_status WHERE user_id = :'student';
 
 \echo '-- while a write observed against the current account is accepted (expect: 1, acct-B) --'
-SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'not_joined', NULL, NULL, 'acct-B');
+SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'not_joined', 'acct-B');
 SELECT count(*) AS rows_after_current_write, max(observed_discord_id) AS observed
 FROM public.discord_membership_status WHERE user_id = :'student';
 

@@ -309,9 +309,10 @@ CREATE OR REPLACE FUNCTION public.record_discord_membership_status(
   p_user_id uuid,
   p_guild_id text,
   p_state public.discord_membership_state,
+  -- Ahead of the optional pair, because a parameter with no default cannot follow one that has it.
+  p_observed_discord_id text,
   p_discord_error_code integer DEFAULT NULL,
-  p_detail text DEFAULT NULL,
-  p_observed_discord_id text DEFAULT NULL
+  p_detail text DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -321,19 +322,31 @@ AS $$
 DECLARE
   v_current_discord_id text;
 BEGIN
-  IF p_observed_discord_id IS NOT NULL THEN
-    SELECT u.discord_id INTO v_current_discord_id
-    FROM public.users u
-    WHERE u.user_id = p_user_id;
+  -- Required, with no default. A default would let a six-argument call from a worker that has not
+  -- been redeployed bind to this function and write with no identity check at all, which is exactly
+  -- the silent path dropping the old overload was meant to remove. Without one, such a call finds no
+  -- matching function and fails, which is the intended boundary during a rollout.
+  IF p_observed_discord_id IS NULL THEN
+    RAISE EXCEPTION 'record_discord_membership_status requires the observed Discord account';
+  END IF;
 
-    -- Superseded. Discarded rather than raised: the caller has already completed its Discord work
-    -- and cannot undo it, and the account it was about is no longer the user's, so there is nothing
-    -- to record and nothing for it to do about the failure.
-    IF v_current_discord_id IS DISTINCT FROM p_observed_discord_id THEN
-      RAISE NOTICE 'Discarding Discord membership status for user % : observed account % is no longer linked',
-        p_user_id, p_observed_discord_id;
-      RETURN;
-    END IF;
+  -- FOR UPDATE, so an identity change cannot commit between this read and the upsert below. Without
+  -- the lock the comparison could still see the old account, the relink and its trigger could delete
+  -- the rows, and this statement would then recreate the stale one after the cleanup had run --
+  -- leaving exactly the row the check exists to prevent. Holding the lock makes the relink wait: it
+  -- proceeds after this transaction commits, and its trigger then clears what was written here.
+  SELECT u.discord_id INTO v_current_discord_id
+  FROM public.users u
+  WHERE u.user_id = p_user_id
+  FOR UPDATE;
+
+  -- Superseded. Discarded rather than raised: the caller has already completed its Discord work
+  -- and cannot undo it, and the account it was about is no longer the user's, so there is nothing
+  -- to record and nothing for it to do about the failure.
+  IF v_current_discord_id IS DISTINCT FROM p_observed_discord_id THEN
+    RAISE NOTICE 'Discarding Discord membership status for user % : observed account % is no longer linked',
+      p_user_id, p_observed_discord_id;
+    RETURN;
   END IF;
 
   INSERT INTO public.discord_membership_status AS dms (
@@ -353,8 +366,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, text, integer, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, text, integer, text) TO service_role;
 
 -- The six-argument form is superseded. Dropped rather than left in place, so a caller that has not
 -- been updated fails loudly instead of silently writing rows with no account recorded against them.

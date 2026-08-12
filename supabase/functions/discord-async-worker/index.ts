@@ -313,7 +313,7 @@ async function recordMembershipStatus(
      * relinked -- without this, the outcome for the old account would be written over the new one's
      * clean slate and an in_guild would exclude them from retries indefinitely.
      */
-    observedDiscordId?: string;
+    observedDiscordId: string;
   },
   scope: Sentry.Scope
 ): Promise<void> {
@@ -1760,6 +1760,46 @@ export async function processEnvelope(
             const platformUserId = envelope.class_id
               ? await lookupUserIdByDiscordId(adminSupabase, args.user_id)
               : null;
+
+            // Reuse an invite the student already has, the way the batch path does. Without this,
+            // anything that re-enqueues add_member_role -- the manual retry most of all, which exists
+            // to be pressed repeatedly -- minted a fresh Discord invite and upserted it over the
+            // single tracking row, changing the URL the student was given while leaving the previous
+            // one live in Discord with nothing pointing at it.
+            if (envelope.class_id && platformUserId) {
+              const { data: outstandingInvite, error: outstandingError } = await adminSupabase
+                .from("discord_invites")
+                .select("invite_url")
+                .eq("user_id", platformUserId)
+                .eq("class_id", envelope.class_id)
+                .eq("guild_id", args.guild_id)
+                .eq("used", false)
+                .gt("expires_at", new Date().toISOString())
+                .maybeSingle();
+
+              // As on the batch path: a failed read is not the same as no invite, and treating it as
+              // one is what creates the duplicate.
+              if (outstandingError) {
+                throw outstandingError;
+              }
+
+              if (outstandingInvite) {
+                console.log(`[processEnvelope] User ${args.user_id} already has an outstanding invite, reusing`);
+                await recordMembershipStatus(
+                  adminSupabase,
+                  {
+                    classId: envelope.class_id,
+                    userId: platformUserId,
+                    observedDiscordId: args.user_id,
+                    guildId: args.guild_id,
+                    state: "not_joined",
+                    detail: `Invite ${outstandingInvite.invite_url} is waiting to be used`
+                  },
+                  scope
+                );
+                return true;
+              }
+            }
 
             try {
               const invite = await discord.createGuildInvite(args.guild_id, 604800, 5, scope); // 7 days, 5 uses
