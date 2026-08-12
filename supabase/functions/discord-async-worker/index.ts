@@ -624,10 +624,14 @@ async function ensureInviteForUser(
     );
 
     if (inviteError) {
+      // Rethrown, matching the envelope path: an invite nobody can find is no invite at all, since
+      // PendingInvites reads discord_invites and the student never sees a URL without the row.
+      // Swallowed, this run moved on and the next one found no stored invite, minted another, and
+      // failed to store that too -- one orphan Discord invite per affected student per hour, up to
+      // 168 alive at once given the 7-day expiry, with the roster still reading "not checked yet".
       console.error(`[ensureInviteForUser] Failed to store invite:`, inviteError);
       scope.setContext("invite_storage_error", { error_message: inviteError.message });
-      Sentry.captureException(inviteError, scope);
-      return "error";
+      throw inviteError;
     }
 
     await recordMembershipStatus(
@@ -673,14 +677,19 @@ async function ensureInviteForUser(
       return "cannot_invite";
     }
 
+    // Retriable, so abandon the run rather than working through the roster. A 429, a timeout, a
+    // 401 or a Discord 5xx is a condition affecting the bot, not this student: returning "error"
+    // here let the caller move on and make the same failing call for every remaining candidate,
+    // discarding the Retry-After each time. Rethrown, it reaches processEnvelope's non-terminal
+    // path, which requeues the whole batch with backoff. Same reasoning as the 429 on the
+    // membership lookup.
     console.error(`[ensureInviteForUser] Invite creation failed for guild ${record.discord_server_id}:`, error);
     scope.setContext("invite_creation_error", {
       guild_id: record.discord_server_id,
       class_id: record.class_id,
       error_message: reason
     });
-    Sentry.captureException(error, scope);
-    return "error";
+    throw error;
   }
 }
 

@@ -127,9 +127,6 @@ BEGIN
     -- and leave the user un-stamped and uncounted: they are not throttled for a retry that
     -- never happened, and the count stays true.
     IF NOT v_row.role_exists THEN
-      IF NOT (v_row.role::text = ANY (v_missing_roles)) THEN
-        v_missing_roles := v_missing_roles || v_row.role::text;
-      END IF;
       CONTINUE;
     END IF;
 
@@ -154,17 +151,42 @@ BEGIN
     v_queued := v_queued + 1;
   END LOOP;
 
-  -- Re-create whichever class roles were missing. The worker writes the discord_roles row
-  -- when it succeeds, so the next press of the button finds the role and queues the users
-  -- that were skipped above.
+  -- Which of the class's Discord roles are missing, computed independently of anyone's
+  -- membership state.
   --
-  -- Skipped when one is already waiting on the queue. Users are deliberately left un-stamped
-  -- on this path, so nothing throttles a second press while the worker is still working, and
-  -- create_role is not idempotent at the Discord end: it creates the role and only then
-  -- inserts the row, while discord_roles allows one row per (class_id, role_type). Two
-  -- presses a few seconds apart would leave a second, untracked role in the guild that
-  -- nothing in Pawtograder ever refers to again.
+  -- Deliberately not derived from the loop above. That loop only sees users who need a
+  -- membership retry, so a class where role creation failed but everyone has since joined the
+  -- server produced no candidates, no repair, and no way to ever create the role -- and the
+  -- batch worker records in_guild even when enqueue_discord_role_sync silently finds no role,
+  -- so nothing anywhere said the roles were missing.
+  --
+  -- Restricted to the role types discord_roles accepts. app_role also has 'admin', which
+  -- discord_roles_role_type_check rejects, so enqueueing it would have Discord create a role
+  -- the insert then refuses to track -- an orphan in the guild, re-created on every retry.
+  SELECT COALESCE(array_agg(DISTINCT ur.role::text), ARRAY[]::text[])
+  INTO v_missing_roles
+  FROM public.user_roles ur
+  WHERE ur.class_id = p_class_id
+    AND ur.disabled = false
+    AND ur.role::text IN ('student', 'grader', 'instructor')
+    AND NOT EXISTS (
+      SELECT 1 FROM public.discord_roles dr
+      WHERE dr.class_id = p_class_id AND dr.role_type = ur.role::text
+    );
+
+  -- Re-create them. The worker writes the discord_roles row when it succeeds, so the next
+  -- press of the button finds the role and queues the users skipped above.
   FOREACH v_role_type IN ARRAY v_missing_roles LOOP
+    -- Serialized per (class, role type) for the rest of this transaction. The check below is
+    -- read-then-write, so without the lock two staff pressing the button at the same moment
+    -- both see an empty queue and both enqueue. create_role is not idempotent at the Discord
+    -- end -- it creates the role and only then inserts the row, while discord_roles allows one
+    -- row per (class_id, role_type) -- so the loser leaves an untracked role in the guild that
+    -- nothing in Pawtograder ever refers to again.
+    PERFORM pg_advisory_xact_lock(hashtext('discord_create_role:' || p_class_id::text || ':' || v_role_type));
+
+    -- Users are left un-stamped on this path, so nothing throttles a second press while the
+    -- worker is still working. This is what stops that becoming a second Discord role.
     IF EXISTS (
       SELECT 1
       FROM pgmq.q_discord_async_calls q

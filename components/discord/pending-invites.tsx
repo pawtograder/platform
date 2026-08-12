@@ -23,6 +23,7 @@ type DiscordInvite = {
     id: number;
     slug: string | null;
     name: string | null;
+    discord_server_id: string | null;
   };
 };
 
@@ -48,7 +49,7 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
       try {
         let query = supabase
           .from("discord_invites")
-          .select("*, classes(id, slug, name)")
+          .select("*, classes(id, slug, name, discord_server_id)")
           .eq("used", false)
           .gt("expires_at", new Date().toISOString())
           .order("created_at", { ascending: false });
@@ -65,7 +66,16 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
         const { data, error: fetchError } = await query;
 
         if (fetchError) throw fetchError;
-        setInvites((data || []) as DiscordInvite[]);
+
+        // Only invites into the server the class currently uses. discord_invites is keyed on
+        // guild_id but nothing clears rows when a course changes or unsets discord_server_id, so an
+        // old unused invite stays here and would be offered under the current course's name --
+        // sending a student into a server the class has moved off, where the membership sync will
+        // go on reporting them absent because it only ever looks at the current guild.
+        const current = ((data || []) as DiscordInvite[]).filter(
+          (invite) => invite.classes?.discord_server_id && invite.guild_id === invite.classes.discord_server_id
+        );
+        setInvites(current);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("Error fetching Discord invites:", err);

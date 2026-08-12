@@ -109,6 +109,7 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
+  const discordConfigured = Boolean(course?.discord_server_id);
 
   // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
   // first paint instead of flipping once the client course controller hydrates.
@@ -193,8 +194,12 @@ export default async function StudentDashboard({
        * on the staff-only manage/discord page. So the instructor alert saying "each has an invite
        * waiting, no action is needed" was describing a link the student had no way to open. Renders
        * nothing when there is no unused, unexpired invite.
+       *
+       * Gated on the course actually having a Discord server, because the component polls every 30
+       * seconds: mounted unconditionally it would cost two permanently useless requests per minute
+       * per open dashboard for every course that does not use Discord, which is most of them.
        */}
-      <PendingInvites classId={course_id} />
+      {discordConfigured && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {incompleteSurveysForBanner.length > 0 && (

@@ -1028,7 +1028,14 @@ export default function EnrollmentsTable() {
     });
 
     return allRows;
-  }, [userRolesData, invitations]);
+    // discordStateByUser and discordStatusUnknown are dependencies even though nothing here reads
+    // them. TanStack memoizes the filtered row model on the identity of `data`, not on the column
+    // definitions, so when the membership RPC resolves (or refresh() replaces the map) the Discord
+    // Status filter kept selecting rows with the previous map: a student could render "In server"
+    // while still listed under a "Cannot invite" filter until some unrelated table state changed.
+    // Returning a new array identity is what invalidates that model.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRolesData, invitations, discordStateByUser, discordStatusUnknown]);
 
   // Create local table using react-table
   const table = useReactTable({

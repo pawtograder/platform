@@ -10,16 +10,18 @@
 --
 -- Scenarios:
 --   1. anon cannot execute the SECURITY DEFINER function at all      -> permission denied
---   2. class has no discord_roles row                                -> queued 0, roles_repaired 1,
---      a create_role is enqueued, and the student is NOT throttled
+--   2. class has no discord_roles row                                -> queued 0, roles_repaired 2
+--      (one per enrolled role type), create_role enqueued, student NOT throttled
 --   3. role exists                                                   -> queued 1, add_member_role
 --      enqueued with the right role_id
 --   4. immediate repeat                                              -> queued 0 (throttled)
 --   5. a student retrying themselves                                 -> allowed
 --   6. a student retrying the whole class                            -> access denied
 --   7. class with no discord_server_id                               -> queued 0, no error
---   8. three presses while a class role is missing                   -> one create_role, not three
+--   8. three presses while class roles are missing                   -> one create_role each, not three
 --   9. a user who unlinks Discord                                    -> drops out of the instructor read
+--  10. everyone in_guild but a class role missing            -> repair still runs
+--  11. an `admin` enrollment                                 -> never enqueued as a Discord role
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -76,17 +78,17 @@ END $$;
 RESET ROLE;
 
 \echo ''
-\echo '=== 2. no discord_roles row (expect: queued 0, roles_repaired 1) ==='
+\echo '=== 2. no discord_roles row (expect: queued 0, roles_repaired 2) ==='
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- a create_role was enqueued for the missing role type (expect: create_role / student) --'
-SELECT message ->> 'method' AS method, message ->> 'role_type' AS role_type
+\echo '-- create_role enqueued per enrolled role type (expect: instructor, student) --'
+SELECT DISTINCT message ->> 'role_type' AS role_type
 FROM pgmq.q_discord_async_calls
-ORDER BY msg_id DESC
-LIMIT 1;
+WHERE message ->> 'method' = 'create_role'
+ORDER BY 1;
 
 \echo '-- and the student was NOT stamped, so the next press is not throttled (expect: t) --'
 SELECT last_retry_requested_at IS NULL AS not_throttled
@@ -163,14 +165,14 @@ UPDATE public.discord_membership_status SET last_retry_requested_at = NULL WHERE
 
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
-\echo '-- press 1 (expect: roles_repaired 1) --'
+\echo '-- press 1 (expect: roles_repaired 2) --'
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 \echo '-- presses 2 and 3 (expect: roles_repaired 0) --'
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- create_role messages on the queue (expect: 1) --'
+\echo '-- create_role messages on the queue (expect: 2, one per role type) --'
 SELECT count(*) AS create_role_msgs
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1;
@@ -198,5 +200,47 @@ SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 
 \echo '-- after unlinking (expect: 0) --'
 SELECT count(*) AS rows_after_unlink FROM public.get_discord_membership_status_for_class(1);
 RESET ROLE;
+
+-- ---------------------------------------------------------------------------
+-- 10. Role repair runs even when nobody needs a membership retry.
+--
+-- The repair used to be derived from the membership-retry loop, so a class whose role creation
+-- failed but whose students had all since joined produced no candidates, no repair, and no way to
+-- ever create the role. The batch worker records in_guild even when enqueue_discord_role_sync
+-- silently finds no role, so nothing anywhere reported it.
+--
+-- 11. `admin` is never enqueued as a Discord role type.
+--
+-- app_role has four values but discord_roles_role_type_check accepts three. Enqueueing admin would
+-- have Discord create a role the insert then refuses to track: an orphan in the guild, re-created
+-- on every retry.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 10 + 11. repair with everyone in_guild, and admin excluded ==='
+UPDATE public.classes SET discord_server_id = 'guild-test-1' WHERE id = 1;
+UPDATE public.users SET discord_id = 'discord-test-student' WHERE user_id = :'student';
+DELETE FROM public.discord_roles WHERE class_id = 1;
+DELETE FROM pgmq.q_discord_async_calls WHERE (message ->> 'class_id')::bigint = 1;
+UPDATE public.discord_membership_status SET state = 'in_guild', last_retry_requested_at = NULL WHERE class_id = 1;
+
+-- Promote one student enrollment to admin so the class carries an unsupported role type.
+UPDATE public.user_roles
+SET role = 'admin'
+WHERE id = (SELECT id FROM public.user_roles WHERE class_id = 1 AND role = 'student' AND disabled = false LIMIT 1);
+
+\echo '-- role types enrolled in the class --'
+SELECT DISTINCT role FROM public.user_roles WHERE class_id = 1 AND disabled = false ORDER BY 1;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+\echo '-- expect: queued 0 (nobody is stuck), roles_repaired 2 (not 3 -- admin excluded) --'
+SELECT * FROM public.request_discord_reinvite(1, NULL);
+RESET ROLE;
+
+\echo '-- create_role role types enqueued (expect: instructor, student; never admin) --'
+SELECT DISTINCT message ->> 'role_type' AS role_type
+FROM pgmq.q_discord_async_calls
+WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1
+ORDER BY 1;
 
 ROLLBACK;
