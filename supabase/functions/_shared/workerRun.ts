@@ -26,11 +26,16 @@ import { type EnvReader } from "./SentryContext.ts";
  * Not correctness. `pgmq_public.read` sets `vt = now() + sleep_seconds` on every message it
  * returns, so two concurrent workers cannot be handed the same message — the queue is already the
  * mutual exclusion. The guard was only ever protecting RESOURCES. That is why this module offers
- * two shapes and both are safe:
+ * these shapes and all of them are safe:
  *
- *   - **leased** (Redis configured): one long-lived drainer across the whole fleet, holding a
- *     Redis lease it renews while it runs. Lowest latency, because the loop stays resident and
- *     polls on its own idle interval. Costs one admission slot per worker for the isolate's life.
+ *   - **leased** (Redis configured): one long-lived drainer per deployment, holding a Redis lease
+ *     it renews for as long as its loop keeps going round. Lowest latency, because the loop stays
+ *     resident and polls on its own idle interval. Costs one admission slot per worker for the
+ *     isolate's life.
+ *
+ *   - **idle** (Redis configured, someone else holds the lease): does nothing and returns. Safe
+ *     because a holder that stops making progress gives the lease up — see `maxStallMs` — so "hold
+ *     the lease" and "is draining" cannot drift apart for long.
  *
  *   - **bounded** (no Redis): the poke drains until the queue is idle or a wall-clock budget
  *     expires, then RETURNS, releasing the isolate and its slot. Cannot accumulate loops no matter
@@ -76,38 +81,14 @@ const HEARTBEAT_DIVISOR = 3;
  */
 const DEFAULT_BOUNDED_BUDGET_MS = 50_000;
 /**
- * How many pokes that LOST the lease race may drain anyway, at once, per worker per deployment.
+ * How long the loop may go without calling into this run before the holder gives up its lease.
  *
- * Not "all of them". These workers are poked at least twice per cron tick
- * (`invoke_gradebook_recalculation_background_task` starts two), and gradebook mutations invoke the
- * recalculation worker directly, so "every loser drains" means a backlogged queue mints a new
- * drainer on every poke. Each one holds an admission slot, `maxParallelism` is 8 *per pod across all
- * functions*, and the wall-clock budget is only consulted between `processBatch` calls -- it cannot
- * cut short a single hung call. That is the slot exhaustion the lease was added to prevent, arrived
- * at from the other direction.
- *
- * One helper is enough for what the fallback is actually for: making sure a holder that has stopped
- * making progress cannot stall the queue behind its own lease. Worst case per worker is therefore
- * the resident holder plus one helper, and the helper is transient -- it exits the moment the queue
- * is idle. Helper slots are plain NX keys that are never renewed, so a helper whose isolate hangs
- * still frees its slot at TTL rather than holding it for the isolate's life.
+ * Generous by default, because a batch that legitimately takes minutes is normal for the GitHub and
+ * Discord workers (`sync_repo_to_handout` is the documented case). Workers whose batches are
+ * milliseconds should set this far lower; the value is the ceiling on how long a stalled holder can
+ * keep the queue to itself.
  */
-const MAX_BOUNDED_HELPERS = 1;
-/**
- * How long a helper slot survives without being handed back.
- *
- * Deliberately much shorter than the lease TTL, and NOT tied to it. A helper releases its slot when
- * it finishes, so this only governs the abnormal exit — the isolate the runtime recycles mid-drain,
- * which in the edge runtime is routine rather than exceptional. At the lease TTL that left the only
- * slot claimed by a dead helper for a full minute, and with the holder stalled too, nothing drained
- * for that whole window: the first CI run after the scope fix still showed 20 gaps over 30 seconds
- * with a 94-second worst case, which is what the specs' 90-second budget was losing to.
- *
- * The failure mode of it being too short is two helpers overlapping briefly, which is bounded and
- * harmless. The failure mode of it being too long is nothing draining at all. Those are not
- * comparable, so this errs short.
- */
-const HELPER_SLOT_TTL_MS = 15_000;
+const DEFAULT_MAX_STALL_MS = 15 * 60_000;
 /** `DEPLOY_KIND` for the CI e2e job. The only deployment kind with no k8s rollout behind it. */
 const E2E_LOCAL_KIND = "e2e-local";
 
@@ -168,8 +149,20 @@ export interface BeginWorkerRunOptions {
   /** How long to sleep after a batch threw. */
   errorSleepMs: number;
   leaseTtlMs?: number;
-  /** Lifetime of a helper-pool slot. Short on purpose; see HELPER_SLOT_TTL_MS. */
-  helperSlotTtlMs?: number;
+  /** How long the loop may go silent before the holder stops renewing. See DEFAULT_MAX_STALL_MS. */
+  maxStallMs?: number;
+  /**
+   * Skip the lease entirely and always drain-and-exit.
+   *
+   * For a worker whose batches are milliseconds, this is simply the better mode. The lease exists to
+   * stop long-lived resident loops accumulating; a run that drains in milliseconds and returns has
+   * nothing to accumulate, holds no admission slot between pokes, and cannot be starved by another
+   * poke's lease. It also restores the property the direct pokes were written for -- a gradebook
+   * mutation pokes the worker and the work starts now, rather than whenever the holder next looks.
+   * Measured on the gradebook specs: 1.2 minutes bounded against 7.2 minutes leased, because a
+   * resident loop under `waitUntil` is not reliably scheduled between requests.
+   */
+  preferBounded?: boolean;
   boundedBudgetMs?: number;
   /** Test seams. */
   redis?: RedisClient | null;
@@ -276,11 +269,6 @@ function leaseKey(name: string, scope: string): string {
   return `pawtograder:worker-lease:${scope}:${name}`;
 }
 
-/** Slot `i` of the small pool that lets lease losers help without becoming a crowd. */
-function helperKey(name: string, scope: string, i: number): string {
-  return `${leaseKey(name, scope)}:helper-${i}`;
-}
-
 /**
  * Decide how this poke should run the worker loop. Never throws, and always returns a run: any Redis
  * problem, and a lease already held elsewhere, both degrade to a bounded run.
@@ -294,15 +282,21 @@ function helperKey(name: string, scope: string, i: number): string {
  * the key held, 425 pokes refused, and not one batch processed — longer than the 60s TTL, so it was
  * not even a matter of waiting for expiry.
  *
- * So a loser now drains too — but only if it can claim one of `MAX_BOUNDED_HELPERS` slots, because
- * "every loser drains" is its own way of exhausting the admission slots (see that constant). A poke
- * that finds the helper pool full gets an `idle` run: it does nothing, exactly as before. What the
- * pool buys is that SOMETHING is always draining, which is the property the plain early return did
- * not have.
+ * The fix belongs on the holder, not on the losers. Two shapes were tried on the loser side first
+ * and both were wrong: letting every loser drain re-creates the admission-slot exhaustion from the
+ * other direction, and rationing them through a small pool of TTL keys cannot work either, because
+ * one key cannot be both a semaphore for live helpers (wants a long TTL, or a batch outliving it
+ * lets a second helper in, repeatedly, for the length of the batch) and a self-healing lock for
+ * dead ones (wants a short TTL). So a loser does nothing, as it always did — and instead the HOLDER
+ * gives the lease up when it stops making progress.
  *
- * Concurrent drainers are safe regardless: the queue, not the lease, provides the mutual exclusion.
- * `pgmq_public.read` sets a visibility timeout on every message it hands out, so two workers cannot
- * be given the same message.
+ * `heartbeat`, `onIdle` and `onError` are all called by the loop, so any of them is proof the loop
+ * is alive. If none is called for `maxStallMs`, renewal stops and the lease lapses at the TTL, and
+ * the next poke becomes the holder. That covers every way a holder goes quiet: a killed isolate
+ * stops its timer, a suspended one stops its timer, and one parked on a promise that never settles
+ * keeps its timer but stops calling us, which the stall check catches. A batch that is merely SLOW
+ * keeps the lease as long as `maxStallMs` allows for it, which is why the default is generous and
+ * the fast workers narrow it.
  */
 export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<WorkerRun> {
   const now = opts.now ?? Date.now;
@@ -314,11 +308,13 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   opts.scope?.setTag("worker_lease_scope", leaseScope);
 
   // `undefined` means "not injected, go and build one"; an explicit `null` means "no Redis", which
-  // is what the tests and the no-Redis deployments both exercise.
+  // is what the tests and the no-Redis deployments both exercise. Skipped entirely when the caller
+  // has opted out of the lease: ioredis connects on construction, and a per-request isolate that
+  // will never look at Redis should not open a connection to it.
   let redis: RedisClient | null = null;
   if (opts.redis !== undefined) {
     redis = opts.redis;
-  } else {
+  } else if (!opts.preferBounded) {
     try {
       redis = createRedis();
     } catch (e) {
@@ -330,8 +326,7 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
     }
   }
 
-  /** `heldKey` is a helper slot to hand back when the run finishes; bounded runs never renew it. */
-  const boundedRun = (reason: string, heldKey?: { key: string; token: string }): WorkerRun => {
+  const boundedRun = (reason: string): WorkerRun => {
     const deadline = now() + budget;
     opts.scope?.setTag("worker_run_mode", "bounded");
     opts.scope?.setTag("worker_bounded_reason", reason);
@@ -345,17 +340,7 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
       onError: async () => {
         if (now() < deadline) await sleep(opts.errorSleepMs);
       },
-      release: async () => {
-        if (!heldKey || !redis) return;
-        try {
-          // Give the slot back early. TTL expiry is still the backstop for an isolate that dies
-          // here, which is why the slot is never renewed.
-          await redis.eval(RELEASE_IF_OWNED, [heldKey.key], [heldKey.token]);
-        } catch (e) {
-          opts.scope?.setTag("worker_lease", "helper_release_failed");
-          Sentry.captureException(e, opts.scope);
-        }
-      }
+      release: () => Promise.resolve()
     };
   };
 
@@ -372,6 +357,10 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
       release: () => Promise.resolve()
     };
   };
+
+  if (opts.preferBounded) {
+    return boundedRun("prefer_bounded");
+  }
 
   if (!redis) {
     return boundedRun("no_redis_configured");
@@ -391,30 +380,20 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   }
 
   if (!acquired) {
-    // Help, but only as one of a bounded few. The holder keeps the low-latency resident loop; a
-    // helper drains what it can and exits, so a holder that has stopped making progress cannot
-    // stall the queue -- while the pool stops a backlog from minting a drainer per poke.
-    for (let i = 1; i <= MAX_BOUNDED_HELPERS; i++) {
-      const hKey = helperKey(opts.name, leaseScope, i);
-      try {
-        const got = await redis.set(hKey, token, { px: opts.helperSlotTtlMs ?? HELPER_SLOT_TTL_MS, nx: true });
-        if (got !== null && got !== undefined && got !== 0) {
-          return boundedRun("lease_held_elsewhere", { key: hKey, token });
-        }
-      } catch (e) {
-        // The pool is an optimization, not a correctness device. If Redis will not answer, idle:
-        // draining anyway is what the pool exists to prevent.
-        opts.scope?.setTag("worker_lease", "helper_acquire_failed");
-        Sentry.captureException(e, opts.scope);
-        return idleRun("helper_acquire_failed");
-      }
-    }
-    return idleRun("helpers_busy");
+    // Someone else is draining, so do nothing -- and rely on the stall check below to make that
+    // statement true, rather than assuming it.
+    return idleRun("lease_held_elsewhere");
   }
 
   opts.scope?.setTag("worker_run_mode", "leased");
   let lost = false;
   let lastHeartbeat = now();
+  /** Last time the LOOP called in. Distinct from `lastHeartbeat`, which the timer also moves. */
+  let lastProgressAt = now();
+  const maxStall = opts.maxStallMs ?? DEFAULT_MAX_STALL_MS;
+  const markProgress = () => {
+    lastProgressAt = now();
+  };
   const heartbeatEvery = Math.max(1, Math.floor(ttl / HEARTBEAT_DIVISOR));
   const setIntervalFn = opts.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms) as unknown as number);
   const clearIntervalFn = opts.clearIntervalFn ?? ((h: number) => clearInterval(h));
@@ -428,6 +407,20 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
 
   const renew = async (): Promise<void> => {
     if (lost) return;
+    // Renewal is a claim that this worker is still draining. Only the loop can support that claim,
+    // and the timer fires whether or not it is true -- which is how a holder parked on a promise
+    // that never settles kept the lease renewed while processing nothing, and turned every other
+    // poke away for as long as it lasted. Stop renewing and let the key lapse; the next poke takes
+    // over. Do NOT delete it here: it may already belong to that next holder.
+    if (now() - lastProgressAt > maxStall) {
+      lost = true;
+      stopRenewTimer();
+      opts.scope?.setTag("worker_lease", "stalled");
+      console.warn(
+        `[workerRun] ${opts.name}: no loop progress for ${now() - lastProgressAt}ms (max ${maxStall}ms), giving up the lease`
+      );
+      return;
+    }
     try {
       // Compare-and-PEXPIRE, not `SET ... XX` -- see RENEW_IF_OWNED. A 0 means the key is no
       // longer ours (expired and retaken, or deleted), which must stop this loop rather than
@@ -458,6 +451,9 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   // admission-slot exhaustion this lease was added to prevent comes back for any workload with slow
   // batches. The timer keeps renewing while the batch is in flight; `heartbeat()` remains as a
   // cheap belt-and-braces check for callers that drive time themselves (the tests do).
+  //
+  // What the timer must NOT do is renew forever on behalf of a loop that has stopped going round,
+  // which is why `renew` consults `lastProgressAt` first.
   renewTimer = setIntervalFn(() => {
     void renew();
   }, heartbeatEvery);
@@ -465,16 +461,21 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   return {
     mode: "leased",
     shouldContinue: () => !lost,
+    // All three are called by the loop, so each is proof it is still going round. Mark progress
+    // BEFORE renewing, or the renewal would judge this very call as the stall.
     heartbeat: async () => {
+      markProgress();
       if (now() - lastHeartbeat >= heartbeatEvery) await renew();
     },
     onIdle: async () => {
       await sleep(opts.idleSleepMs);
+      markProgress();
       await renew();
       return !lost;
     },
     onError: async () => {
       await sleep(opts.errorSleepMs);
+      markProgress();
       await renew();
     },
     release: async () => {

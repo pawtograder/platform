@@ -957,14 +957,15 @@ export async function runBatchHandler() {
   const run = await beginWorkerRun({
     name: "gradebook_column_recalculate",
     scope,
-    // Poll far more often than the other workers, because this queue is the one a human is waiting
-    // on: a grade edit enqueues a row and the instructor expects the dependent columns to move.
-    // That used to be immediate — every direct poke from `invoke_gradebook_recalculation_background_task`
-    // started a drain — but under a lease the pokes are turned away and the resident holder's idle
-    // sleep becomes the floor on recalculation latency. At 10s that is a visible regression in the
-    // app and the difference between passing and failing for the gradebook specs' 90s budget. The
-    // cost is one extra `pgmq_public.read` per second on an indexed empty queue, from a loop that is
-    // already resident and already holding its admission slot.
+    // Drain and exit, never hold a lease. This queue is the one a human is waiting on -- an
+    // instructor edits a grade and expects the dependent columns to move -- and
+    // `invoke_gradebook_recalculation_background_task` is called straight from gradebook mutations
+    // so that the work starts immediately. A lease turns those pokes away and makes the resident
+    // holder's polling interval the floor on recalculation latency instead. Batches here are
+    // milliseconds (chunks complete in 10-20ms), so there is no long-lived loop to bound in the
+    // first place: a bounded run holds no admission slot between pokes and cannot be starved.
+    // Measured on these specs: 1.2 minutes bounded against 7.2 minutes leased.
+    preferBounded: true,
     idleSleepMs: 1000,
     errorSleepMs: 5000
   });

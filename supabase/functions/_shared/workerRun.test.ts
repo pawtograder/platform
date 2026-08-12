@@ -10,12 +10,9 @@ function fakeRedis(opts: { failAcquire?: boolean; failRenew?: boolean } = {}) {
     get setCalls() {
       return setCalls;
     },
-    /** px used for each key, so tests can assert a helper slot outlives less than a lease. */
-    ttls: new Map<string, number>(),
     // deno-lint-ignore no-explicit-any
     set(key: string, value: string, o?: any) {
       setCalls++;
-      if (typeof o?.px === "number") this.ttls.set(key, o.px);
       if (o?.nx) {
         if (opts.failAcquire) throw new Error("redis down");
         if (store.has(key)) return Promise.resolve(null);
@@ -124,15 +121,14 @@ Deno.test("Redis configured -> leased run, and the lease is actually written", a
   assertEquals(redis.store.has(LEASE_KEY), true);
 });
 
-// Only one resident loop, but the loser still helps: a bounded run drains and exits, so a holder
-// that has stopped making progress cannot stall the queue behind its own lease.
-Deno.test("a second run while the lease is held is bounded, not a no-op", async () => {
+// A loser does nothing -- and the holder giving up a lease it is stalled on is what makes that
+// safe. See the stall tests below.
+Deno.test("a second run while the lease is held is idle", async () => {
   const redis = fakeRedis();
   const first = await beginWorkerRun({ ...base, redis });
   assertEquals(first.mode, "leased");
   const second = await beginWorkerRun({ ...base, redis });
-  assertEquals(second.mode, "bounded");
-  assertEquals(await second.onIdle(), false, "the helper must exit rather than stay resident");
+  assertEquals(second.mode, "idle");
 });
 
 // The lease still has to mean something: exactly one holder gets the resident loop.
@@ -146,95 +142,144 @@ Deno.test("only one run is leased at a time", async () => {
   assertEquals(runs.filter((r) => r.mode === "leased").length, 1);
 });
 
-// "Every loser drains" is its own slot-exhaustion bug: these workers get several pokes per cron
-// tick, so a backlogged queue would mint a drainer on each one.
-Deno.test("the helper pool is bounded; pokes past it idle instead of draining", async () => {
-  const redis = fakeRedis();
-  const leased = await beginWorkerRun({ ...base, redis });
-  assertEquals(leased.mode, "leased");
-
-  const helpers: string[] = [];
-  for (let i = 0; i < 5; i++) {
-    helpers.push((await beginWorkerRun({ ...base, redis })).mode);
-  }
-  assertEquals(
-    helpers.filter((m) => m === "bounded").length,
-    1,
-    "at most MAX_BOUNDED_HELPERS pokes may drain alongside the holder"
-  );
-  assertEquals(helpers.filter((m) => m === "idle").length, 4);
-});
-
 // An idle run must be inert in the caller's loop: `while (run.shouldContinue())` runs zero times.
 Deno.test("an idle run does no work at all", async () => {
   const redis = fakeRedis();
   await beginWorkerRun({ ...base, redis });
-  await beginWorkerRun({ ...base, redis }); // takes the one helper slot
   const idle = await beginWorkerRun({ ...base, redis });
   assertEquals(idle.mode, "idle");
   assertEquals(idle.shouldContinue(), false);
+  assertEquals(await idle.onIdle(), false);
   await idle.release();
 });
 
-// The slot has to come back, or one backlog would wedge the pool until TTL.
-Deno.test("a helper hands its slot back on release", async () => {
-  const redis = fakeRedis();
-  await beginWorkerRun({ ...base, redis });
-  const helper = await beginWorkerRun({ ...base, redis });
-  assertEquals(helper.mode, "bounded");
-  assertEquals(redis.store.has(`${LEASE_KEY}:helper-1`), true);
-  await helper.release();
-  assertEquals(redis.store.has(`${LEASE_KEY}:helper-1`), false);
-  assertEquals((await beginWorkerRun({ ...base, redis })).mode, "bounded", "the freed slot is reusable");
-});
+// ── Stall detection ────────────────────────────────────────────────────────────
+// The regression this exists for: the renewal timer kept a lease alive on behalf of a loop that
+// had stopped going round, and every other poke was turned away for as long as it lasted.
 
-// A helper that dies without releasing holds the only slot until its key expires, so that expiry
-// has to be quick. At the lease TTL, one dead helper plus a stalled holder meant nothing drained
-// for a minute -- the ~94s worst-case gap seen in CI.
-Deno.test("a helper slot expires much sooner than a lease", async () => {
-  const redis = fakeRedis();
-  await beginWorkerRun({ ...base, redis, leaseTtlMs: 60_000 });
-  const helper = await beginWorkerRun({ ...base, redis, leaseTtlMs: 60_000 });
-  assertEquals(helper.mode, "bounded");
-  const leaseTtl = redis.ttls.get(LEASE_KEY)!;
-  const helperTtl = redis.ttls.get(`${LEASE_KEY}:helper-1`)!;
-  assertEquals(leaseTtl, 60_000);
-  assertEquals(helperTtl < leaseTtl / 2, true, `helper slot ttl ${helperTtl} should be well under ${leaseTtl}`);
-});
-
-// Helper slots are never renewed, so a hung helper frees its slot at TTL rather than for the life
-// of the isolate. Guarding the property that makes that true: no renewal timer is registered.
-Deno.test("a helper registers no renewal timer", async () => {
+Deno.test("a holder that stops calling in stops renewing", async () => {
   const redis = fakeRedis();
   const timers = fakeTimers();
-  await beginWorkerRun({ ...base, redis });
-  const before = timers.active;
-  const helper = await beginWorkerRun({
+  let t = 0;
+  const run = await beginWorkerRun({
     ...base,
     redis,
+    leaseTtlMs: 300,
+    maxStallMs: 1000,
+    now: () => t,
     setIntervalFn: timers.setIntervalFn,
     clearIntervalFn: timers.clearIntervalFn
   });
-  assertEquals(helper.mode, "bounded");
-  assertEquals(timers.active, before);
+  assertEquals(run.mode, "leased");
+
+  // The loop is going round: the timer fires, but progress is recent, so the lease is kept.
+  t += 200;
+  await run.heartbeat();
+  timers.fireAll();
+  await Promise.resolve();
+  assertEquals(run.shouldContinue(), true);
+
+  // Now the loop is wedged inside processBatch. The timer still fires; the lease must not survive.
+  t += 1001;
+  timers.fireAll();
+  await Promise.resolve();
+  assertEquals(run.shouldContinue(), false, "a stalled holder must give up the lease");
+  assertEquals(timers.active, 0, "and stop renewing it");
 });
 
-// Redis refusing to answer must not become "drain anyway" -- that is the crowd the pool prevents.
-Deno.test("a Redis failure while claiming a helper slot idles rather than drains", async () => {
+// It must let the key LAPSE rather than delete it: by the time a stall is noticed the key may
+// already have expired and been taken by the next holder.
+Deno.test("giving up a stalled lease does not delete another holder's key", async () => {
   const redis = fakeRedis();
-  await beginWorkerRun({ ...base, redis });
-  let calls = 0;
-  const flaky = {
-    ...redis,
-    // deno-lint-ignore no-explicit-any
-    set(key: string, value: string, o?: any) {
-      calls++;
-      if (calls > 1) throw new Error("redis down");
-      return redis.set(key, value, o);
-    }
-  };
-  const run = await beginWorkerRun({ ...base, redis: flaky });
-  assertEquals(run.mode, "idle");
+  const timers = fakeTimers();
+  let t = 0;
+  const run = await beginWorkerRun({
+    ...base,
+    redis,
+    leaseTtlMs: 300,
+    maxStallMs: 1000,
+    now: () => t,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+  t += 1001;
+  timers.fireAll();
+  await Promise.resolve();
+  assertEquals(run.shouldContinue(), false);
+
+  redis.store.set(LEASE_KEY, "next-holders-token");
+  await run.release();
+  assertEquals(redis.store.get(LEASE_KEY), "next-holders-token");
+});
+
+// Once the stalled holder's key lapses, the next poke becomes the holder -- which is the whole
+// point of noticing the stall.
+Deno.test("the next poke takes over once a stalled lease lapses", async () => {
+  const redis = fakeRedis();
+  const timers = fakeTimers();
+  let t = 0;
+  const stalled = await beginWorkerRun({
+    ...base,
+    redis,
+    leaseTtlMs: 300,
+    maxStallMs: 1000,
+    now: () => t,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+  t += 1001;
+  timers.fireAll();
+  await Promise.resolve();
+  assertEquals(stalled.shouldContinue(), false);
+
+  redis.store.delete(LEASE_KEY); // what the TTL does for real
+  const next = await beginWorkerRun({ ...base, redis });
+  assertEquals(next.mode, "leased");
+});
+
+// A batch that is merely SLOW is not a stall, or the GitHub worker would drop its lease on every
+// sync_repo_to_handout.
+Deno.test("a slow batch inside maxStallMs keeps the lease", async () => {
+  const redis = fakeRedis();
+  const timers = fakeTimers();
+  let t = 0;
+  const run = await beginWorkerRun({
+    ...base,
+    redis,
+    leaseTtlMs: 300,
+    maxStallMs: 10 * 60_000,
+    now: () => t,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+  for (let i = 0; i < 20; i++) {
+    t += 20_000; // a batch running for minutes, with no loop iteration in between
+    timers.fireAll();
+    await Promise.resolve();
+  }
+  assertEquals(run.shouldContinue(), true, "minutes-long batches are normal for some workers");
+});
+
+// onIdle and onError are loop calls too, so they must count as progress -- otherwise a worker that
+// sat idle longer than maxStallMs would drop its lease for being healthy.
+Deno.test("idling counts as progress", async () => {
+  const redis = fakeRedis();
+  const timers = fakeTimers();
+  let t = 0;
+  const run = await beginWorkerRun({
+    ...base,
+    redis,
+    leaseTtlMs: 300,
+    maxStallMs: 1000,
+    now: () => t,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+  for (let i = 0; i < 5; i++) {
+    t += 900;
+    assertEquals(await run.onIdle(), true);
+  }
+  assertEquals(run.shouldContinue(), true);
 });
 
 Deno.test("releasing the lease lets the next run acquire it", async () => {
@@ -452,4 +497,23 @@ Deno.test("the scope is part of the Redis key, so scopes cannot block each other
   assertEquals(runA?.mode, "leased");
   assertEquals(runB?.mode, "leased", "a concurrent CI run must not be starved by another run's lease");
   assertEquals(redis.store.size, 2);
+});
+
+// A worker whose batches are milliseconds is better off draining and exiting: nothing accumulates,
+// no admission slot is held between pokes, and no other poke's lease can starve it.
+Deno.test("preferBounded skips the lease even when Redis is available", async () => {
+  const redis = fakeRedis();
+  const run = await beginWorkerRun({ ...base, redis, preferBounded: true });
+  assertEquals(run.mode, "bounded");
+  assertEquals(redis.store.size, 0, "no lease key should be written at all");
+  assertEquals(await run.onIdle(), false);
+});
+
+// ...and it must not be starved by a lease someone else holds, which is the whole point.
+Deno.test("preferBounded is unaffected by a held lease", async () => {
+  const redis = fakeRedis();
+  const holder = await beginWorkerRun({ ...base, redis });
+  assertEquals(holder.mode, "leased");
+  const run = await beginWorkerRun({ ...base, redis, preferBounded: true });
+  assertEquals(run.mode, "bounded");
 });
