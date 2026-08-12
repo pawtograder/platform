@@ -19,6 +19,7 @@ import {
   PrimaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import {
   fetchDefaultGradeTargetStudentProfileId,
@@ -435,6 +436,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("sha", sha);
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
+  // One click from any event this request reports to the run that caused it.
+  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
   let assignment_id: number | null = null;

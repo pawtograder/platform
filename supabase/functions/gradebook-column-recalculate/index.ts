@@ -957,13 +957,18 @@ export async function runBatchHandler() {
   const run = await beginWorkerRun({
     name: "gradebook_column_recalculate",
     scope,
-    idleSleepMs: 10000,
+    // Drain and exit, never hold a lease. This queue is the one a human is waiting on -- an
+    // instructor edits a grade and expects the dependent columns to move -- and
+    // `invoke_gradebook_recalculation_background_task` is called straight from gradebook mutations
+    // so that the work starts immediately. A lease turns those pokes away and makes the resident
+    // holder's polling interval the floor on recalculation latency instead. Batches here are
+    // milliseconds (chunks complete in 10-20ms), so there is no long-lived loop to bound in the
+    // first place: a bounded run holds no admission slot between pokes and cannot be starved.
+    // Measured on these specs: 1.2 minutes bounded against 7.2 minutes leased.
+    preferBounded: true,
+    idleSleepMs: 1000,
     errorSleepMs: 5000
   });
-  if (!run) {
-    console.log("Another gradebook batch handler holds the lease; nothing to do");
-    return;
-  }
   scope.setTag("worker_run_mode", run.mode);
 
   while (isRunning && run.shouldContinue()) {

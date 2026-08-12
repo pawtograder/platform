@@ -22,6 +22,7 @@ import {
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
   ingestSubmissionFilesFromZip,
   SubmissionFileTooLargeError,
@@ -544,6 +545,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
   scope?.setTag("is_e2e_run", isE2ERun.toString());
+  // One click from any event this request reports to the run that caused it.
+  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
 
   // Circuit breaker: check if org-level circuit is open for GitHub API calls
   const adminSupabase = createClient<Database>(
