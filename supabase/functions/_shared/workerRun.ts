@@ -1,5 +1,6 @@
 import * as Sentry from "npm:@sentry/deno";
 import { createRedis, type RedisClient } from "./Redis.ts";
+import { type EnvReader } from "./SentryContext.ts";
 
 /**
  * Lifecycle for the pg_cron-poked background workers.
@@ -49,6 +50,19 @@ import { createRedis, type RedisClient } from "./Redis.ts";
  * A third option was rejected: reverting `policy` to `per_worker` would make the old guard correct
  * with no code change, but it reintroduces exactly the shared-heap pile-up under bursts that
  * `per_request` was chosen to avoid (see the `policy` comment in charts/pawtograder/values.yaml).
+ *
+ * ## The lease is scoped to a deployment, not to a worker name
+ *
+ * A lease that bounds loops "across the whole fleet" is only meaningful if the fleet is one
+ * deployment, and this Redis is emphatically not one deployment. Previews, staging and production
+ * all set `redis.provider: shared`, and CI's e2e job gets the same `UPSTASH_*` secrets in its
+ * `.env.local`. That sharing is deliberate and must stay: those deployments also share one set of
+ * GitHub App credentials, so they share one GitHub API quota, and the Bottleneck limiters in
+ * `Redis.ts` can only honour that quota if every deployment coordinates through the same keys.
+ *
+ * So the rule is per-key, not per-instance. State about a shared EXTERNAL resource (rate limits)
+ * belongs in a shared key. State about one deployment's own edge tier — which is all this lease is —
+ * must be scoped, or a preview starves staging. See `workerLeaseScope`.
  */
 
 /** Default lease lifetime. Comfortably longer than the heartbeat interval, short enough that an
@@ -106,9 +120,11 @@ export interface WorkerRun {
 }
 
 export interface BeginWorkerRunOptions {
-  /** Stable worker identity; becomes the Redis key. */
+  /** Stable worker identity; becomes part of the Redis key. */
   name: string;
   scope?: Sentry.Scope;
+  /** Reads deployment identity for the lease key. Injectable so tests need no process env. */
+  readEnv?: EnvReader;
   /** How long to sleep when a batch found no work (leased mode only). */
   idleSleepMs: number;
   /** How long to sleep after a batch threw. */
@@ -126,22 +142,95 @@ export interface BeginWorkerRunOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function leaseKey(name: string): string {
-  return `pawtograder:worker-lease:${name}`;
+const denoEnv: EnvReader = (key) => {
+  try {
+    return Deno.env.get(key);
+  } catch {
+    // --allow-env not granted. A missing scope is not fatal; it only makes the key less specific.
+    return undefined;
+  }
+};
+
+/** Redis keys are opaque bytes, but a key you cannot paste into redis-cli is a key you cannot debug. */
+function sanitizeKeySegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-");
 }
 
 /**
- * Decide how (or whether) this poke should run the worker loop.
+ * Which deployment this lease belongs to.
  *
- * Returns `null` when another holder has the lease — the correct response is to return immediately
- * and let the holder keep draining. Never throws: any Redis problem degrades to a bounded run.
+ * The lease bounds resident drainer loops **within one edge tier**, and nothing more. The key was a
+ * bare worker name, so every deployment on the shared Redis shared one lease. One CI run's worker
+ * could hold `pawtograder:worker-lease:gradebook_column_recalculate` while a *different* run's
+ * worker, against a different database, was turned away by it -- and two concurrent e2e jobs is the
+ * normal case on the `pawtograder-e2e` runner pool. The starved job's gradebook queue simply stopped
+ * draining: 2,285 "another handler holds the lease" lines and not one completed run, so the
+ * recalculated scores the gradebook specs wait on never landed and they failed on the 90s poll. A PR
+ * preview could do the same thing to staging.
+ *
+ * Resolution order, most specific first, so a scope is never *less* unique than the thing it names:
+ *   - `WORKER_LEASE_SCOPE`, for anything that needs to say so explicitly;
+ *   - otherwise `ENVIRONMENT`/`DEPLOY_KIND` (the identity `SentryContext.ts` already established),
+ *     narrowed by `DEPLOY_PR` so two preview namespaces do not collide on "preview", and by
+ *     `DEPLOY_RUN_ID`/`DEPLOY_RUN_ATTEMPT` so two CI runs do not collide on "e2e-local".
+ *
+ * Production stays a single `production` scope, which is the whole point: there the fleet SHOULD
+ * share one lease.
  */
-export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<WorkerRun | null> {
+export function workerLeaseScope(readEnv: EnvReader = denoEnv): string {
+  const value = (key: string): string | undefined => {
+    const trimmed = readEnv(key)?.trim();
+    return trimmed ? trimmed : undefined;
+  };
+
+  const explicit = value("WORKER_LEASE_SCOPE");
+  if (explicit) return sanitizeKeySegment(explicit);
+
+  const parts = [value("ENVIRONMENT") ?? value("DEPLOY_KIND") ?? "development"];
+
+  const pr = value("DEPLOY_PR");
+  if (pr) parts.push(`pr-${pr}`);
+
+  const runId = value("DEPLOY_RUN_ID");
+  if (runId) {
+    const attempt = value("DEPLOY_RUN_ATTEMPT");
+    parts.push(attempt ? `run-${runId}-${attempt}` : `run-${runId}`);
+  }
+
+  return parts.map(sanitizeKeySegment).join(":");
+}
+
+function leaseKey(name: string, scope: string): string {
+  return `pawtograder:worker-lease:${scope}:${name}`;
+}
+
+/**
+ * Decide how this poke should run the worker loop. Never throws, and always returns a run: any Redis
+ * problem, and a lease already held elsewhere, both degrade to a bounded run.
+ *
+ * Losing the race for the lease used to mean returning `null` — "the holder is draining, so do
+ * nothing". That is only true while the holder is actually draining, and the lease cannot tell.
+ * `renew` fires on its own interval precisely so a slow batch keeps the lease, which means liveness
+ * of the KEY is independent of progress of the LOOP: an isolate that the runtime suspends, or one
+ * parked on an await that never settles, keeps its lease renewed while doing nothing, and every
+ * other poke is turned away for as long as that lasts. Measured locally: a 106-second window with
+ * the key held, 425 pokes refused, and not one batch processed — longer than the 60s TTL, so it was
+ * not even a matter of waiting for expiry.
+ *
+ * A bounded run is the right answer to "someone else holds it". It cannot accumulate — it drains
+ * until the queue is idle or its wall-clock budget expires, then returns and frees the admission
+ * slot — so the resource bound this module exists to enforce still holds. And the queue, not the
+ * lease, is what makes concurrent drainers safe: `pgmq_public.read` sets a visibility timeout on
+ * every message it hands out, so two workers cannot be given the same message.
+ */
+export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<WorkerRun> {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? defaultSleep;
   const ttl = opts.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const budget = opts.boundedBudgetMs ?? DEFAULT_BOUNDED_BUDGET_MS;
-  const key = leaseKey(opts.name);
+  const leaseScope = workerLeaseScope(opts.readEnv);
+  const key = leaseKey(opts.name, leaseScope);
+  opts.scope?.setTag("worker_lease_scope", leaseScope);
 
   // `undefined` means "not injected, go and build one"; an explicit `null` means "no Redis", which
   // is what the tests and the no-Redis deployments both exercise.
@@ -196,8 +285,9 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   }
 
   if (!acquired) {
-    opts.scope?.setTag("worker_run_mode", "skipped_lease_held");
-    return null;
+    // Help rather than idle. The holder keeps the low-latency resident loop; this poke drains what
+    // it can and exits, so a holder that has stopped making progress cannot stall the queue.
+    return boundedRun("lease_held_elsewhere");
   }
 
   opts.scope?.setTag("worker_run_mode", "leased");

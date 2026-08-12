@@ -1,5 +1,5 @@
-import { assertEquals } from "jsr:@std/assert@^1";
-import { beginWorkerRun } from "./workerRun.ts";
+import { assertEquals, assertNotEquals } from "jsr:@std/assert@^1";
+import { beginWorkerRun, workerLeaseScope } from "./workerRun.ts";
 
 /** Minimal stand-in for the subset of the Redis surface a lease uses. */
 function fakeRedis(opts: { failAcquire?: boolean; failRenew?: boolean } = {}) {
@@ -77,10 +77,22 @@ const base = {
   idleSleepMs: 10,
   errorSleepMs: 5,
   sleep: noSleep,
+  // Empty env, so the lease scope is the "development" default rather than whatever the machine
+  // running the tests happens to export.
+  readEnv: () => undefined,
   // Default to inert timers so tests drive renewal explicitly rather than on the wall clock.
   setIntervalFn: () => 1,
   clearIntervalFn: () => {}
 };
+
+/** The key `base` produces: the "development" scope segment, then the worker name. */
+const LEASE_KEY = "pawtograder:worker-lease:development:test-worker";
+
+/** An EnvReader over a plain object, for the lease-scope tests. */
+const envOf =
+  (vars: Record<string, string>) =>
+  (key: string): string | undefined =>
+    vars[key];
 
 Deno.test("no Redis configured -> bounded run, never null", async () => {
   const run = await beginWorkerRun({ ...base, redis: null });
@@ -106,16 +118,29 @@ Deno.test("Redis configured -> leased run, and the lease is actually written", a
   const redis = fakeRedis();
   const run = await beginWorkerRun({ ...base, redis });
   assertEquals(run?.mode, "leased");
-  assertEquals(redis.store.has("pawtograder:worker-lease:test-worker"), true);
+  assertEquals(redis.store.has(LEASE_KEY), true);
 });
 
-// The accumulation fix: a second poke while the first holds the lease must do nothing at all.
-Deno.test("a second run while the lease is held returns null", async () => {
+// Only one resident loop, but the loser still helps: a bounded run drains and exits, so a holder
+// that has stopped making progress cannot stall the queue behind its own lease.
+Deno.test("a second run while the lease is held is bounded, not a no-op", async () => {
   const redis = fakeRedis();
   const first = await beginWorkerRun({ ...base, redis });
-  assertEquals(first?.mode, "leased");
+  assertEquals(first.mode, "leased");
   const second = await beginWorkerRun({ ...base, redis });
-  assertEquals(second, null);
+  assertEquals(second.mode, "bounded");
+  assertEquals(await second.onIdle(), false, "the helper must exit rather than stay resident");
+});
+
+// The lease still has to mean something: exactly one holder gets the resident loop.
+Deno.test("only one run is leased at a time", async () => {
+  const redis = fakeRedis();
+  const runs = [
+    await beginWorkerRun({ ...base, redis }),
+    await beginWorkerRun({ ...base, redis }),
+    await beginWorkerRun({ ...base, redis })
+  ];
+  assertEquals(runs.filter((r) => r.mode === "leased").length, 1);
 });
 
 Deno.test("releasing the lease lets the next run acquire it", async () => {
@@ -138,7 +163,7 @@ Deno.test("losing the lease stops the loop", async () => {
   const run = await beginWorkerRun({ ...base, redis, leaseTtlMs: 300, now: () => t });
   assertEquals(run!.shouldContinue(), true);
   // Another isolate takes over: the key no longer holds our token, so an XX renew finds nothing.
-  redis.store.delete("pawtograder:worker-lease:test-worker");
+  redis.store.delete(LEASE_KEY);
   t += 200; // past ttl/3, so the heartbeat is due
   await run!.heartbeat();
   assertEquals(run!.shouldContinue(), false);
@@ -167,9 +192,9 @@ Deno.test("heartbeat is a no-op before the interval elapses", async () => {
 Deno.test("release does not delete another holder's lease", async () => {
   const redis = fakeRedis();
   const run = await beginWorkerRun({ ...base, redis });
-  redis.store.set("pawtograder:worker-lease:test-worker", "someone-elses-token");
+  redis.store.set(LEASE_KEY, "someone-elses-token");
   await run!.release();
-  assertEquals(redis.store.get("pawtograder:worker-lease:test-worker"), "someone-elses-token");
+  assertEquals(redis.store.get(LEASE_KEY), "someone-elses-token");
 });
 
 Deno.test("leased idle sleeps and keeps looping", async () => {
@@ -185,15 +210,11 @@ Deno.test("a renewal does not steal a lease another isolate now owns", async () 
   const redis = fakeRedis();
   let t = 0;
   const run = await beginWorkerRun({ ...base, redis, leaseTtlMs: 300, now: () => t });
-  redis.store.set("pawtograder:worker-lease:test-worker", "another-isolates-token");
+  redis.store.set(LEASE_KEY, "another-isolates-token");
   t += 200;
   await run!.heartbeat();
   assertEquals(run!.shouldContinue(), false, "must stop rather than reclaim");
-  assertEquals(
-    redis.store.get("pawtograder:worker-lease:test-worker"),
-    "another-isolates-token",
-    "the new owner's token must survive"
-  );
+  assertEquals(redis.store.get(LEASE_KEY), "another-isolates-token", "the new owner's token must survive");
 });
 
 // The other defect: renewal only happened between batches, so a batch longer than the TTL let the
@@ -232,5 +253,77 @@ Deno.test("release deletes only our own lease", async () => {
   const redis = fakeRedis();
   const run = await beginWorkerRun({ ...base, redis });
   await run!.release();
-  assertEquals(redis.store.has("pawtograder:worker-lease:test-worker"), false);
+  assertEquals(redis.store.has(LEASE_KEY), false);
+});
+
+// ── Lease scope ────────────────────────────────────────────────────────────────
+// Everything below is about one bug: the key was the worker name alone, so every deployment sharing
+// the Upstash credentials shared one lease.
+
+Deno.test("lease scope falls back to development when nothing identifies the deploy", () => {
+  assertEquals(workerLeaseScope(envOf({})), "development");
+});
+
+Deno.test("lease scope prefers ENVIRONMENT, then DEPLOY_KIND", () => {
+  assertEquals(workerLeaseScope(envOf({ ENVIRONMENT: "production", DEPLOY_KIND: "preview" })), "production");
+  assertEquals(workerLeaseScope(envOf({ DEPLOY_KIND: "staging" })), "staging");
+});
+
+// The production fleet SHOULD share one lease -- that is what bounds resident loops across pods.
+Deno.test("production is a single scope across the fleet", () => {
+  assertEquals(
+    workerLeaseScope(envOf({ ENVIRONMENT: "production" })),
+    workerLeaseScope(envOf({ ENVIRONMENT: "production" }))
+  );
+});
+
+Deno.test("two preview deployments do not collide on 'preview'", () => {
+  const a = workerLeaseScope(envOf({ ENVIRONMENT: "preview", DEPLOY_PR: "901" }));
+  const b = workerLeaseScope(envOf({ ENVIRONMENT: "preview", DEPLOY_PR: "902" }));
+  assertNotEquals(a, b);
+});
+
+// The regression: two e2e jobs on the pawtograder-e2e pool, same Redis, same key. One drained and
+// the other was turned away for its whole run.
+Deno.test("two CI runs do not collide on 'e2e-local'", () => {
+  const env = (runId: string) => envOf({ DEPLOY_KIND: "e2e-local", DEPLOY_RUN_ID: runId, DEPLOY_RUN_ATTEMPT: "1" });
+  assertEquals(workerLeaseScope(env("31550106308")), "e2e-local:run-31550106308-1");
+  assertNotEquals(workerLeaseScope(env("31550106308")), workerLeaseScope(env("31550905986")));
+});
+
+// A retried job re-runs the whole suite against a fresh database; it is not the same deployment.
+Deno.test("a re-run attempt is its own scope", () => {
+  const attempt = (n: string) => envOf({ DEPLOY_KIND: "e2e-local", DEPLOY_RUN_ID: "1", DEPLOY_RUN_ATTEMPT: n });
+  assertNotEquals(workerLeaseScope(attempt("1")), workerLeaseScope(attempt("2")));
+});
+
+Deno.test("WORKER_LEASE_SCOPE overrides everything", () => {
+  assertEquals(workerLeaseScope(envOf({ WORKER_LEASE_SCOPE: "manual", ENVIRONMENT: "production" })), "manual");
+});
+
+// Branch-derived values reach these vars, and a key you cannot paste into redis-cli is a key you
+// cannot debug.
+Deno.test("scope segments are sanitized", () => {
+  assertEquals(workerLeaseScope(envOf({ ENVIRONMENT: "feat/some thing" })), "feat-some-thing");
+});
+
+Deno.test("blank env values are ignored rather than making an empty segment", () => {
+  assertEquals(workerLeaseScope(envOf({ ENVIRONMENT: "   ", DEPLOY_KIND: "staging", DEPLOY_PR: "" })), "staging");
+});
+
+Deno.test("the scope is part of the Redis key, so scopes cannot block each other", async () => {
+  const redis = fakeRedis();
+  const runA = await beginWorkerRun({
+    ...base,
+    redis,
+    readEnv: envOf({ DEPLOY_KIND: "e2e-local", DEPLOY_RUN_ID: "1", DEPLOY_RUN_ATTEMPT: "1" })
+  });
+  const runB = await beginWorkerRun({
+    ...base,
+    redis,
+    readEnv: envOf({ DEPLOY_KIND: "e2e-local", DEPLOY_RUN_ID: "2", DEPLOY_RUN_ATTEMPT: "1" })
+  });
+  assertEquals(runA?.mode, "leased");
+  assertEquals(runB?.mode, "leased", "a concurrent CI run must not be starved by another run's lease");
+  assertEquals(redis.store.size, 2);
 });

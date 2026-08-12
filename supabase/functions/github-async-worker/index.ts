@@ -2612,10 +2612,6 @@ export async function runBatchHandler() {
     idleSleepMs: 15000,
     errorSleepMs: 5000
   });
-  if (!run) {
-    console.log("[runBatchHandler] another worker holds the lease; nothing to do");
-    return;
-  }
   scope.setTag("worker_run_mode", run.mode);
 
   try {

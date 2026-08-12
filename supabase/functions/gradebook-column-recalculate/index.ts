@@ -960,10 +960,6 @@ export async function runBatchHandler() {
     idleSleepMs: 10000,
     errorSleepMs: 5000
   });
-  if (!run) {
-    console.log("Another gradebook batch handler holds the lease; nothing to do");
-    return;
-  }
   scope.setTag("worker_run_mode", run.mode);
 
   while (isRunning && run.shouldContinue()) {
