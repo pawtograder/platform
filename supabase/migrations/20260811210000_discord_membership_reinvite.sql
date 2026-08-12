@@ -599,7 +599,12 @@ SET search_path = ''
 AS $$
   SELECT COALESCE(
     (
-      SELECT (f ->> 'enabled')::boolean
+      -- jsonb_typeof, not a cast. classes.features is unconstrained jsonb, so an entry like
+      -- {"name":"discord-student-join","enabled":"unknown"} is permitted -- and `->> 'enabled'`
+      -- followed by ::boolean would raise on it, aborting this function inside the hourly candidate
+      -- query and stopping Discord sync for every course in the run. Anything that is not a JSON
+      -- boolean falls through to the feature default instead.
+      SELECT CASE WHEN jsonb_typeof(f -> 'enabled') = 'boolean' THEN (f -> 'enabled')::boolean END
       FROM public.classes c,
            LATERAL jsonb_array_elements(
              CASE WHEN jsonb_typeof(c.features) = 'array' THEN c.features ELSE '[]'::jsonb END

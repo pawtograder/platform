@@ -407,6 +407,15 @@ SELECT public.discord_student_join_enabled(1) AS enabled;
 \echo '-- and the candidate query carries it per class (expect: t) --'
 SELECT DISTINCT student_join_enabled FROM public.get_discord_role_sync_candidates() WHERE class_id = 1;
 
+-- A non-boolean enabled value is permitted by the unconstrained jsonb column, and casting it raised
+-- inside the candidate query -- which would have stopped Discord sync for every course in the run,
+-- not just this one.
+UPDATE public.classes SET features = '[{"name":"discord-student-join","enabled":"unknown"}]'::jsonb WHERE id = 1;
+\echo '-- a non-boolean enabled value falls back to the default (expect: f) --'
+SELECT public.discord_student_join_enabled(1) AS enabled;
+\echo '-- and the candidate query still runs rather than raising (expect: a count) --'
+SELECT count(*) AS candidates FROM public.get_discord_role_sync_candidates();
+
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.
 --

@@ -155,12 +155,20 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Put a replacement message on the queue.
+ *
+ * Returns whether it is actually there. Callers archive the original immediately afterwards, so a
+ * swallowed failure here loses the operation outright -- and for a manually requested retry on an
+ * inactive class there is no hourly batch behind it to notice, leaving the recorded failure stuck
+ * until somebody presses the button again.
+ */
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: DiscordAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope
-) {
+): Promise<boolean> {
   const newRetryCount = (envelope.retry_count ?? 0) + 1;
   console.log(
     `[requeueWithDelay] Requeuing envelope with method=${envelope.method}, retry_count=${newRetryCount}, delay=${delaySeconds}s`
@@ -178,9 +186,10 @@ async function requeueWithDelay(
     console.error(`[requeueWithDelay] Failed to requeue:`, result.error);
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
-  } else {
-    console.log(`[requeueWithDelay] Successfully requeued envelope`);
+    return false;
   }
+  console.log(`[requeueWithDelay] Successfully requeued envelope`);
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -763,11 +772,16 @@ async function ensureInviteForUser(
     return "cannot_invite";
   }
 
-  // The course has not opted in to student invitations, so there is no invitation to create and
-  // nothing for a student to act on. Recorded rather than skipped silently: they are genuinely not
-  // in the server, the roster should say so, and the detail keeps the instructor alert from claiming
-  // a link is waiting on a dashboard that is not showing one.
-  if (!record.student_join_enabled) {
+  // Students only. The candidate query returns every active user_role, and the flag is a property of
+  // the class, so gating on it alone withheld invitations from graders and instructors as well --
+  // staff whose route to an invitation is the manage/discord page, which this feature says nothing
+  // about. The flag is named for students and applies to them.
+  //
+  // For a student whose course has not opted in there is no invitation to create and nothing to act
+  // on. Recorded rather than skipped silently: they are genuinely not in the server, the roster
+  // should say so, and the detail keeps the instructor alert from claiming a link is waiting on a
+  // dashboard that is not showing one.
+  if (!record.student_join_enabled && record.role === "student") {
     await recordMembershipStatus(
       adminSupabase,
       {
@@ -1913,10 +1927,28 @@ export async function processEnvelope(
             // relink, the manual retry -- so without it a course with the feature off would still
             // accumulate invitations nobody can see.
             if (envelope.class_id) {
-              const { data: joinEnabled, error: joinFlagError } = await adminSupabase.rpc(
-                "discord_student_join_enabled",
-                { p_class_id: envelope.class_id }
-              );
+              // Which class role this envelope is for. The flag is student-scoped, and this handler
+              // is reached for staff too, so the role has to be resolved before the gate applies --
+              // otherwise a course with the feature off would stop inviting its graders as well.
+              // args.role_id is the Discord role, which discord_roles maps back to a role_type.
+              const { data: roleRow, error: roleLookupError } = await adminSupabase
+                .from("discord_roles")
+                .select("role_type")
+                .eq("class_id", envelope.class_id)
+                .eq("discord_role_id", args.role_id)
+                .maybeSingle();
+              if (roleLookupError) {
+                throw roleLookupError;
+              }
+
+              // Unknown role type: treat it as staff rather than as a student, so a lookup miss
+              // withholds nothing. The student case is the one the flag exists to switch off, and
+              // erring the other way would silently stop invitations a course had opted in to.
+              const isStudentEnvelope = roleRow?.role_type === "student";
+
+              const { data: joinEnabled, error: joinFlagError } = isStudentEnvelope
+                ? await adminSupabase.rpc("discord_student_join_enabled", { p_class_id: envelope.class_id })
+                : { data: true, error: null };
               if (joinFlagError) {
                 // Not assumed either way: creating an invite a course has switched off is as wrong
                 // as withholding one it wants, so the envelope retries rather than guessing.
@@ -2257,8 +2289,12 @@ export async function processEnvelope(
         retry_count: currentRetryCount
       });
 
-      await requeueWithDelay(adminSupabase, envelope, delay, scope);
-      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      // Archived only once the replacement exists. Otherwise the original is destroyed and the
+      // replacement never arrived, and the operation is simply gone. Left on the queue it is
+      // redelivered when its visibility timeout expires, which is the recoverable failure.
+      if (await requeueWithDelay(adminSupabase, envelope, delay, scope)) {
+        await archiveMessage(adminSupabase, meta.msg_id, scope);
+      }
       return false;
     }
 
@@ -2270,8 +2306,10 @@ export async function processEnvelope(
       requeue_delay_seconds: 120
     });
 
-    await requeueWithDelay(adminSupabase, envelope, 120, scope); // 2 minutes
-    await archiveMessage(adminSupabase, meta.msg_id, scope);
+    // Same as the rate-limit path above: the original stays until its replacement is stored.
+    if (await requeueWithDelay(adminSupabase, envelope, 120, scope)) {
+      await archiveMessage(adminSupabase, meta.msg_id, scope);
+    }
     return false;
   }
 }
