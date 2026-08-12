@@ -30,6 +30,7 @@
 --  16. two workers claiming an invite for one user           -> one row, the loser learns the winning URL
 --  17. roles created in parallel                             -> the existing-user sync still fires once all three exist
 --  18. the student-join course feature flag                  -> defaults off, survives malformed features
+--  19. moving a class to a different Discord server          -> the old server's role ids are dropped
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -415,6 +416,36 @@ UPDATE public.classes SET features = '[{"name":"discord-student-join","enabled":
 SELECT public.discord_student_join_enabled(1) AS enabled;
 \echo '-- and the candidate query still runs rather than raising (expect: a count) --'
 SELECT count(*) AS candidates FROM public.get_discord_role_sync_candidates();
+
+-- ---------------------------------------------------------------------------
+-- 19. Changing a class's Discord server forgets the old server's roles.
+--
+-- discord_roles has no guild column, so a row created for guild A stays valid-looking after a move
+-- to guild B: trigger_discord_create_roles_on_server_connect skips creation while any row exists,
+-- enqueue_discord_role_sync pairs A's role ids with B, and every add_member_role fails with Unknown
+-- Role. The repair in request_discord_reinvite looks for missing rows and finds none.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 19. moving a class to a different Discord server ==='
+UPDATE public.classes SET discord_server_id = 'guild-A' WHERE id = 1;
+DELETE FROM public.discord_roles WHERE class_id = 1;
+INSERT INTO public.discord_roles (class_id, role_type, discord_role_id)
+VALUES (1, 'student', 'A-student'), (1, 'grader', 'A-grader'), (1, 'instructor', 'A-instructor');
+\echo '-- roles tracked against guild A (expect: 3) --'
+SELECT count(*) AS rows_for_a FROM public.discord_roles WHERE class_id = 1;
+
+DELETE FROM pgmq.q_discord_async_calls WHERE (message ->> 'class_id')::bigint = 1;
+UPDATE public.classes SET discord_server_id = 'guild-B' WHERE id = 1;
+
+\echo '-- no role id from the old guild survives (expect: 0) --'
+SELECT count(*) FILTER (WHERE discord_role_id LIKE 'A-%') AS stale_rows
+FROM public.discord_roles WHERE class_id = 1;
+
+\echo '-- and a fresh set is enqueued for the new guild (expect: guild-B x3) --'
+SELECT DISTINCT message ->> 'role_type' AS role_type, message -> 'args' ->> 'guild_id' AS guild
+FROM pgmq.q_discord_async_calls
+WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1
+ORDER BY 1;
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.

@@ -666,3 +666,38 @@ COMMENT ON FUNCTION public.get_discord_role_sync_candidates() IS
 
 REVOKE ALL ON FUNCTION public.get_discord_role_sync_candidates() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_discord_role_sync_candidates() TO service_role;
+
+-- ============================================================================
+-- 8. Forget a class's Discord roles when it changes server
+-- ============================================================================
+
+-- discord_roles has no guild column, so a row created for guild A stays valid-looking after a class
+-- moves to guild B. trigger_discord_create_roles_on_server_connect skips creation whenever any role
+-- row exists for the class, so nothing replaces them, and enqueue_discord_role_sync goes on pairing
+-- guild A's role ids with guild B -- every add_member_role failing with Unknown Role. The repair in
+-- request_discord_reinvite cannot help either: it looks for *missing* rows, and these are present.
+--
+-- BEFORE, so it runs ahead of the AFTER trigger that creates them: that trigger then finds no rows
+-- and enqueues a fresh set for the new guild. Trigger execution order is otherwise alphabetical by
+-- name, which is not something to rely on for correctness.
+CREATE OR REPLACE FUNCTION public.clear_discord_roles_on_server_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.discord_roles WHERE class_id = NEW.id;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.clear_discord_roles_on_server_change() IS
+  'Drops a class''s tracked Discord roles when its server changes, so role ids from the previous guild are not reused against the new one. discord_roles has no guild key, so the rows are otherwise indistinguishable from current ones.';
+
+DROP TRIGGER IF EXISTS clear_discord_roles_on_server_change ON public.classes;
+CREATE TRIGGER clear_discord_roles_on_server_change
+BEFORE UPDATE OF discord_server_id ON public.classes
+FOR EACH ROW
+WHEN (NEW.discord_server_id IS DISTINCT FROM OLD.discord_server_id)
+EXECUTE FUNCTION public.clear_discord_roles_on_server_change();
