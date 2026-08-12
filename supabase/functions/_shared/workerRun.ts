@@ -75,6 +75,26 @@ const HEARTBEAT_DIVISOR = 3;
  * retires the isolate, so a bounded run ends on its own terms rather than being cut off mid-batch.
  */
 const DEFAULT_BOUNDED_BUDGET_MS = 50_000;
+/**
+ * How many pokes that LOST the lease race may drain anyway, at once, per worker per deployment.
+ *
+ * Not "all of them". These workers are poked at least twice per cron tick
+ * (`invoke_gradebook_recalculation_background_task` starts two), and gradebook mutations invoke the
+ * recalculation worker directly, so "every loser drains" means a backlogged queue mints a new
+ * drainer on every poke. Each one holds an admission slot, `maxParallelism` is 8 *per pod across all
+ * functions*, and the wall-clock budget is only consulted between `processBatch` calls -- it cannot
+ * cut short a single hung call. That is the slot exhaustion the lease was added to prevent, arrived
+ * at from the other direction.
+ *
+ * One helper is enough for what the fallback is actually for: making sure a holder that has stopped
+ * making progress cannot stall the queue behind its own lease. Worst case per worker is therefore
+ * the resident holder plus one helper, and the helper is transient -- it exits the moment the queue
+ * is idle. Helper slots are plain NX keys that are never renewed, so a helper whose isolate hangs
+ * still frees its slot at TTL rather than holding it for the isolate's life.
+ */
+const MAX_BOUNDED_HELPERS = 1;
+/** `DEPLOY_KIND` for the CI e2e job. The only deployment kind with no k8s rollout behind it. */
+const E2E_LOCAL_KIND = "e2e-local";
 
 /**
  * Renew ONLY if the key still holds our token, atomically.
@@ -103,11 +123,14 @@ else
   return 0
 end`;
 
-export type WorkerRunMode = "leased" | "bounded";
+export type WorkerRunMode = "leased" | "bounded" | "idle";
 
 export interface WorkerRun {
   readonly mode: WorkerRunMode;
-  /** False once the lease is lost (leased) or the budget is spent (bounded). */
+  /**
+   * False once the lease is lost (leased), the budget is spent (bounded), or immediately (idle) —
+   * so a caller's `while (run.shouldContinue())` is the one place that has to know the difference.
+   */
   shouldContinue(): boolean;
   /** Call once per loop iteration. Renews the lease when due; marks the run finished if it is lost. */
   heartbeat(): Promise<void>;
@@ -151,9 +174,30 @@ const denoEnv: EnvReader = (key) => {
   }
 };
 
-/** Redis keys are opaque bytes, but a key you cannot paste into redis-cli is a key you cannot debug. */
+/** FNV-1a, base36. Not security; just enough to keep a lossy rewrite from merging two scopes. */
+function shortHash(value: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
+/**
+ * Redis keys are opaque bytes, but a key you cannot paste into redis-cli is a key you cannot debug.
+ *
+ * Collapsing every run of invalid characters to `-` is lossy, and lossy is exactly the wrong
+ * property here: `feat/foo` and `feat-foo` would land on one key, which is the cross-deployment
+ * collision this module is fixing, reintroduced by the sanitizer. So when the rewrite changed
+ * anything, a hash of the ORIGINAL is appended and the mapping stays injective. Values that were
+ * already key-safe -- which is every value in practice, since the scope is built from a
+ * chart-validated environment name and some integers -- are untouched, so the common key stays
+ * readable.
+ */
 function sanitizeKeySegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const safe = value.replace(/[^A-Za-z0-9._-]+/g, "-");
+  return safe === value ? safe : `${safe}~${shortHash(value)}`;
 }
 
 /**
@@ -168,14 +212,22 @@ function sanitizeKeySegment(value: string): string {
  * recalculated scores the gradebook specs wait on never landed and they failed on the 90s poll. A PR
  * preview could do the same thing to staging.
  *
- * Resolution order, most specific first, so a scope is never *less* unique than the thing it names:
+ * Resolution order:
  *   - `WORKER_LEASE_SCOPE`, for anything that needs to say so explicitly;
  *   - otherwise `ENVIRONMENT`/`DEPLOY_KIND` (the identity `SentryContext.ts` already established),
- *     narrowed by `DEPLOY_PR` so two preview namespaces do not collide on "preview", and by
- *     `DEPLOY_RUN_ID`/`DEPLOY_RUN_ATTEMPT` so two CI runs do not collide on "e2e-local".
+ *     narrowed by `DEPLOY_PR` so two preview namespaces do not collide on "preview".
  *
- * Production stays a single `production` scope, which is the whole point: there the fleet SHOULD
- * share one lease.
+ * The scope has to be stable for the LIFE OF A DEPLOYMENT, not per deploy. `DEPLOY_RUN_ID` is
+ * tempting -- it is the only thing that separates two CI e2e runs, which have no other identity --
+ * but `preview.yml` passes `global.deploy.runId` on every helm upgrade, so keying on it would give
+ * each preview redeploy a fresh set of keys. During the chart's rolling update (`maxSurge: 1`,
+ * `maxUnavailable: 0`, up to 410s of graceful drain) the outgoing and incoming pods would then hold
+ * resident leases under different keys, and the within-deployment bound would be off for the whole
+ * rollout. So run identity is added only for `e2e-local`, the one kind with no k8s rollout behind
+ * it, where each run genuinely is its own throwaway deployment with its own database.
+ *
+ * Production stays a single `production` scope, and a preview stays `preview:pr-<n>` across
+ * redeploys, which is the whole point: within one deployment the fleet SHOULD share one lease.
  */
 export function workerLeaseScope(readEnv: EnvReader = denoEnv): string {
   const value = (key: string): string | undefined => {
@@ -186,15 +238,18 @@ export function workerLeaseScope(readEnv: EnvReader = denoEnv): string {
   const explicit = value("WORKER_LEASE_SCOPE");
   if (explicit) return sanitizeKeySegment(explicit);
 
-  const parts = [value("ENVIRONMENT") ?? value("DEPLOY_KIND") ?? "development"];
+  const kind = value("ENVIRONMENT") ?? value("DEPLOY_KIND") ?? "development";
+  const parts = [kind];
 
   const pr = value("DEPLOY_PR");
   if (pr) parts.push(`pr-${pr}`);
 
-  const runId = value("DEPLOY_RUN_ID");
-  if (runId) {
-    const attempt = value("DEPLOY_RUN_ATTEMPT");
-    parts.push(attempt ? `run-${runId}-${attempt}` : `run-${runId}`);
+  if (kind === E2E_LOCAL_KIND) {
+    const runId = value("DEPLOY_RUN_ID");
+    if (runId) {
+      const attempt = value("DEPLOY_RUN_ATTEMPT");
+      parts.push(attempt ? `run-${runId}-${attempt}` : `run-${runId}`);
+    }
   }
 
   return parts.map(sanitizeKeySegment).join(":");
@@ -202,6 +257,11 @@ export function workerLeaseScope(readEnv: EnvReader = denoEnv): string {
 
 function leaseKey(name: string, scope: string): string {
   return `pawtograder:worker-lease:${scope}:${name}`;
+}
+
+/** Slot `i` of the small pool that lets lease losers help without becoming a crowd. */
+function helperKey(name: string, scope: string, i: number): string {
+  return `${leaseKey(name, scope)}:helper-${i}`;
 }
 
 /**
@@ -217,11 +277,15 @@ function leaseKey(name: string, scope: string): string {
  * the key held, 425 pokes refused, and not one batch processed — longer than the 60s TTL, so it was
  * not even a matter of waiting for expiry.
  *
- * A bounded run is the right answer to "someone else holds it". It cannot accumulate — it drains
- * until the queue is idle or its wall-clock budget expires, then returns and frees the admission
- * slot — so the resource bound this module exists to enforce still holds. And the queue, not the
- * lease, is what makes concurrent drainers safe: `pgmq_public.read` sets a visibility timeout on
- * every message it hands out, so two workers cannot be given the same message.
+ * So a loser now drains too — but only if it can claim one of `MAX_BOUNDED_HELPERS` slots, because
+ * "every loser drains" is its own way of exhausting the admission slots (see that constant). A poke
+ * that finds the helper pool full gets an `idle` run: it does nothing, exactly as before. What the
+ * pool buys is that SOMETHING is always draining, which is the property the plain early return did
+ * not have.
+ *
+ * Concurrent drainers are safe regardless: the queue, not the lease, provides the mutual exclusion.
+ * `pgmq_public.read` sets a visibility timeout on every message it hands out, so two workers cannot
+ * be given the same message.
  */
 export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<WorkerRun> {
   const now = opts.now ?? Date.now;
@@ -249,7 +313,8 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
     }
   }
 
-  const boundedRun = (reason: string): WorkerRun => {
+  /** `heldKey` is a helper slot to hand back when the run finishes; bounded runs never renew it. */
+  const boundedRun = (reason: string, heldKey?: { key: string; token: string }): WorkerRun => {
     const deadline = now() + budget;
     opts.scope?.setTag("worker_run_mode", "bounded");
     opts.scope?.setTag("worker_bounded_reason", reason);
@@ -263,6 +328,30 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
       onError: async () => {
         if (now() < deadline) await sleep(opts.errorSleepMs);
       },
+      release: async () => {
+        if (!heldKey || !redis) return;
+        try {
+          // Give the slot back early. TTL expiry is still the backstop for an isolate that dies
+          // here, which is why the slot is never renewed.
+          await redis.eval(RELEASE_IF_OWNED, [heldKey.key], [heldKey.token]);
+        } catch (e) {
+          opts.scope?.setTag("worker_lease", "helper_release_failed");
+          Sentry.captureException(e, opts.scope);
+        }
+      }
+    };
+  };
+
+  /** A poke with nothing to do: the lease is held and the helper pool is full. */
+  const idleRun = (reason: string): WorkerRun => {
+    opts.scope?.setTag("worker_run_mode", "idle");
+    opts.scope?.setTag("worker_idle_reason", reason);
+    return {
+      mode: "idle",
+      shouldContinue: () => false,
+      heartbeat: () => Promise.resolve(),
+      onIdle: () => Promise.resolve(false),
+      onError: () => Promise.resolve(),
       release: () => Promise.resolve()
     };
   };
@@ -285,9 +374,25 @@ export async function beginWorkerRun(opts: BeginWorkerRunOptions): Promise<Worke
   }
 
   if (!acquired) {
-    // Help rather than idle. The holder keeps the low-latency resident loop; this poke drains what
-    // it can and exits, so a holder that has stopped making progress cannot stall the queue.
-    return boundedRun("lease_held_elsewhere");
+    // Help, but only as one of a bounded few. The holder keeps the low-latency resident loop; a
+    // helper drains what it can and exits, so a holder that has stopped making progress cannot
+    // stall the queue -- while the pool stops a backlog from minting a drainer per poke.
+    for (let i = 1; i <= MAX_BOUNDED_HELPERS; i++) {
+      const hKey = helperKey(opts.name, leaseScope, i);
+      try {
+        const got = await redis.set(hKey, token, { px: ttl, nx: true });
+        if (got !== null && got !== undefined && got !== 0) {
+          return boundedRun("lease_held_elsewhere", { key: hKey, token });
+        }
+      } catch (e) {
+        // The pool is an optimization, not a correctness device. If Redis will not answer, idle:
+        // draining anyway is what the pool exists to prevent.
+        opts.scope?.setTag("worker_lease", "helper_acquire_failed");
+        Sentry.captureException(e, opts.scope);
+        return idleRun("helper_acquire_failed");
+      }
+    }
+    return idleRun("helpers_busy");
   }
 
   opts.scope?.setTag("worker_run_mode", "leased");

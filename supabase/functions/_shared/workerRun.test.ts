@@ -143,6 +143,83 @@ Deno.test("only one run is leased at a time", async () => {
   assertEquals(runs.filter((r) => r.mode === "leased").length, 1);
 });
 
+// "Every loser drains" is its own slot-exhaustion bug: these workers get several pokes per cron
+// tick, so a backlogged queue would mint a drainer on each one.
+Deno.test("the helper pool is bounded; pokes past it idle instead of draining", async () => {
+  const redis = fakeRedis();
+  const leased = await beginWorkerRun({ ...base, redis });
+  assertEquals(leased.mode, "leased");
+
+  const helpers: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    helpers.push((await beginWorkerRun({ ...base, redis })).mode);
+  }
+  assertEquals(
+    helpers.filter((m) => m === "bounded").length,
+    1,
+    "at most MAX_BOUNDED_HELPERS pokes may drain alongside the holder"
+  );
+  assertEquals(helpers.filter((m) => m === "idle").length, 4);
+});
+
+// An idle run must be inert in the caller's loop: `while (run.shouldContinue())` runs zero times.
+Deno.test("an idle run does no work at all", async () => {
+  const redis = fakeRedis();
+  await beginWorkerRun({ ...base, redis });
+  await beginWorkerRun({ ...base, redis }); // takes the one helper slot
+  const idle = await beginWorkerRun({ ...base, redis });
+  assertEquals(idle.mode, "idle");
+  assertEquals(idle.shouldContinue(), false);
+  await idle.release();
+});
+
+// The slot has to come back, or one backlog would wedge the pool until TTL.
+Deno.test("a helper hands its slot back on release", async () => {
+  const redis = fakeRedis();
+  await beginWorkerRun({ ...base, redis });
+  const helper = await beginWorkerRun({ ...base, redis });
+  assertEquals(helper.mode, "bounded");
+  assertEquals(redis.store.has(`${LEASE_KEY}:helper-1`), true);
+  await helper.release();
+  assertEquals(redis.store.has(`${LEASE_KEY}:helper-1`), false);
+  assertEquals((await beginWorkerRun({ ...base, redis })).mode, "bounded", "the freed slot is reusable");
+});
+
+// Helper slots are never renewed, so a hung helper frees its slot at TTL rather than for the life
+// of the isolate. Guarding the property that makes that true: no renewal timer is registered.
+Deno.test("a helper registers no renewal timer", async () => {
+  const redis = fakeRedis();
+  const timers = fakeTimers();
+  await beginWorkerRun({ ...base, redis });
+  const before = timers.active;
+  const helper = await beginWorkerRun({
+    ...base,
+    redis,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+  assertEquals(helper.mode, "bounded");
+  assertEquals(timers.active, before);
+});
+
+// Redis refusing to answer must not become "drain anyway" -- that is the crowd the pool prevents.
+Deno.test("a Redis failure while claiming a helper slot idles rather than drains", async () => {
+  const redis = fakeRedis();
+  await beginWorkerRun({ ...base, redis });
+  let calls = 0;
+  const flaky = {
+    ...redis,
+    // deno-lint-ignore no-explicit-any
+    set(key: string, value: string, o?: any) {
+      calls++;
+      if (calls > 1) throw new Error("redis down");
+      return redis.set(key, value, o);
+    }
+  };
+  const run = await beginWorkerRun({ ...base, redis: flaky });
+  assertEquals(run.mode, "idle");
+});
+
 Deno.test("releasing the lease lets the next run acquire it", async () => {
   const redis = fakeRedis();
   const first = await beginWorkerRun({ ...base, redis });
@@ -297,14 +374,46 @@ Deno.test("a re-run attempt is its own scope", () => {
   assertNotEquals(workerLeaseScope(attempt("1")), workerLeaseScope(attempt("2")));
 });
 
+// `preview.yml` passes global.deploy.runId on EVERY helm upgrade. Keying on it would re-key each
+// redeploy, and the chart's rolling update (maxSurge 1, maxUnavailable 0, ~410s drain) would then
+// have the outgoing and incoming pods holding resident leases under different keys.
+Deno.test("a preview keeps one scope across redeploys", () => {
+  const deploy = (runId: string) =>
+    envOf({ ENVIRONMENT: "preview", DEPLOY_PR: "927", DEPLOY_RUN_ID: runId, DEPLOY_RUN_ATTEMPT: "1" });
+  assertEquals(workerLeaseScope(deploy("1")), "preview:pr-927");
+  assertEquals(workerLeaseScope(deploy("1")), workerLeaseScope(deploy("2")));
+});
+
+Deno.test("staging and production ignore run identity too", () => {
+  const deploy = (environment: string, runId: string) => envOf({ ENVIRONMENT: environment, DEPLOY_RUN_ID: runId });
+  assertEquals(workerLeaseScope(deploy("staging", "1")), "staging");
+  assertEquals(workerLeaseScope(deploy("production", "1")), workerLeaseScope(deploy("production", "2")));
+});
+
 Deno.test("WORKER_LEASE_SCOPE overrides everything", () => {
   assertEquals(workerLeaseScope(envOf({ WORKER_LEASE_SCOPE: "manual", ENVIRONMENT: "production" })), "manual");
 });
 
-// Branch-derived values reach these vars, and a key you cannot paste into redis-cli is a key you
-// cannot debug.
+// A key you cannot paste into redis-cli is a key you cannot debug.
 Deno.test("scope segments are sanitized", () => {
-  assertEquals(workerLeaseScope(envOf({ ENVIRONMENT: "feat/some thing" })), "feat-some-thing");
+  const scope = workerLeaseScope(envOf({ ENVIRONMENT: "feat/some thing" }));
+  assertEquals(/^feat-some-thing~[a-z0-9]+$/.test(scope), true, scope);
+});
+
+// Sanitizing must not merge two scopes -- that is the collision this module exists to prevent,
+// reintroduced by the thing meant to make keys readable.
+Deno.test("sanitizing distinct values keeps them distinct", () => {
+  const scopeOf = (environment: string) => workerLeaseScope(envOf({ ENVIRONMENT: environment }));
+  assertNotEquals(scopeOf("feat/foo"), scopeOf("feat-foo"));
+  assertNotEquals(scopeOf("a/b"), scopeOf("a b"));
+  assertNotEquals(scopeOf("a//b"), scopeOf("a/b"));
+});
+
+// The values that actually occur are already key-safe, and those must stay readable.
+Deno.test("already-safe values are left alone", () => {
+  for (const environment of ["dev", "preview", "staging", "production", "e2e-local"]) {
+    assertEquals(workerLeaseScope(envOf({ ENVIRONMENT: environment })), environment);
+  }
 });
 
 Deno.test("blank env values are ignored rather than making an empty segment", () => {
