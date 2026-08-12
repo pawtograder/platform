@@ -198,8 +198,13 @@ export default async function StudentDashboard({
        * Gated on the course actually having a Discord server, because the component polls every 30
        * seconds: mounted unconditionally it would cost two permanently useless requests per minute
        * per open dashboard for every course that does not use Discord, which is most of them.
+       *
+       * Also hidden when an instructor is viewing as a student. PendingInvites scopes itself with
+       * useAuthState(), not with the profile being viewed, so it would show the instructor their own
+       * invite under the student's dashboard and hand them a SyncRolesButton that mutates their own
+       * Discord roles -- neither of which is what "view as" is meant to show.
        */}
-      {discordConfigured && <PendingInvites classId={course_id} />}
+      {discordConfigured && !isViewingAsStudent && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {incompleteSurveysForBanner.length > 0 && (

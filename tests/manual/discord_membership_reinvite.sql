@@ -22,6 +22,7 @@
 --   9. a user who unlinks Discord                                    -> drops out of the instructor read
 --  10. everyone in_guild but a class role missing            -> repair still runs
 --  11. an `admin` enrollment                                 -> never enqueued as a Discord role
+--  12. a caller naming their own id for a class they are not in -> access denied, nothing enqueued
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -242,5 +243,46 @@ SELECT DISTINCT message ->> 'role_type' AS role_type
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1
 ORDER BY 1;
+
+-- ---------------------------------------------------------------------------
+-- 12. Naming your own id does not give you a claim on someone else's class.
+--
+-- The staff check is `authorizeforclassgrader(p_class_id)`, and a non-staff caller is allowed
+-- through when p_user_id is their own id. That alone said nothing about the class: the membership
+-- loop found no enrollment and returned queued 0, but the role-repair phase scans the class
+-- independently of that loop, so any authenticated user who knew a class id could enqueue
+-- create_role against a Discord server they had nothing to do with. Two boundaries now: an active
+-- enrollment is required, and repair is staff-only.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 12. an outsider cannot reach another class (expect: access denied, 0 messages) ==='
+INSERT INTO public.classes (name, slug, discord_server_id, time_zone)
+VALUES ('Reinvite harness target', 'reinvite-harness-target', 'guild-harness-victim', 'America/New_York')
+RETURNING id AS victimclass \gset
+
+INSERT INTO public.profiles (name, class_id, is_private_profile) VALUES ('harness-priv', :victimclass, true) RETURNING id AS vpriv \gset
+INSERT INTO public.profiles (name, class_id, is_private_profile) VALUES ('harness-pub', :victimclass, false) RETURNING id AS vpub \gset
+INSERT INTO public.user_roles (user_id, class_id, role, private_profile_id, public_profile_id)
+VALUES (:'student', :victimclass, 'student', :'vpriv', :'vpub');
+
+DELETE FROM pgmq.q_discord_async_calls WHERE (message ->> 'class_id')::bigint = :victimclass;
+SELECT set_config('test.victim_class', :victimclass::text, true);
+
+-- The instructor of class 1, who holds no role at all in the class created just above.
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
+DO $$
+BEGIN
+  PERFORM public.request_discord_reinvite(current_setting('test.victim_class')::bigint, auth.uid());
+  RAISE NOTICE 'FAIL: an unenrolled caller reached another class';
+EXCEPTION
+  WHEN OTHERS THEN RAISE NOTICE 'PASS: %', SQLERRM;
+END $$;
+RESET ROLE;
+
+\echo '-- create_role enqueued against the other class (expect: 0) --'
+SELECT count(*) AS create_role_msgs
+FROM pgmq.q_discord_async_calls
+WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = current_setting('test.victim_class')::bigint;
 
 ROLLBACK;

@@ -76,8 +76,21 @@ BEGIN
   -- A student may retry their own membership -- that is the self-service half of the
   -- GitHub pattern, where the resend banner is rendered to the student themselves. Acting
   -- on anyone else, or on the whole class, is a staff action.
-  IF NOT v_is_staff AND (p_user_id IS NULL OR p_user_id <> v_caller) THEN
-    RAISE EXCEPTION 'Access denied: must be a grader or instructor for this class';
+  IF NOT v_is_staff THEN
+    IF p_user_id IS NULL OR p_user_id <> v_caller THEN
+      RAISE EXCEPTION 'Access denied: must be a grader or instructor for this class';
+    END IF;
+
+    -- Passing your own id is not on its own a claim on this class. Without this an
+    -- authenticated user could name any class id, satisfy the check above, and reach the
+    -- role-repair phase below -- which scans the class independently of the membership loop
+    -- and would enqueue create_role against a Discord server they have nothing to do with.
+    IF NOT EXISTS (
+      SELECT 1 FROM public.user_roles ur
+      WHERE ur.class_id = p_class_id AND ur.user_id = v_caller AND ur.disabled = false
+    ) THEN
+      RAISE EXCEPTION 'Access denied: no active enrollment in this class';
+    END IF;
   END IF;
 
   SELECT c.discord_server_id INTO v_guild_id
@@ -163,6 +176,16 @@ BEGIN
   -- Restricted to the role types discord_roles accepts. app_role also has 'admin', which
   -- discord_roles_role_type_check rejects, so enqueueing it would have Discord create a role
   -- the insert then refuses to track -- an orphan in the guild, re-created on every retry.
+  -- Staff only, as a second boundary. Repair is class-wide work: it enqueues Discord mutations
+  -- for a whole guild, which is not something a student's retry of their own membership should
+  -- ever reach, whatever the enrollment check above concluded. A student in a class whose roles
+  -- are missing gets queued 0 and repaired 0, which is accurate -- their retry cannot succeed
+  -- until staff restore the roles.
+  IF NOT v_is_staff THEN
+    RETURN QUERY SELECT v_queued, 0;
+    RETURN;
+  END IF;
+
   SELECT COALESCE(array_agg(DISTINCT ur.role::text), ARRAY[]::text[])
   INTO v_missing_roles
   FROM public.user_roles ur

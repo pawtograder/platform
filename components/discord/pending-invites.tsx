@@ -92,11 +92,14 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     return () => clearInterval(interval);
   }, [user, classId, showAll]);
 
-  if (loading) {
-    // Silent for the student view, which is mounted unconditionally on the course dashboard and
-    // resolves to nothing for most students: a placeholder there would flash "Loading Discord
-    // invites..." on every dashboard load, including for courses with no Discord server at all.
-    // The staff listing is a section someone navigated to on purpose, so it says what it is doing.
+  // Only the first fetch, not the 30-second background refresh. `loading` goes true on every poll,
+  // so reacting to it unconditionally tore the whole panel down and rebuilt it twice a minute --
+  // taking the join and copy buttons with it, and cancelling any interaction in progress. While
+  // there are cached invites to show, the refresh is invisible.
+  if (loading && invites.length === 0) {
+    // Silent for the student view, which resolves to nothing for most students: a placeholder there
+    // would flash "Loading Discord invites..." on every dashboard load. The staff listing is a
+    // section someone navigated to on purpose, so it says what it is doing.
     if (!showAll) return null;
     return (
       <Box p={4}>
