@@ -1655,10 +1655,6 @@ export async function runBatchHandler() {
     idleSleepMs: 15000,
     errorSleepMs: 5000
   });
-  if (!run) {
-    console.log("Another email batch handler holds the lease; nothing to do");
-    return;
-  }
   scope.setTag("worker_run_mode", run.mode);
 
   try {
