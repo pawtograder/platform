@@ -348,31 +348,44 @@ async function lookupUserIdByDiscordId(
 }
 
 /**
+ * What became of a terminal failure, which decides how loudly it is reported.
+ *
+ * `recorded` is the membership case this change exists for: the outcome is written to
+ * discord_membership_status and shown on the roster, so an instructor already has it and there is
+ * nothing for an operator to do. Those arrive continuously for as long as a student stays out of a
+ * server -- 30,332 of them buried the dead letter queue -- so they stay a grouped warning.
+ *
+ * `dead-lettered` is everything else: a role that cannot be created, a message that cannot be sent.
+ * Nothing in the product records those, so the DLQ row is the only durable evidence, and its growth
+ * is what PawtograderDiscordDLQGrowing watches.
+ */
+type TerminalDisposition = "recorded" | "dead-lettered";
+
+/**
  * Report a failure that no number of retries can fix.
  *
- * Deliberately not the dead letter queue. A DLQ row is a request for a human to look at one message;
- * these arrive continuously for as long as the underlying condition holds, and 30,332 of them buried
- * the queue they were meant to make legible. One grouped Sentry event per (method, cause) says the
- * same thing without the table growing. The fingerprint is explicit so every occurrence of a cause
- * lands in one issue rather than one per user or guild.
+ * The fingerprint is explicit so every occurrence of a cause lands in one issue rather than one per
+ * user or guild, which is what made the old dead-letter flood unreadable.
  */
 function reportTerminalFailure(
   envelope: DiscordAsyncEnvelope,
   meta: { msg_id: number; enqueued_at: string },
   error: unknown,
   classification: { httpStatus?: number; code?: number; reason?: string },
-  parentScope: Sentry.Scope
+  parentScope: Sentry.Scope,
+  disposition: TerminalDisposition
 ) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   console.log(
-    `[reportTerminalFailure] ${envelope.method} failed terminally (${classification.reason ?? "unclassified"}), not retrying: ${errorMessage}`
+    `[reportTerminalFailure] ${envelope.method} failed terminally (${classification.reason ?? "unclassified"}), not retrying (${disposition}): ${errorMessage}`
   );
 
-  // Cloned, so the terminal fingerprint and warning level cannot leak into any later event captured
-  // on the caller's scope — including the ones from the add_member_role path, which carries on after
+  // Cloned, so the terminal fingerprint and level cannot leak into any later event captured on the
+  // caller's scope — including the ones from the add_member_role path, which carries on after
   // reporting a failed invite.
   const scope = parentScope.clone();
   scope.setTag("terminal", "true");
+  scope.setTag("terminal_disposition", disposition);
   scope.setTag("discord_error_code", String(classification.code ?? "none"));
   scope.setContext("terminal_failure", {
     method: envelope.method,
@@ -383,14 +396,17 @@ function reportTerminalFailure(
     retry_count: envelope.retry_count ?? 0,
     original_msg_id: meta.msg_id,
     enqueued_at: meta.enqueued_at,
-    class_id: envelope.class_id
+    class_id: envelope.class_id,
+    disposition
   });
   scope.setFingerprint([
     "discord-terminal",
     envelope.method,
     String(classification.code ?? classification.httpStatus ?? "unknown")
   ]);
-  scope.setLevel("warning");
+  // A dead-lettered failure is waiting for a person; a recorded one is already in front of the
+  // instructor who can act on it.
+  scope.setLevel(disposition === "dead-lettered" ? "error" : "warning");
 
   Sentry.captureMessage(
     `Discord ${envelope.method} cannot succeed and will not be retried: ${classification.reason ?? errorMessage}`,
@@ -1605,7 +1621,10 @@ export async function processEnvelope(
                   scope
                 );
               }
-              reportTerminalFailure(envelope, meta, inviteError, classification, scope);
+              // "recorded", not dead-lettered: the cannot_invite row written just above puts this in
+              // front of the instructor who can fix it, and these arrive once per unjoined student
+              // per run — the exact volume that made the dead letter queue unreadable.
+              reportTerminalFailure(envelope, meta, inviteError, classification, scope, "recorded");
             }
 
             // Either way this message is done. The user is not in the guild, so there is no role to
@@ -1731,27 +1750,31 @@ export async function processEnvelope(
     console.error(`[processEnvelope] Error processing envelope:`, error);
     console.trace(error);
 
-    // A failure that cannot succeed on a later attempt gets recorded once and archived. Requeueing it
-    // buys five more identical failures and a dead-letter row, and the hourly enqueue brings it
-    // straight back — which is how 30,332 dead-lettered operations accumulated for ~30 users.
+    // A failure that cannot succeed on a later attempt is dead-lettered once, not retried. Requeueing
+    // it buys five more identical failures before the same dead-letter row, and the hourly enqueue
+    // brings it straight back — which is how 30,332 dead-lettered operations accumulated for ~30
+    // users. What fixed that flood was removing the *retries* and recording the membership outcome as
+    // state; the operations that reach here have no such record, so the DLQ row is their only durable
+    // evidence and the growth signal PawtograderDiscordDLQGrowing is built on.
     const classification = classifyDiscordError(error);
     if (classification.terminal) {
-      reportTerminalFailure(envelope, meta, error, classification, scope);
-      const archived = await archiveMessage(adminSupabase, meta.msg_id, scope);
-      if (!archived) {
-        // Archiving is the only thing ending this message: the terminal path deliberately does not
-        // requeue, so a swallowed archive failure would leave the message on the queue to be
-        // redelivered when its visibility timeout expires, fail terminally again, and loop with no
-        // retry ceiling. The DLQ is the backstop the retry path already relies on.
-        const copied = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+      reportTerminalFailure(envelope, meta, error, classification, scope, "dead-lettered");
 
-        // Copying to the DLQ is not by itself an ending: the original is still on the queue, so
-        // without this the message would be redelivered and copied again on every cycle, growing the
-        // very table the fallback was meant to protect. Once the payload is safe in the DLQ, deleting
-        // the original loses nothing, and archive has already proved it cannot do it.
-        if (copied && !(await deleteMessage(adminSupabase, meta.msg_id, scope))) {
-          Sentry.captureMessage(`Terminal message ${meta.msg_id} could not be archived or deleted`, { level: "error" });
+      const copied = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+      if (copied) {
+        // Copying is not by itself an ending: the original is still on the queue, and this path does
+        // not requeue, so nothing else removes it. Left behind it would be redelivered on every
+        // visibility timeout and copied again each time, growing the table it was meant to make
+        // legible. Delete is the fallback once archive has proved it cannot do it — the payload is
+        // already safe in the DLQ, so nothing is lost.
+        if (!(await archiveMessage(adminSupabase, meta.msg_id, scope))) {
+          await deleteMessage(adminSupabase, meta.msg_id, scope);
         }
+      } else {
+        // Deliberately left on the queue. Ending it here would discard the only copy; redelivery
+        // retries the DLQ write, and this recovers by itself once that write succeeds.
+        console.error(`[processEnvelope] Failed to dead-letter terminal message ${meta.msg_id}, leaving unarchived`);
+        Sentry.captureMessage(`Terminal message ${meta.msg_id} could not be dead-lettered`, { level: "error" });
       }
       return false;
     }
