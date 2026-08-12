@@ -12284,6 +12284,20 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      claim_discord_invite: {
+        Args: {
+          p_class_id: number;
+          p_expires_at: string;
+          p_guild_id: string;
+          p_invite_code: string;
+          p_invite_url: string;
+          p_user_id: string;
+        };
+        Returns: {
+          claimed: boolean;
+          winning_invite_url: string;
+        }[];
+      };
       cleanup_expired_realtime_subscriptions: {
         Args: never;
         Returns: undefined;

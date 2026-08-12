@@ -10,8 +10,8 @@
 --
 -- Scenarios:
 --   1. anon cannot execute the SECURITY DEFINER function at all      -> permission denied
---   2. class has no discord_roles row                                -> queued 0, roles_repaired 2
---      (one per enrolled role type), create_role enqueued, student NOT throttled
+--   2. class has no discord_roles row                                -> queued 0, roles_repaired 3
+--      (all three supported types), create_role enqueued, student NOT throttled
 --   3. role exists                                                   -> queued 1, add_member_role
 --      enqueued with the right role_id
 --   4. immediate repeat                                              -> queued 0 (throttled)
@@ -22,10 +22,12 @@
 --   9. a user who unlinks Discord                                    -> drops out of the instructor read
 --  10. everyone in_guild but a class role missing            -> repair still runs
 --  11. an `admin` enrollment                                 -> never enqueued as a Discord role
+--      (repair covers all three supported types, so the sync trigger's COUNT = 3 is reachable)
 --  12. a caller naming their own id for a class they are not in -> access denied, nothing enqueued
 --  13. a linked user with no status row at all              -> included in a class-wide retry
 --  14. relinking a different Discord account                -> the stale observation is cleared
 --  15. an in-flight write from the superseded account       -> discarded, current account still accepted
+--  16. two workers claiming an invite for one user           -> one row, the loser learns the winning URL
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -82,13 +84,13 @@ END $$;
 RESET ROLE;
 
 \echo ''
-\echo '=== 2. no discord_roles row (expect: queued 0, roles_repaired 2) ==='
+\echo '=== 2. no discord_roles row (expect: queued 0, roles_repaired 3) ==='
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- create_role enqueued per enrolled role type (expect: instructor, student) --'
+\echo '-- create_role enqueued for all three supported types (expect: grader, instructor, student) --'
 SELECT DISTINCT message ->> 'role_type' AS role_type
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role'
@@ -169,14 +171,14 @@ UPDATE public.discord_membership_status SET last_retry_requested_at = NULL WHERE
 
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
-\echo '-- press 1 (expect: roles_repaired 2) --'
+\echo '-- press 1 (expect: roles_repaired 3) --'
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 \echo '-- presses 2 and 3 (expect: roles_repaired 0) --'
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- create_role messages on the queue (expect: 2, one per role type) --'
+\echo '-- create_role messages on the queue (expect: 3, one per supported role type) --'
 SELECT count(*) AS create_role_msgs
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1;
@@ -237,11 +239,11 @@ SELECT DISTINCT role FROM public.user_roles WHERE class_id = 1 AND disabled = fa
 
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', json_build_object('sub', :'instructor', 'role', 'authenticated')::text, true) \gset
-\echo '-- expect: queued 0 (nobody is stuck), roles_repaired 2 (not 3 -- admin excluded) --'
+\echo '-- expect: queued 0 (nobody is stuck), roles_repaired 3 (the supported types; admin is not one) --'
 SELECT * FROM public.request_discord_reinvite(1, NULL);
 RESET ROLE;
 
-\echo '-- create_role role types enqueued (expect: instructor, student; never admin) --'
+\echo '-- create_role role types enqueued (expect: grader, instructor, student; never admin) --'
 SELECT DISTINCT message ->> 'role_type' AS role_type
 FROM pgmq.q_discord_async_calls
 WHERE message ->> 'method' = 'create_role' AND (message ->> 'class_id')::bigint = 1
@@ -317,6 +319,36 @@ SELECT count(*) AS rows_after_stale_write FROM public.discord_membership_status 
 SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'not_joined', 'acct-B');
 SELECT count(*) AS rows_after_current_write, max(observed_discord_id) AS observed
 FROM public.discord_membership_status WHERE user_id = :'student';
+
+-- ---------------------------------------------------------------------------
+-- 16. One invite slot per (user, class, guild), claimed atomically.
+--
+-- Every invite is created with `unique: true`, so two workers reaching the same absent user produce
+-- two live Discord invites and one row. processBatch runs four envelopes in parallel and an hourly
+-- batch_role_sync can collide with an add_member_role envelope, so read-then-write cannot prevent
+-- it: both saw no invite, both created one, and the later upsert replaced the earlier URL while that
+-- invite stayed live in Discord. claim_discord_invite() decides the winner in one statement and
+-- hands the loser the stored URL so it can revoke what it made.
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo '=== 16. the invite claim is atomic and reports the winner ==='
+DELETE FROM public.discord_invites WHERE class_id = 1;
+
+\echo '-- first claim wins (expect: https://A, t) --'
+SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeA', 'https://A', now() + INTERVAL '7 days');
+
+\echo '-- a second claim while A is live loses, and is told A (expect: https://A, f) --'
+SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeB', 'https://B', now() + INTERVAL '7 days');
+
+\echo '-- an expired invite is replaced (expect: https://C, t) --'
+UPDATE public.discord_invites SET expires_at = now() - INTERVAL '1 day'
+WHERE user_id = :'student' AND class_id = 1 AND guild_id = 'guild-test-1';
+SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeC', 'https://C', now() + INTERVAL '7 days');
+
+\echo '-- a used invite is replaced too (expect: https://D, t) --'
+UPDATE public.discord_invites SET used = true
+WHERE user_id = :'student' AND class_id = 1 AND guild_id = 'guild-test-1';
+SELECT * FROM public.claim_discord_invite(:'student', 1, 'guild-test-1', 'codeD', 'https://D', now() + INTERVAL '7 days');
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.

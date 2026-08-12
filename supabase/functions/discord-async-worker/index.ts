@@ -291,6 +291,78 @@ type DiscordMembershipState = Database["public"]["Enums"]["discord_membership_st
 const STATUS_WRITE_ATTEMPTS = 3;
 
 /**
+ * Store a freshly created Discord invite, and return the URL the student will actually be given.
+ *
+ * Retried in place and compensated on failure, because by this point the invite exists in Discord
+ * and every alternative is worse. Rethrowing sends the whole envelope back through the retry path,
+ * which calls createGuildInvite again -- and `unique: true` means a new invite every time, so a
+ * database hiccup left one live, unreachable invite per attempt. Swallowing left the student with no
+ * link at all. Retrying the write repeats nothing external; revoking is what keeps a write that
+ * genuinely cannot succeed from leaving anything behind.
+ *
+ * A lost race is not a failure: another worker stored a usable invite first, so this one revokes
+ * what it made and hands back the stored URL. Both workers then describe the same invite.
+ */
+async function claimInvite(
+  adminSupabase: SupabaseClient<Database>,
+  invite: { userId: string; classId: number; guildId: string; code: string; url: string; expiresAt: Date },
+  scope: Sentry.Scope
+): Promise<string> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= STATUS_WRITE_ATTEMPTS; attempt++) {
+    const { data, error } = await adminSupabase.rpc("claim_discord_invite", {
+      p_user_id: invite.userId,
+      p_class_id: invite.classId,
+      p_guild_id: invite.guildId,
+      p_invite_code: invite.code,
+      p_invite_url: invite.url,
+      p_expires_at: invite.expiresAt.toISOString()
+    });
+
+    if (!error) {
+      const row = data?.[0];
+      if (row?.claimed === false && row.winning_invite_url && row.winning_invite_url !== invite.url) {
+        console.log(`[claimInvite] Lost the invite race for user ${invite.userId}, revoking the surplus invite`);
+        await revokeInvite(invite.code, scope);
+        return row.winning_invite_url;
+      }
+      return row?.winning_invite_url ?? invite.url;
+    }
+
+    lastError = error;
+    if (attempt < STATUS_WRITE_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+
+  // Out of attempts. The invite is real and nothing can reach it, so revoke it before giving up --
+  // otherwise it sits in the guild for seven days, in no table and no UI.
+  console.error(`[claimInvite] Could not store invite for user ${invite.userId}:`, lastError);
+  scope.setContext("invite_storage_error", {
+    user_id: invite.userId,
+    class_id: invite.classId,
+    error_message: lastError instanceof Error ? lastError.message : String(lastError)
+  });
+  await revokeInvite(invite.code, scope);
+  throw lastError;
+}
+
+/** Best-effort revoke. Reported rather than thrown: the caller is already handling a failure. */
+async function revokeInvite(code: string, scope: Sentry.Scope): Promise<void> {
+  try {
+    await discord.deleteInvite(code, scope);
+  } catch (e) {
+    console.error(`[revokeInvite] Failed to revoke invite ${code}:`, e);
+    scope.setContext("invite_revoke_failed", {
+      invite_code: code,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureMessage(`Discord invite ${code} left live and untracked`, { level: "error" });
+  }
+}
+
+/**
  * Record where a user stands with a class's Discord server.
  *
  * This is what replaces retrying: a user who has not joined the server, or a bot that cannot invite
@@ -687,29 +759,18 @@ async function ensureInviteForUser(
     const invite = await discord.createGuildInvite(record.discord_server_id, 604800, 5, scope); // 7 days, 5 uses
     const expiresAt = new Date(Date.now() + 604800 * 1000);
 
-    const { error: inviteError } = await adminSupabase.from("discord_invites").upsert(
+    const claimedUrl = await claimInvite(
+      adminSupabase,
       {
-        user_id: record.user_id,
-        class_id: record.class_id,
-        guild_id: record.discord_server_id,
-        invite_code: invite.code,
-        invite_url: invite.url,
-        expires_at: expiresAt.toISOString(),
-        used: false
+        userId: record.user_id,
+        classId: record.class_id,
+        guildId: record.discord_server_id,
+        code: invite.code,
+        url: invite.url,
+        expiresAt
       },
-      { onConflict: "user_id,class_id,guild_id" }
+      scope
     );
-
-    if (inviteError) {
-      // Rethrown, matching the envelope path: an invite nobody can find is no invite at all, since
-      // PendingInvites reads discord_invites and the student never sees a URL without the row.
-      // Swallowed, this run moved on and the next one found no stored invite, minted another, and
-      // failed to store that too -- one orphan Discord invite per affected student per hour, up to
-      // 168 alive at once given the 7-day expiry, with the roster still reading "not checked yet".
-      console.error(`[ensureInviteForUser] Failed to store invite:`, inviteError);
-      scope.setContext("invite_storage_error", { error_message: inviteError.message });
-      throw inviteError;
-    }
 
     await recordMembershipStatus(
       adminSupabase,
@@ -719,7 +780,7 @@ async function ensureInviteForUser(
         observedDiscordId: record.discord_id,
         guildId: record.discord_server_id,
         state: "not_joined",
-        detail: `Invite ${invite.url} is waiting to be used`
+        detail: `Invite ${claimedUrl} is waiting to be used`
       },
       scope
     );
@@ -1808,33 +1869,22 @@ export async function processEnvelope(
               if (envelope.class_id && platformUserId) {
                 const expiresAt = new Date(Date.now() + 604800 * 1000); // 7 days
 
-                const { error: storeError } = await adminSupabase.from("discord_invites").upsert(
+                // Same claim the batch path uses. This handler and an hourly batch_role_sync can
+                // reach the same absent user at once -- processBatch runs four envelopes in parallel
+                // -- and both would otherwise create an invite and race to store it, leaving the
+                // loser's live in Discord and pointing the student at whichever URL landed last.
+                const claimedUrl = await claimInvite(
+                  adminSupabase,
                   {
-                    user_id: platformUserId,
-                    class_id: envelope.class_id,
-                    guild_id: args.guild_id,
-                    invite_code: invite.code,
-                    invite_url: invite.url,
-                    expires_at: expiresAt.toISOString(),
-                    used: false
+                    userId: platformUserId,
+                    classId: envelope.class_id,
+                    guildId: args.guild_id,
+                    code: invite.code,
+                    url: invite.url,
+                    expiresAt
                   },
-                  {
-                    onConflict: "user_id,class_id,guild_id"
-                  }
+                  scope
                 );
-
-                if (storeError) {
-                  // An invite nobody can find is no invite at all: PendingInvites reads
-                  // discord_invites, so without the row the student never sees the URL. Rethrown so
-                  // the ordinary retry path gets another chance to persist it, rather than recording
-                  // a status that claims an invite is waiting when none is reachable.
-                  console.error(`[processEnvelope] Failed to store invite in database:`, storeError);
-                  scope.setContext("invite_storage_error", {
-                    error_message: storeError.message,
-                    invite_code: invite.code
-                  });
-                  throw storeError;
-                }
 
                 console.log(
                   `[processEnvelope] Stored invite in database: user_id=${platformUserId}, class_id=${envelope.class_id}`
@@ -1848,7 +1898,7 @@ export async function processEnvelope(
                     observedDiscordId: args.user_id,
                     guildId: args.guild_id,
                     state: "not_joined",
-                    detail: `Invite ${invite.url} is waiting to be used`
+                    detail: `Invite ${claimedUrl} is waiting to be used`
                   },
                   scope
                 );

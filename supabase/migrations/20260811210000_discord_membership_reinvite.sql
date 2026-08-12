@@ -201,16 +201,20 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT COALESCE(array_agg(DISTINCT ur.role::text), ARRAY[]::text[])
+  --
+  -- All three supported types, not just the ones currently enrolled.
+  -- trigger_sync_existing_users_on_role_creation only calls sync_existing_users_after_roles_created
+  -- when COUNT(DISTINCT role_type) = 3, so repairing a class with no grader would create student and
+  -- instructor, never reach three, and never fire the sync that assigns roles to the users already
+  -- in the guild. Creating an unused role costs nothing -- the class-connect flow creates all three
+  -- unconditionally -- and it is what makes the repair actually finish.
+  SELECT COALESCE(array_agg(rt.role_type), ARRAY[]::text[])
   INTO v_missing_roles
-  FROM public.user_roles ur
-  WHERE ur.class_id = p_class_id
-    AND ur.disabled = false
-    AND ur.role::text IN ('student', 'grader', 'instructor')
-    AND NOT EXISTS (
-      SELECT 1 FROM public.discord_roles dr
-      WHERE dr.class_id = p_class_id AND dr.role_type = ur.role::text
-    );
+  FROM unnest(ARRAY['student', 'grader', 'instructor']) AS rt(role_type)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.discord_roles dr
+    WHERE dr.class_id = p_class_id AND dr.role_type = rt.role_type
+  );
 
   -- Re-create them. The worker writes the discord_roles row when it succeeds, so the next
   -- press of the button finds the role and queues the users skipped above.
@@ -284,6 +288,74 @@ AFTER UPDATE OF discord_id ON public.users
 FOR EACH ROW
 WHEN (NEW.discord_id IS DISTINCT FROM OLD.discord_id)
 EXECUTE FUNCTION public.clear_discord_membership_status_on_identity_change();
+
+-- ============================================================================
+-- 3b. Claim the one invite slot per (user, class, guild)
+-- ============================================================================
+
+-- Store a freshly created Discord invite, but only if it is still needed, and report which invite
+-- the student will actually be given.
+--
+-- discord_invites holds one row per (user_id, class_id, guild_id) and every invite is created with
+-- `unique: true`, so two workers creating invites for the same user produce two live Discord invites
+-- and one row. Read-then-write cannot prevent that: processBatch runs up to four envelopes in
+-- parallel, an hourly batch_role_sync and an add_member_role envelope can reach the same absent user
+-- at once, and the retry RPC's advisory lock covers the enqueue, not the worker. Both saw no
+-- outstanding invite, both created one, and the later upsert replaced the earlier URL -- leaving the
+-- first invite live in Discord with nothing pointing at it, and the student holding a link that had
+-- been quietly swapped.
+--
+-- The conditional upsert is why this is a function rather than a PostgREST call: the row must be
+-- replaced when the invite it names is used or expired, and left alone when it is still good, which
+-- `.upsert()` cannot express. Returning the winning URL lets a caller that lost revoke the invite it
+-- just created and hand the student the one that was already stored.
+CREATE OR REPLACE FUNCTION public.claim_discord_invite(
+  p_user_id uuid,
+  p_class_id bigint,
+  p_guild_id text,
+  p_invite_code text,
+  p_invite_url text,
+  p_expires_at timestamptz
+)
+RETURNS TABLE (winning_invite_url text, claimed boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_url text;
+BEGIN
+  INSERT INTO public.discord_invites AS di (user_id, class_id, guild_id, invite_code, invite_url, expires_at, used)
+  VALUES (p_user_id, p_class_id, p_guild_id, p_invite_code, p_invite_url, p_expires_at, false)
+  ON CONFLICT (user_id, class_id, guild_id) DO UPDATE
+  SET invite_code = excluded.invite_code,
+      invite_url = excluded.invite_url,
+      expires_at = excluded.expires_at,
+      used = false
+  -- Only when what is already there cannot be used. A live invite belongs to whichever worker got
+  -- here first and must not be swapped out from under the student.
+  WHERE di.used = true OR di.expires_at <= now()
+  RETURNING di.invite_url INTO v_url;
+
+  IF v_url IS NOT NULL THEN
+    RETURN QUERY SELECT v_url, true;
+    RETURN;
+  END IF;
+
+  -- The DO UPDATE was filtered out, so a usable invite is already stored. Hand its URL back.
+  SELECT di.invite_url INTO v_url
+  FROM public.discord_invites di
+  WHERE di.user_id = p_user_id AND di.class_id = p_class_id AND di.guild_id = p_guild_id;
+
+  RETURN QUERY SELECT v_url, false;
+END;
+$$;
+
+COMMENT ON FUNCTION public.claim_discord_invite(uuid, bigint, text, text, text, timestamptz) IS
+  'Atomically store a new Discord invite unless a usable one is already recorded. Returns the URL the student will be given and whether this caller''s invite won, so a loser can revoke the invite it created rather than leaving it live and untracked.';
+
+REVOKE ALL ON FUNCTION public.claim_discord_invite(uuid, bigint, text, text, text, timestamptz) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_discord_invite(uuid, bigint, text, text, text, timestamptz) TO service_role;
 
 -- ============================================================================
 -- 4. Refuse a write from a Discord account that is no longer linked

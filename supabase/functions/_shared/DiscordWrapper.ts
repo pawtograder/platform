@@ -395,6 +395,18 @@ export async function getGuildMember(
 }
 
 /**
+ * Revoke an invite by its code.
+ *
+ * The compensating half of createGuildInvite. Every invite is created with `unique: true`, so an
+ * invite that could not be stored is unreachable by anyone -- it is in no table and no UI -- while
+ * remaining live in the guild for its full seven days. Deleting it is what keeps a failed or
+ * superseded creation from accumulating.
+ */
+export async function deleteInvite(inviteCode: string, scope?: Sentry.Scope): Promise<void> {
+  await discordRequest("DELETE", `/invites/${inviteCode}`, undefined, scope);
+}
+
+/**
  * Create an invite link for a guild
  */
 export async function createGuildInvite(
