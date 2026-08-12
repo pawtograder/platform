@@ -2133,6 +2133,7 @@ export type Database = {
           last_observed_at: string;
           last_retry_requested_at: string | null;
           observed_count: number;
+          observed_discord_id: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2146,6 +2147,7 @@ export type Database = {
           last_observed_at?: string;
           last_retry_requested_at?: string | null;
           observed_count?: number;
+          observed_discord_id?: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2159,6 +2161,7 @@ export type Database = {
           last_observed_at?: string;
           last_retry_requested_at?: string | null;
           observed_count?: number;
+          observed_discord_id?: string | null;
           state?: Database["public"]["Enums"]["discord_membership_state"];
           user_id?: string;
         };
@@ -13588,6 +13591,7 @@ export type Database = {
           p_detail?: string;
           p_discord_error_code?: number;
           p_guild_id: string;
+          p_observed_discord_id?: string;
           p_state: Database["public"]["Enums"]["discord_membership_state"];
           p_user_id: string;
         };

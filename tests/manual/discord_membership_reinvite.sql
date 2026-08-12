@@ -25,6 +25,7 @@
 --  12. a caller naming their own id for a class they are not in -> access denied, nothing enqueued
 --  13. a linked user with no status row at all              -> included in a class-wide retry
 --  14. relinking a different Discord account                -> the stale observation is cleared
+--  15. an in-flight write from the superseded account       -> discarded, current account still accepted
 --
 -- Scenario 2 is the one worth keeping: enqueue_discord_role_sync() returns silently when the class
 -- has no discord_roles row for the user's role type, so a version of this function that counted every
@@ -304,6 +305,18 @@ UPDATE public.users SET discord_id = 'acct-B' WHERE user_id = :'student';
 
 \echo '-- after unlink and relink of a different account (expect: 0) --'
 SELECT count(*) AS rows_after_relink FROM public.discord_membership_status WHERE user_id = :'student';
+
+-- 15. And the ordering window the trigger alone does not close: a worker that read the old account
+-- before the relink, and records its result afterwards, would recreate a row describing an account
+-- nobody uses -- an in_guild there excludes the new account from class-wide retries indefinitely.
+\echo '-- an in-flight write from the superseded account is discarded (expect: 0) --'
+SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'in_guild', NULL, NULL, 'acct-A');
+SELECT count(*) AS rows_after_stale_write FROM public.discord_membership_status WHERE user_id = :'student';
+
+\echo '-- while a write observed against the current account is accepted (expect: 1, acct-B) --'
+SELECT public.record_discord_membership_status(1, :'student', 'guild-test-1', 'not_joined', NULL, NULL, 'acct-B');
+SELECT count(*) AS rows_after_current_write, max(observed_discord_id) AS observed
+FROM public.discord_membership_status WHERE user_id = :'student';
 
 -- ---------------------------------------------------------------------------
 -- 12. Naming your own id does not give you a claim on someone else's class.

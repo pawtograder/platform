@@ -286,7 +286,82 @@ WHEN (NEW.discord_id IS DISTINCT FROM OLD.discord_id)
 EXECUTE FUNCTION public.clear_discord_membership_status_on_identity_change();
 
 -- ============================================================================
--- 4. Surface the retry timestamp to the roster
+-- 4. Refuse a write from a Discord account that is no longer linked
+-- ============================================================================
+
+-- The trigger above closes the case where the account changes and nothing rewrites the row. It does
+-- not close the ordering window: a worker reads discord_id, does its Discord call, and by the time
+-- it records the outcome the user may have relinked. The trigger has already deleted the old rows,
+-- so the in-flight write recreates one describing an account nobody uses -- an `in_guild` for the
+-- old account then excludes the new one from class-wide retries, indefinitely for an inactive class.
+--
+-- The write now carries the account it observed and is dropped unless that is still the linked one.
+-- Nullable, and skipped when null, so a caller that does not know the account keeps the old
+-- behaviour rather than having its write silently discarded.
+ALTER TABLE public.discord_membership_status
+  ADD COLUMN IF NOT EXISTS observed_discord_id text;
+
+COMMENT ON COLUMN public.discord_membership_status.observed_discord_id IS
+  'The Discord account this observation was made against. Compared with users.discord_id on write so a result captured before a relink cannot describe the account that replaced it.';
+
+CREATE OR REPLACE FUNCTION public.record_discord_membership_status(
+  p_class_id bigint,
+  p_user_id uuid,
+  p_guild_id text,
+  p_state public.discord_membership_state,
+  p_discord_error_code integer DEFAULT NULL,
+  p_detail text DEFAULT NULL,
+  p_observed_discord_id text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_current_discord_id text;
+BEGIN
+  IF p_observed_discord_id IS NOT NULL THEN
+    SELECT u.discord_id INTO v_current_discord_id
+    FROM public.users u
+    WHERE u.user_id = p_user_id;
+
+    -- Superseded. Discarded rather than raised: the caller has already completed its Discord work
+    -- and cannot undo it, and the account it was about is no longer the user's, so there is nothing
+    -- to record and nothing for it to do about the failure.
+    IF v_current_discord_id IS DISTINCT FROM p_observed_discord_id THEN
+      RAISE NOTICE 'Discarding Discord membership status for user % : observed account % is no longer linked',
+        p_user_id, p_observed_discord_id;
+      RETURN;
+    END IF;
+  END IF;
+
+  INSERT INTO public.discord_membership_status AS dms (
+    class_id, user_id, guild_id, state, discord_error_code, detail, observed_discord_id
+  )
+  VALUES (p_class_id, p_user_id, p_guild_id, p_state, p_discord_error_code, p_detail, p_observed_discord_id)
+  ON CONFLICT (class_id, user_id, guild_id) DO UPDATE
+  SET state = excluded.state,
+      discord_error_code = excluded.discord_error_code,
+      detail = excluded.detail,
+      observed_discord_id = excluded.observed_discord_id,
+      last_observed_at = now(),
+      -- Reset the count when the state changes so observed_count always describes
+      -- the current state rather than the history of the row.
+      observed_count = CASE WHEN dms.state = excluded.state THEN dms.observed_count + 1 ELSE 1 END,
+      first_observed_at = CASE WHEN dms.state = excluded.state THEN dms.first_observed_at ELSE now() END;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text, text) TO service_role;
+
+-- The six-argument form is superseded. Dropped rather than left in place, so a caller that has not
+-- been updated fails loudly instead of silently writing rows with no account recorded against them.
+DROP FUNCTION IF EXISTS public.record_discord_membership_status(bigint, uuid, text, public.discord_membership_state, integer, text);
+
+-- ============================================================================
+-- 5. Surface the retry timestamp to the roster
 -- ============================================================================
 
 -- Unchanged except for the added last_retry_requested_at column, which the UI uses to

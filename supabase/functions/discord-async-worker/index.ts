@@ -305,6 +305,15 @@ async function recordMembershipStatus(
     state: DiscordMembershipState;
     discordErrorCode?: number;
     detail?: string;
+    /**
+     * The Discord account this observation was made against.
+     *
+     * The RPC discards the write when it no longer matches users.discord_id. A worker reads the
+     * account, makes its Discord call, and by the time it records the result the user may have
+     * relinked -- without this, the outcome for the old account would be written over the new one's
+     * clean slate and an in_guild would exclude them from retries indefinitely.
+     */
+    observedDiscordId?: string;
   },
   scope: Sentry.Scope
 ): Promise<void> {
@@ -322,7 +331,8 @@ async function recordMembershipStatus(
         p_guild_id: args.guildId,
         p_state: args.state,
         p_discord_error_code: args.discordErrorCode,
-        p_detail: args.detail
+        p_detail: args.detail,
+        p_observed_discord_id: args.observedDiscordId
       });
 
       if (!error) {
@@ -657,6 +667,7 @@ async function ensureInviteForUser(
       {
         classId: record.class_id,
         userId: record.user_id,
+        observedDiscordId: record.discord_id,
         guildId: record.discord_server_id,
         state: "cannot_invite",
         discordErrorCode: knownFailure.code,
@@ -705,6 +716,7 @@ async function ensureInviteForUser(
       {
         classId: record.class_id,
         userId: record.user_id,
+        observedDiscordId: record.discord_id,
         guildId: record.discord_server_id,
         state: "not_joined",
         detail: `Invite ${invite.url} is waiting to be used`
@@ -733,6 +745,7 @@ async function ensureInviteForUser(
         {
           classId: record.class_id,
           userId: record.user_id,
+          observedDiscordId: record.discord_id,
           guildId: record.discord_server_id,
           state: "cannot_invite",
           discordErrorCode: classification.code,
@@ -878,6 +891,7 @@ async function processBatchRoleSync(
         {
           classId: record.class_id,
           userId: record.user_id,
+          observedDiscordId: record.discord_id,
           guildId: record.discord_server_id,
           state: "cannot_invite",
           discordErrorCode: DISCORD_UNKNOWN_GUILD,
@@ -959,6 +973,7 @@ async function processBatchRoleSync(
           {
             classId: record.class_id,
             userId: record.user_id,
+            observedDiscordId: record.discord_id,
             guildId: record.discord_server_id,
             state: "in_guild"
           },
@@ -974,7 +989,7 @@ async function processBatchRoleSync(
     // The user is not in the guild, which no role operation can fix — adding a role to a non-member
     // returns 404 however many times it is attempted. So nothing is enqueued here. The membership
     // check above runs again next hour, and the user picks up their roles once they join.
-    const { data: existingInvite } = await adminSupabase
+    const { data: existingInvite, error: existingInviteError } = await adminSupabase
       .from("discord_invites")
       .select("id")
       .eq("user_id", record.user_id)
@@ -984,6 +999,15 @@ async function processBatchRoleSync(
       .gt("expires_at", new Date().toISOString())
       .maybeSingle();
 
+    // A failed read is not the same as no invite, and reading only `data` conflated them. On a
+    // schema-cache miss or a transient database error the worker would mint a fresh Discord invite
+    // and overwrite the single tracking row, leaving the previous invite live in Discord with
+    // nothing pointing at it -- while the student's link changed underneath them for no reason.
+    // Thrown before the external mutation, so the batch requeues and re-reads.
+    if (existingInviteError) {
+      throw existingInviteError;
+    }
+
     if (existingInvite) {
       summary.not_in_guild++;
       await recordMembershipStatus(
@@ -991,6 +1015,7 @@ async function processBatchRoleSync(
         {
           classId: record.class_id,
           userId: record.user_id,
+          observedDiscordId: record.discord_id,
           guildId: record.discord_server_id,
           state: "not_joined",
           detail: "An unused invite is already outstanding"
@@ -1622,9 +1647,15 @@ export async function processEnvelope(
                 guild_id: args.guild_id,
                 error_message: raceCleanupError instanceof Error ? raceCleanupError.message : String(raceCleanupError)
               });
-              Sentry.captureMessage(`Surplus Discord role ${result.id} left in guild ${args.guild_id}`, {
-                level: "error"
-              });
+
+              // Same treatment as a failed rollback below, and for the same reason: retrying would
+              // create a third role, but archiving as a success leaves a surplus one in the guild
+              // with only a Sentry event behind it. Dead-lettered so there is a durable row naming
+              // the role an operator has to remove.
+              throw new NonRetriableWorkerError(
+                `Surplus Discord role ${result.id} could not be removed from guild ${args.guild_id} after losing a create_role race`,
+                { cause: raceCleanupError }
+              );
             }
             return true;
           }
@@ -1774,6 +1805,7 @@ export async function processEnvelope(
                   {
                     classId: envelope.class_id,
                     userId: platformUserId,
+                    observedDiscordId: args.user_id,
                     guildId: args.guild_id,
                     state: "not_joined",
                     detail: `Invite ${invite.url} is waiting to be used`
@@ -1802,6 +1834,7 @@ export async function processEnvelope(
                   {
                     classId: envelope.class_id,
                     userId: platformUserId,
+                    observedDiscordId: args.user_id,
                     guildId: args.guild_id,
                     state: "cannot_invite",
                     discordErrorCode: classification.code,
@@ -1852,6 +1885,7 @@ export async function processEnvelope(
                   {
                     classId: envelope.class_id,
                     userId: platformUserId,
+                    observedDiscordId: args.user_id,
                     guildId: args.guild_id,
                     state: "in_guild"
                   },

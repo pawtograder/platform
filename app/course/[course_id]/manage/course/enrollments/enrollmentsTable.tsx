@@ -88,7 +88,7 @@ type InvitationRow = Database["public"]["Tables"]["invitations"]["Row"] & { type
 // Combined type for table rows
 type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollment" }) | InvitationRow;
 
-type DiscordStatusLabel = "In server" | "Not in server" | "Cannot invite" | "Not linked" | "Not checked yet";
+type DiscordStatusLabel = "In server" | "Not in server" | "Cannot invite" | "Not linked" | "Not checked yet" | "N/A";
 
 const DISCORD_STATUS_PRESENTATION: Record<DiscordStatusLabel, { color: string; icon: ElementType }> = {
   "In server": { color: "green.600", icon: CheckIcon },
@@ -97,14 +97,16 @@ const DISCORD_STATUS_PRESENTATION: Record<DiscordStatusLabel, { color: string; i
   // Ordinary and self-resolving: the student has an invite and has not used it yet.
   "Not in server": { color: "orange.600", icon: FaClock },
   "Not linked": { color: "gray.fg", icon: FaTimes },
-  "Not checked yet": { color: "gray.400", icon: FaQuestionCircle }
+  "Not checked yet": { color: "gray.400", icon: FaQuestionCircle },
+  // Rows Discord membership does not apply to: pending invitations, and dropped enrollments, which
+  // the status RPC excludes and no sync will ever revisit.
+  "N/A": { color: "gray.400", icon: FaQuestionCircle }
 };
 
 // Derived from the presentation map so the filter can never drift from the labels the column renders.
 // "N/A" is the value the column produces for a pending invitation row.
 const DISCORD_STATUS_FILTER_OPTIONS = [
-  ...Object.keys(DISCORD_STATUS_PRESENTATION).map((label) => ({ label, value: label })),
-  { label: "N/A", value: "N/A" }
+  ...Object.keys(DISCORD_STATUS_PRESENTATION).map((label) => ({ label, value: label }))
 ];
 
 /**
@@ -119,6 +121,14 @@ function discordStatusLabel(
   row: UserRoleWithPrivateProfileAndUser,
   stateByUser: Map<string, DiscordMembershipState>
 ): DiscordStatusLabel {
+  // Checked before anything else. The table deliberately keeps disabled enrollments and labels them
+  // Dropped, but get_discord_membership_status_for_class returns only active ones, so a dropped
+  // student with Discord still linked fell through to "Not checked yet" -- and stayed there, because
+  // both the hourly candidate query and the manual retry skip disabled roles. That reads as
+  // something an instructor should chase for somebody who has left the course.
+  if (row.disabled) {
+    return "N/A";
+  }
   if (!row.users?.discord_id) {
     return "Not linked";
   }
