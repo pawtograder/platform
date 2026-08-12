@@ -154,8 +154,6 @@ export default function DiscordMembershipStatusAlerts({
     );
   }
 
-  const stuck = cannotInvite.length + notJoined.length;
-
   return (
     <Stack gap={3} mb={4}>
       {groupByCause(cannotInvite).map(({ key, rows }) => (
@@ -191,7 +189,12 @@ export default function DiscordMembershipStatusAlerts({
       {/*
        * One button rather than one per alert, because the retry is not scoped: it re-checks everyone
        * in the class who is not recorded as being in the server. A button inside the cannot_invite
-       * alert reading "retry these 3" would queue all twelve, so the label states the real scope.
+       * alert reading "retry these 3" would queue all twelve.
+       *
+       * The label names no count at all. It cannot: the RPC also queues every linked student with no
+       * status row, and those are invisible here -- the hook only returns rows that exist. A count
+       * drawn from the alerts above would understate the work for exactly the class where the sync
+       * has never run, which is the case the button matters most in.
        *
        * This is the only thing that clears a cannot_invite row. The hourly sync is what recorded it,
        * and for a class past its end date that sync no longer runs -- so without this an instructor
@@ -203,7 +206,7 @@ export default function DiscordMembershipStatusAlerts({
           <DiscordReinviteButton
             classId={classId}
             rows={[...cannotInvite, ...notJoined]}
-            label={`Retry Discord for ${stuck} ${stuck === 1 ? "student" : "students"}`}
+            label="Retry Discord for this course"
             onQueued={refresh}
           />
         </Box>

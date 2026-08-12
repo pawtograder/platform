@@ -1746,6 +1746,15 @@ export async function processEnvelope(
               await discord.deleteRole({ guild_id: args.guild_id, role_id: result.id }, scope);
               console.log(`[processEnvelope] Rolled back untracked Discord role ${result.id}`);
             } catch (rollbackError) {
+              // Already gone is the state the rollback was trying to reach, so it succeeded. Treating
+              // a 404 as a failed compensation dead-lettered a repair that had left nothing behind --
+              // no role and no tracking row -- and denied the tracking error the ordinary retry that
+              // would have recreated both.
+              if (isResourceGone(rollbackError)) {
+                console.log(`[processEnvelope] Role ${result.id} was already gone; rollback complete`);
+                throw trackingError;
+              }
+
               console.error(`[processEnvelope] Could not roll back role ${result.id}:`, rollbackError);
               scope.setContext("role_rollback_failed", {
                 discord_role_id: result.id,
@@ -1770,9 +1779,28 @@ export async function processEnvelope(
           // Outside the insert's transaction, so this sees the sibling create_role workers the
           // trigger on discord_roles could not. Without it a class whose three roles are created
           // concurrently ends with all three rows and nobody assigned to them.
-          const { data: synced, error: syncError } = await adminSupabase.rpc("sync_discord_users_if_roles_complete", {
-            p_class_id: envelope.class_id
-          });
+          // Retried in place. Only the last worker to commit sees all three roles, so this is that
+          // class's one chance to fire the sync: no later insert repeats the check, an inactive class
+          // has no hourly batch behind it, and a manual retry skips users already recorded in_guild.
+          // A transient failure here would leave the roles created and nobody assigned to them,
+          // permanently. Database-only, so retrying repeats nothing external.
+          let synced = false;
+          let syncError: { message: string } | null = null;
+          for (let attempt = 1; attempt <= STATUS_WRITE_ATTEMPTS; attempt++) {
+            const { data, error } = await adminSupabase.rpc("sync_discord_users_if_roles_complete", {
+              p_class_id: envelope.class_id
+            });
+            if (!error) {
+              synced = data === true;
+              syncError = null;
+              break;
+            }
+            syncError = error;
+            if (attempt < STATUS_WRITE_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+            }
+          }
+
           if (syncError) {
             // Not fatal to this envelope: the role itself is created and tracked. Reported so a class
             // that ends up with roles and no assignments is visible rather than merely quiet.
