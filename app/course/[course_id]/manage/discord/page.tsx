@@ -130,7 +130,7 @@ export default function DiscordManagementPage() {
       </Box>
 
       {/* Students who are not in the server, and whether that needs an admin */}
-      {isServerConfigured && <DiscordMembershipStatusAlerts classId={course.id} />}
+      {isServerConfigured && <DiscordMembershipStatusAlerts classId={course.id} alwaysOfferRetry />}
 
       {/* Link Discord Account */}
       <Box>

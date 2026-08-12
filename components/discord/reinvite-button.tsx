@@ -13,8 +13,15 @@ import { toaster } from "../ui/toaster";
  */
 const RETRY_THROTTLE_MS = 5 * 60 * 1000;
 
-/** True when at least one of these rows is outside the throttle window, so a retry would do something. */
+/**
+ * True when a retry would do something: at least one row is outside the throttle window.
+ *
+ * An empty group counts as retryable. The throttle is per row, so with no rows there is nothing to
+ * throttle -- and a retry with no stuck students is not a no-op, because it also re-creates a class's
+ * missing Discord roles, which is the one case that has no membership row to hang off.
+ */
 export function canRetryAny(rows: DiscordMembershipRow[], now: number = Date.now()): boolean {
+  if (rows.length === 0) return true;
   return rows.some(
     (row) => !row.last_retry_requested_at || now - new Date(row.last_retry_requested_at).getTime() > RETRY_THROTTLE_MS
   );

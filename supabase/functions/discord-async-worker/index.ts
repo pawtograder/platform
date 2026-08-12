@@ -23,7 +23,8 @@ import {
   classifyDiscordError,
   isBotPermissionProblem,
   isRateLimitError,
-  isResourceGone
+  isResourceGone,
+  DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -513,6 +514,8 @@ type MembershipCheck =
   | { result: "not_member" }
   /** The bot cannot read this guild at all, which no student can resolve. */
   | { result: "forbidden"; status: number }
+  /** Discord has no such guild: the class's discord_server_id is wrong, or the bot was removed. */
+  | { result: "unknown_guild" }
   /** Discord is rate limiting this route. Nothing else in the run will fare better. */
   | { result: "rate_limited"; retryAfterMs: number }
   /** The check failed for a reason that says nothing about the user. */
@@ -544,13 +547,34 @@ async function checkGuildMembership(
     // Read before the body is discarded below. Discord sends seconds, possibly fractional.
     const retryAfterHeader = response.status === 429 ? response.headers.get("retry-after") : null;
 
-    // The body is never read on any branch. Left dangling it holds the connection out of the pool
-    // for one roster's worth of responses at a time, and Deno warns that response bodies were not
-    // consumed. Cancelling releases it immediately.
-    await response.body?.cancel();
+    // A 404 is the one status whose body decides what it means: 10007 Unknown Member is about this
+    // user, 10004 Unknown Guild is about the class's discord_server_id being wrong or the bot having
+    // been removed. Read only for 404, so the ordinary paths keep discarding the body untouched.
+    let notFoundCode: number | undefined;
+    if (response.status === 404) {
+      try {
+        const parsed = (await response.json()) as { code?: number };
+        notFoundCode = typeof parsed?.code === "number" ? parsed.code : undefined;
+      } catch {
+        // Unparseable body: fall through as a user-scoped miss, which is the safer reading. Treating
+        // it as an unknown guild would take the whole class off the roster on a malformed response.
+        notFoundCode = undefined;
+      }
+    } else {
+      // The body is never read on the other branches. Left dangling it holds the connection out of
+      // the pool for one roster's worth of responses at a time, and Deno warns that response bodies
+      // were not consumed. Cancelling releases it immediately.
+      await response.body?.cancel();
+    }
 
     if (response.status === 200) return { result: "member" };
-    if (response.status === 404) return { result: "not_member" };
+    if (response.status === 404) {
+      // Cached at guild scope by the caller. Read as not_member it cost one doomed lookup per
+      // enrolled user per hour for a guild Discord does not have: only the follow-on invite was
+      // short-circuited, because guildInviteFailures is consulted after the membership cache.
+      if (notFoundCode === DISCORD_UNKNOWN_GUILD) return { result: "unknown_guild" };
+      return { result: "not_member" };
+    }
     if (response.status === 429) {
       const parsed = retryAfterHeader ? Number.parseFloat(retryAfterHeader) : Number.NaN;
       // A minute when Discord does not say. Guessing short would resume straight back into the
@@ -748,6 +772,10 @@ async function processBatchRoleSync(
   // would still cost one failing request per enrolled student: hundreds an hour for one broken guild,
   // which is the same unbounded work this change exists to remove.
   const forbiddenGuilds = new Map<string, number>();
+  // Likewise guild scope, and for the same reason. A 404 carrying Unknown Guild says the class's
+  // discord_server_id names a server Discord does not have, so no lookup for any other student in it
+  // can do anything but 404 too.
+  const unknownGuilds = new Set<string>();
   // Guilds whose invite creation has already failed this run, so the failure costs one call, not one
   // call per enrolled student.
   const guildInviteFailures = new Map<string, { code?: number; reason: string }>();
@@ -755,9 +783,10 @@ async function processBatchRoleSync(
   for (const record of records) {
     const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
     const knownForbidden = forbiddenGuilds.get(record.discord_server_id);
+    const knownUnknownGuild = unknownGuilds.has(record.discord_server_id);
 
-    // Check membership if not cached, and never for a guild already known to be unreadable this run.
-    if (knownForbidden === undefined && !membershipCache.has(cacheKey)) {
+    // Check membership if not cached, and never for a guild already known to be unreachable this run.
+    if (knownForbidden === undefined && !knownUnknownGuild && !membershipCache.has(cacheKey)) {
       const membership = await checkGuildMembership(record.discord_server_id, record.discord_id, botToken);
 
       // Abandon the whole run. This route is rate limited per bot, not per guild or per user, so
@@ -778,12 +807,42 @@ async function processBatchRoleSync(
       if (membership.result === "forbidden") {
         forbiddenGuilds.set(record.discord_server_id, membership.status);
       }
+      if (membership.result === "unknown_guild") {
+        unknownGuilds.add(record.discord_server_id);
+      }
       // Small delay to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     const membership: MembershipCheck =
-      knownForbidden !== undefined ? { result: "forbidden", status: knownForbidden } : membershipCache.get(cacheKey)!;
+      knownForbidden !== undefined
+        ? { result: "forbidden", status: knownForbidden }
+        : knownUnknownGuild
+          ? { result: "unknown_guild" }
+          : membershipCache.get(cacheKey)!;
+
+    if (membership.result === "unknown_guild") {
+      // Recorded per user, unlike the 403 above. A 403 says nothing about whether a student joined,
+      // but a guild Discord does not have holds nobody: no invite can be created into it and no role
+      // can be applied, so cannot_invite is accurate for every enrolled user rather than a guess.
+      // remediationFor() already words 10004 as a wrong server ID rather than a missing permission.
+      const reason = `Discord has no server with the ID configured for this course (${record.discord_server_id})`;
+      guildInviteFailures.set(record.discord_server_id, { code: DISCORD_UNKNOWN_GUILD, reason });
+      await recordMembershipStatus(
+        adminSupabase,
+        {
+          classId: record.class_id,
+          userId: record.user_id,
+          guildId: record.discord_server_id,
+          state: "cannot_invite",
+          discordErrorCode: DISCORD_UNKNOWN_GUILD,
+          detail: reason
+        },
+        scope
+      );
+      summary.cannot_invite++;
+      continue;
+    }
 
     if (membership.result === "unknown") {
       // Nothing was learned about this user, so nothing is recorded and nothing is enqueued. The next

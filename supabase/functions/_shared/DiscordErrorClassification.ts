@@ -41,6 +41,15 @@ export const TERMINAL_DISCORD_ERROR_CODES: ReadonlyMap<number, string> = new Map
 /** Discord error code for "the bot cannot see this resource", the invite-creation failure. */
 export const DISCORD_MISSING_ACCESS = 50001;
 
+/**
+ * Discord error code for "no such guild".
+ *
+ * A 404 carrying this is a fact about the class's configured server -- a wrong discord_server_id, or
+ * a bot that has been removed -- rather than about the user being looked up, so callers cache it at
+ * guild scope instead of reading it as "this student has not joined".
+ */
+export const DISCORD_UNKNOWN_GUILD = 10004;
+
 export type DiscordErrorClassification = {
   /** True when retrying cannot change the outcome. */
   terminal: boolean;

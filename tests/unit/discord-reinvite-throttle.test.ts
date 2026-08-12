@@ -35,9 +35,12 @@ describe("canRetryAny", () => {
     expect(canRetryAny([row(minutesAgo(1)), row(minutesAgo(2))])).toBe(false);
   });
 
-  // An empty group means there is nothing the button could queue, so it must not offer to.
-  it("blocks a retry for an empty group", () => {
-    expect(canRetryAny([])).toBe(false);
+  // An empty group is retryable. The throttle is per row, so with no rows there is nothing to
+  // throttle -- and a retry with no stuck students still re-creates a class's missing Discord roles,
+  // which is the one repair with no membership row to hang off. The Discord settings page mounts the
+  // button with no rows for exactly that case.
+  it("allows a retry for an empty group, which can still repair missing roles", () => {
+    expect(canRetryAny([])).toBe(true);
   });
 });
 

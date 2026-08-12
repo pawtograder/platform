@@ -100,7 +100,23 @@ function StudentList({ rows }: { rows: DiscordMembershipRow[] }) {
  *
  * Renders nothing when there is nothing to act on.
  */
-export default function DiscordMembershipStatusAlerts({ classId }: { classId: number | undefined }) {
+export default function DiscordMembershipStatusAlerts({
+  classId,
+  /**
+   * Keep the retry control on screen when there is nothing to report.
+   *
+   * The retry also re-creates a class's missing Discord roles, and that repair is deliberately
+   * independent of anyone's membership: the batch records `in_guild` even when the role sync
+   * silently finds no role, so a class whose role creation failed can have a perfectly healthy
+   * roster and no roles at all. With the button living inside the alerts, that is exactly the case
+   * with no way to reach it. Set on the Discord settings page, where a control that is occasionally
+   * a no-op is appropriate; left off the roster, where it would be permanent furniture.
+   */
+  alwaysOfferRetry = false
+}: {
+  classId: number | undefined;
+  alwaysOfferRetry?: boolean;
+}) {
   const { notJoined, cannotInvite, loading, error, refresh } = useDiscordMembershipStatus(classId);
 
   if (loading || error) {
@@ -110,7 +126,18 @@ export default function DiscordMembershipStatusAlerts({ classId }: { classId: nu
   }
 
   if (notJoined.length === 0 && cannotInvite.length === 0) {
-    return null;
+    if (!alwaysOfferRetry || classId === undefined) {
+      return null;
+    }
+    return (
+      <Box mb={4}>
+        <Text fontSize="sm" color="fg.muted">
+          Every linked student is in the Discord server. If roles are missing there, retrying re-creates this
+          course&apos;s Discord roles.
+        </Text>
+        <DiscordReinviteButton classId={classId} rows={[]} label="Retry Discord setup" onQueued={refresh} />
+      </Box>
+    );
   }
 
   const stuck = cannotInvite.length + notJoined.length;
