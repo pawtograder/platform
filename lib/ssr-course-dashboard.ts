@@ -123,6 +123,12 @@ export type StudentDashboardBundle = {
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
     /**
+     * Read here so the dashboard can decide server-side whether to mount the pending-invite panel.
+     * That component polls every 30 seconds, so mounting it for a course with no Discord server
+     * costs two useless requests per minute per open dashboard.
+     */
+    discord_server_id: string | null;
+    /**
      * `classes.features` — read server-side so feature-gated dashboard content renders without a
      * flash. Declared in its narrowed shape so consumers can hand it straight to
      * `courseFeatureEnabled` instead of each re-asserting the row type.
@@ -187,7 +193,7 @@ export async function fetchStudentDashboardBundle(
   ] = await Promise.all([
     supabase
       .from("classes")
-      .select("time_zone, office_hours_ics_url, events_ics_url, name, features")
+      .select("time_zone, office_hours_ics_url, events_ics_url, name, features, discord_server_id")
       .eq("id", courseId)
       .single(),
     supabase

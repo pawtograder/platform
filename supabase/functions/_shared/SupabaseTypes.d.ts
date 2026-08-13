@@ -2122,6 +2122,66 @@ export type Database = {
           }
         ];
       };
+      discord_membership_status: {
+        Row: {
+          class_id: number;
+          detail: string | null;
+          discord_error_code: number | null;
+          first_observed_at: string;
+          guild_id: string;
+          id: number;
+          last_observed_at: string;
+          last_retry_requested_at: string | null;
+          observed_count: number;
+          observed_discord_id: string | null;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          detail?: string | null;
+          discord_error_code?: number | null;
+          first_observed_at?: string;
+          guild_id: string;
+          id?: number;
+          last_observed_at?: string;
+          last_retry_requested_at?: string | null;
+          observed_count?: number;
+          observed_discord_id?: string | null;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          detail?: string | null;
+          discord_error_code?: number | null;
+          first_observed_at?: string;
+          guild_id?: string;
+          id?: number;
+          last_observed_at?: string;
+          last_retry_requested_at?: string | null;
+          observed_count?: number;
+          observed_discord_id?: string | null;
+          state?: Database["public"]["Enums"]["discord_membership_state"];
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discord_membership_status_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "discord_membership_status_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discord_messages: {
         Row: {
           class_id: number;
@@ -12224,6 +12284,20 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      claim_discord_invite: {
+        Args: {
+          p_class_id: number;
+          p_expires_at: string;
+          p_guild_id: string;
+          p_invite_code: string;
+          p_invite_url: string;
+          p_user_id: string;
+        };
+        Returns: {
+          claimed: boolean;
+          winning_invite_url: string;
+        }[];
+      };
       cleanup_expired_realtime_subscriptions: {
         Args: never;
         Returns: undefined;
@@ -12525,6 +12599,10 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      discord_student_join_enabled: {
+        Args: { p_class_id: number };
+        Returns: boolean;
+      };
       dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
@@ -12817,6 +12895,32 @@ export type Database = {
           p_test_part?: string;
         };
         Returns: Json;
+      };
+      get_discord_membership_status_for_class: {
+        Args: { p_class_id: number };
+        Returns: {
+          detail: string;
+          discord_error_code: number;
+          discord_username: string;
+          email: string;
+          last_observed_at: string;
+          last_retry_requested_at: string;
+          name: string;
+          sortable_name: string;
+          state: Database["public"]["Enums"]["discord_membership_state"];
+          user_id: string;
+        }[];
+      };
+      get_discord_role_sync_candidates: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          discord_id: string;
+          discord_server_id: string;
+          role: Database["public"]["Enums"]["app_role"];
+          student_join_enabled: boolean;
+          user_id: string;
+        }[];
       };
       get_discussion_engagement: {
         Args: { p_class_id: number };
@@ -13266,6 +13370,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_discord_discussion_stats_update: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_email_batch_processor_background_task: {
         Args: never;
         Returns: undefined;
@@ -13284,6 +13392,10 @@ export type Database = {
       };
       is_allowed_grader_key: {
         Args: { class: number; graderkey: string };
+        Returns: boolean;
+      };
+      is_class_active: {
+        Args: { p_archived: boolean; p_end_date: string };
         Returns: boolean;
       };
       is_in_class: {
@@ -13492,6 +13604,18 @@ export type Database = {
         Args: { p_stale_minutes?: number };
         Returns: number;
       };
+      record_discord_membership_status: {
+        Args: {
+          p_class_id: number;
+          p_detail?: string;
+          p_discord_error_code?: number;
+          p_guild_id: string;
+          p_observed_discord_id: string;
+          p_state: Database["public"]["Enums"]["discord_membership_state"];
+          p_user_id: string;
+        };
+        Returns: undefined;
+      };
       record_github_async_error: {
         Args: { p_error_data: Json; p_method: string; p_org: string };
         Returns: undefined;
@@ -13530,6 +13654,13 @@ export type Database = {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
       };
+      request_discord_reinvite: {
+        Args: { p_class_id: number; p_user_id?: string };
+        Returns: {
+          queued: number;
+          roles_repaired: number;
+        }[];
+      };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
@@ -13561,6 +13692,10 @@ export type Database = {
       retry_repository_creation: {
         Args: { p_repository_id: number };
         Returns: number;
+      };
+      rubric_check_options_non_negative: {
+        Args: { p_data: Json };
+        Returns: boolean;
       };
       safe_broadcast: {
         Args: {
@@ -13612,6 +13747,18 @@ export type Database = {
         Args: { p_survey_id: string; p_survey_logical_id: string };
         Returns: undefined;
       };
+      store_discord_role_if_current: {
+        Args: {
+          p_class_id: number;
+          p_discord_role_id: string;
+          p_guild_id: string;
+          p_role_type: string;
+        };
+        Returns: {
+          stored: boolean;
+          superseded: boolean;
+        }[];
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
@@ -13634,6 +13781,10 @@ export type Database = {
           p_parsed_events: Json;
         };
         Returns: Json;
+      };
+      sync_discord_users_if_roles_complete: {
+        Args: { p_class_id: number };
+        Returns: boolean;
       };
       sync_existing_users_after_roles_created: {
         Args: { p_class_id: number };
@@ -13814,6 +13965,7 @@ export type Database = {
         | "scheduling"
         | "operations"
         | "forum";
+      discord_membership_state: "in_guild" | "not_joined" | "cannot_invite";
       discord_resource_type: "help_request" | "regrade_request" | "discussion_thread";
       discussion_discord_notification_type: "all" | "followed_only" | "none";
       discussion_notification_type: "immediate" | "digest" | "disabled";
@@ -14021,6 +14173,7 @@ export const Constants = {
         "operations",
         "forum"
       ],
+      discord_membership_state: ["in_guild", "not_joined", "cannot_invite"],
       discord_resource_type: ["help_request", "regrade_request", "discussion_thread"],
       discussion_discord_notification_type: ["all", "followed_only", "none"],
       discussion_notification_type: ["immediate", "digest", "disabled"],

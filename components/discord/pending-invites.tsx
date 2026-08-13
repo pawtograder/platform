@@ -23,6 +23,7 @@ type DiscordInvite = {
     id: number;
     slug: string | null;
     name: string | null;
+    discord_server_id: string | null;
   };
 };
 
@@ -48,7 +49,7 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
       try {
         let query = supabase
           .from("discord_invites")
-          .select("*, classes(id, slug, name)")
+          .select("*, classes(id, slug, name, discord_server_id)")
           .eq("used", false)
           .gt("expires_at", new Date().toISOString())
           .order("created_at", { ascending: false });
@@ -65,7 +66,16 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
         const { data, error: fetchError } = await query;
 
         if (fetchError) throw fetchError;
-        setInvites((data || []) as DiscordInvite[]);
+
+        // Only invites into the server the class currently uses. discord_invites is keyed on
+        // guild_id but nothing clears rows when a course changes or unsets discord_server_id, so an
+        // old unused invite stays here and would be offered under the current course's name --
+        // sending a student into a server the class has moved off, where the membership sync will
+        // go on reporting them absent because it only ever looks at the current guild.
+        const current = ((data || []) as DiscordInvite[]).filter(
+          (invite) => invite.classes?.discord_server_id && invite.guild_id === invite.classes.discord_server_id
+        );
+        setInvites(current);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("Error fetching Discord invites:", err);
@@ -82,7 +92,15 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     return () => clearInterval(interval);
   }, [user, classId, showAll]);
 
-  if (loading) {
+  // Only the first fetch, not the 30-second background refresh. `loading` goes true on every poll,
+  // so reacting to it unconditionally tore the whole panel down and rebuilt it twice a minute --
+  // taking the join and copy buttons with it, and cancelling any interaction in progress. While
+  // there are cached invites to show, the refresh is invisible.
+  if (loading && invites.length === 0) {
+    // Silent for the student view, which resolves to nothing for most students: a placeholder there
+    // would flash "Loading Discord invites..." on every dashboard load. The staff listing is a
+    // section someone navigated to on purpose, so it says what it is doing.
+    if (!showAll) return null;
     return (
       <Box p={4}>
         <Text fontSize="sm" color="fg.muted">

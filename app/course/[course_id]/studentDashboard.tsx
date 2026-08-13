@@ -27,6 +27,7 @@ import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-sum
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
+import PendingInvites from "@/components/discord/pending-invites";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
@@ -108,6 +109,11 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
+  // Both halves are required: a server has to be configured, and the course has to have opted in.
+  // The flag defaults off, so a course that already had a server keeps the behaviour it had before
+  // this panel existed -- students saw no invitation, because there was no route to one.
+  const discordConfigured =
+    Boolean(course?.discord_server_id) && courseFeatureEnabled(course?.features, COURSE_FEATURES.DISCORD_STUDENT_JOIN);
 
   // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
   // first paint instead of flipping once the client course controller hydrates.
@@ -185,6 +191,25 @@ export default async function StudentDashboard({
       </Heading>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      {/*
+       * The student's own outstanding Discord invite, alongside the GitHub equivalent above.
+       * PendingInvites has always supported this mode -- without showAll it filters to the signed-in
+       * user, and discord_invites_user_select grants exactly that row -- but it was only ever mounted
+       * on the staff-only manage/discord page. So the instructor alert saying "each has an invite
+       * waiting, no action is needed" was describing a link the student had no way to open. Renders
+       * nothing when there is no unused, unexpired invite.
+       *
+       * Gated on the DISCORD_STUDENT_JOIN feature and on the course having a Discord server. The
+       * feature gate is the point: joining a course Discord is opt-in per course, and this panel is
+       * the only place a student can reach their invitation. The server check also keeps the
+       * component's 30-second poll off dashboards that could never have anything to show.
+       *
+       * Also hidden when an instructor is viewing as a student. PendingInvites scopes itself with
+       * useAuthState(), not with the profile being viewed, so it would show the instructor their own
+       * invite under the student's dashboard and hand them a SyncRolesButton that mutates their own
+       * Discord roles -- neither of which is what "view as" is meant to show.
+       */}
+      {discordConfigured && !isViewingAsStudent && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {incompleteSurveysForBanner.length > 0 && (
