@@ -20,6 +20,13 @@ const disableSentryRouteManifestInjection =
 const usingBugsink = !!process.env.SENTRY_URL;
 const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1" || usingBugsink;
 const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1" || usingBugsink;
+// The deploy step is part of that same unimplemented release API. It also has to
+// be disabled explicitly: on Vercel the bundler plugin fills `release.deploy` in
+// from VERCEL_TARGET_ENV whenever we leave it undefined, and then runs
+// `sentry-cli releases deploys <version> new` after the upload regardless of
+// whether `create` ran. Against Bugsink the release does not exist, so the deploy
+// fails with "Release not found" and `errorHandler` turns that into a red build.
+const disableSentryReleaseDeploy = process.env.SENTRY_DISABLE_RELEASE_DEPLOY === "1" || disableSentryReleaseCreate;
 const disableSentrySourcemaps = process.env.SENTRY_DISABLE_SOURCEMAPS === "1";
 const useSentryRunAfterProductionCompileHook = process.env.SENTRY_USE_RUN_AFTER_PRODUCTION_COMPILE === "1";
 
@@ -207,7 +214,11 @@ const sentryConfig = {
   useRunAfterProductionCompileHook: useSentryRunAfterProductionCompileHook,
   release: {
     create: !disableSentryReleaseCreate,
-    finalize: !disableSentryReleaseFinalize
+    finalize: !disableSentryReleaseFinalize,
+    // `undefined` is what re-arms the plugin's Vercel auto-detection, so the
+    // suppression has to be a value the plugin sees as "set but falsy". The public
+    // type only admits an options object, hence the cast.
+    ...(disableSentryReleaseDeploy ? { deploy: null as unknown as undefined } : {})
   },
   // Quiet for local dev, but never while actually uploading source maps: the
   // build runs inside Docker where CI is unset, and the upload report is the
