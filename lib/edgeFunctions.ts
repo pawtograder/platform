@@ -7,15 +7,23 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import type { FunctionInvokeOptions } from "@supabase/functions-js";
 import * as Sentry from "@sentry/nextjs";
 
-/** Invokes autograder-create-repos-for-student. Use `opts.forTestAssignment` only from the instructor Test Assignment UI. */
+/**
+ * Invokes autograder-create-repos-for-student. Use `opts.forTestAssignment` only from the instructor
+ * Test Assignment UI.
+ *
+ * Pass `opts.classId` to confine the work to one course. Without it the function enumerates every
+ * class the caller belongs to and does org-membership and permission work in all of them, which is
+ * far more than a single "create my test repo" click asks for.
+ */
 export async function autograderCreateReposForStudent(
   supabase: SupabaseClient<Database>,
   assignmentId?: number,
-  opts?: { forTestAssignment?: boolean }
+  opts?: { forTestAssignment?: boolean; classId?: number }
 ) {
   await invokeEdgeFunction(supabase, "autograder-create-repos-for-student", {
     body: {
       assignment_id: assignmentId,
+      ...(opts?.classId !== undefined ? { class_id: opts.classId } : {}),
       ...(opts?.forTestAssignment && assignmentId !== undefined ? { for_test_assignment: true } : {})
     }
   });

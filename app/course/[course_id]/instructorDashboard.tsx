@@ -1,5 +1,6 @@
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
+import { ViewAsStudentButton } from "@/components/course/view-as-student-button";
 import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
@@ -573,6 +574,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     <VStack spaceY={0} align="stretch" p={2}>
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+
+      <HStack justify="flex-end" mb={2}>
+        <ViewAsStudentButton />
+      </HStack>
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {showSurveysDashboard && (
