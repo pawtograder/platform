@@ -26,8 +26,15 @@
 --
 -- This migration:
 --   1. sanitize_repo_name_component() -- the SQL twin of _shared/repoNames.ts.
---   2. enqueue_github_create_repo() sanitizes the repo name at the single choke point
---      every SQL caller already goes through, so the row and GitHub agree.
+--   2. Sanitization applies only where a name is FIRST derived and stored: the insert
+--      path of enqueue_github_create_repo(), plus the group-name component in
+--      create_all_repos_for_assignment_internal(). A name read back off an existing row
+--      is authoritative and is used verbatim -- it is what a GitHub repo was created as
+--      and what webhooks resolve against, and `is_github_ready = false` does not mean no
+--      GitHub repo exists (the worker can create the repo and fail to mark the row).
+--      So new rows converge on the name GitHub will actually create, and existing rows
+--      keep resolving to their real repository. Renaming the rows that already diverged
+--      is a data migration, deliberately not folded in here.
 --   3. create_all_repos_for_assignment_internal() dedupes on identity, not on name.
 --   4. repositories.creation_attempts / .last_creation_attempt_at + a reset trigger.
 --   5. reconcile_stuck_repo_creations() gains exponential backoff, an attempt ceiling
