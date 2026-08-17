@@ -121,8 +121,12 @@ declare
   repo_id bigint;
   full_repo_name text;
   v_repo_name text;
+  v_existing_name text;
   v_args jsonb;
 begin
+  -- Sanitize the name the CALLER derived. Only a name we are about to store is
+  -- sanitized; a name read back off an existing row is authoritative and is used
+  -- verbatim (see below).
   v_repo_name := public.sanitize_repo_name_component(p_repo_name);
   full_repo_name := p_org || '/' || v_repo_name;
 
@@ -131,13 +135,21 @@ begin
   returning id into log_id;
 
   if p_assignment_id is not null then
-    select id into repo_id
+    -- Historic data contains rows that share an identity (no unique constraint enforces
+    -- one repo per assignment+profile / assignment+group). A bare `select ... into` over
+    -- those picks an arbitrary row, so a retry for one row could enqueue against another
+    -- row's repository. Prefer the row whose stored name is exactly the one the caller
+    -- asked for -- which is how enqueue_create_repo_for_repository addresses a specific
+    -- row -- and fall back to the lowest id so the choice is at least deterministic.
+    select id, repository into repo_id, v_existing_name
     from public.repositories
     where assignment_id = p_assignment_id
       and (
         (p_profile_id is not null and profile_id = p_profile_id) or
         (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
-      );
+      )
+    order by (repository = p_org || '/' || p_repo_name) desc, id
+    limit 1;
 
     if repo_id is null then
       insert into public.repositories(
@@ -158,7 +170,40 @@ begin
         p_latest_template_sha,
         false
       )
+      on conflict do nothing
       returning id into repo_id;
+
+      -- A concurrent enqueue for the same repo can win the race between the select
+      -- above and this insert. `unique_repo_name` turns that into a no-op rather than
+      -- a duplicate; re-read the winner's row so both callers enqueue against one row.
+      -- The re-read is constrained to the SAME identity: a row holding this name for a
+      -- different assignment/profile/group is a genuine name collision, and adopting it
+      -- would silently point this job at someone else's repository. Fail loudly instead,
+      -- which is what the bare unique violation did before.
+      if repo_id is null then
+        select id, repository into repo_id, v_existing_name
+        from public.repositories
+        where repository = full_repo_name
+          and assignment_id = p_assignment_id
+          and (
+            (p_profile_id is not null and profile_id = p_profile_id) or
+            (p_assignment_group_id is not null and assignment_group_id = p_assignment_group_id)
+          );
+        if repo_id is null then
+          raise exception 'Repository name % is already used by a different assignment, student or group', full_repo_name;
+        end if;
+        v_repo_name := split_part(v_existing_name, '/', 2);
+      end if;
+    else
+      -- An existing row's stored name is authoritative: it is what a GitHub repo was
+      -- (or will be) created as, what webhooks resolve against, and what
+      -- enqueue_create_repo_for_repository reads back on a retry. Re-sanitizing it
+      -- would retarget the job at a DIFFERENT repository -- `…-group-Team--One` is a
+      -- perfectly valid GitHub name, but the sanitizer collapses it to
+      -- `…-group-Team-One` -- and the worker marks the row ready by repo_id without
+      -- writing the name back, so the row would end up pointing at a repo nobody
+      -- created. Use the stored name and leave the row alone.
+      v_repo_name := split_part(v_existing_name, '/', 2);
     end if;
   end if;
 
@@ -390,7 +435,12 @@ begin
     perform public.enqueue_github_create_repo(
       v_course_id,
       v_org,
-      v_slug || '-' || v_assignment_slug || '-group-' || r_group_name,
+      -- Sanitize the group name as its own COMPONENT, exactly as the TypeScript paths
+      -- do. Sanitizing only the assembled name would let two groups whose names are
+      -- entirely illegal characters ("###" and "@@@") both collapse to
+      -- `<slug>-<assignment>-group` and collide on one repository; per-component
+      -- sanitization raises on such a name instead, matching sanitizeRepoNameComponent.
+      v_slug || '-' || v_assignment_slug || '-group-' || public.sanitize_repo_name_component(r_group_name),
       coalesce(v_template_repo, r_source_repo),
       v_slug,
       r_members,
@@ -618,15 +668,22 @@ begin
     raise exception 'Not authorized to retry repository creation for this class';
   end if;
 
-  -- Clear the error AND the attempt counter: an instructor retry is a deliberate
-  -- statement that the underlying problem has been fixed, so the row gets a full
-  -- automatic retry budget again rather than being re-parked on the next tick.
   update public.repositories
-     set creation_error = null,
-         creation_attempts = 0
+     set creation_error = null
    where id = p_repository_id;
 
   v_msg_id := public.enqueue_create_repo_for_repository(p_repository_id);
+
+  -- Zero the counter AFTER the enqueue, not before: enqueue_create_repo_for_repository
+  -- increments it, so resetting first would leave the instructor with seven automatic
+  -- retries rather than the full budget. A deliberate manual retry states that the
+  -- underlying problem is fixed, so it does not spend an automatic attempt. The
+  -- updated_at bump from the enqueue survives (this write refreshes it again), so the
+  -- reconciler's stale window still keeps a second job from racing this one.
+  update public.repositories
+     set creation_attempts = 0
+   where id = p_repository_id;
+
   return v_msg_id;
 end;
 $$;
@@ -715,8 +772,17 @@ comment on function public.reconcile_stuck_repo_creations(int) is
 -- times get parked now rather than being handed a fresh retry budget by the new
 -- backoff. They become visible to instructors via creation_error and the Retry
 -- button, which is the correct end state for a repo that has never once succeeded.
--- Deliberately conservative: only rows in classes that have ended, or stuck longer
+-- Deliberately conservative: only rows in classes that have ended, or pending longer
 -- than a week in a running class.
+--
+-- Keyed on updated_at, NOT created_at: a repository row can be created once and go
+-- pending much later. assignment-create-all-repos flips an existing row back to
+-- is_github_ready = false when a permission sync finds no valid usernames or skips
+-- collaborator removals, and the async worker leaves a row pending when it cannot mark
+-- it ready. Keying on created_at would park those the instant they go pending, purely
+-- because the row itself is old, and the reconciler would then skip them until an
+-- instructor retried by hand. updated_at measures the thing this cutoff is about: how
+-- long THIS pending state has lasted.
 update public.repositories rp
    set creation_attempts = 8,
        creation_error = 'Repository creation did not succeed after repeated automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.'
@@ -729,5 +795,5 @@ update public.repositories rp
    and a.repo_mode not in ('none', 'no_submission')
    and (
      not public.is_class_active(c.archived, c.end_date)
-     or rp.created_at < now() - interval '7 days'
+     or rp.updated_at < now() - interval '7 days'
    );
