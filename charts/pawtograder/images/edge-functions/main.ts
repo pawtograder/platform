@@ -137,28 +137,56 @@ let residentBytes = 0;
 
 const mb = (n: number) => (n / 1048576).toFixed(1);
 
-// --- cold-load byte semaphore -------------------------------------------------
+// --- cold-load byte semaphore (FIFO) ---------------------------------------
 // Held from before the read until userWorkers.create() has returned, because the
-// buffer is referenced for that whole span. Waiters are woken on every release
-// and re-check their own condition, so a large request cannot be starved by a
-// stream of small ones slipping under the budget.
+// buffer is referenced for that whole span.
+//
+// Strict FIFO, and the full byte size is charged:
+//   * FIFO because waking every waiter does NOT prevent starvation. A large
+//     request that still cannot fit re-queues, and a stream of small releases
+//     lets younger small requests take the capacity ahead of it indefinitely.
+//     Only the head of the queue may acquire, so nothing overtakes a blocked
+//     older request.
+//   * Full size, never clamped to the allowance, because Deno.readFile allocates
+//     the whole bundle regardless of what the allowance says. Charging a clamped
+//     value would let an oversized bundle through while accounting for less than
+//     it actually costs, which is precisely the gap this semaphore exists to close.
+//     A bundle larger than the entire allowance therefore runs ALONE (see
+//     canAdmitCold), and eszipColdLoadHeadroomMb is required by the chart to be
+//     large enough to cover the biggest bundle in the image.
 let coldBytes = 0;
-const coldWaiters: Array<() => void> = [];
+const coldQueue: Array<{ need: number; resolve: () => void }> = [];
+
+function canAdmitCold(need: number): boolean {
+  // A request bigger than the whole allowance could never satisfy the normal
+  // condition, so it is allowed through when nothing else holds any bytes.
+  if (need > COLD_LOAD_MAX_BYTES) return coldBytes === 0;
+  return coldBytes + need <= COLD_LOAD_MAX_BYTES;
+}
+
+function pumpColdQueue(): void {
+  while (coldQueue.length > 0 && canAdmitCold(coldQueue[0].need)) {
+    const waiter = coldQueue.shift()!;
+    coldBytes += waiter.need;
+    waiter.resolve();
+  }
+}
 
 async function acquireCold(size: number): Promise<void> {
-  // A bundle bigger than the entire allowance would never fit, so it runs alone
-  // rather than deadlocking: wait for the budget to drain, then proceed.
-  const need = Math.min(size, COLD_LOAD_MAX_BYTES);
-  while (coldBytes > 0 && coldBytes + need > COLD_LOAD_MAX_BYTES) {
-    await new Promise<void>((resolve) => coldWaiters.push(resolve));
+  // Fast path only when nobody is queued — otherwise this would overtake them.
+  if (coldQueue.length === 0 && canAdmitCold(size)) {
+    coldBytes += size;
+    return;
   }
-  coldBytes += need;
+  await new Promise<void>((resolve) => {
+    coldQueue.push({ need: size, resolve });
+    pumpColdQueue();
+  });
 }
 
 function releaseCold(size: number): void {
-  coldBytes -= Math.min(size, COLD_LOAD_MAX_BYTES);
-  // Wake all waiters; each re-tests the budget itself.
-  while (coldWaiters.length > 0) coldWaiters.shift()!();
+  coldBytes -= size;
+  pumpColdQueue();
 }
 
 // --- eviction pins -----------------------------------------------------------
@@ -176,6 +204,8 @@ function unpin(name: string): void {
   const n = (pinned.get(name) ?? 0) - 1;
   if (n > 0) pinned.set(name, n);
   else pinned.delete(name);
+  // Reclaim anything that could not be evicted while this entry was in use.
+  enforceBudget();
 }
 
 // Mark `name` most-recently-used. Map iterates in insertion order, so
@@ -196,12 +226,28 @@ function admit(name: string, bytes: Uint8Array): void {
   if (existing) residentBytes -= existing.byteLength;
   touch(name, bytes);
   residentBytes += bytes.byteLength;
-  // Evict oldest-first until back inside budget. The entry just admitted is
-  // newest, so it cannot be evicted out from under this request.
+  enforceBudget();
+}
+
+/**
+ * Evict least-recently-used until residentBytes is back inside the budget.
+ *
+ * Pinned entries are skipped, which is what makes the pin safe — but it also
+ * means a pass can end still over budget if every viable victim is in use. The
+ * newly admitted entry is the most-recently-used, so it is the LAST thing this
+ * loop considers: when pins leave no other room, the new entry is what gets
+ * dropped, i.e. admission is refused rather than the bound being exceeded.
+ * Serving is unaffected, since the caller already holds its own reference.
+ *
+ * unpin() calls this again, so bytes that could not be reclaimed while an entry
+ * was in use are reclaimed as soon as it is released rather than staying resident
+ * forever. Without that retry the "bounded" cache could ratchet upward, one
+ * pinned admission at a time, past the total the chart's assertion certifies.
+ */
+function enforceBudget(): void {
   for (const victim of [...resident.keys()]) {
-    if (residentBytes <= ESZIP_CACHE_MAX_BYTES) break;
-    // Never evict a bundle a worker creation is currently holding (see `pinned`).
-    if (victim === name || pinned.has(victim)) continue;
+    if (residentBytes <= ESZIP_CACHE_MAX_BYTES) return;
+    if (pinned.has(victim)) continue;
     const evicted = resident.get(victim)!;
     resident.delete(victim);
     residentBytes -= evicted.byteLength;
@@ -226,16 +272,19 @@ const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
  *     reservation is taken. The entry is pinned instead, so eviction cannot
  *     subtract its bytes while the reference is still held.
  *   * Cache MISS — the bytes are not in the cache budget (and may never be, if
- *     admit() refuses them as oversized or evicts them again), so they are
+ *     admit() refuses them as oversized or eviction drops them again), so they are
  *     reserved against COLD_LOAD_MAX_BYTES for the whole span. `stat` gives the
- *     size before the allocation happens, which is the only way to reserve
- *     BEFORE the memory is spent rather than after.
+ *     size before the allocation happens, which is the only way to reserve BEFORE
+ *     the memory is spent rather than after.
  *
  * Concurrent misses for the same name each reserve, which over-reserves for one
- * shared buffer. That errs toward waiting rather than toward exceeding the
- * budget, which is the direction to err in.
+ * shared buffer. That errs toward waiting rather than toward exceeding the budget,
+ * which is the direction to err in.
  */
-async function withEszip<T>(name: string, use: (eszip: Uint8Array | null) => Promise<T>): Promise<T> {
+async function withEszip<T>(
+  name: string,
+  use: (eszip: Uint8Array | null) => Promise<T>
+): Promise<T> {
   if (resident.has(name)) {
     pin(name);
     try {

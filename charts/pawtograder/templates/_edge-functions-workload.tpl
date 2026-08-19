@@ -62,6 +62,9 @@ number is worse than one that admits it cannot.
 {{- $limitMi = trimSuffix "Mi" $limit | int -}}
 {{- end -}}
 {{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
+{{- if le $cacheMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
+{{- end -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
 {{- if or (eq $par "") (le ($par | int) 0) -}}
@@ -70,6 +73,18 @@ number is worse than one that admits it cannot.
 {{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
 {{- $hostMi := 90 -}}
 {{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
+{{- if le $coldMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $ef.eszipColdLoadHeadroomMb) -}}
+{{- end -}}
+{{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
+     than the largest bundle in the image cannot bound it -- an oversized bundle is
+     admitted alone and overshoots by (size - allowance). 64Mi covers the largest
+     bundle measured in this image (58.4MiB); if the bundles grow past that, this
+     minimum and the sizing note in values.yaml both need revisiting. */}}
+{{- $minColdMi := 64 -}}
+{{- if lt $coldMi $minColdMi -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $coldMi $minColdMi) -}}
+{{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
 {{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
