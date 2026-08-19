@@ -9,7 +9,7 @@ import { createRedis, bottleneckRedisOptions, type RedisClient } from "./Redis.t
 import { SYNC_COMMIT_MESSAGE_PREFIX } from "./handoutSyncPush.ts";
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
 import { encodeBase64 } from "https://deno.land/std@0.221.0/encoding/base64.ts";
 import * as github from "./GitHubWrapper.ts";

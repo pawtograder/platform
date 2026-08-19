@@ -8,7 +8,7 @@ import {
   fetchAllPages
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 //See also autograder-sync-staff-team
 async function handleRequest(req: Request, scope: Sentry.Scope) {

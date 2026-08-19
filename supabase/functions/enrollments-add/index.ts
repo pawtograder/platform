@@ -5,7 +5,7 @@ import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
 import type { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { email, name, role, courseId, notify } = (await req.json()) as AddEnrollmentRequest;

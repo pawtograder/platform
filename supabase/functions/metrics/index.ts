@@ -5,7 +5,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 // Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
 // without this Sentry.init never ran and every capture was a silent no-op.
 import "../_shared/SentryInit.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 /** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
 const VACUUM_RAM_RPC_TIMEOUT_MS = 3000;

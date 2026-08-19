@@ -4,7 +4,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const { join_request_id, course_id } = (await req.json()) as { join_request_id: number; course_id: number };

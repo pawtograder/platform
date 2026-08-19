@@ -48,7 +48,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { authenticateMCPRequest, MCPAuthError, updateTokenLastUsed } from "../_shared/MCPAuth.ts";
 import { dispatch, dispatchStream, getCommand, UnknownCommandError } from "./router.ts";
 import { isStreamCommand } from "./commands/base.ts";

@@ -23,7 +23,7 @@
 /* eslint-disable no-console */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";

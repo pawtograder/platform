@@ -38,7 +38,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { Open as openZip } from "npm:unzipper";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
 import type { Database } from "./SupabaseTypes.d.ts";

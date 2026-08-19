@@ -33,7 +33,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { indexSubmission } from "../_shared/CodeSymbolIndexer.ts";
 import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);

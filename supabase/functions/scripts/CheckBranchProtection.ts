@@ -29,7 +29,7 @@
  */
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit, createBranchProtectionRuleset } from "../_shared/GitHubWrapper.ts";
 import { RequestError } from "https://esm.sh/octokit?dts";

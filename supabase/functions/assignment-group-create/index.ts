@@ -4,7 +4,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   //Get the user

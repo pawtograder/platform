@@ -47,7 +47,7 @@ import {
   MAX_FILE_SIZE_MB
 } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";

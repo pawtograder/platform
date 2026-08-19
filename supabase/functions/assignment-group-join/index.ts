@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
 import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {

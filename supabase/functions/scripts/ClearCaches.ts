@@ -1,7 +1,7 @@
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 
 interface Cache {

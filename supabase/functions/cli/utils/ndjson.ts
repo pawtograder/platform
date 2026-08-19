@@ -11,7 +11,7 @@
  * discriminator in each record.
  */
 
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { CLICommandError } from "../errors.ts";
 import { corsHeaders } from "./supabase.ts";
 

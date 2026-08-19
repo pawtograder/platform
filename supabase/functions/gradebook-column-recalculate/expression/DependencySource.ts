@@ -2,7 +2,7 @@ import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type {
   Assignment,
   GradebookColumn,

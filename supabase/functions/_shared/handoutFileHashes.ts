@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import micromatch from "npm:micromatch";
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { getOctoKit } from "./GitHubWrapper.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 import { PawtograderConfig } from "./PawtograderYml.d.ts";

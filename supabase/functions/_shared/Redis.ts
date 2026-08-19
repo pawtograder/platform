@@ -1,6 +1,6 @@
 import { Redis as UpstashRedis } from "https://esm.sh/@upstash/redis";
 import IORedisDefault, { type Redis as IORedisInstance } from "npm:ioredis";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 
 // npm:ioredis ships as a CJS default export; the named import above is

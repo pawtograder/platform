@@ -4,7 +4,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
 import type { DiscussionThreadNotification, Notification, NotificationEnvelope } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";

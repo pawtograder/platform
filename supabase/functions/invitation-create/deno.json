@@ -1,5 +1,5 @@
 {
   "imports": {
-    "sentry": "npm:@sentry/deno"
+    "sentry": "npm:@sentry/deno@10.10.0"
   }
 }

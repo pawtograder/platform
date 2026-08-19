@@ -7,7 +7,7 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 type SISSycEnrollmentResult = {
   success: boolean;

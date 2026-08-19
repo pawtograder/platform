@@ -16,7 +16,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";

@@ -13,7 +13,7 @@
 // reason logic gets extracted out of HandlerUtils in the first place. This module depends only on
 // @sentry/deno plus two pure helpers.
 
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
 import { sentryIdentity } from "./SentryContext.ts";
 

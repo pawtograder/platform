@@ -1,6 +1,6 @@
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { bottleneckRedisOptions } from "./Redis.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type {
   SendMessageArgs,
   UpdateMessageArgs,

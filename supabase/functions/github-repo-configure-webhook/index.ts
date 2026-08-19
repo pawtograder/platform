@@ -9,7 +9,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   describeHandoutSeedResult,
   seedHandoutFileHashes,

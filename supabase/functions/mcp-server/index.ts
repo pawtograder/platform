@@ -18,7 +18,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { minimatch } from "npm:minimatch@9";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
