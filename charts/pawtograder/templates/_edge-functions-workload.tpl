@@ -164,6 +164,11 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
               value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+            # Byte budget for the demuxer's resident eszip cache. This is the
+            # THIRD term in the container's memory budget, alongside
+            # maxParallelism x worker.memoryLimitMb — see values.yaml.
+            - name: EDGE_ESZIP_CACHE_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with

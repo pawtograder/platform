@@ -1133,6 +1133,23 @@ edgeFunctions:
   # accumulates toward the 256MB cap. cpuHardMs keeps headroom above soft so an
   # in-flight request that crosses 2s can finish rather than being force-cancelled
   # (CPU time excludes async I/O, so 2s of real compute is ample here).
+  # Byte budget for the eszip cache the main.ts demuxer keeps of the bundles it
+  # has served. This is a real term in the container memory budget and it is the
+  # one that is easy to forget: a pod holds one bundle per DISTINCT FUNCTION it
+  # has ever been asked for, bundles run 19-59MB, and the image ships 55 of them
+  # (~2.2GB total). Unbounded, that alone exceeded the container limit and
+  # OOM-killed pods after a few days' uptime (2026-08-19).
+  #
+  # The container budget is now three terms that must be reconciled together:
+  #   eszipCacheMaxBytes + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+  # At the defaults: 512Mi + (8 x 256Mi) + 90Mi = ~2.6Gi, which is why the
+  # edge tier wants a limit at or above 4Gi. Raise this only alongside that sum.
+  #
+  # 512Mi holds ~13 average bundles — comfortably more than the handful of
+  # functions a pod serves repeatedly — so the LRU only churns on rare ones.
+  # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
+  # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
+  eszipCacheMaxMb: 512
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -1545,6 +1562,16 @@ monitoring:
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
     edgeFunctionMemoryRatio: 0.85
+    # Fraction of a node's total memory above which PawtograderEdgeFunctionsNodeMemoryHigh fires.
+    # Covers the axis every other rule here misses: the kernel can OOM-kill a pod that is nowhere
+    # near its own limit, because the NODE is full.
+    #
+    # NOTE: this rule reads node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes, i.e. it
+    # needs node-exporter scraped into the same Prometheus. If those series are absent the rule sits
+    # Inactive forever and looks shipped while being dead on arrival -- the same trap the
+    # container-label comment in prometheus-rules.yaml documents. Confirm the series exists before
+    # relying on this.
+    nodeMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this

@@ -71,13 +71,76 @@ const MAX_RETIRED_RETRIES = 5;
 // dropdown is built from. Set EDGE_ACCESS_LOG=0 to silence it (no rebuild).
 const ACCESS_LOG = (Deno.env.get("EDGE_ACCESS_LOG") ?? "1") !== "0";
 
-// Cache of loaded eszip bytes, keyed by function name. The value is a Promise
-// so concurrent first-requests for the same function share a single disk read
-// rather than each allocating their own ~40MB buffer (which under a 50-burst
-// would be ~2GB of transient allocation in this main isolate). A resolved
-// `null` means "no eszip on disk for this function" — fall back to raw
-// servicePath and don't keep re-stat-ing the filesystem.
-const eszipCache = new Map<string, Promise<Uint8Array | null>>();
+// Resident eszip bytes, keyed by function name, bounded by total BYTES held.
+//
+// 2026-08-19: this was an unbounded `Map<string, Promise<Uint8Array>>` and it
+// was the edge tier's memory problem. Every eszip a pod had ever served stayed
+// pinned in this main isolate, which lives as long as the pod, so RSS was
+// "floor + whatever the pod happened to have served" and it climbed for days:
+// 87Mi at startup, 667Mi at 1h, 1868-2408Mi at ~5d. The giveaway was that the
+// spread across SAME-AGE pods tracked distinct functions served, not uptime and
+// not request count — four 25-minute-old pods sat at 210/336/398/486Mi holding
+// 2/3/3/4 functions. The ceiling is the whole bundle (`[bundle] done: 55 eszips,
+// 2.2G total`, see the Dockerfile), and 2.2G of cache plus 8 admitted isolates
+// at 256Mi each does not fit in the 4Gi container limit. That is the OOMKill:
+// the limit was never a backstop, it was a deadline.
+//
+// Three structures now, because the three cases have genuinely different
+// lifetimes and conflating them is what made the leak invisible:
+//   * `inflight` preserves the ORIGINAL coalescing property this cache existed
+//     for: concurrent first-requests for one function share a single disk read
+//     instead of each allocating its own ~40MB buffer. Entries are dropped on
+//     settle, so it holds at most `--max-parallelism` promises.
+//   * `missing` is the negative cache. No eszip on disk means fall back to raw
+//     servicePath; remembering that costs a string and saves a stat per
+//     request, so it is kept for the pod's life. Note it is now populated ONLY
+//     on NotFound — the old code cached the null from ANY read error, so one
+//     transient EIO downgraded a function to raw servicePath permanently.
+//   * `resident` is the positive cache: an LRU bounded by BYTES, not by entry
+//     count. Entries run 19-59MB and averaging them is how you get surprised.
+// Eviction is always safe: an in-progress worker creation already holds its own
+// reference to the Uint8Array, so evicting only drops OURS.
+const ESZIP_CACHE_MAX_BYTES = Number(
+  Deno.env.get("EDGE_ESZIP_CACHE_MAX_BYTES") ?? 512 * 1024 * 1024
+);
+const inflight = new Map<string, Promise<Uint8Array | null>>();
+const missing = new Set<string>();
+const resident = new Map<string, Uint8Array>();
+let residentBytes = 0;
+
+const mb = (n: number) => (n / 1048576).toFixed(1);
+
+// Mark `name` most-recently-used. Map iterates in insertion order, so
+// delete + re-set is the entire LRU.
+function touch(name: string, bytes: Uint8Array): void {
+  resident.delete(name);
+  resident.set(name, bytes);
+}
+
+function admit(name: string, bytes: Uint8Array): void {
+  // A single eszip larger than the whole budget is served but never cached;
+  // admitting it would evict everything else to hold one entry.
+  if (bytes.byteLength > ESZIP_CACHE_MAX_BYTES) return;
+  // Re-admission shouldn't happen (`inflight` coalesces, and a hit returns
+  // early), but double-counting here would silently raise the bound this whole
+  // structure exists to enforce, so account for it rather than assume.
+  const existing = resident.get(name);
+  if (existing) residentBytes -= existing.byteLength;
+  touch(name, bytes);
+  residentBytes += bytes.byteLength;
+  // Evict oldest-first until back inside budget. The entry just admitted is
+  // newest, so it cannot be evicted out from under this request.
+  for (const victim of resident.keys()) {
+    if (residentBytes <= ESZIP_CACHE_MAX_BYTES) break;
+    const evicted = resident.get(victim)!;
+    resident.delete(victim);
+    residentBytes -= evicted.byteLength;
+    console.log(
+      `[eszip] evicted ${victim} (${mb(evicted.byteLength)}MB), resident ` +
+        `${mb(residentBytes)}MB / ${mb(ESZIP_CACHE_MAX_BYTES)}MB, ${resident.size} functions`
+    );
+  }
+}
 
 // Snapshot the process env ONCE at startup. It's static for the lifetime of the
 // pod, and this runs on the gateway hot path — recomputing it per request would
@@ -85,15 +148,33 @@ const eszipCache = new Map<string, Promise<Uint8Array | null>>();
 const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
 
 function loadEszip(name: string): Promise<Uint8Array | null> {
-  let pending = eszipCache.get(name);
+  const hit = resident.get(name);
+  if (hit) {
+    touch(name, hit);
+    return Promise.resolve(hit);
+  }
+  if (missing.has(name)) return Promise.resolve(null);
+
+  let pending = inflight.get(name);
   if (!pending) {
-    pending = Deno.readFile(`${ESZIP_DIR}/${name}.eszip`).catch((e) => {
-      if (!(e instanceof Deno.errors.NotFound)) {
-        console.error(`failed to read eszip for ${name}:`, (e as Error)?.message ?? e);
-      }
-      return null;
-    });
-    eszipCache.set(name, pending);
+    pending = Deno.readFile(`${ESZIP_DIR}/${name}.eszip`)
+      .then((bytes): Uint8Array | null => {
+        admit(name, bytes);
+        return bytes;
+      })
+      .catch((e) => {
+        if (e instanceof Deno.errors.NotFound) {
+          missing.add(name);
+        } else {
+          // Transient — deliberately NOT remembered, so the next request retries.
+          console.error(`failed to read eszip for ${name}:`, (e as Error)?.message ?? e);
+        }
+        return null;
+      })
+      .finally(() => {
+        inflight.delete(name);
+      });
+    inflight.set(name, pending);
   }
   return pending;
 }
