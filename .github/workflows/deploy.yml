@@ -19,11 +19,78 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decide whether this ref may run on the self-hosted pool at all.
+  #
+  # e2e-local checks out the PR head and executes it: `npm ci` runs lockfile
+  # install scripts, and the build, the config files and the test sources are
+  # all attacker-controlled on a fork PR. The app secrets are gone from that job
+  # (see the .env.local step below) and ARGOS_TOKEN is all that remains, so the
+  # main exposure is now the runner itself — an untrusted PR gets arbitrary code
+  # execution in a pod on the cluster, with only a container boundary between it
+  # and everything else. That is a low-probability, high-cost failure, and it is
+  # not worth carrying for drive-by PRs.
+  #
+  # This is also why the trigger stays `pull_request_target` even though the
+  # job no longer wants secrets: under `pull_request`, GitHub runs the workflow
+  # file from the PR head, so a fork could simply delete this gate. Under
+  # `pull_request_target` the workflow — and therefore this check — always comes
+  # from the base branch.
+  #
+  # Trust is decided on where the head branch lives, and nothing else. A branch
+  # in this repo can only have been pushed by someone who already has write
+  # access, so whoever supplied the latest commit is someone we already trust.
+  #
+  # Deliberately NOT author_association: that field describes the PR's author
+  # and their standing in *this* repo, not whoever pushed the head commit that
+  # is about to be checked out. Anyone with push access to the head branch can
+  # update a PR and fire `synchronize`, and for a fork that set is controlled by
+  # the fork's owner -- a personal fork's collaborators, or, for an org-owned
+  # fork, every member with write there. Trusting a fork PR because its author
+  # is a MEMBER would let any of them land code on this runner under that
+  # member's standing. Current head-repo permission is not answerable from the
+  # event payload either, and the API call it would need is not something a
+  # fork-triggered token can be relied on to make.
+  #
+  # An untrusted PR gets no E2E run. To run one, a maintainer reviews the diff
+  # and pushes the branch into this repo, which makes it a same-repo PR; that is
+  # the same manual path canvas-e2e.yml documents. Everyone whose fork PR this
+  # used to wave through -- owners, org members, collaborators -- already has
+  # write access here, so that is a branch push rather than a favour to ask.
+  check-trust:
+    runs-on: ubuntu-latest
+    outputs:
+      trusted: ${{ steps.check.outputs.trusted }}
+    steps:
+      - id: check
+        # Read the event through env rather than interpolating into the script:
+        # these are GitHub-controlled enums today, but the habit is what keeps a
+        # future field from becoming an injection.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "pull_request_target" ]]; then
+            # push to main/staging, or a maintainer's manual dispatch
+            trusted=true
+          elif [[ "${IS_FORK}" != "true" ]]; then
+            # a branch in this repo: pushing it already required write access
+            trusted=true
+          else
+            trusted=false
+          fi
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+          if [[ "${trusted}" != "true" ]]; then
+            echo "::notice title=E2E skipped::This PR's head branch lives in a fork, so it does not run on the self-hosted E2E pool. A maintainer can run the suite by pushing the branch into this repo after reviewing the diff."
+          fi
+
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
   # the Playwright suite against it. The Coolify branch-preview job that used to
   # run alongside this one is gone — it'll come back once the deployment target
   # moves into the same k8s cluster as this runner.
   e2e-local:
+    needs: check-trust
+    if: needs.check-trust.outputs.trusted == 'true'
     runs-on: pawtograder-e2e
     timeout-minutes: 75
     permissions:
@@ -81,24 +148,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # No repo secrets go into .env.local — every value below is a literal or
+      # is generated on the runner. The suite does not need the real ones:
+      #
+      #   * GitHub App key / OAuth creds — E2E_MOCK_GITHUB below short-circuits
+      #     the ingestion paths before they reach cloneRepository, so nothing
+      #     authenticates to GitHub, and _shared/GitHubWrapper.ts only builds a
+      #     JWT lazily, so a throwaway PEM satisfies the App constructor at
+      #     module load. This is what AGENTS.md means by "GitHub App credentials
+      #     are not required locally".
+      #   * UPSTASH_REDIS_REST_* — omitted entirely. _shared/Redis.ts returns
+      #     null when neither REDIS_URL nor the Upstash pair is set, and callers
+      #     take the "Redis disabled" path.
+      #   * SENTRY_DSN — omitted. _shared/SentryInit.ts no-ops without a DSN, so
+      #     CI edge-function events no longer reach the Bugsink "Dev" project.
+      #     Re-add the secret here if that reporting is wanted back.
+      #
+      # The remaining tokens (END_TO_END_SECRET, EDGE_FUNCTION_SECRET,
+      # EVENTBRIDGE_SECRET) were already literals — they authenticate the suite
+      # to a Supabase stack that lives and dies with this job.
       - name: Write .env.local
         env:
-          GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
-          GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
-          GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
-          GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_SECRET }}
-          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # Sentry identity for this run. Without these, edge-function events in the Bugsink "Dev"
-          # project carry no release, no branch and no PR — the CI run was only recoverable by reading
-          # the compose project name out of the `URL` tag, and only on events from functions that set
-          # it. Consumed by _shared/SentryContext.ts. Quoted through env: rather than interpolated into
-          # the heredoc so a branch name cannot inject shell.
+          # Identity for this run. Inert while SENTRY_DSN is unset, but cheap to
+          # keep so re-adding a DSN gives usable events immediately. Quoted
+          # through env: rather than interpolated into the heredoc so a branch
+          # name cannot inject shell.
           DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
           DEPLOY_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          GITHUB_APP_ID=1
+          GITHUB_OAUTH_CLIENT_ID=not-a-real-oauth-client-id
+          GITHUB_OAUTH_CLIENT_SECRET=not-a-real-oauth-client-secret
           cat > .env.local <<EOF
           NEXT_PUBLIC_SUPABASE_URL=${LOCAL_SUPABASE_URL}
           NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
@@ -108,18 +189,23 @@ jobs:
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
+          # E2E_ENABLE only opens the edge functions' auth bypass. The GitHub
+          # bypass is a separate flag: without it, isE2ERun still falls through
+          # to cloneRepository -> getOctoKit and issues a real GitHub request,
+          # which the dummy App credentials below cannot satisfy. The suites
+          # that ingest submissions or webhooks (push-no-autograder,
+          # pr-webhook-ingest, pr-base-tree-cache) are written for this path and
+          # assert against the canned file it inserts.
+          E2E_MOCK_GITHUB=true
           END_TO_END_SECRET=not-a-secret
           EDGE_FUNCTION_SECRET=some-secret-value
           # Auth gate for the github-repo-webhook EventBridge envelope. Lets the
           # webhook-direct e2e (push-no-autograder, pr-webhook-ingest) authenticate
-          # and run in CI; no real GitHub (E2E repos resolve via getRepoToCloneConsideringE2E).
+          # and run in CI; no real GitHub (see E2E_MOCK_GITHUB above).
           EVENTBRIDGE_SECRET=some-eventbridge-secret
           GITHUB_APP_ID=${GITHUB_APP_ID}
           GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
           GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
-          UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
-          UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
-          SENTRY_DSN=${SENTRY_DSN}
           DEPLOY_KIND=e2e-local
           DEPLOY_BRANCH=${DEPLOY_BRANCH}
           DEPLOY_PR=${DEPLOY_PR}
@@ -127,10 +213,17 @@ jobs:
           DEPLOY_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}
           GIT_COMMIT_SHA=${GITHUB_SHA}
           EOF
+          # Throwaway App key, generated per run and never leaving the runner.
+          # @octokit/auth-app parses it lazily, so it only has to be a
+          # well-formed PKCS#8 RSA key for `new App(...)` in GitHubWrapper.ts to
+          # construct; nothing in the suite signs a JWT that GitHub will see.
+          mkdir -p "$RUN_TMP"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out "$RUN_TMP/dummy-app-key.pem" 2>/dev/null
           # Single-line escaped PEM — supabase functions serve --env-file does
           # not support multi-line quoted values; .env.local.staging uses the
           # same shape. The Octokit / GitHub-App SDK unescapes \n at runtime.
-          KEY_ESCAPED=$(printf '%s' "${GITHUB_PRIVATE_KEY_STRING}" | awk 'BEGIN{ORS=""} {printf "%s\\n", $0}')
+          KEY_ESCAPED=$(awk 'BEGIN{ORS=""} {printf "%s\\n", $0}' "$RUN_TMP/dummy-app-key.pem")
           printf 'GITHUB_PRIVATE_KEY_STRING="%s"\n' "$KEY_ESCAPED" >> .env.local
 
       # Make supabase/config.toml's project_id unique per run so the supabase
@@ -350,9 +443,24 @@ jobs:
           # EDGE_FUNCTION_SECRET / END_TO_END_SECRET are sourced from .env.local
           # (written above) via the test-runner's dotenv load — single source
           # of truth so the two values can't drift.
-          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+          #
+          # TEST_PASSWORD is gone: every call site already falls back to
+          # "change-it", which is what the seeder writes, so the secret was only
+          # ever restating the default.
+          #
+          # ARGOS_TOKEN is the one secret this job still takes. Visual
+          # regression is worth keeping, and check-trust above means only a
+          # trusted ref ever reaches this step, so the token is not exposed to
+          # fork-supplied code the way the GitHub App key was. It is also the
+          # mildest thing in the old set: scoped to one visual-testing project,
+          # with no reach into GitHub, Redis, or any student repo.
+          #
+          # It has to be passed explicitly here. Argos can authenticate
+          # tokenlessly on GitHub Actions via OIDC -- which is how
+          # playwright-standalone.yml uploads without a token -- but that needs
+          # `id-token: write`, and this job deliberately holds only
+          # `contents: read`.
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx playwright test
 
       - name: Tail server logs on failure
