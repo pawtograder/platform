@@ -41,8 +41,11 @@ export default defineConfig({
     [
       "@argos-ci/playwright/reporter",
       {
-        // Upload to Argos on CI only.
-        uploadToArgos: !!process.env.CI,
+        // Upload to Argos on CI only, and only when a token is actually
+        // present. The E2E lane deliberately runs without repo secrets, so
+        // without the token check the reporter would fail the run trying to
+        // upload with an empty credential.
+        uploadToArgos: !!process.env.CI && !!process.env.ARGOS_TOKEN,
 
         // Set your Argos token (required if not using GitHub Actions).
         token: process.env.ARGOS_TOKEN || ""
