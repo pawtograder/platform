@@ -65,6 +65,21 @@ number is worse than one that admits it cannot.
 {{- if le $cacheMi 0 -}}
 {{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
 {{- end -}}
+{{/* Every one of these is rendered into the environment AND has a fallback in
+     main.ts of the shape `Number(env) || default`. A zero, negative or
+     non-numeric value therefore renders as configured, is counted as configured
+     (or as nothing) here, and is then silently replaced by the runtime with its
+     own default -- so the process runs on a number this assertion never saw.
+     worker.memoryLimitMb is the one that breaks the memory budget directly: at
+     0 the isolate term vanishes from the sum while eight workers still reserve
+     8 x 256Mi. The other four are not budget terms, but the same divergence
+     makes them worth rejecting in the same place rather than leaving one
+     validated knob beside four unvalidated ones. */}}
+{{- range $knob, $value := dict "worker.memoryLimitMb" $ef.worker.memoryLimitMb "worker.timeoutMs" $ef.worker.timeoutMs "worker.cpuSoftMs" $ef.worker.cpuSoftMs "worker.cpuHardMs" $ef.worker.cpuHardMs "worker.lowMemoryMultiplier" $ef.worker.lowMemoryMultiplier -}}
+{{- if le ($value | int) 0 -}}
+{{- fail (printf "edgeFunctions.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $knob $value) -}}
+{{- end -}}
+{{- end -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
 {{- if or (eq $par "") (le ($par | int) 0) -}}

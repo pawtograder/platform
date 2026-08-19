@@ -71,7 +71,7 @@ import "./commands/helpRequests.ts";
 import "./commands/reviews.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
-import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
@@ -97,7 +97,13 @@ serveWithSentryFlush(async (req) => {
     const authHeader = req.headers.get("Authorization");
     const authContext = await authenticateMCPRequest(authHeader);
 
-    updateTokenLastUsed(authContext.tokenId).catch(() => {});
+    // Detached on purpose: the CLI response must not wait on a last-used
+    // timestamp write. Routed through the background helper so the capture
+    // updateTokenLastUsed now makes on failure is actually delivered — the
+    // request-boundary flush has already run by the time this settles — and so
+    // the isolate is kept alive until the write completes. The old empty
+    // `.catch(() => {})` swallowed the outcome entirely.
+    waitUntilWithSentryFlush(updateTokenLastUsed(authContext.tokenId));
 
     const body: CLIRequest = await req.json();
 
