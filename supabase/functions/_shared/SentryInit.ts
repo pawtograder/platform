@@ -71,3 +71,34 @@ export function serveWithSentryFlush(handler: Deno.ServeHandler): void {
     }
   });
 }
+
+/**
+ * `EdgeRuntime.waitUntil` plus a flush that happens when the BACKGROUND work
+ * settles, not when the response was returned.
+ *
+ * `serveWithSentryFlush` and `wrapRequestHandler` both flush in a `finally` on
+ * the request, which is the right moment for anything the handler did inline —
+ * and the wrong one for work handed to `waitUntil`. Those handlers return
+ * immediately, so the flush runs while the background promise is still going,
+ * and everything it captures afterwards dies with the isolate exactly as before.
+ * The batch workers are the case that matters: their capture sites are all in
+ * the loop or its startup `.catch`, i.e. entirely after the response.
+ *
+ * Flushing here does not remove the need to flush on the request — a handler
+ * can capture inline and in the background — and a second flush with an empty
+ * queue is close to free.
+ */
+export function waitUntilWithSentryFlush(promise: Promise<unknown>): void {
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+  const flushed = promise.finally(async () => {
+    await Sentry.flush(2000);
+  });
+  if (runtime?.waitUntil) {
+    runtime.waitUntil(flushed);
+  } else {
+    // No runtime to hand it to (local `deno run`, tests): keep the original
+    // fire-and-forget shape rather than changing behaviour, but do not let a
+    // rejection surface as an unhandled one.
+    void flushed.catch(() => {});
+  }
+}

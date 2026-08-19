@@ -27,6 +27,7 @@ import {
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -2552,7 +2553,7 @@ serveWithSentryFlush((req) => {
     // missing-environment-variable check. `.catch` is what makes that throw visible: nothing
     // consumes the promise handed to waitUntil, so without it the one error that can actually end
     // this worker is an unhandled rejection and never reaches Sentry.
-    EdgeRuntime.waitUntil(
+    waitUntilWithSentryFlush(
       runBatchHandler()
         .catch((e) => {
           console.error(`[serve] Batch handler exited with an error:`, e);

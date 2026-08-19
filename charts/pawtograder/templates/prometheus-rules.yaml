@@ -456,9 +456,11 @@ spec:
               flight on that pod failed. Check the NODE first: a node-level SystemOOM kills the
               biggest process on the box and is reported here identically to a cgroup kill, but the
               fix is different (see PawtograderEdgeFunctionsNodeMemoryHigh). If the node was fine,
-              the pod budget has THREE terms that must fit inside the container memory limit with
-              headroom for a burst: eszipCacheMaxMb + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB)
-              + ~90Mi of Deno host. The cache term is the one that is easy to forget: it fills with
+              the pod budget is a sum that must fit inside the container memory limit:
+              eszipCacheMaxMb + eszipColdLoadHeadroomMb
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
+              asserts it at render time, so a pod that OOMs despite fitting means one of the
+              measured constants has drifted -- re-measure before raising the limit. The cache term is the one that is easy to forget: it fills with
               the DISTINCT FUNCTIONS a pod has served rather than with load, up to eszipCacheMaxMb,
               and evicts least-recently-used past that. So it is bounded, but the bound is a term in
               this budget and raising it without raising the limit is how you get back here.

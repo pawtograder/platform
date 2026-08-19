@@ -17,7 +17,7 @@ All other config is shared from .Values.edgeFunctions; channels differ only by
 name, labels, image, and replicas, and target the same Postgres/auth/storage.
 */}}
 {{/*
-Guardrail: the edge-function container memory budget has THREE terms, and every
+Guardrail: the edge-function container memory budget is a SUM, and every
 production incident on this tier has come from reconciling fewer than three of
 them. 2026-08-11 counted only the isolates (maxParallelism x per-isolate limit)
 and OOM-killed 21 of 24 pods. 2026-08-19 counted isolates + host but not the
@@ -25,11 +25,18 @@ demuxer's eszip cache, which grows to eszipCacheMaxMb, and OOM-killed pods again
 
 So the sum is asserted at render time rather than documented and hoped for:
 
-    eszipCacheMaxMb + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+    eszipCacheMaxMb + eszipColdLoadHeadroomMb
+      + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
       <= resources.limits.memory
 
 The host term is measured, not guessed: a freshly started pod with an empty
 cache sits at ~87Mi.
+
+The cold-load term covers bundle buffers that residentBytes does NOT count: a
+bundle being read for a cache miss, and one the LRU evicted or refused while a
+worker creation still holds it. main.ts narrows that window to the duration of
+create(), but it cannot be zero, and a burst of cold requests for distinct
+functions is exactly when it is largest.
 
 Two deliberate gaps. When maxParallelism is unset the runtime derives it from
 CPU count, so the isolate term is unknowable here and only cache + host are
@@ -59,9 +66,10 @@ than one that admits it cannot.
 {{- $isolatesMi = mul ($par | int) $perIsolateMi -}}
 {{- end -}}
 {{- $hostMi := 90 -}}
-{{- $needMi := add $cacheMi $isolatesMi $hostMi -}}
+{{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
+{{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
-{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
 {{- end -}}
 {{- end -}}
 

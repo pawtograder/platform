@@ -26,7 +26,7 @@ import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
-import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -2667,7 +2667,7 @@ if (import.meta.main) {
       // captured, delayed 5s, and retried indefinitely. `.catch` is what makes an exit visible --
       // nothing consumes the promise handed to waitUntil, so a rejection here would otherwise be
       // an unhandled rejection that never reaches Sentry.
-      EdgeRuntime.waitUntil(
+      waitUntilWithSentryFlush(
         runBatchHandler()
           .catch((e) => {
             const scope = new Sentry.Scope();

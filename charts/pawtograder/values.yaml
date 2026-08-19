@@ -1140,8 +1140,9 @@ edgeFunctions:
   # (~2.2GB total). Unbounded, that alone exceeded the container limit and
   # OOM-killed pods after a few days' uptime (2026-08-19).
   #
-  # The container budget is now three terms that must be reconciled together:
-  #   eszipCacheMaxBytes + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+  # The container budget is four terms that must be reconciled together:
+  #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
   # At the defaults: 512Mi + (8 x 256Mi) + 90Mi = ~2.6Gi, which is why the
   # edge tier wants a limit at or above 4Gi. Raise this only alongside that sum.
   #
@@ -1150,6 +1151,18 @@ edgeFunctions:
   # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
   # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
   eszipCacheMaxMb: 512
+  # Headroom for bundle bytes the cache accounting does NOT see: a bundle being
+  # read on a cache miss, and one the LRU evicted (or refused as oversized) while
+  # a worker creation still holds a reference to it. Those buffers are real and
+  # concurrent with the cache, so the container budget has to carry them.
+  #
+  # main.ts holds such a reference only for the duration of
+  # EdgeRuntime.userWorkers.create() rather than for the whole request, which is
+  # what keeps this term small — but it is not zero, and a burst of cold requests
+  # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
+  # roughly four of the largest bundle in the image (58.4MiB measured); after
+  # warmup the working set is resident and this is not touched at all.
+  eszipColdLoadHeadroomMb: 256
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -1160,7 +1173,7 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
-  # The memory LIMIT has to hold the whole three-term budget documented above
+  # The memory LIMIT has to hold the whole budget documented above
   # (eszipCacheMaxMb + maxParallelism x worker.memoryLimitMb + ~90Mi host), which
   # is asserted at render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi

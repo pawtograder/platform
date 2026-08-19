@@ -9,6 +9,7 @@ import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { resolveEmailTransport, type EmailTransportDecision } from "../_shared/emailTransportConfig.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -1691,7 +1692,7 @@ export async function runBatchHandler() {
   console.log("Email batch handler stopped");
 }
 
-Deno.serve((req) => {
+serveWithSentryFlush((req) => {
   const headers = req.headers;
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
@@ -1725,7 +1726,7 @@ Deno.serve((req) => {
     // Reset on exit. runBatchHandler breaks out of its loop after maxConsecutiveErrors, and
     // without this the flag would stay true forever and the worker would never restart even once
     // the underlying fault cleared. That matters much more now that misconfigured SMTP throws.
-    EdgeRuntime.waitUntil(
+    waitUntilWithSentryFlush(
       runBatchHandler().finally(() => {
         started = false;
       })

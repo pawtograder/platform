@@ -23,6 +23,7 @@ import {
   summarizeSettled,
   type SettledSummary
 } from "../_shared/settledSummary.ts";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -601,7 +602,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         Sentry.captureException(error, scope);
       }
     };
-    EdgeRuntime.waitUntil(handler());
+    waitUntilWithSentryFlush(handler());
 
     return new Response(
       JSON.stringify({

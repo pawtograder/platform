@@ -204,9 +204,21 @@ Deno.serve(async (req: Request) => {
 
   const servicePath = `/home/deno/functions/${serviceName}`;
 
-  const eszip = await loadEszip(serviceName);
-
-  const createWorker = () => {
+  const createWorker = async () => {
+    // Loaded HERE rather than once per request, so this reference lives only for
+    // the duration of create() instead of for the whole request.
+    //
+    // It used to be hoisted above callWorker, which meant the closure held a
+    // 19-59MB buffer for as long as worker.fetch() ran — up to the 400s worker
+    // lifetime. Bundles the LRU has evicted, or that were too big to admit, are
+    // not counted by residentBytes, so a cold burst could hold well over
+    // eszipCacheMaxMb in buffers the budget knew nothing about. Narrowing the
+    // window to create() does not make that term zero, but it takes it from
+    // "the length of a request" to "the length of an admission", and the
+    // remainder is covered by eszipColdLoadHeadroomMb in the chart's budget
+    // assertion. A cache hit returns the already-counted buffer, so the steady
+    // state after warmup costs nothing extra.
+    const eszip = await loadEszip(serviceName);
     const opts: Record<string, unknown> = {
       servicePath,
       memoryLimitMb: MEMORY_LIMIT_MB,
