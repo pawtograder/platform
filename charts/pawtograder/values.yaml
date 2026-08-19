@@ -1105,10 +1105,10 @@ edgeFunctions:
   #     work waits for the next cron tick instead. Safer, slower.
   # Raising maxParallelism does not substitute for either: an unbounded loop consumes
   # whatever you give it.
-  # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
-  # derives it from CPU cores, which is low on small pods and forces co-location.
-  # Under per_request this is effectively the max concurrent requests per pod
-  # (excess queue up to request-wait-timeout). Empty = runtime default.
+  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
+  # is effectively the max concurrent requests per pod (excess queue up to
+  # request-wait-timeout).
+  #
   # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
   # is a term in the container memory budget, and unset means "whatever the runtime
   # infers from CPU count", which cannot be checked at render time. 8 is what
@@ -1179,8 +1179,9 @@ edgeFunctions:
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
   # The memory LIMIT has to hold the whole budget documented above
-  # (eszipCacheMaxMb + maxParallelism x worker.memoryLimitMb + ~90Mi host), which
-  # is asserted at render time by pawtograder.edgeFunctions.assertMemoryBudget.
+  # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  # render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi
   # cache and 256Mi cold-load defaults with maxParallelism 8 -- comes to 2906Mi
   # (~2.8Gi) and did not fit 2Gi, so the old default was a combination the

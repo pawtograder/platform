@@ -264,7 +264,7 @@ function enforceBudget(): void {
 const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
 
 /**
- * Run `use` with this function's bundle, holding the bundle's bytes against a
+ * Run `runWithBundle` with this function's bundle, holding the bundle's bytes against a
  * budget for exactly as long as the reference is live.
  *
  * Two cases, deliberately different:
@@ -283,18 +283,18 @@ const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
  */
 async function withEszip<T>(
   name: string,
-  use: (eszip: Uint8Array | null) => Promise<T>
+  runWithBundle: (eszip: Uint8Array | null) => Promise<T>
 ): Promise<T> {
   if (resident.has(name)) {
     pin(name);
     try {
-      return await use(await loadEszip(name));
+      return await runWithBundle(await loadEszip(name));
     } finally {
       unpin(name);
     }
   }
 
-  if (missing.has(name)) return await use(null);
+  if (missing.has(name)) return await runWithBundle(null);
 
   let size = 0;
   try {
@@ -302,12 +302,12 @@ async function withEszip<T>(
   } catch {
     // No bundle (or unreadable): loadEszip records the negative result and the
     // caller falls back to the raw servicePath. Nothing to reserve.
-    return await use(await loadEszip(name));
+    return await runWithBundle(await loadEszip(name));
   }
 
   await acquireCold(size);
   try {
-    return await use(await loadEszip(name));
+    return await runWithBundle(await loadEszip(name));
   } finally {
     releaseCold(size);
   }
@@ -406,7 +406,10 @@ Deno.serve(async (req: Request) => {
       opts.maybeEszip = eszip;
       opts.maybeEntrypoint = `file:///home/deno/functions/${serviceName}/index.ts`;
     }
-      // @ts-ignore EdgeRuntime is provided by supabase/edge-runtime
+      // @ts-expect-error EdgeRuntime is an untyped global provided by
+      // supabase/edge-runtime, so this reference always errors under a plain
+      // type-check -- which is what makes expect-error (rather than ignore) the
+      // correct directive here.
       return await EdgeRuntime.userWorkers.create(opts);
     });
 
