@@ -474,29 +474,48 @@ begin
       r_source_repo := v_default_source;
     end if;
 
-    perform public.enqueue_github_create_repo(
-      v_course_id,
-      v_org,
-      -- Sanitize the group name as its own COMPONENT, exactly as the TypeScript paths
-      -- do. Sanitizing only the assembled name would let two groups whose names are
-      -- entirely illegal characters ("###" and "@@@") both collapse to
-      -- `<slug>-<assignment>-group` and collide on one repository; per-component
-      -- sanitization raises on such a name instead, matching sanitizeRepoNameComponent.
-      v_slug || '-' || v_assignment_slug || '-group-' || public.sanitize_repo_name_component(r_group_name),
-      coalesce(v_template_repo, r_source_repo),
-      v_slug,
-      r_members,
-      false,
-      null,
-      v_assignment_id,
-      null,
-      r_group_id,
-      v_latest_template_sha,
-      v_creation_method,
-      r_source_repo,
-      v_branch_protection,
-      null
-    );
+    -- One unusable group name must not take down the assignment-wide pass. This runs
+    -- inside the FOR EACH ROW trigger on assignment_groups_members, so an exception here
+    -- aborts whatever transaction touched membership -- a student's group join, say.
+    -- Two reachable cases, both allowed by the group-name validators
+    -- (`^[a-zA-Z0-9_-]{1,36}$` in the UI and edge functions, `^[a-zA-Z0-9_-]+$` in the
+    -- SQL RPCs), neither of which the sanitizer can express:
+    --   * separator-only names ("---", "_") trim to an empty component and raise;
+    --   * "Team-One" and "Team--One" both collapse to "Team-One" and collide on
+    --     unique_repo_name.
+    -- The TypeScript paths hit exactly the same two walls, since they call
+    -- sanitizeRepoNameComponent on the same input -- so skipping is the consistent
+    -- outcome, not a SQL-only quirk. Warn, skip that group, keep going. Validating
+    -- names against the sanitizer at group-creation time (with post-sanitization
+    -- uniqueness) is the real fix and belongs with the group-creation paths.
+    begin
+      perform public.enqueue_github_create_repo(
+        v_course_id,
+        v_org,
+        -- Sanitize the group name as its own COMPONENT, exactly as the TypeScript paths
+        -- do, so a name derived here and the same name derived there agree. Netting only
+        -- the assembled name would leave "Team--One" uncollapsed in SQL while TypeScript
+        -- collapses it -- the divergence this migration exists to close.
+        v_slug || '-' || v_assignment_slug || '-group-' || public.sanitize_repo_name_component(r_group_name),
+        coalesce(v_template_repo, r_source_repo),
+        v_slug,
+        r_members,
+        false,
+        null,
+        v_assignment_id,
+        null,
+        r_group_id,
+        v_latest_template_sha,
+        v_creation_method,
+        r_source_repo,
+        v_branch_protection,
+        null
+      );
+    exception
+      when others then
+        raise warning 'Could not enqueue a repo for group "%" (id %) on assignment %: %. Rename the group to something that survives repo-name normalization, then use Retry.',
+          r_group_name, r_group_id, v_assignment_id, sqlerrm;
+    end;
   end loop;
 end;
 $$;
