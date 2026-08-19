@@ -14,6 +14,7 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
+import { isValidGroupName } from "@/lib/groupNameValidation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
@@ -103,16 +104,17 @@ function CreateGroupButton({
               <Dialog.Title>Create a new group</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Field.Root invalid={name.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(name)}>
+              <Field.Root invalid={name.length > 0 && !isValidGroupName(name)}>
                 <Field.Label>Choose a name for your group</Field.Label>
                 <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
                 <Field.HelperText>
                   Other students will use this name to find your group, and instructors will use this name to identify
-                  the group. The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36
-                  characters.
+                  the group. The name must consist only of alphanumeric, hyphens, or underscores, contain at least one
+                  letter or number, and be less than 36 characters.
                 </Field.HelperText>
                 <Field.ErrorText>
-                  The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
+                  The name must consist only of alphanumeric, hyphens, or underscores, contain at least one letter or
+                  number, and be less than 36 characters.
                 </Field.ErrorText>
               </Field.Root>
               <Field.Root>
@@ -133,6 +135,7 @@ function CreateGroupButton({
               </Dialog.ActionTrigger>
               <Button
                 loading={isLoading}
+                disabled={!isValidGroupName(name)}
                 colorPalette="green"
                 onClick={() => {
                   setIsLoading(true);

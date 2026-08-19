@@ -26,23 +26,39 @@
 --
 -- This migration:
 --   1. sanitize_repo_name_component() -- the SQL twin of _shared/repoNames.ts, applied
---      per COMPONENT, plus sanitize_repo_name() -- a weaker whole-name net that only
---      maps illegal characters, so it can never alter an already-valid assembled name.
---   2. Sanitization applies only where a name is FIRST derived and stored: the insert
---      path of enqueue_github_create_repo(), plus the group-name component in
---      create_all_repos_for_assignment_internal(). A name read back off an existing row
---      is authoritative and is used verbatim -- it is what a GitHub repo was created as
---      and what webhooks resolve against, and `is_github_ready = false` does not mean no
---      GitHub repo exists (the worker can create the repo and fail to mark the row).
---      So new rows converge on the name GitHub will actually create, and existing rows
---      keep resolving to their real repository. Renaming the rows that already diverged
---      is a data migration, deliberately not folded in here.
+--      per COMPONENT and never to an assembled name.
+--   2. Sanitization happens at the sites that DERIVE a name, on the one component that
+--      needs it: the group name, in create_all_repos_for_assignment_internal() and in
+--      publish_assignment_group_changes(). enqueue_github_create_repo() passes the name
+--      its caller derived straight through.
+--
+--      Nothing normalizes an assembled name, and that restraint is load-bearing rather
+--      than laziness: TypeScript sanitizes the group-name component alone and leaves the
+--      class and assignment slugs byte-for-byte, so ANY pass over the whole name -- even
+--      one restricted to characters GitHub rejects -- makes SQL derive a different
+--      repository than TypeScript for the same group, which is precisely the divergence
+--      this migration exists to close. Slugs really do carry such characters: the e2e
+--      harness builds a `dd/MM/yy HH:mm:ss#suffix` stamp into a class slug, so a
+--      whole-name net rewrites `/`, `:` and `#` and every derived name stops matching.
+--      Sanitizing an assembled name is therefore a bug, not a safety net.
+--
+--      A name read back off an existing row is authoritative and is used verbatim -- it
+--      is what a GitHub repo was created as and what webhooks resolve against, and
+--      `is_github_ready = false` does not mean no GitHub repo exists (the worker can
+--      create the repo and fail to mark the row). So new rows converge on the name
+--      GitHub will actually create, and existing rows keep resolving to their real
+--      repository. Renaming the rows that already diverged is a data migration,
+--      deliberately not folded in here.
 --   3. create_all_repos_for_assignment_internal() dedupes on identity, not on name.
 --   4. repositories.creation_attempts / .last_creation_attempt_at + a reset trigger.
 --   5. reconcile_stuck_repo_creations() gains exponential backoff, an attempt ceiling
 --      that parks the row for an instructor, and active-class scoping.
 --   6. A one-time backfill that parks rows already stuck long enough to have been
 --      retried hundreds of times, so the backlog drains instead of replaying.
+--   7. A trigger on assignment_groups that refuses a group name with no repo-name form
+--      ("---") and one that normalizes onto a sibling's ("Team--One" beside "Team-One").
+--      Both pass today's app-layer validators and then produce a group that can never
+--      get a repository, which is a class of stuck row rather than a stuck retry.
 
 -- ============================================================================
 -- 1. Repo-name sanitizer (SQL twin of supabase/functions/_shared/repoNames.ts)
@@ -57,8 +73,11 @@
 -- would diverge from them: an assignment slugged `hw--1` assembles to
 -- `course-hw--1-group-Team` in TypeScript but would collapse to `course-hw-1-group-Team`
 -- here, and github-user-sync would then sync permissions against a repo that does not
--- exist. Nothing constrains slugs to make that collapse a no-op. Use
--- sanitize_repo_name() below for the whole-name safety net.
+-- exist. Nothing constrains slugs to make that collapse a no-op -- and a class slug can
+-- hold characters GitHub rejects outright (`/`, `:`, `#`), which TypeScript passes
+-- through untouched, so even a gentler whole-name pass diverges. There is deliberately
+-- no whole-name sanitizer to reach for: normalize components, assemble, and leave the
+-- assembled name alone.
 create or replace function public.sanitize_repo_name_component(raw text)
 returns text
 language plpgsql
@@ -97,42 +116,36 @@ comment on function public.sanitize_repo_name_component(text) is
 
 grant execute on function public.sanitize_repo_name_component(text) to authenticated, service_role;
 
--- Whole-assembled-name safety net. Deliberately WEAKER than the component sanitizer:
--- it only maps characters GitHub rejects onto hyphens, and never collapses runs, trims
--- separators or raises. That restraint is the point -- this runs over names assembled
--- by callers that have already sanitized their own components, so it must be a no-op
--- on any name that is already valid. It exists for the SQL callers that still
--- concatenate a raw group name (publish_assignment_group_changes), so those cannot put
--- a space into a repo name; those sites should move to per-component sanitization,
--- after which this becomes dead weight rather than a behavior.
-create or replace function public.sanitize_repo_name(raw text)
-returns text
-language sql
-immutable
-parallel safe
-set search_path = ''
-as $$
-  select case when raw is null then null
-              else regexp_replace(raw, '[^A-Za-z0-9._-]+', '-', 'g')
-         end;
-$$;
-
-comment on function public.sanitize_repo_name(text) is
-  'Map characters GitHub rejects in a repo name onto hyphens. A last-resort net over an assembled name; it must never alter an already-valid name, so it does not collapse or trim. Per-component normalization belongs to sanitize_repo_name_component().';
-
-grant execute on function public.sanitize_repo_name(text) to authenticated, service_role;
+-- An earlier revision of this migration also shipped sanitize_repo_name(), a weaker
+-- pass over the ASSEMBLED name that only mapped characters GitHub rejects onto hyphens.
+-- It is dropped rather than kept unused: however gentle, a whole-name pass rewrites
+-- parts of the name no TypeScript path touches. A class slug carrying `/`, `:` or `#`
+-- -- which the e2e harness generates on every run, and which nothing forbids in
+-- production -- came out of it hyphenated, so the queued repoName stopped matching the
+-- name every TypeScript path derives for the same repository, and repo lookups by name
+-- missed. Dropped explicitly so an environment that already applied that revision does
+-- not keep a function whose only correct number of callers is zero.
+drop function if exists public.sanitize_repo_name(text);
 
 -- ============================================================================
--- 2. Sanitize at the enqueue choke point
+-- 2. One repository row per identity at the enqueue choke point
 -- ============================================================================
 --
--- Unchanged from 20260530120200 except for the sanitize of p_repo_name. Every SQL
--- path that creates a repo goes through here (create_all_repos_for_assignment_internal,
--- publish_assignment_group_changes, copy_groups_from_assignment,
--- enqueue_create_repo_for_repository), so this is the one place that has to apply it.
--- Before this, a group named "Team 1" was stored as `org/course-hw1-group-Team 1`
--- while GitHub coerced the actual repo to `Team-1` -- which also broke webhook
--- lookups that resolve a repository row by name.
+-- Every SQL path that creates a repo goes through here
+-- (create_all_repos_for_assignment_internal, publish_assignment_group_changes,
+-- copy_groups_from_assignment, enqueue_create_repo_for_repository). Unchanged from
+-- 20260530120200 except for how it picks the row to enqueue against and which name it
+-- queues: the lookup now breaks ties deterministically, an insert that loses a race
+-- re-reads the winner instead of raising, and a name read back off an existing row is
+-- queued verbatim.
+--
+-- What this function deliberately does NOT do is sanitize. It queues p_repo_name as the
+-- caller assembled it. Normalizing here would look like the obvious choke point and be
+-- wrong: the caller has already sanitized the one component that needs it, and the rest
+-- of the name -- the class and assignment slugs -- must stay byte-identical to what the
+-- TypeScript paths produce, including characters GitHub itself rejects. A slug of
+-- `e2e-17/08/26-00:34:10#f3oe` is not ours to fix here; rewriting it makes this the only
+-- deriver in the system that disagrees with all the others.
 create or replace function public.enqueue_github_create_repo(
   p_class_id bigint,
   p_org text,
@@ -164,12 +177,13 @@ declare
   v_existing_name text;
   v_args jsonb;
 begin
-  -- Net the name the CALLER derived. sanitize_repo_name (not the component sanitizer)
-  -- so a caller that already normalized its components keeps them byte-for-byte -- an
-  -- assignment slugged `hw--1` must survive, because the TypeScript paths preserve it.
-  -- Only a name we are about to store is netted; a name read back off an existing row
-  -- is authoritative and is used verbatim (see below).
-  v_repo_name := public.sanitize_repo_name(p_repo_name);
+  -- The caller's name, byte-for-byte. Callers sanitize the group-name COMPONENT before
+  -- they assemble (create_all_repos_for_assignment_internal,
+  -- publish_assignment_group_changes), matching what TypeScript does; anything this
+  -- function did to the assembled name on top of that would only make SQL and
+  -- TypeScript derive different repositories. v_repo_name exists because a name read
+  -- back off an existing row overrides it below, not because it gets rewritten here.
+  v_repo_name := p_repo_name;
   full_repo_name := p_org || '/' || v_repo_name;
 
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
@@ -880,3 +894,605 @@ update public.repositories rp
      not public.is_class_active(c.archived, c.end_date)
      or rp.updated_at < now() - interval '7 days'
    );
+
+-- ============================================================================
+-- 9. Reject group names that cannot become a repository name
+-- ============================================================================
+--
+-- A group repository is named
+--   <class_slug>-<assignment_slug>-group-<sanitize_repo_name_component(group.name)>
+-- which makes the group name the only user-authored component of a GitHub repo name.
+-- Two shapes of name pass the app-layer validators (`^[a-zA-Z0-9_-]{1,36}$` in the
+-- create-group form, in publish_assignment_group_changes and in the bulk-import path)
+-- and then have nowhere to go on the other side of that derivation:
+--
+--   * Separator-only names -- `---`, `_`, `-_-`. sanitize_repo_name_component() trims
+--     them to the empty string and raises, so what the student sees is not "pick
+--     another name" at the moment they pick it, but a create-all-repos call or an
+--     async worker job failing later with a message about repo-name components. The
+--     group exists, has members, and can never get a repository.
+--   * Names that differ only in characters the sanitizer folds away: `Team-One` and
+--     `Team--One` both normalize to `Team-One`. Both are legal, distinct rows under
+--     unique_assignment_group_name; both derive the same repository name; and the
+--     second one to reach the queue trips the unique_repo_name index on
+--     repositories.repository. Which group loses is a race, and the loser's failure
+--     surfaces in a worker rather than at the keyboard of whoever named it.
+--
+-- The uniqueness comparison is case-insensitive because GitHub is: `team-one` and
+-- `Team-One` are one repository there, so two groups holding those names collide on
+-- creation even though both rows are distinct. publish_assignment_group_changes
+-- already refuses a case-insensitive duplicate of the plain name (and
+-- unique_assignment_groups_name_assignment_id enforces it); this extends that same
+-- rule to the sanitized form, which is what actually reaches GitHub.
+--
+-- This lives in the database rather than in one more validator because group rows are
+-- written from several places -- the student-facing join/create flow, the instructor
+-- RPCs, copy_groups_from_assignment, the CSV import, seeds -- and only the table sees
+-- all of them.
+--
+-- Deliberately NOT enforced here: the character set and the 36-character limit. Those
+-- stay exactly where they are, in the app layer. Names with spaces (`Brand New Team 9`)
+-- are ordinary and sanitize cleanly to `Brand-New-Team-9`; rejecting them at the table
+-- would break existing callers, seeds and rows for no gain. The rule this trigger
+-- enforces is narrower and mechanical: whatever the name is, it must survive the
+-- derivation and land on a repository name no sibling group also lands on.
+--
+-- Existing rows are grandfathered. The trigger fires on `update of name`, so a legacy
+-- group that already violates either rule keeps its name, keeps its repository and
+-- keeps working until somebody renames it -- at which point the new name has to be
+-- valid. The audit at the end of this section reports the legacy violations into the
+-- deploy log without failing the deploy.
+
+-- security definer because RLS on assignment_groups scopes SELECT to the caller's
+-- class enrollment, and the collision check has to see every sibling group regardless
+-- of who is writing. A definer-less check would silently pass for a caller who cannot
+-- read the row it collides with, which is the exact case this is meant to catch.
+create or replace function public.validate_assignment_group_name()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_sanitized text;
+  v_other text;
+  r record;
+begin
+  begin
+    v_sanitized := public.sanitize_repo_name_component(new.name);
+  exception
+    when others then
+      raise exception 'Group name "%" cannot be used: a group name needs at least one letter or number in it. This group''s repository is named after it, and GitHub will not accept a name made only of dashes, underscores or dots. Pick a different name for the group.', new.name
+        using errcode = 'check_violation';
+  end;
+
+  -- Row-at-a-time rather than one set query so that a grandfathered sibling whose own
+  -- name does not sanitize cannot make this trigger raise on an unrelated group: a
+  -- name with no repo-name form has no repository, so nothing can collide with it.
+  --
+  -- The scan skips any sibling whose name is byte-identical to the incoming one, and
+  -- that exclusion is load-bearing -- do NOT simplify it away as redundant with the id
+  -- guard:
+  --
+  --   A BEFORE INSERT trigger fires before ON CONFLICT arbitration, and identity
+  --   defaults are already filled in by the time it runs. So an upsert that Postgres
+  --   is about to route into an UPDATE of an existing row arrives here looking like a
+  --   brand-new row with a fresh id, colliding with itself; `id is distinct from
+  --   new.id` cannot tell the two apart. copy_groups_from_assignment reuses target
+  --   groups exactly that way -- INSERT ... ON CONFLICT (assignment_id, name) DO
+  --   UPDATE, so repository and submission history survive a re-copy -- and without
+  --   this exclusion every copy into a target that already holds a same-named group
+  --   aborts on a collision of a group with itself. That is an instructor's ordinary
+  --   "copy groups from lab 1 to lab 2, then fix a roster and copy again" workflow.
+  --
+  -- Skipping those rows gives up no protection. A byte-identical duplicate is already
+  -- rejected by unique_assignment_group_name (assignment_id, name), and a duplicate
+  -- differing only in capitalization by unique_assignment_groups_name_assignment_id
+  -- (lower(name), assignment_id). What those indexes cannot see, and what this trigger
+  -- exists for, is a pair that is distinct as stored yet identical once sanitized --
+  -- `Team--One` against `Team-One` -- and such a pair is never byte-identical, so it
+  -- still reaches the comparison below.
+  for r in
+    select ag.id, ag.name
+      from public.assignment_groups ag
+     where ag.assignment_id = new.assignment_id
+       and ag.id is distinct from new.id
+       and ag.name is distinct from new.name
+  loop
+    begin
+      v_other := lower(public.sanitize_repo_name_component(r.name));
+    exception
+      when others then
+        v_other := null;
+    end;
+
+    if v_other is not null and v_other = lower(v_sanitized) then
+      raise exception 'Group name "%" is too similar to the existing group "%" on this assignment. GitHub ignores capitalization and treats repeated dashes as one, so both group names turn into the same repository name ("%") and only one of the two groups could ever get its repository. Rename one of them so they differ by a letter or a number, not only by punctuation or capitalization.', new.name, r.name, v_sanitized
+        using errcode = 'unique_violation';
+    end if;
+  end loop;
+
+  return new;
+end;
+$$;
+
+comment on function public.validate_assignment_group_name() is
+  'Reject an assignment group name that cannot become a repository name: one that sanitize_repo_name_component() empties, or one that normalizes to the same component as a sibling group in the same assignment (compared case-insensitively, as GitHub does). Does not police character set or length -- those stay in the app layer, and names with spaces are valid here.';
+
+drop trigger if exists validate_assignment_group_name on public.assignment_groups;
+create trigger validate_assignment_group_name
+  before insert or update of name on public.assignment_groups
+  for each row
+  execute function public.validate_assignment_group_name();
+
+-- One-time audit of what the rules would have caught, reported and not enforced.
+-- Renaming existing groups is a data decision (their repositories already exist under
+-- the old names), so this only puts the counts in the deploy log for whoever has to
+-- make it. Wrapped so that it can never fail the migration: an audit that aborts a
+-- deploy is worse than no audit.
+do $$
+declare
+  r record;
+  v_keys text[] := '{}';
+  v_unnameable int := 0;
+  v_colliding_names int := 0;
+  v_collision_clusters int := 0;
+begin
+  for r in select ag.id, ag.assignment_id, ag.name from public.assignment_groups ag loop
+    begin
+      v_keys := v_keys || (r.assignment_id::text || ':' || lower(public.sanitize_repo_name_component(r.name)));
+    exception
+      when others then
+        v_unnameable := v_unnameable + 1;
+    end;
+  end loop;
+
+  select coalesce(count(*), 0), coalesce(sum(k.n), 0)
+    into v_collision_clusters, v_colliding_names
+    from (
+      select count(*) as n
+        from unnest(v_keys) as sanitized_key
+       group by sanitized_key
+      having count(*) > 1
+    ) k;
+
+  if v_unnameable > 0 then
+    raise warning 'assignment_groups audit: % existing group name(s) do not sanitize to a usable repo-name component. They are grandfathered; renaming one now requires a valid name.', v_unnameable;
+  end if;
+  if v_collision_clusters > 0 then
+    raise warning 'assignment_groups audit: % existing group name(s), in % collision set(s), normalize to the same repo-name component as a sibling group in the same assignment. They are grandfathered; only one group per set can hold the derived repository.', v_colliding_names, v_collision_clusters;
+  end if;
+exception
+  when others then
+    raise warning 'assignment_groups audit skipped: %', sqlerrm;
+end;
+$$;
+
+-- ============================================================================
+-- 10. Sanitize the group-name component in publish_assignment_group_changes
+-- ============================================================================
+--
+-- The last SQL site that assembled a repo name out of a RAW group name. It builds
+-- `<class_slug>-<assignment_slug>-group-<group name>` when it enqueues creation for a
+-- group an instructor just published, and with no whole-name net left (section 1) that
+-- concatenation is the one place SQL can still derive a name TypeScript never would: a
+-- group named `Team--One` gives `-group-Team--One` here and `-group-Team-One` in
+-- github-user-sync and in create_all_repos_for_assignment_internal. The repository row
+-- then holds a name no GitHub repo has, permission sync misses, and the reconciler
+-- re-enqueues it forever -- the failure mode this migration is about, arriving through
+-- the one door left open.
+--
+-- The fix is one component, not the assembled name: wrap v_group_name in
+-- sanitize_repo_name_component(), exactly as section 3 does in
+-- create_all_repos_for_assignment_internal(). Everything around it -- the class and
+-- assignment slugs -- stays byte-for-byte, because TypeScript leaves them alone too.
+--
+-- The body below is the live 20260624000000 definition re-emitted verbatim, with that
+-- single expression changed and nothing else touched. It is copied rather than patched
+-- because Postgres has no way to edit one expression of a function in place; when this
+-- function is next revised, that revision supersedes this copy and must carry the
+-- sanitize forward. The trigger in section 9 is the backstop that keeps the group name
+-- itself derivable, but it cannot make this site agree with TypeScript -- only
+-- sanitizing here can.
+create or replace function public.publish_assignment_group_changes(
+    p_class_id       bigint,
+    p_assignment_id  bigint,
+    p_groups_to_create jsonb default '[]'::jsonb,
+    p_moves_to_fulfill jsonb default '[]'::jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_caller_profile_id uuid;
+    v_course_slug       text;
+    v_github_org        text;
+    v_template_repo     text;
+    v_latest_sha        text;
+    v_assignment_slug   text;
+
+    v_repo_mode            public.assignment_repo_mode;
+    v_source_assignment_id bigint;
+    v_branch_protection    jsonb;
+    v_creation_method      text;
+    v_group_source_repo    text;
+
+    v_group             jsonb;
+    v_move              jsonb;
+    v_group_name        text;
+    v_new_group_id      bigint;
+    v_member_id         uuid;
+    v_member_ids        jsonb;
+
+    v_old_gid           bigint;
+    v_new_gid           bigint;
+    v_profile_id        uuid;
+    v_empty_gid         bigint;
+
+    v_membership_id     bigint;
+    v_repo_record       record;
+
+    v_affected_groups   bigint[] := '{}';
+    v_deleted_groups    bigint[] := '{}';
+    -- empty groups we intentionally keep (they have submissions); excluded from
+    -- the permission sync so their preserved repo's GitHub access is left as-is
+    v_preserved_groups  bigint[] := '{}';
+
+    v_groups_created    integer := 0;
+    v_members_added     integer := 0;
+    v_members_moved     integer := 0;
+    v_groups_dissolved  integer := 0;
+    v_syncs_enqueued    integer := 0;
+    v_errors            jsonb[] := '{}';
+begin
+    -- auth
+    if auth.uid() is null then
+        raise exception 'Not authenticated';
+    end if;
+    if not exists (
+        select 1 from public.user_privileges up
+        where up.user_id = auth.uid()
+          and (up.role = 'admin' or (up.class_id = p_class_id and up.role = 'instructor'))
+    ) then
+        raise exception 'Only instructors can publish group changes';
+    end if;
+
+    select private_profile_id into v_caller_profile_id
+    from public.user_roles
+    where user_id = auth.uid()
+      and class_id = p_class_id
+      and role = 'instructor'
+    limit 1;
+
+    -- class + assignment metadata (one query), incl. repo_mode config
+    select c.slug, c.github_org, a.slug, a.template_repo, a.latest_template_sha,
+           a.repo_mode, a.source_assignment_id,
+           jsonb_build_object(
+             'blockForcePush', coalesce(a.protect_block_force_push, true),
+             'requirePullRequest', coalesce(a.protect_require_pull_request, false),
+             'requiredReviewers', coalesce(a.protect_required_reviewers, 0)
+           )
+    into   v_course_slug, v_github_org, v_assignment_slug, v_template_repo, v_latest_sha,
+           v_repo_mode, v_source_assignment_id, v_branch_protection
+    from   public.assignments a
+    join   public.classes c on c.id = a.class_id
+    where  a.id = p_assignment_id and a.class_id = p_class_id;
+
+    if v_course_slug is null then
+        raise exception 'Assignment % not found in class %', p_assignment_id, p_class_id;
+    end if;
+
+    -- Phase 1: process moves on existing groups
+    for v_move in select * from jsonb_array_elements(p_moves_to_fulfill)
+    loop
+        v_profile_id := (v_move->>'profile_id')::uuid;
+        v_old_gid    := (v_move->>'old_group_id')::bigint;
+        v_new_gid    := (v_move->>'new_group_id')::bigint;
+
+        begin
+            if v_old_gid is not null and not exists (
+                select 1 from public.assignment_groups
+                where id = v_old_gid
+                  and assignment_id = p_assignment_id
+                  and class_id = p_class_id
+            ) then
+                v_errors := array_append(v_errors, jsonb_build_object(
+                    'profile_id', v_profile_id,
+                    'error', format('Group %s does not belong to assignment %s', v_old_gid, p_assignment_id)
+                ));
+                continue;
+            end if;
+            if v_new_gid is not null and not exists (
+                select 1 from public.assignment_groups
+                where id = v_new_gid
+                  and assignment_id = p_assignment_id
+                  and class_id = p_class_id
+            ) then
+                v_errors := array_append(v_errors, jsonb_build_object(
+                    'profile_id', v_profile_id,
+                    'error', format('Group %s does not belong to assignment %s', v_new_gid, p_assignment_id)
+                ));
+                continue;
+            end if;
+
+            if v_old_gid is not null then
+                select id into v_membership_id
+                from public.assignment_groups_members
+                where assignment_group_id = v_old_gid
+                  and profile_id = v_profile_id
+                  and class_id = p_class_id;
+
+                if v_membership_id is null then
+                    v_errors := array_append(v_errors, jsonb_build_object(
+                        'profile_id', v_profile_id,
+                        'error', format('Student not in group %s', v_old_gid)
+                    ));
+                    continue;
+                end if;
+
+                delete from public.assignment_groups_members where id = v_membership_id;
+                v_affected_groups := array_append(v_affected_groups, v_old_gid);
+            end if;
+
+            if v_new_gid is not null then
+                if v_old_gid is null then
+                    update public.submissions
+                    set is_active = false
+                    where assignment_id = p_assignment_id
+                      and profile_id = v_profile_id;
+                end if;
+
+                insert into public.assignment_groups_members
+                    (assignment_group_id, profile_id, assignment_id, class_id, added_by)
+                values
+                    (v_new_gid, v_profile_id, p_assignment_id, p_class_id, v_caller_profile_id);
+
+                v_affected_groups := array_append(v_affected_groups, v_new_gid);
+            end if;
+
+            v_members_moved := v_members_moved + 1;
+
+        exception when others then
+            v_errors := array_append(v_errors, jsonb_build_object(
+                'profile_id', v_profile_id,
+                'error', SQLERRM
+            ));
+        end;
+    end loop;
+
+    -- Phase 2: create new groups and add their initial members
+    for v_group in select * from jsonb_array_elements(p_groups_to_create)
+    loop
+        v_group_name := trim(v_group->>'name');
+        v_member_ids := v_group->'member_ids';
+
+        begin
+            if v_group_name = '' or v_group_name is null then
+                raise exception 'Group name cannot be empty';
+            end if;
+            if length(v_group_name) > 36 then
+                raise exception 'Group name too long (max 36 chars)';
+            end if;
+            if v_group_name !~ '^[a-zA-Z0-9_-]+$' then
+                raise exception 'Group name must be alphanumeric, hyphens, or underscores';
+            end if;
+
+            if exists (
+                select 1 from public.assignment_groups
+                where assignment_id = p_assignment_id and lower(name) = lower(v_group_name)
+            ) then
+                raise exception 'Group "%" already exists', v_group_name;
+            end if;
+
+            -- Resolve the creation strategy from repo_mode BEFORE creating the
+            -- group, so a fork-mode group with no source repo is reported as an
+            -- error without leaving a half-created group behind.
+            v_creation_method := null;
+            v_group_source_repo := null;
+            if v_repo_mode not in ('none', 'no_submission') then
+                if v_repo_mode = 'fork_from_prior_assignment' then
+                    select r.repository into v_group_source_repo
+                      from public.repositories r
+                      join public.assignment_groups ag on ag.id = r.assignment_group_id
+                     where r.assignment_id = v_source_assignment_id
+                       and ag.name = v_group_name
+                     limit 1;
+                    if v_group_source_repo is null then
+                        raise exception 'No source repository for group "%" on source assignment %', v_group_name, v_source_assignment_id;
+                    end if;
+                    v_creation_method := 'fork';
+                elsif v_repo_mode = 'template_with_student_forks' then
+                    v_group_source_repo := v_template_repo;
+                    v_creation_method := 'fork';
+                else  -- template_only_staff
+                    v_group_source_repo := v_template_repo;
+                    v_creation_method := 'template';
+                end if;
+            end if;
+
+            insert into public.assignment_groups (name, assignment_id, class_id)
+            values (v_group_name, p_assignment_id, p_class_id)
+            returning id into v_new_group_id;
+
+            v_groups_created := v_groups_created + 1;
+
+            -- enqueue repo creation per repo_mode (empty usernames; permission sync below)
+            if v_creation_method is not null
+               and v_github_org is not null
+               and (v_repo_mode = 'fork_from_prior_assignment'
+                    or (v_template_repo is not null and v_template_repo != '')) then
+                perform public.enqueue_github_create_repo(
+                    p_class_id,
+                    v_github_org,
+                    v_course_slug || '-' || v_assignment_slug || '-group-' || public.sanitize_repo_name_component(v_group_name),
+                    coalesce(v_template_repo, v_group_source_repo),
+                    v_course_slug,
+                    '{}'::text[],
+                    false,
+                    'batch-group-create-' || v_new_group_id::text,
+                    p_assignment_id,
+                    null::uuid,
+                    v_new_group_id,
+                    v_latest_sha,
+                    v_creation_method,
+                    v_group_source_repo,
+                    v_branch_protection,
+                    null
+                );
+            end if;
+
+            if v_member_ids is not null and jsonb_array_length(v_member_ids) > 0 then
+                for v_member_id in
+                    select (value#>>'{}')::uuid from jsonb_array_elements(v_member_ids) as value
+                loop
+                    update public.submissions
+                    set is_active = false
+                    where assignment_id = p_assignment_id
+                      and profile_id = v_member_id;
+
+                    insert into public.assignment_groups_members
+                        (assignment_group_id, profile_id, assignment_id, class_id, added_by)
+                    values
+                        (v_new_group_id, v_member_id, p_assignment_id, p_class_id, v_caller_profile_id);
+
+                    v_members_added := v_members_added + 1;
+                end loop;
+            end if;
+
+            v_affected_groups := array_append(v_affected_groups, v_new_group_id);
+
+        exception when others then
+            v_errors := array_append(v_errors, jsonb_build_object(
+                'group_name', v_group_name,
+                'error', SQLERRM
+            ));
+        end;
+    end loop;
+
+    -- Phase 2b: dissolve empty groups (batch-final state after moves + creates)
+    for v_empty_gid in
+        select ag.id
+        from public.assignment_groups ag
+        where ag.assignment_id = p_assignment_id
+          and ag.class_id = p_class_id
+          and not exists (
+              select 1 from public.assignment_groups_members agm
+              where agm.assignment_group_id = ag.id
+          )
+    loop
+        -- Preserve groups that still have submissions. Their repo holds
+        -- graded/active work and is referenced by submissions (repository_id and
+        -- repository_check_run_id), so deleting it would violate those FKs and
+        -- destroy history. Keep the group, repo, check runs, and submissions
+        -- intact; only fully dissolve groups whose repos have no submissions.
+        if exists (
+            select 1 from public.submissions s
+            where s.assignment_group_id = v_empty_gid
+        ) or exists (
+            select 1
+            from public.submissions s
+            join public.repositories r on r.id = s.repository_id
+            where r.assignment_group_id = v_empty_gid
+        ) then
+            v_preserved_groups := array_append(v_preserved_groups, v_empty_gid);
+            continue;
+        end if;
+
+        delete from public.assignment_group_invitations
+        where assignment_group_id = v_empty_gid;
+        delete from public.assignment_group_join_request
+        where assignment_group_id = v_empty_gid;
+
+        for v_repo_record in
+            select r.id, r.repository
+            from public.repositories r
+            where r.assignment_group_id = v_empty_gid
+              and r.repository is not null
+              and position('/' in r.repository) > 0
+        loop
+            if v_github_org is not null then
+                perform public.enqueue_github_archive_repo(
+                    p_class_id,
+                    v_github_org,
+                    split_part(v_repo_record.repository, '/', 2),
+                    'batch-dissolve-' || v_empty_gid::text
+                );
+            end if;
+            delete from public.repository_check_runs where repository_id = v_repo_record.id;
+            delete from public.repositories where id = v_repo_record.id;
+        end loop;
+
+        delete from public.assignment_groups where id = v_empty_gid;
+        v_deleted_groups := array_append(v_deleted_groups, v_empty_gid);
+        v_groups_dissolved := v_groups_dissolved + 1;
+    end loop;
+
+    -- Phase 3: enqueue ONE permission sync per affected repo
+    -- Deduplicate and exclude dissolved + preserved groups.
+    -- Enqueue the sync even for repos that aren't GitHub-ready yet: newly-created
+    -- group repos are created via enqueue_github_create_repo with an EMPTY
+    -- collaborator list, so this sync is the only path that grants member access.
+    -- The async worker requeues sync_repo_permissions until is_github_ready=true
+    -- (so it can't race create_repo), then applies the real member list. Skipping
+    -- not-ready repos here would strand those members without GitHub access.
+    for v_repo_record in
+        select distinct r.id           as repo_id,
+               r.repository,
+               r.assignment_group_id,
+               r.is_github_ready
+        from   unnest(v_affected_groups) as gid(g)
+        join   public.repositories r on r.assignment_group_id = gid.g
+        where  not (gid.g = any(v_deleted_groups))
+          and  not (gid.g = any(v_preserved_groups))
+    loop
+        begin
+            declare
+                v_usernames text[];
+            begin
+                select coalesce(array_remove(array_agg(u.github_username), null), '{}')
+                into v_usernames
+                from public.assignment_groups_members agm
+                join public.user_roles ur on ur.private_profile_id = agm.profile_id
+                join public.users u on u.user_id = ur.user_id
+                where agm.assignment_group_id = v_repo_record.assignment_group_id
+                  and ur.class_id = p_class_id
+                  and ur.role = 'student'
+                  and ur.github_org_confirmed = true
+                  and u.github_username is not null
+                  and u.github_username != '';
+
+                if v_repo_record.repository is not null and position('/' in v_repo_record.repository) > 0 then
+                    perform public.enqueue_github_sync_repo_permissions(
+                        p_class_id,
+                        v_github_org,
+                        split_part(v_repo_record.repository, '/', 2),
+                        v_course_slug,
+                        coalesce(v_usernames, '{}'),
+                        'batch-publish-' || p_assignment_id::text || '-g' || v_repo_record.assignment_group_id::text
+                    );
+                    v_syncs_enqueued := v_syncs_enqueued + 1;
+                end if;
+            end;
+        exception when others then
+            v_errors := array_append(v_errors, jsonb_build_object(
+                'repository_id', v_repo_record.repo_id,
+                'error', SQLERRM
+            ));
+        end;
+    end loop;
+
+    return jsonb_build_object(
+        'groups_created',   v_groups_created,
+        'members_added',    v_members_added,
+        'members_moved',    v_members_moved,
+        'groups_dissolved', v_groups_dissolved,
+        'syncs_enqueued',   v_syncs_enqueued,
+        'errors',           to_jsonb(v_errors)
+    );
+end;
+$$;
+
+revoke all on function public.publish_assignment_group_changes(bigint, bigint, jsonb, jsonb) from public;
+grant execute on function public.publish_assignment_group_changes(bigint, bigint, jsonb, jsonb) to authenticated;

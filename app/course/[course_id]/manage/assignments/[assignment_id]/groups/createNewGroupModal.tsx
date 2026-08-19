@@ -1,3 +1,4 @@
+import { isValidGroupName } from "@/lib/groupNameValidation";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersAndMentor } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
@@ -45,7 +46,7 @@ export default function CreateNewGroup({
             </Dialog.Header>
             <Dialog.Body>
               <Flex flexDir="column" gap="15px">
-                <Field.Root invalid={newGroupName.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(newGroupName)}>
+                <Field.Root invalid={newGroupName.length > 0 && !isValidGroupName(newGroupName)}>
                   <Field.Label>
                     Choose a name for the group or
                     <Button
@@ -65,7 +66,8 @@ export default function CreateNewGroup({
                   </Field.Label>
                   <Input name="name" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
                   <Field.ErrorText>
-                    The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
+                    The name must consist only of alphanumeric, hyphens, or underscores, contain at least one letter or
+                    number, and be less than 36 characters.
                   </Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={isGroupInvalid()}>
@@ -111,7 +113,7 @@ export default function CreateNewGroup({
                       setSelectedMembers([]);
                     }}
                     colorPalette={"green"}
-                    disabled={newGroupName.length === 0}
+                    disabled={!isValidGroupName(newGroupName)}
                   >
                     Save
                   </Button>
