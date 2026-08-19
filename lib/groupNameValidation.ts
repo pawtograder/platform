@@ -18,6 +18,9 @@ import type { Assignment } from "@/utils/supabase/DatabaseTypes";
  * A third rule, that a name must not sanitize to the same value as another group's on the same
  * assignment, is not checkable here: it needs the assignment's other names. It lives in the edge
  * functions and the database trigger, under the same repo_mode exemption.
+ *
+ * Deno cannot import this module, so the edge functions carry their own copy of the exemption
+ * predicate in supabase/functions/_shared/repoCreationStrategy.ts. The two must agree.
  */
 export function assignmentProvisionsRepositories(repoMode: Assignment["repo_mode"]): boolean {
   return repoMode !== "none" && repoMode !== "no_submission";

@@ -6,11 +6,21 @@
 import type { BranchProtectionConfig } from "./branchProtection.ts";
 
 export type AssignmentRepoMode =
-  | "none"
-  | "template_only_staff"
-  | "template_with_student_forks"
-  | "fork_from_prior_assignment"
-  | "no_submission";
+  "none" | "template_only_staff" | "template_with_student_forks" | "fork_from_prior_assignment" | "no_submission";
+
+/**
+ * Whether an assignment's mode provisions repositories at all. `none` and `no_submission` never
+ * do, so callers must skip repo-name derivation and the create-repo enqueue for both. The rules
+ * that exist only to protect a repository name (a group name needing a letter or number, and not
+ * colliding with a sibling once sanitized) are likewise exempt under these two modes.
+ *
+ * Twins that must agree: `assignmentProvisionsRepositories` in lib/groupNameValidation.ts on the
+ * Next side, and the repo_mode guards in validate_assignment_group_name() and
+ * create_all_repos_for_assignment_internal() in SQL.
+ */
+export function assignmentProvisionsRepositories(repoMode: AssignmentRepoMode): boolean {
+  return repoMode !== "none" && repoMode !== "no_submission";
+}
 
 export type AssignmentForRepoCreation = {
   id: number;

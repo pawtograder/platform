@@ -817,36 +817,65 @@ declare
   v_count integer := 0;
   v_max_attempts constant integer := 8;
   v_max_backoff_doublings constant integer := 5;  -- caps the interval at 32x p_stale_minutes
-  -- Longest single requeue github-async-worker can apply to one job (12h for an extreme
-  -- rate limit), plus an hour of margin. See the park comment below.
-  v_worker_max_requeue constant interval := interval '13 hours';
+  -- Repository ids that still have a create_repo message sitting in a queue. Collected
+  -- once per tick rather than probed per row: the queue tables have no index on the
+  -- envelope's repo_id, so a NOT EXISTS per candidate would scan them once per candidate.
+  v_inflight_repo_ids text[];
 begin
-  -- Park anything that has exhausted its automatic retries AND has gone quiet for the
-  -- interval its next attempt would have waited. Done as a set operation before the loop
-  -- so a row is parked exactly once, and so the loop below never sees it again.
+  select coalesce(array_agg(distinct s.rid), '{}'::text[])
+    into v_inflight_repo_ids
+    from (
+      select q.message->>'repo_id' as rid
+        from pgmq.q_async_calls q
+       where q.message->>'method' = 'create_repo'
+      union all
+      select q.message->>'repo_id' as rid
+        from pgmq.q_async_calls_low_priority q
+       where q.message->>'method' = 'create_repo'
+    ) s
+   where s.rid is not null;
+
+  -- Park anything that has exhausted its automatic retries, whose last job is no longer
+  -- anywhere in a queue, and which has gone quiet for the interval its next attempt
+  -- would have waited. Done as a set operation before the loop so a row is parked
+  -- exactly once, and so the loop below never sees it again.
   --
-  -- The staleness term is not belt-and-braces. Attempt eight is enqueued, not completed:
-  -- the job can sit in the queue, and github-async-worker requeues a rate-limited create
-  -- with a long delay. Parking on the attempt count alone means the very next tick
-  -- reports a failure to the instructor while that attempt is still pending, and the
-  -- Retry button they are being pointed at enqueues a second create_repo racing the
-  -- first. Reusing the retry loop's own backoff interval -- deliberately the same
-  -- expression, not a second timing rule that could drift from it -- parks a row exactly
-  -- when it would otherwise have become eligible for attempt nine.
+  -- Park on evidence, not on a timer. Attempt eight is ENQUEUED, not completed, and a
+  -- create_repo job can legitimately live far longer than any interval we would guess:
+  -- github-async-worker requeues an `extreme` rate limit for 12 hours and lets an
+  -- envelope do that up to retry_count 5 before it goes to the DLQ (the retry_count
+  -- check and the requeue sit around lines 2372-2404 of
+  -- supabase/functions/github-async-worker/index.ts), so one attempt can span roughly
+  -- 60 hours. requeueWithDelay never touches the repository row, so updated_at stays
+  -- pinned at the eighth enqueue for that whole time. Parking on elapsed time therefore
+  -- means telling the instructor a repo failed while its job is still alive, and the
+  -- Retry we point them at races the job that is about to run.
   --
-  -- That expression alone is not long enough, though: it tops out at
-  -- 15 min * 2^5 = 8 hours, while the worker can hold a single job longer than that.
-  -- supabase/functions/github-async-worker/index.ts requeues an `extreme` rate limit
-  -- with a default of 43200s = 12 hours (the baseDefault around line 2315) and requeues
-  -- with 28800s = 8 hours when the error circuit breaker trips (around lines 2397 and
-  -- 2461). An eighth attempt that hit an extreme rate limit is therefore still sitting
-  -- in the queue, invisible to us, four hours before the backoff expression would call
-  -- it dead. The floor of 13 hours covers the 12-hour worst case with an hour of margin
-  -- for queue latency and reconciler tick spacing.
+  -- Any fixed floor -- 13 hours, 60 hours -- would be a copy of the worker's retry
+  -- policy living in SQL, silently wrong the moment that policy changes. The queue is a
+  -- table, so ask it instead: a pgmq message stays in q_<queue> until it is archived,
+  -- including while a worker holds it invisible, and the create_repo envelope carries
+  -- repo_id. Requeueing sends the new message BEFORE archiving the old one, so a job
+  -- being retried is never briefly absent from this check. Absence means the job really
+  -- is gone: archived after success, moved to the DLQ, or lost.
   --
-  -- This couples the migration to the worker's retry policy: if those delays change,
-  -- this floor has to change with them, or we go back to parking rows whose last
-  -- attempt is still alive.
+  -- Matched as TEXT, never cast. Casting message->>'repo_id' to bigint would raise
+  -- inside the reconciler the first time an envelope carried a null or non-numeric
+  -- repo_id -- enqueue_github_create_repo writes 'repo_id', null whenever it is called
+  -- without an assignment -- and a raise here would take out the whole tick, not one
+  -- row. Text comparison against rp.id::text cannot raise and matches a repo_id written
+  -- as either a JSON number or a JSON string.
+  --
+  -- Both live queues are scanned. create_repo is only ever produced onto async_calls
+  -- today, but the worker drains async_calls_low_priority when the main queue is empty
+  -- and requeues onto whichever queue it read from, so covering both costs one more scan
+  -- and removes a way for this to be quietly wrong later. The DLQ is deliberately NOT
+  -- scanned: a message that reached it is dead, and treating it as live would leave the
+  -- row unparked forever.
+  --
+  -- The backoff interval stays as a floor, so a row is not parked the instant its last
+  -- message is archived -- there is a moment between a worker archiving a create_repo
+  -- and the row being marked ready -- but the queue check is what actually decides.
   update public.repositories rp
      set creation_error = format(
            'Repository creation did not succeed after %s automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.',
@@ -856,11 +885,9 @@ begin
      and rp.is_github_ready = false
      and rp.creation_error is null
      and rp.creation_attempts >= v_max_attempts
-     and rp.updated_at < now() - greatest(
-           make_interval(
-             mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
-           ),
-           v_worker_max_requeue
+     and rp.id::text <> all (v_inflight_repo_ids)
+     and rp.updated_at < now() - make_interval(
+           mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
          )
      and a.repo_mode not in ('none', 'no_submission');
 
@@ -915,6 +942,12 @@ begin
          public.is_class_active(c.archived, c.end_date)
          or rp.last_creation_attempt_at > now() - interval '7 days'
        )
+       -- Same evidence the park uses, for the same reason in reverse: updated_at cannot
+       -- tell a lost job from one the worker is holding for a 12-hour rate-limit delay,
+       -- so re-enqueueing on elapsed time alone puts a second create_repo in the queue
+       -- for a repository that already has one. Skip a row whose job is still there and
+       -- let it run; if it is gone, this is the path that replaces it.
+       and rp.id::text <> all (v_inflight_repo_ids)
        -- Exponential backoff: each failed attempt doubles the wait, capped.
        and rp.updated_at < now() - make_interval(
              mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
@@ -1241,8 +1274,18 @@ $$;
 -- create_all_repos_for_assignment_internal(). Everything around it -- the class and
 -- assignment slugs -- stays byte-for-byte, because TypeScript leaves them alone too.
 --
--- The body below is the live 20260624000000 definition re-emitted verbatim, with that
--- single expression changed and nothing else touched. It is copied rather than patched
+-- The body below is the live 20260624000000 definition re-emitted verbatim, with three
+-- changes and nothing else touched, so a diff against 20260624000000 has exactly three
+-- hunks:
+--   1. the group-name component above is wrapped in sanitize_repo_name_component();
+--   2. and 3. the two `split_part(repository, '/', 2)` calls that feed
+--      enqueue_github_archive_repo and enqueue_github_sync_repo_permissions now strip
+--      everything up to the FIRST slash instead. split_part truncates at the SECOND one,
+--      so a repository whose name contains a slash -- which nothing forbids, and which
+--      any class slug carrying a date does -- was archived or permission-synced under a
+--      shortened name that matches no repo on GitHub. Same defect, and same fix, as in
+--      enqueue_create_repo_for_repository in section 5.
+-- It is copied rather than patched
 -- because Postgres has no way to edit one expression of a function in place; when this
 -- function is next revised, that revision supersedes this copy and must carry the
 -- sanitize forward. The trigger in section 9 is the backstop that keeps the group name
@@ -1570,7 +1613,9 @@ begin
                 perform public.enqueue_github_archive_repo(
                     p_class_id,
                     v_github_org,
-                    split_part(v_repo_record.repository, '/', 2),
+                    -- everything after the FIRST slash: the org is one segment, the repo
+                    -- name that follows can itself contain a slash
+                    substring(v_repo_record.repository from position('/' in v_repo_record.repository) + 1),
                     'batch-dissolve-' || v_empty_gid::text
                 );
             end if;
@@ -1621,7 +1666,8 @@ begin
                     perform public.enqueue_github_sync_repo_permissions(
                         p_class_id,
                         v_github_org,
-                        split_part(v_repo_record.repository, '/', 2),
+                        -- everything after the FIRST slash; see the archive call above
+                        substring(v_repo_record.repository from position('/' in v_repo_record.repository) + 1),
                         v_course_slug,
                         coalesce(v_usernames, '{}'),
                         'batch-publish-' || p_assignment_id::text || '-g' || v_repo_record.assignment_group_id::text

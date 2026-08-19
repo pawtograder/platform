@@ -7,6 +7,7 @@ import {
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { assignmentProvisionsRepositories } from "../_shared/repoCreationStrategy.ts";
 import {
   SecurityError,
   UserVisibleError,
@@ -75,9 +76,10 @@ async function instructorCreateAutograderGroup(
     throw new IllegalArgumentError("Assignment not found");
   }
 
-  //Both checks below exist only to protect the group's GitHub repository name, so they do not apply to assignments
-  //that never provision one. Mirrors the repo_mode exemption in validate_assignment_group_name().
-  if (assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
+  //Neither the name rules below nor the repo enqueue further down apply to an assignment that never provisions a
+  //repository. Mirrors the repo_mode exemption in validate_assignment_group_name().
+  const providesRepositories = assignmentProvisionsRepositories(assignment.repo_mode);
+  if (providesRepositories) {
     if (!/[a-zA-Z0-9]/.test(trimmedName)) {
       throw new IllegalArgumentError("Group name must contain at least one letter or number");
     }
@@ -121,26 +123,30 @@ async function instructorCreateAutograderGroup(
     throw new UserVisibleError("Failed to create group");
   }
 
-  //Enqueue async repo creation for the group
-  const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
-  // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
-  const { error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
-    p_class_id: assignment.class_id!,
-    p_org: profile.classes!.github_org!,
-    p_repo_name: repoName,
-    p_template_repo: assignment.template_repo!,
-    p_course_slug: profile.classes!.slug!,
-    p_github_usernames: [],
-    p_is_template_repo: false,
-    p_debug_id: `group-create-${newGroup.id}`,
-    p_assignment_id: assignment.id,
-    p_profile_id: undefined, // Group repos don't have a profile_id
-    p_assignment_group_id: newGroup.id,
-    p_latest_template_sha: assignment.latest_template_sha ?? undefined
-  });
-  if (enqueueError) {
-    Sentry.captureException(enqueueError, scope);
-    throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
+  //Enqueue async repo creation for the group, unless this assignment never provisions one
+  if (providesRepositories) {
+    //Sanitize the group-name component the same way every other repo-name derivation does, or this group's repository
+    //is named differently here than in github-user-sync and assignment-create-all-repos
+    const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(trimmedName)}`;
+    // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
+    const { error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
+      p_class_id: assignment.class_id!,
+      p_org: profile.classes!.github_org!,
+      p_repo_name: repoName,
+      p_template_repo: assignment.template_repo!,
+      p_course_slug: profile.classes!.slug!,
+      p_github_usernames: [],
+      p_is_template_repo: false,
+      p_debug_id: `group-create-${newGroup.id}`,
+      p_assignment_id: assignment.id,
+      p_profile_id: undefined, // Group repos don't have a profile_id
+      p_assignment_group_id: newGroup.id,
+      p_latest_template_sha: assignment.latest_template_sha ?? undefined
+    });
+    if (enqueueError) {
+      Sentry.captureException(enqueueError, scope);
+      throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
+    }
   }
   return {
     message: `Group #${newGroup.id} created successfully`,

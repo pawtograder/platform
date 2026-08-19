@@ -14,7 +14,11 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
-import { groupNameRequirementsText, isValidGroupName } from "@/lib/groupNameValidation";
+import {
+  assignmentProvisionsRepositories,
+  groupNameRequirementsText,
+  isValidGroupName
+} from "@/lib/groupNameValidation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
@@ -146,7 +150,15 @@ function CreateGroupButton({
                   )
                     .then(() => {
                       repositories.refetchAll().then(() => {
-                        toaster.create({ title: "Repositories created", description: "", type: "success" });
+                        toaster.create({
+                          //An assignment that provisions no repository still creates the group; saying otherwise
+                          //promises the student a repo that is never coming
+                          title: assignmentProvisionsRepositories(assignment.repo_mode)
+                            ? "Repositories created"
+                            : "Group created",
+                          description: "",
+                          type: "success"
+                        });
                         setOpen(false);
                         setName("");
                         setSelectedInvitees([]);
