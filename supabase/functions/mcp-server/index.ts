@@ -2084,13 +2084,11 @@ serveWithSentryFlush(async (req: Request): Promise<Response> => {
       // last-used timestamp write. Routed through the background-work helper
       // so a late failure still gets flushed -- the request-boundary flush has
       // already run by the time this settles.
-      waitUntilWithSentryFlush(
-        updateTokenLastUsed(context.tokenId).catch((err) => {
-          Sentry.captureException(err, {
-            tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-          });
-        })
-      );
+      // Detached on purpose: the response must not wait on a last-used timestamp
+      // write. updateTokenLastUsed reports its own failures, so there is nothing to
+      // catch here — but it reports them AFTER this response, so the flush has to
+      // come from the background helper rather than the request boundary.
+      waitUntilWithSentryFlush(updateTokenLastUsed(context.tokenId));
 
       // Create SSE stream
       const { stream, sse } = createSSEStream();
@@ -2150,13 +2148,11 @@ serveWithSentryFlush(async (req: Request): Promise<Response> => {
     // last-used timestamp write. Routed through the background-work helper
     // so a late failure still gets flushed -- the request-boundary flush has
     // already run by the time this settles.
-    waitUntilWithSentryFlush(
-      updateTokenLastUsed(context.tokenId).catch((err) => {
-        Sentry.captureException(err, {
-          tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-        });
-      })
-    );
+    // Detached on purpose: the response must not wait on a last-used timestamp
+    // write. updateTokenLastUsed reports its own failures, so there is nothing to
+    // catch here — but it reports them AFTER this response, so the flush has to
+    // come from the background helper rather than the request boundary.
+    waitUntilWithSentryFlush(updateTokenLastUsed(context.tokenId));
 
     // Parse the MCP request (can be single or batch)
     const body = await req.json();

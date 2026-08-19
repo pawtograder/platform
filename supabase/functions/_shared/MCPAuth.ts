@@ -11,6 +11,7 @@
 import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 // Environment variable names.
 //
@@ -428,8 +429,23 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    await adminSupabase.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_id", tokenId);
-  } catch {
-    // Non-critical, silently ignore
+    const { error } = await adminSupabase
+      .from("api_tokens")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("token_id", tokenId);
+    // supabase-js RESOLVES with an { error } instead of throwing, so the previous
+    // bare await could not fail and the catch below could not fire. Callers had a
+    // `.catch()` that captured to Sentry and was therefore dead code: a token
+    // whose last_used_at silently stopped updating looked identical to one that
+    // was never used, which is exactly the signal this column exists to provide.
+    if (error) {
+      Sentry.captureException(error, {
+        tags: { operation: "update_token_last_used", tokenId }
+      });
+    }
+  } catch (e) {
+    // Still non-fatal for the request — the caller has already responded — but no
+    // longer invisible.
+    Sentry.captureException(e, { tags: { operation: "update_token_last_used", tokenId } });
   }
 }

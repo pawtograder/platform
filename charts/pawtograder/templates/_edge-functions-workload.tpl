@@ -38,11 +38,14 @@ worker creation still holds it. main.ts narrows that window to the duration of
 create(), but it cannot be zero, and a burst of cold requests for distinct
 functions is exactly when it is largest.
 
-Two deliberate gaps. When maxParallelism is unset the runtime derives it from
-CPU count, so the isolate term is unknowable here and only cache + host are
-checked. And a limit that is not an integer number of Gi/Mi is skipped rather
-than mis-parsed -- a guardrail that silently computes the wrong number is worse
-than one that admits it cannot.
+maxParallelism is REQUIRED rather than defaulted-to-zero. Left unset the runtime
+derives it from CPU count, which cannot be known at render time; treating that as
+zero made this assertion accept the very combinations the values documentation
+says it rejects, which is worse than not having it.
+
+One deliberate gap remains: a limit that is not an integer number of Gi/Mi is
+skipped rather than mis-parsed -- a guardrail that silently computes the wrong
+number is worse than one that admits it cannot.
 */}}
 {{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
 {{- $ef := .Values.edgeFunctions -}}
@@ -61,10 +64,10 @@ than one that admits it cannot.
 {{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
-{{- $isolatesMi := 0 -}}
-{{- if and (ne $par "") (gt ($par | int) 0) -}}
-{{- $isolatesMi = mul ($par | int) $perIsolateMi -}}
+{{- if or (eq $par "") (le ($par | int) 0) -}}
+{{- fail (printf "edgeFunctions.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $par) -}}
 {{- end -}}
+{{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
 {{- $hostMi := 90 -}}
 {{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
@@ -227,6 +230,10 @@ spec:
             # maxParallelism x worker.memoryLimitMb — see values.yaml.
             - name: EDGE_ESZIP_CACHE_MAX_BYTES
               value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
+            # Enforced at runtime by main.ts, not just budgeted here: a semaphore
+            # holds these bytes from before a cold read until create() returns.
+            - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with

@@ -1109,7 +1109,11 @@ edgeFunctions:
   # derives it from CPU cores, which is low on small pods and forces co-location.
   # Under per_request this is effectively the max concurrent requests per pod
   # (excess queue up to request-wait-timeout). Empty = runtime default.
-  maxParallelism: ""
+  # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
+  # is a term in the container memory budget, and unset means "whatever the runtime
+  # infers from CPU count", which cannot be checked at render time. 8 is what
+  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
   # When a per_worker isolate crosses the ratio the runtime tells it to finish
@@ -1143,8 +1147,9 @@ edgeFunctions:
   # The container budget is four terms that must be reconciled together:
   #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
   #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
-  # At the defaults: 512Mi + (8 x 256Mi) + 90Mi = ~2.6Gi, which is why the
-  # edge tier wants a limit at or above 4Gi. Raise this only alongside that sum.
+  # At the defaults: 512Mi + 256Mi + (8 x 256Mi) + 90Mi = 2906Mi (~2.8Gi), which
+  # is why the edge tier wants a limit at or above 4Gi. Raise this only alongside
+  # that sum.
   #
   # 512Mi holds ~13 average bundles — comfortably more than the handful of
   # functions a pod serves repeatedly — so the LRU only churns on rare ones.
@@ -1177,8 +1182,9 @@ edgeFunctions:
   # (eszipCacheMaxMb + maxParallelism x worker.memoryLimitMb + ~90Mi host), which
   # is asserted at render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi
-  # cache default with maxParallelism 8 -- comes to ~2.6Gi and did not fit 2Gi, so
-  # the old default was a combination the guardrail now rejects outright.
+  # cache and 256Mi cold-load defaults with maxParallelism 8 -- comes to 2906Mi
+  # (~2.8Gi) and did not fit 2Gi, so the old default was a combination the
+  # guardrail now rejects outright.
   #
   # This is a backstop, not a target: with the cache bounded, a pod's steady state
   # is the cache plus admitted isolates, and the headroom exists so the runtime
