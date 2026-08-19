@@ -36,9 +36,26 @@ jobs:
   # `pull_request_target` the workflow — and therefore this check — always comes
   # from the base branch.
   #
+  # Trust is decided on where the head branch lives, and nothing else. A branch
+  # in this repo can only have been pushed by someone who already has write
+  # access, so whoever supplied the latest commit is someone we already trust.
+  #
+  # Deliberately NOT author_association: that field describes the PR's author
+  # and their standing in *this* repo, not whoever pushed the head commit that
+  # is about to be checked out. Anyone with push access to the head branch can
+  # update a PR and fire `synchronize`, and for a fork that set is controlled by
+  # the fork's owner -- a personal fork's collaborators, or, for an org-owned
+  # fork, every member with write there. Trusting a fork PR because its author
+  # is a MEMBER would let any of them land code on this runner under that
+  # member's standing. Current head-repo permission is not answerable from the
+  # event payload either, and the API call it would need is not something a
+  # fork-triggered token can be relied on to make.
+  #
   # An untrusted PR gets no E2E run. To run one, a maintainer reviews the diff
   # and pushes the branch into this repo, which makes it a same-repo PR; that is
-  # the same manual path canvas-e2e.yml documents.
+  # the same manual path canvas-e2e.yml documents. Everyone whose fork PR this
+  # used to wave through -- owners, org members, collaborators -- already has
+  # write access here, so that is a branch push rather than a favour to ask.
   check-trust:
     runs-on: ubuntu-latest
     outputs:
@@ -51,7 +68,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" != "pull_request_target" ]]; then
@@ -60,15 +76,12 @@ jobs:
           elif [[ "${IS_FORK}" != "true" ]]; then
             # a branch in this repo: pushing it already required write access
             trusted=true
-          elif [[ "${AUTHOR_ASSOCIATION}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
-            # a fork, but by someone who already has standing in the org/repo
-            trusted=true
           else
             trusted=false
           fi
           echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
           if [[ "${trusted}" != "true" ]]; then
-            echo "::notice title=E2E skipped::This PR comes from a fork by an outside contributor, so it does not run on the self-hosted E2E pool. A maintainer can run the suite by pushing the branch into this repo after reviewing the diff."
+            echo "::notice title=E2E skipped::This PR's head branch lives in a fork, so it does not run on the self-hosted E2E pool. A maintainer can run the suite by pushing the branch into this repo after reviewing the diff."
           fi
 
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
