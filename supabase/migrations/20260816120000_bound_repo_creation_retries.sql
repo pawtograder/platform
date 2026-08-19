@@ -25,7 +25,9 @@
 --    then multiplied it: R rows written x (mismatched groups + students without repos).
 --
 -- This migration:
---   1. sanitize_repo_name_component() -- the SQL twin of _shared/repoNames.ts.
+--   1. sanitize_repo_name_component() -- the SQL twin of _shared/repoNames.ts, applied
+--      per COMPONENT, plus sanitize_repo_name() -- a weaker whole-name net that only
+--      maps illegal characters, so it can never alter an already-valid assembled name.
 --   2. Sanitization applies only where a name is FIRST derived and stored: the insert
 --      path of enqueue_github_create_repo(), plus the group-name component in
 --      create_all_repos_for_assignment_internal(). A name read back off an existing row
@@ -47,10 +49,16 @@
 -- ============================================================================
 
 -- Kept byte-for-byte equivalent to sanitizeRepoNameComponent() so a name derived in
--- SQL and the same name derived in TypeScript resolve to one repository. Applied to
--- the whole assembled name rather than per component: the class and assignment slugs
--- are already URL-safe, so the result is identical, and one call site covers every
--- caller instead of every concatenation site.
+-- SQL and the same name derived in TypeScript resolve to one repository.
+--
+-- Apply this to a single COMPONENT (a group name), never to an assembled repo name.
+-- The TypeScript paths sanitize only the group-name component and leave the class and
+-- assignment slugs untouched, so running the collapse and trim rules over a whole name
+-- would diverge from them: an assignment slugged `hw--1` assembles to
+-- `course-hw--1-group-Team` in TypeScript but would collapse to `course-hw-1-group-Team`
+-- here, and github-user-sync would then sync permissions against a repo that does not
+-- exist. Nothing constrains slugs to make that collapse a no-op. Use
+-- sanitize_repo_name() below for the whole-name safety net.
 create or replace function public.sanitize_repo_name_component(raw text)
 returns text
 language plpgsql
@@ -88,6 +96,31 @@ comment on function public.sanitize_repo_name_component(text) is
   'Normalize a repo name to the character set GitHub accepts. SQL twin of sanitizeRepoNameComponent() in supabase/functions/_shared/repoNames.ts; the two must stay in sync or SQL- and TS-derived names diverge and dedupe by name breaks.';
 
 grant execute on function public.sanitize_repo_name_component(text) to authenticated, service_role;
+
+-- Whole-assembled-name safety net. Deliberately WEAKER than the component sanitizer:
+-- it only maps characters GitHub rejects onto hyphens, and never collapses runs, trims
+-- separators or raises. That restraint is the point -- this runs over names assembled
+-- by callers that have already sanitized their own components, so it must be a no-op
+-- on any name that is already valid. It exists for the SQL callers that still
+-- concatenate a raw group name (publish_assignment_group_changes), so those cannot put
+-- a space into a repo name; those sites should move to per-component sanitization,
+-- after which this becomes dead weight rather than a behavior.
+create or replace function public.sanitize_repo_name(raw text)
+returns text
+language sql
+immutable
+parallel safe
+set search_path = ''
+as $$
+  select case when raw is null then null
+              else regexp_replace(raw, '[^A-Za-z0-9._-]+', '-', 'g')
+         end;
+$$;
+
+comment on function public.sanitize_repo_name(text) is
+  'Map characters GitHub rejects in a repo name onto hyphens. A last-resort net over an assembled name; it must never alter an already-valid name, so it does not collapse or trim. Per-component normalization belongs to sanitize_repo_name_component().';
+
+grant execute on function public.sanitize_repo_name(text) to authenticated, service_role;
 
 -- ============================================================================
 -- 2. Sanitize at the enqueue choke point
@@ -131,10 +164,12 @@ declare
   v_existing_name text;
   v_args jsonb;
 begin
-  -- Sanitize the name the CALLER derived. Only a name we are about to store is
-  -- sanitized; a name read back off an existing row is authoritative and is used
-  -- verbatim (see below).
-  v_repo_name := public.sanitize_repo_name_component(p_repo_name);
+  -- Net the name the CALLER derived. sanitize_repo_name (not the component sanitizer)
+  -- so a caller that already normalized its components keeps them byte-for-byte -- an
+  -- assignment slugged `hw--1` must survive, because the TypeScript paths preserve it.
+  -- Only a name we are about to store is netted; a name read back off an existing row
+  -- is authoritative and is used verbatim (see below).
+  v_repo_name := public.sanitize_repo_name(p_repo_name);
   full_repo_name := p_org || '/' || v_repo_name;
 
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
@@ -614,7 +649,21 @@ begin
   end if;
 
   if r.repo_mode = 'fork_from_prior_assignment' and v_source_repo is null then
-    raise warning 'No source repository resolved for repository % (fork_from_prior_assignment); skipping', p_repository_id;
+    -- Deterministic failure, not a transient one: there is no repository on the source
+    -- assignment to fork, and no amount of retrying creates one. Returning here without
+    -- touching the retry state left the row stale-and-unparked forever -- the reconciler
+    -- counted the call as a success, the attempt ceiling was never approached and
+    -- creation_error was never set, so it came back every 15 minutes and never surfaced
+    -- the instructor Retry action. Park it instead; that is exactly what creation_error
+    -- is for, and it takes the row out of reconcile_stuck_repo_creations' scan.
+    update public.repositories
+       set creation_error = format(
+             'No repository found on the source assignment (id %s) to fork from. Create the source repositories first, then use Retry.',
+             r.source_assignment_id),
+           last_creation_attempt_at = now(),
+           updated_at = now()
+     where id = p_repository_id;
+    raise warning 'No source repository resolved for repository % (fork_from_prior_assignment); parked for instructor retry', p_repository_id;
     return null;
   end if;
 
