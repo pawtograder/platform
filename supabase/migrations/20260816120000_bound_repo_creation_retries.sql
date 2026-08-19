@@ -263,6 +263,28 @@ begin
     end if;
   end if;
 
+  -- Record that creation has been enqueued for this row, on BOTH paths above: the row
+  -- this call just inserted, and an existing row it is reusing. Before this, only
+  -- enqueue_create_repo_for_repository wrote the column, so a repository whose FIRST
+  -- attempt happened in an inactive class -- or whose class went inactive while that
+  -- first job was in flight -- kept a null timestamp forever. The reconciler's
+  -- inactive-class follow-up window keys on this column, so such a row was excluded from
+  -- it permanently, never reached the attempt ceiling either, and sat at
+  -- is_github_ready = false with no creation_error: pending in the UI, with no Retry
+  -- affordance and nothing that could ever make it actionable. The column now means what
+  -- its comment says -- when creation was last enqueued for this row -- rather than
+  -- "when the reconciler last touched it". Nothing outside this migration reads it.
+  --
+  -- The updated_at bump this write causes (via set_updated_at_on_repositories) is
+  -- correct, not collateral: updated_at is the reconciler's "a job was just queued, do
+  -- not queue another" window, and a job has just been queued. It is the same bump
+  -- enqueue_create_repo_for_repository already makes explicitly.
+  if repo_id is not null then
+    update public.repositories
+       set last_creation_attempt_at = now()
+     where id = repo_id;
+  end if;
+
   v_args := jsonb_build_object(
     'org', p_org,
     'repoName', v_repo_name,
@@ -559,7 +581,7 @@ alter table public.repositories
 comment on column public.repositories.creation_attempts is
   'How many times automatic reconciliation has re-enqueued creation for this repo. Drives the reconciler backoff and ceiling; reset to 0 when the repo becomes ready or an instructor retries.';
 comment on column public.repositories.last_creation_attempt_at is
-  'When reconciliation last re-enqueued creation for this repo.';
+  'When creation was last enqueued for this repo, by any path -- the initial enqueue_github_create_repo as well as reconciliation and instructor retries. Drives the reconciler''s follow-up window for classes that are no longer active; a null here means no creation has ever been queued for the row.';
 
 -- Partial index matching the reconciler's scan: the pending set is tiny next to the
 -- table, and the reconciler runs every 15 minutes.
@@ -796,6 +818,48 @@ grant execute on function public.retry_repository_creation(bigint) to authentica
 -- ============================================================================
 -- 7. Bounded reconciliation
 -- ============================================================================
+
+-- "Is a create_repo job still out there for this repository?" -- the one definition of
+-- still-trying, shared by the reconciler below and the one-time backfill in section 8.
+-- A single function rather than the same predicate written twice, because the two
+-- disagreeing about what counts as in flight is exactly how one of them starts parking
+-- rows whose job is alive.
+--
+-- Matched as TEXT, never cast: enqueue_github_create_repo writes 'repo_id', null when it
+-- is called without an assignment, and (message->>'repo_id')::bigint on such an envelope
+-- would raise inside the caller -- taking out a whole reconciler tick, or the migration
+-- itself. Text comparison cannot raise and matches a repo_id written as a JSON number or
+-- a JSON string.
+--
+-- Both live queues are scanned. create_repo is only produced onto async_calls today, but
+-- the worker drains async_calls_low_priority when the main queue is empty and requeues
+-- onto whichever queue it read from. The DLQ is deliberately NOT scanned: a message that
+-- reached it is dead, and treating it as live would leave the row unparked forever.
+create or replace function public.repo_ids_with_queued_create()
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(array_agg(distinct s.rid), '{}'::text[])
+    from (
+      select q.message->>'repo_id' as rid
+        from pgmq.q_async_calls q
+       where q.message->>'method' = 'create_repo'
+      union all
+      select q.message->>'repo_id' as rid
+        from pgmq.q_async_calls_low_priority q
+       where q.message->>'method' = 'create_repo'
+    ) s
+   where s.rid is not null;
+$$;
+
+comment on function public.repo_ids_with_queued_create() is
+  'repositories.id (as text) for every create_repo message still sitting in a live async queue, worker-invisible ones included. The shared in-flight test for the reconciler and the backfill: a row whose id appears here has a creation attempt that has not finished, so it must not be parked or re-enqueued.';
+
+revoke all on function public.repo_ids_with_queued_create() from public;
+grant execute on function public.repo_ids_with_queued_create() to service_role;
 --
 -- Three bounds the previous version had none of:
 --   * Active classes only. The old scan covered every repository row ever created,
@@ -822,18 +886,7 @@ declare
   -- envelope's repo_id, so a NOT EXISTS per candidate would scan them once per candidate.
   v_inflight_repo_ids text[];
 begin
-  select coalesce(array_agg(distinct s.rid), '{}'::text[])
-    into v_inflight_repo_ids
-    from (
-      select q.message->>'repo_id' as rid
-        from pgmq.q_async_calls q
-       where q.message->>'method' = 'create_repo'
-      union all
-      select q.message->>'repo_id' as rid
-        from pgmq.q_async_calls_low_priority q
-       where q.message->>'method' = 'create_repo'
-    ) s
-   where s.rid is not null;
+  v_inflight_repo_ids := public.repo_ids_with_queued_create();
 
   -- Park anything that has exhausted its automatic retries, whose last job is no longer
   -- anywhere in a queue, and which has gone quiet for the interval its next attempt
@@ -859,19 +912,9 @@ begin
   -- being retried is never briefly absent from this check. Absence means the job really
   -- is gone: archived after success, moved to the DLQ, or lost.
   --
-  -- Matched as TEXT, never cast. Casting message->>'repo_id' to bigint would raise
-  -- inside the reconciler the first time an envelope carried a null or non-numeric
-  -- repo_id -- enqueue_github_create_repo writes 'repo_id', null whenever it is called
-  -- without an assignment -- and a raise here would take out the whole tick, not one
-  -- row. Text comparison against rp.id::text cannot raise and matches a repo_id written
-  -- as either a JSON number or a JSON string.
-  --
-  -- Both live queues are scanned. create_repo is only ever produced onto async_calls
-  -- today, but the worker drains async_calls_low_priority when the main queue is empty
-  -- and requeues onto whichever queue it read from, so covering both costs one more scan
-  -- and removes a way for this to be quietly wrong later. The DLQ is deliberately NOT
-  -- scanned: a message that reached it is dead, and treating it as live would leave the
-  -- row unparked forever.
+  -- The in-flight set is read once per tick, not probed per row: the queue tables have
+  -- no index on the envelope's repo_id. See repo_ids_with_queued_create() above for why
+  -- it compares as text and which queues it covers.
   --
   -- The backoff interval stays as a floor, so a row is not parked the instant its last
   -- message is archived -- there is a moment between a worker archiving a create_repo
@@ -927,8 +970,9 @@ begin
        -- quiet within a week of the last attempt anyone made on it.
        --
        -- last_creation_attempt_at is written only when a job is actually queued, by
-       -- enqueue_create_repo_for_repository, so a row nobody has touched in a dead class
-       -- has an old or null value and stays out entirely.
+       -- every path that queues one -- the initial enqueue_github_create_repo as well as
+       -- reconciliation and instructor retries -- so a row nobody has ever queued work
+       -- for, or has not in a long time, has a null or old value and stays out entirely.
        --
        -- The honest consequence: this follows up recent AUTOMATIC attempts too, not only
        -- human ones -- nothing on the row distinguishes them, and retry_repository_
@@ -991,26 +1035,43 @@ comment on function public.reconcile_stuck_repo_creations(int) is
 -- instructor retried by hand. updated_at measures the thing this cutoff is about: how
 -- long THIS pending state has lasted.
 --
--- This does NOT need the in-flight guard the reconciler's park just grew. Both cutoffs
--- here are already staleness cutoffs on updated_at, and both are enormous next to the
--- reconciler's longest backoff of eight hours: a week of silence in a running class, or
--- a class that has ended and whose rows the reconciler no longer scans at all. Nothing
--- plausibly in flight survives either. And parking is recoverable in any case -- if a
--- late job does succeed, reset_repo_creation_attempts_on_ready clears creation_error and
--- the attempt count as the row flips ready, so a parked row heals itself rather than
--- needing the instructor to undo anything.
+-- Two conditions, and the inactive-class branch needs both of them.
+--
+-- The in-flight guard is repo_ids_with_queued_create(), the same function the reconciler
+-- parks on, so the two cannot drift into disagreeing about what "still trying" means. A
+-- one-time backfill is the worst place to get that wrong: it runs once, at deploy, with
+-- nobody watching, and a row it parks while a create_repo job is queued gets an error
+-- message and a Retry button that races the job about to run.
+--
+-- The staleness term is what makes the inactive-class branch safe. `not is_class_active`
+-- alone parks on a property of the CLASS, not of the row: a class archived five minutes
+-- ago, with a create_repo enqueued four minutes ago, satisfied it. Requiring a day of
+-- silence as well means the class being over is a reason to stop retrying, not a reason
+-- to declare this particular attempt dead. A day sits well above the worker's 8-hour
+-- circuit-breaker requeue while staying far below the running-class cutoff of a week;
+-- the queue check is what actually decides, and this is the floor under it.
+--
+-- Parking stays recoverable either way: if a late job does succeed,
+-- reset_repo_creation_attempts_on_ready clears creation_error and the attempt count as
+-- the row flips ready, so a parked row heals itself rather than needing an instructor to
+-- undo anything.
 update public.repositories rp
    set creation_attempts = 8,
        creation_error = 'Repository creation did not succeed after repeated automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.'
   from public.assignments a,
-       public.classes c
+       public.classes c,
+       (select public.repo_ids_with_queued_create() as ids) q
  where a.id = rp.assignment_id
    and c.id = rp.class_id
    and rp.is_github_ready = false
    and rp.creation_error is null
    and a.repo_mode not in ('none', 'no_submission')
+   -- Never park a repository whose creation job is still in a queue. Read once, in the
+   -- FROM list, rather than per candidate row.
+   and rp.id::text <> all (q.ids)
    and (
-     not public.is_class_active(c.archived, c.end_date)
+     (not public.is_class_active(c.archived, c.end_date)
+      and rp.updated_at < now() - interval '1 day')
      or rp.updated_at < now() - interval '7 days'
    );
 
