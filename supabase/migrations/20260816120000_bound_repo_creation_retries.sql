@@ -798,6 +798,26 @@ begin
 
   v_msg_id := public.enqueue_create_repo_for_repository(p_repository_id);
 
+  if v_msg_id is null then
+    -- Nothing was queued, so clearing the error above would strand the row: it would sit
+    -- at is_github_ready = false with no error, which the UI reads as "creation pending"
+    -- and which hides the Retry button, while the reconciler skips it too. That is the
+    -- same dead end this migration keeps closing, reached through the Retry button.
+    --
+    -- enqueue_create_repo_for_repository returns null in two cases. For repo_mode 'none'
+    -- and 'no_submission' it queues nothing because those assignments never get a
+    -- repository -- most likely a leftover row from before the mode was changed, which an
+    -- instructor should be told about rather than left to click Retry forever. For an
+    -- unresolvable fork source it has already written its own, more specific error, so
+    -- coalesce keeps that rather than overwriting it with this generic one.
+    update public.repositories
+       set creation_error = coalesce(
+             creation_error,
+             'This assignment no longer creates GitHub repositories, so this leftover repository row cannot be created. It can be removed.')
+     where id = p_repository_id;
+    return null;
+  end if;
+
   -- Zero the counter AFTER the enqueue, not before: enqueue_create_repo_for_repository
   -- increments it, so resetting first would leave the instructor with seven automatic
   -- retries rather than the full budget. A deliberate manual retry states that the
