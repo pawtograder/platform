@@ -812,6 +812,9 @@ declare
   v_count integer := 0;
   v_max_attempts constant integer := 8;
   v_max_backoff_doublings constant integer := 5;  -- caps the interval at 32x p_stale_minutes
+  -- Longest single requeue github-async-worker can apply to one job (12h for an extreme
+  -- rate limit), plus an hour of margin. See the park comment below.
+  v_worker_max_requeue constant interval := interval '13 hours';
 begin
   -- Park anything that has exhausted its automatic retries AND has gone quiet for the
   -- interval its next attempt would have waited. Done as a set operation before the loop
@@ -824,8 +827,21 @@ begin
   -- Retry button they are being pointed at enqueues a second create_repo racing the
   -- first. Reusing the retry loop's own backoff interval -- deliberately the same
   -- expression, not a second timing rule that could drift from it -- parks a row exactly
-  -- when it would otherwise have become eligible for attempt nine, which is the moment
-  -- the previous attempt is known not to be coming back.
+  -- when it would otherwise have become eligible for attempt nine.
+  --
+  -- That expression alone is not long enough, though: it tops out at
+  -- 15 min * 2^5 = 8 hours, while the worker can hold a single job longer than that.
+  -- supabase/functions/github-async-worker/index.ts requeues an `extreme` rate limit
+  -- with a default of 43200s = 12 hours (the baseDefault around line 2315) and requeues
+  -- with 28800s = 8 hours when the error circuit breaker trips (around lines 2397 and
+  -- 2461). An eighth attempt that hit an extreme rate limit is therefore still sitting
+  -- in the queue, invisible to us, four hours before the backoff expression would call
+  -- it dead. The floor of 13 hours covers the 12-hour worst case with an hour of margin
+  -- for queue latency and reconciler tick spacing.
+  --
+  -- This couples the migration to the worker's retry policy: if those delays change,
+  -- this floor has to change with them, or we go back to parking rows whose last
+  -- attempt is still alive.
   update public.repositories rp
      set creation_error = format(
            'Repository creation did not succeed after %s automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.',
@@ -835,8 +851,11 @@ begin
      and rp.is_github_ready = false
      and rp.creation_error is null
      and rp.creation_attempts >= v_max_attempts
-     and rp.updated_at < now() - make_interval(
-           mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
+     and rp.updated_at < now() - greatest(
+           make_interval(
+             mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
+           ),
+           v_worker_max_requeue
          )
      and a.repo_mode not in ('none', 'no_submission');
 
@@ -849,8 +868,48 @@ begin
        and rp.creation_error is null
        and rp.creation_attempts < v_max_attempts
        and a.repo_mode not in ('none', 'no_submission')
-       -- Recurring per-class work must not run for courses that have ended.
-       and public.is_class_active(c.archived, c.end_date)
+       -- Recurring per-class work must not run for courses that have ended -- EXCEPT to
+       -- finish following up an attempt somebody actually made. retry_repository_creation
+       -- clears creation_error and zeroes the counter, so on an archived class (or one
+       -- ended over 30 days ago) the row it queued would fall outside this scan entirely:
+       -- if that job is lost, or exhausts the worker's generic retries without writing a
+       -- terminal error, the row sits at is_github_ready = false with no error, the UI
+       -- shows it as pending, the Retry affordance is gone, and nothing can ever make it
+       -- actionable again. Following up on a human's retry is not recurring work; it is
+       -- one bounded sequence with an end.
+       --
+       -- Bounded by the same ceiling as everything else, which is what keeps this from
+       -- being the side door back to the unbounded behavior this migration removed. An
+       -- inactive-class row can only be picked up here while creation_attempts is under
+       -- the ceiling, and the park UPDATE above -- which deliberately has no class filter
+       -- -- ends the sequence by setting creation_error. Worst case after one click:
+       -- 8 attempts over roughly 32 hours, then parked with an error the instructor can
+       -- see. The row converges on ready or on parked, and either way stops being scanned.
+       --
+       -- Sizing the window. Every re-enqueue rewrites last_creation_attempt_at, so the
+       -- window does not have to cover a whole retry sequence -- only the longest gap
+       -- between two consecutive attempts, which is the 13-hour park floor above. Seven
+       -- days is deliberately far above that minimum: a worker paused for a few days, or
+       -- a queue that backed up over a weekend, should not permanently strand a row
+       -- halfway through its sequence. It is still short enough that a dead class goes
+       -- quiet within a week of the last attempt anyone made on it.
+       --
+       -- last_creation_attempt_at is written only when a job is actually queued, by
+       -- enqueue_create_repo_for_repository, so a row nobody has touched in a dead class
+       -- has an old or null value and stays out entirely.
+       --
+       -- The honest consequence: this follows up recent AUTOMATIC attempts too, not only
+       -- human ones -- nothing on the row distinguishes them, and retry_repository_
+       -- creation's counter reset is not a reliable marker. So archiving a class does not
+       -- stop work on it the same instant; a row still pending finishes its remaining
+       -- attempts (at most 8, roughly 32 hours) and is then parked with an error. That is
+       -- bounded per row and terminal, which is the property this migration is about --
+       -- unlike the behavior it replaced, where every not-ready row in the instance was
+       -- re-enqueued every 15 minutes with no counter and no end.
+       and (
+         public.is_class_active(c.archived, c.end_date)
+         or rp.last_creation_attempt_at > now() - interval '7 days'
+       )
        -- Exponential backoff: each failed attempt doubles the wait, capped.
        and rp.updated_at < now() - make_interval(
              mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
@@ -959,6 +1018,11 @@ update public.repositories rp
 -- enforces is narrower and mechanical: whatever the name is, it must survive the
 -- derivation and land on a repository name no sibling group also lands on.
 --
+-- Groups on assignments that never provision a repository ('none', 'no_submission') are
+-- exempt from both rules -- there is no repository name to protect, so the rules would
+-- only be rejecting labels. See the trigger body for how that interacts with an
+-- assignment whose mode changes later.
+--
 -- Existing rows are grandfathered. The trigger fires on `update of name`, so a legacy
 -- group that already violates either rule keeps its name, keeps its repository and
 -- keeps working until somebody renames it -- at which point the new name has to be
@@ -976,10 +1040,34 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_repo_mode text;
   v_sanitized text;
   v_other text;
   r record;
 begin
+  -- Both rules below exist only to protect a GitHub repository name. Two assignment
+  -- modes never provision one -- create_all_repos_for_assignment_internal() returns
+  -- early for 'no_submission' and 'none' -- so on a manual or paper assignment these
+  -- checks reject group names for a repository that will never be created: `Team-One`
+  -- beside `Team--One` is two perfectly good labels colliding over nothing, and `---`
+  -- is a fine name for a group that submits on paper.
+  --
+  -- The exemption is evaluated per write, not stored, so an assignment that later moves
+  -- to a repo-provisioning mode carries names admitted under it. Nothing retro-validates
+  -- them, deliberately: that is the same grandfathering this migration applies to legacy
+  -- rows, and it is why section 3 makes create_all_repos_for_assignment_internal() warn
+  -- and skip a group whose name will not sanitize rather than abort the whole pass. The
+  -- assignment still provisions every other group, the instructor gets a warning naming
+  -- the group that did not, and renaming it goes through this trigger -- which by then
+  -- does apply -- so the repair sticks.
+  select a.repo_mode::text into v_repo_mode
+    from public.assignments a
+   where a.id = new.assignment_id;
+
+  if v_repo_mode in ('none', 'no_submission') then
+    return new;
+  end if;
+
   begin
     v_sanitized := public.sanitize_repo_name_component(new.name);
   exception
@@ -1091,7 +1179,15 @@ declare
   v_colliding_names int := 0;
   v_collision_clusters int := 0;
 begin
-  for r in select ag.id, ag.assignment_id, ag.name from public.assignment_groups ag loop
+  -- Same exemption the trigger applies: a group on a no-repo assignment has no repo
+  -- name to violate, and counting it would send whoever reads this log after names that
+  -- are fine.
+  for r in
+    select ag.id, ag.assignment_id, ag.name
+      from public.assignment_groups ag
+      join public.assignments a on a.id = ag.assignment_id
+     where a.repo_mode not in ('none', 'no_submission')
+  loop
     begin
       v_keys := v_keys || (r.assignment_id::text || ':' || lower(public.sanitize_repo_name_component(r.name)));
     exception
