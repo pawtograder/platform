@@ -1105,11 +1105,15 @@ edgeFunctions:
   #     work waits for the next cron tick instead. Safer, slower.
   # Raising maxParallelism does not substitute for either: an unbounded loop consumes
   # whatever you give it.
-  # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
-  # derives it from CPU cores, which is low on small pods and forces co-location.
-  # Under per_request this is effectively the max concurrent requests per pod
-  # (excess queue up to request-wait-timeout). Empty = runtime default.
-  maxParallelism: ""
+  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
+  # is effectively the max concurrent requests per pod (excess queue up to
+  # request-wait-timeout).
+  #
+  # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
+  # is a term in the container memory budget, and unset means "whatever the runtime
+  # infers from CPU count", which cannot be checked at render time. 8 is what
+  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
   # When a per_worker isolate crosses the ratio the runtime tells it to finish
@@ -1133,6 +1137,37 @@ edgeFunctions:
   # accumulates toward the 256MB cap. cpuHardMs keeps headroom above soft so an
   # in-flight request that crosses 2s can finish rather than being force-cancelled
   # (CPU time excludes async I/O, so 2s of real compute is ample here).
+  # Byte budget for the eszip cache the main.ts demuxer keeps of the bundles it
+  # has served. This is a real term in the container memory budget and it is the
+  # one that is easy to forget: a pod holds one bundle per DISTINCT FUNCTION it
+  # has ever been asked for, bundles run 19-59MB, and the image ships 55 of them
+  # (~2.2GB total). Unbounded, that alone exceeded the container limit and
+  # OOM-killed pods after a few days' uptime (2026-08-19).
+  #
+  # The container budget is four terms that must be reconciled together:
+  #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+  # At the defaults: 512Mi + 256Mi + (8 x 256Mi) + 90Mi = 2906Mi (~2.8Gi), which
+  # is why the edge tier wants a limit at or above 4Gi. Raise this only alongside
+  # that sum.
+  #
+  # 512Mi holds ~13 average bundles — comfortably more than the handful of
+  # functions a pod serves repeatedly — so the LRU only churns on rare ones.
+  # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
+  # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
+  eszipCacheMaxMb: 512
+  # Headroom for bundle bytes the cache accounting does NOT see: a bundle being
+  # read on a cache miss, and one the LRU evicted (or refused as oversized) while
+  # a worker creation still holds a reference to it. Those buffers are real and
+  # concurrent with the cache, so the container budget has to carry them.
+  #
+  # main.ts holds such a reference only for the duration of
+  # EdgeRuntime.userWorkers.create() rather than for the whole request, which is
+  # what keeps this term small — but it is not zero, and a burst of cold requests
+  # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
+  # roughly four of the largest bundle in the image (58.4MiB measured); after
+  # warmup the working set is resident and this is not touched at all.
+  eszipColdLoadHeadroomMb: 256
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -1143,9 +1178,23 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory LIMIT has to hold the whole budget documented above
+  # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  # render time by pawtograder.edgeFunctions.assertMemoryBudget.
+  # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi
+  # cache and 256Mi cold-load defaults with maxParallelism 8 -- comes to 2906Mi
+  # (~2.8Gi) and did not fit 2Gi, so the old default was a combination the
+  # guardrail now rejects outright.
+  #
+  # This is a backstop, not a target: with the cache bounded, a pod's steady state
+  # is the cache plus admitted isolates, and the headroom exists so the runtime
+  # retires an isolate rather than the kernel killing PID 1 and every request on
+  # it. Limits are not scheduled (requests are), so raising it does not change
+  # placement.
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
-    limits: { cpu: "2", memory: "2Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two
   # don't fight). minReplicas should be high enough that a sudden burst spreads
@@ -1545,6 +1594,15 @@ monitoring:
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
     edgeFunctionMemoryRatio: 0.85
+    # Fraction of a node's ALLOCATABLE memory, used by this release's own pods, above which
+    # PawtograderEdgeFunctionsNodeMemoryHigh fires. Covers the axis every other rule here misses:
+    # the kernel can OOM-kill a pod that is nowhere near its own limit, because the NODE is full.
+    #
+    # Counts only this namespace's usage, so it is a floor on how full the node is, not the whole
+    # picture -- a node filled by another tenant will not fire it. In exchange the rule is scoped to
+    # nodes we actually run on, and depends only on kube-state-metrics + cadvisor, the same
+    # exporters the rest of this rule group already needs.
+    nodeMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this

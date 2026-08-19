@@ -428,8 +428,9 @@ spec:
             description: >-
               {{`{{ $labels.pod }}`}} in {{ $ns }} restarted more than
               {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
-              If the last termination reason is OOMKilled, check that maxParallelism x
-              EDGE_WORKER_MEMORY_LIMIT_MB fits inside the container memory limit.
+              If the last termination reason is OOMKilled, check that eszipCacheMaxMb +
+              (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi fits inside the container
+              memory limit.
         # Gated on a RECENT restart, not on the reason alone. kube_pod_container_status_last_terminated_reason
         # reflects the container's lastState, so it keeps reporting OOMKilled=1 for the rest of that
         # container's life -- a single 03:00 kill would hold a critical alert firing for days after
@@ -452,8 +453,65 @@ spec:
             summary: "Pawtograder edge-function pod was OOM-killed ({{`{{ $labels.pod }}`}})"
             description: >-
               {{`{{ $labels.pod }}`}} in {{ $ns }} was terminated with OOMKilled. Every request in
-              flight on that pod failed. The admission budget (maxParallelism x per-isolate memory
-              limit) must fit inside the container memory limit, with headroom for a burst.
+              flight on that pod failed. Check the NODE first: a node-level SystemOOM kills the
+              biggest process on the box and is reported here identically to a cgroup kill, but the
+              fix is different (see PawtograderEdgeFunctionsNodeMemoryHigh). If the node was fine,
+              the pod budget is a sum that must fit inside the container memory limit:
+              eszipCacheMaxMb + eszipColdLoadHeadroomMb
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
+              asserts it at render time, so a pod that OOMs despite fitting means one of the
+              measured constants has drifted -- re-measure before raising the limit. The cache term is the one that is easy to forget: it fills with
+              the DISTINCT FUNCTIONS a pod has served rather than with load, up to eszipCacheMaxMb,
+              and evicts least-recently-used past that. So it is bounded, but the bound is a term in
+              this budget and raising it without raising the limit is how you get back here.
+        # The axis the two rules above CANNOT see. Every alert in this group is per-pod and compares
+        # a pod against its own limit, so all of them stay green while the node underneath runs out
+        # of memory -- which is exactly how 2026-08-18 went: worker-1 hit a kernel SystemOOM, the
+        # kernel picked edge-runtime as the victim, and the pod-level rules had nothing to say
+        # because no pod was near its own 4Gi limit.
+        #
+        # Scoped by CONSTRUCTION to nodes that run this release's pods: the numerator only produces
+        # a series for a node once a pod from {{ $ns }} lands on it, so an unrelated node filling up
+        # in a shared cluster cannot fire an alert named after our edge functions, and two releases
+        # cannot emit the same cluster-wide series.
+        #
+        # What it therefore measures is THIS RELEASE'S FOOTPRINT against the node's allocatable
+        # memory, not total node usage. That is the honest trade: a node filled by some other
+        # tenant's workload will not fire this. It would have caught 2026-08-18 with room to spare
+        # (27.5Gi of pawtograder pods against 30.8Gi allocatable on worker-1 = 89%), and it is the
+        # part we can both see and act on.
+        #
+        # Against ALLOCATABLE, deliberately not against requests: these pods run well over their
+        # memory request, so the scheduler packs by a number that understates reality and
+        # request-based headroom looks fine right up to the kill.
+        #
+        # Uses kube-state-metrics + cadvisor rather than node-exporter, so it depends only on the
+        # same exporters the rest of this group already relies on. `max by (namespace, pod, node)`
+        # on kube_pod_info guards the join against duplicate series for one pod.
+        - alert: PawtograderEdgeFunctionsNodeMemoryHigh
+          expr: |
+            (
+              sum by (node) (
+                container_memory_working_set_bytes{namespace="{{ $ns }}", container!="", image!=""}
+                  * on (namespace, pod) group_left (node)
+                max by (namespace, pod, node) (kube_pod_info{namespace="{{ $ns }}"})
+              )
+                / on (node)
+              max by (node) (kube_node_status_allocatable{resource="memory", unit="byte"})
+            ) > {{ .Values.monitoring.prometheusRules.nodeMemoryRatio | default 0.85 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder pods are filling a node ({{`{{ $labels.node }}`}})"
+            description: >-
+              Pods from {{ $ns }} are using more than
+              {{ .Values.monitoring.prometheusRules.nodeMemoryRatio | default 0.85 }} of
+              {{`{{ $labels.node }}`}}'s allocatable memory. At this point the kernel can OOM-kill a
+              pod on this node while every pod-level memory alert stays green, because those compare
+              each pod against its OWN limit. Check what is co-located here -- Postgres and the edge
+              tier landing on one node is the combination that has bitten before. Note this counts
+              only {{ $ns }}'s own usage, so the node may be fuller than this figure shows.
         # Leading indicator for the above. Memory that climbs with UPTIME rather than load is the
         # signature of long-lived isolates accumulating, and it is visible well before the kill.
         - alert: PawtograderEdgeFunctionsMemoryHigh

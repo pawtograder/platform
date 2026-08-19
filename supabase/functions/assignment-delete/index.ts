@@ -8,7 +8,7 @@ import {
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { enqueueGithubArchiveRepo, getOctoKit, listCommits } from "../_shared/GitHubWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   buildAssignmentDeleteArchiveDebugId,
   collectGitHubRepoTargets,

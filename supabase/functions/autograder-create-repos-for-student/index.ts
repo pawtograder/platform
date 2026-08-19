@@ -13,7 +13,7 @@ import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandl
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   resolveRepoCreationStrategy,
   type AssignmentForRepoCreation,

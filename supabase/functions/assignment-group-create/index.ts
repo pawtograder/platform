@@ -6,7 +6,7 @@ import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandl
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { assignmentProvisionsRepositories } from "../_shared/repoCreationStrategy.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   //Get the user

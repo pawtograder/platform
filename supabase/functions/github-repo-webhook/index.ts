@@ -47,10 +47,11 @@ import {
   MAX_FILE_SIZE_MB
 } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -3961,7 +3962,7 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
   return "tests" in unit && "testCount" in unit;
 }
 
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   console.log("[ENTRY] Received webhook request");
   if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
     return Response.json(

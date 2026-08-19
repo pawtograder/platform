@@ -1,4 +1,4 @@
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "./Redis.ts";
 import { type EnvReader } from "./SentryContext.ts";
 

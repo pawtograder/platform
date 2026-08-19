@@ -28,7 +28,7 @@ import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E }
 import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { collectTextFilesFromZipBuffer } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 type RequestBody = { submission_id: number };
 

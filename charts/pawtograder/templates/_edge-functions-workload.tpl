@@ -16,8 +16,99 @@ Args:
 All other config is shared from .Values.edgeFunctions; channels differ only by
 name, labels, image, and replicas, and target the same Postgres/auth/storage.
 */}}
+{{/*
+Guardrail: the edge-function container memory budget is a SUM, and every
+production incident on this tier has come from reconciling fewer than three of
+them. 2026-08-11 counted only the isolates (maxParallelism x per-isolate limit)
+and OOM-killed 21 of 24 pods. 2026-08-19 counted isolates + host but not the
+demuxer's eszip cache, which grows to eszipCacheMaxMb, and OOM-killed pods again.
+
+So the sum is asserted at render time rather than documented and hoped for:
+
+    eszipCacheMaxMb + eszipColdLoadHeadroomMb
+      + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+      <= resources.limits.memory
+
+The host term is measured, not guessed: a freshly started pod with an empty
+cache sits at ~87Mi.
+
+The cold-load term covers bundle buffers that residentBytes does NOT count: a
+bundle being read for a cache miss, and one the LRU evicted or refused while a
+worker creation still holds it. main.ts narrows that window to the duration of
+create(), but it cannot be zero, and a burst of cold requests for distinct
+functions is exactly when it is largest.
+
+maxParallelism is REQUIRED rather than defaulted-to-zero. Left unset the runtime
+derives it from CPU count, which cannot be known at render time; treating that as
+zero made this assertion accept the very combinations the values documentation
+says it rejects, which is worse than not having it.
+
+One deliberate gap remains: a limit that is not an integer number of Gi/Mi is
+skipped rather than mis-parsed -- a guardrail that silently computes the wrong
+number is worse than one that admits it cannot.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
+{{- $ef := .Values.edgeFunctions -}}
+{{- $limit := "" -}}
+{{- if $ef.resources -}}
+{{- if $ef.resources.limits -}}
+{{- $limit = $ef.resources.limits.memory | default "" | toString -}}
+{{- end -}}
+{{- end -}}
+{{- $limitMi := 0 -}}
+{{- if hasSuffix "Gi" $limit -}}
+{{- $limitMi = mul (trimSuffix "Gi" $limit | int) 1024 -}}
+{{- else if hasSuffix "Mi" $limit -}}
+{{- $limitMi = trimSuffix "Mi" $limit | int -}}
+{{- end -}}
+{{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
+{{- if le $cacheMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
+{{- end -}}
+{{/* Every one of these is rendered into the environment AND has a fallback in
+     main.ts of the shape `Number(env) || default`. A zero, negative or
+     non-numeric value therefore renders as configured, is counted as configured
+     (or as nothing) here, and is then silently replaced by the runtime with its
+     own default -- so the process runs on a number this assertion never saw.
+     worker.memoryLimitMb is the one that breaks the memory budget directly: at
+     0 the isolate term vanishes from the sum while eight workers still reserve
+     8 x 256Mi. The other four are not budget terms, but the same divergence
+     makes them worth rejecting in the same place rather than leaving one
+     validated knob beside four unvalidated ones. */}}
+{{- range $knob, $value := dict "worker.memoryLimitMb" $ef.worker.memoryLimitMb "worker.timeoutMs" $ef.worker.timeoutMs "worker.cpuSoftMs" $ef.worker.cpuSoftMs "worker.cpuHardMs" $ef.worker.cpuHardMs "worker.lowMemoryMultiplier" $ef.worker.lowMemoryMultiplier -}}
+{{- if le ($value | int) 0 -}}
+{{- fail (printf "edgeFunctions.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $knob $value) -}}
+{{- end -}}
+{{- end -}}
+{{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
+{{- $par := $ef.maxParallelism | toString -}}
+{{- if or (eq $par "") (le ($par | int) 0) -}}
+{{- fail (printf "edgeFunctions.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $par) -}}
+{{- end -}}
+{{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
+{{- $hostMi := 90 -}}
+{{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
+{{- if le $coldMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $ef.eszipColdLoadHeadroomMb) -}}
+{{- end -}}
+{{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
+     than the largest bundle in the image cannot bound it -- an oversized bundle is
+     admitted alone and overshoots by (size - allowance). 64Mi covers the largest
+     bundle measured in this image (58.4MiB); if the bundles grow past that, this
+     minimum and the sizing note in values.yaml both need revisiting. */}}
+{{- $minColdMi := 64 -}}
+{{- if lt $coldMi $minColdMi -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $coldMi $minColdMi) -}}
+{{- end -}}
+{{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
+{{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
+{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.edgeFunctions.workload" -}}
 {{- $ctx := .ctx -}}
+{{- include "pawtograder.edgeFunctions.assertMemoryBudget" $ctx -}}
 {{- $component := .component -}}
 {{- $image := .image -}}
 {{- $name := include "pawtograder.componentName" (dict "ctx" $ctx "component" $component) -}}
@@ -164,6 +255,15 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
               value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+            # Byte budget for the demuxer's resident eszip cache. This is the
+            # THIRD term in the container's memory budget, alongside
+            # maxParallelism x worker.memoryLimitMb — see values.yaml.
+            - name: EDGE_ESZIP_CACHE_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
+            # Enforced at runtime by main.ts, not just budgeted here: a semaphore
+            # holds these bytes from before a cold read until create() returns.
+            - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with

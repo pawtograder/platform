@@ -15,7 +15,7 @@ import {
   IllegalArgumentError,
   assertUserIsInstructor
 } from "../_shared/HandlerUtils.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function instructorCreateAutograderGroup(
   req: Request,
   scope: Sentry.Scope

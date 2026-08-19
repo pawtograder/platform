@@ -14,7 +14,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const { assignment_id } = (await req.json()) as { assignment_id: number };
   scope?.setTag("function", "assignment-group-leave");

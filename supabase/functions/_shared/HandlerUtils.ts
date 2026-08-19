@@ -1,6 +1,6 @@
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "./SupabaseTypes.d.ts";
 // Import for side effect. Module evaluation order guarantees this runs to completion before any
 // code in this file, so the ~50 functions that rely on importing HandlerUtils to get Sentry keep
@@ -427,6 +427,19 @@ export async function wrapRequestHandler(
         status: 500
       }
     );
+  } finally {
+    // Under `policy: per_request` the isolate is torn down as soon as this
+    // response is returned, taking Sentry's in-memory transport queue with it.
+    // Without an explicit flush, everything captured above — and every
+    // captureException/captureMessage a handler made — is silently discarded.
+    // Before this, `Sentry.flush()` was called in exactly one function of 55,
+    // so error reporting from the edge tier was mostly fiction.
+    //
+    // Flushed unconditionally rather than only on the error path: handlers
+    // capture directly too, and with an empty queue this resolves immediately.
+    // The 2s ceiling bounds the worst case — losing an event is better than
+    // holding an isolate (and one of `maxParallelism` admission slots) open.
+    await Sentry.flush(2000);
   }
 }
 export class SecurityError extends Error {

@@ -4,7 +4,7 @@ import { validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-retrieve-autograder-regression-tests");
   const token = req.headers.get("Authorization");

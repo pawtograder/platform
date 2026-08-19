@@ -3,7 +3,7 @@ import { Database } from "./SupabaseTypes.d.ts";
 // import { jwtDecode } from "npm:jwt-decode"; // Currently unused
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 function uuid() {

@@ -16,12 +16,13 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { describeCause, isDuplicateKey } from "../_shared/ErrorDetail.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
@@ -319,7 +320,7 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
 /**
  * Main handler
  */
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });

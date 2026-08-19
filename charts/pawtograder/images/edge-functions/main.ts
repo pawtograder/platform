@@ -71,29 +71,276 @@ const MAX_RETIRED_RETRIES = 5;
 // dropdown is built from. Set EDGE_ACCESS_LOG=0 to silence it (no rebuild).
 const ACCESS_LOG = (Deno.env.get("EDGE_ACCESS_LOG") ?? "1") !== "0";
 
-// Cache of loaded eszip bytes, keyed by function name. The value is a Promise
-// so concurrent first-requests for the same function share a single disk read
-// rather than each allocating their own ~40MB buffer (which under a 50-burst
-// would be ~2GB of transient allocation in this main isolate). A resolved
-// `null` means "no eszip on disk for this function" — fall back to raw
-// servicePath and don't keep re-stat-ing the filesystem.
-const eszipCache = new Map<string, Promise<Uint8Array | null>>();
+// Resident eszip bytes, keyed by function name, bounded by total BYTES held.
+//
+// 2026-08-19: this was an unbounded `Map<string, Promise<Uint8Array>>` and it
+// was the edge tier's memory problem. Every eszip a pod had ever served stayed
+// pinned in this main isolate, which lives as long as the pod, so RSS was
+// "floor + whatever the pod happened to have served" and it climbed for days:
+// 87Mi at startup, 667Mi at 1h, 1868-2408Mi at ~5d. The giveaway was that the
+// spread across SAME-AGE pods tracked distinct functions served, not uptime and
+// not request count — four 25-minute-old pods sat at 210/336/398/486Mi holding
+// 2/3/3/4 functions. The ceiling is the whole bundle (`[bundle] done: 55 eszips,
+// 2.2G total`, see the Dockerfile), and 2.2G of cache plus 8 admitted isolates
+// at 256Mi each does not fit in the 4Gi container limit. That is the OOMKill:
+// the limit was never a backstop, it was a deadline.
+//
+// Three structures now, because the three cases have genuinely different
+// lifetimes and conflating them is what made the leak invisible:
+//   * `inflight` preserves the ORIGINAL coalescing property this cache existed
+//     for: concurrent first-requests for one function share a single disk read
+//     instead of each allocating its own ~40MB buffer. Entries are dropped on
+//     settle, so it holds at most `--max-parallelism` promises.
+//   * `missing` is the negative cache. No eszip on disk means fall back to raw
+//     servicePath; remembering that costs a string and saves a stat per
+//     request, so it is kept for the pod's life. Note it is now populated ONLY
+//     on NotFound — the old code cached the null from ANY read error, so one
+//     transient EIO downgraded a function to raw servicePath permanently.
+//   * `resident` is the positive cache: an LRU bounded by BYTES, not by entry
+//     count. Entries run 19-59MB and averaging them is how you get surprised.
+// Eviction is always safe: an in-progress worker creation already holds its own
+// reference to the Uint8Array, so evicting only drops OURS.
+// A budget that isn't a finite positive number isn't a budget. `Number("Infinity")`
+// is Infinity, which makes the eviction condition unsatisfiable and quietly
+// restores the unbounded cache this whole mechanism exists to remove; `Number("")`
+// and `Number("abc")` are 0 and NaN, which break it the other way (NaN comparisons
+// are false, so the evict loop empties the cache on every admit). Anything not
+// finite and positive falls back to the default and says so.
+function byteBudget(envName: string, fallback: number): number {
+  const raw = Deno.env.get(envName);
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(
+      `${envName}=${JSON.stringify(raw)} is not a finite positive byte count; using ${fallback}`
+    );
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+const ESZIP_CACHE_MAX_BYTES = byteBudget("EDGE_ESZIP_CACHE_MAX_BYTES", 512 * 1024 * 1024);
+
+// Aggregate ceiling on bundle bytes held OUTSIDE the resident cache: a bundle
+// being read on a cache miss, and that same buffer while it is being handed to
+// userWorkers.create(). `inflight` only coalesces requests for the SAME function,
+// so without this, N simultaneous cold requests for N DISTINCT functions each
+// allocate their own 19-59MB buffer and nothing bounds the sum — five of the
+// largest bundle in the image already exceed a 256Mi allowance. This makes
+// eszipCacheMaxMb + eszipColdLoadHeadroomMb an enforced total rather than a
+// documented hope, which is what the chart's budget assertion claims it is.
+const COLD_LOAD_MAX_BYTES = byteBudget("EDGE_ESZIP_COLD_LOAD_MAX_BYTES", 256 * 1024 * 1024);
+const inflight = new Map<string, Promise<Uint8Array | null>>();
+const missing = new Set<string>();
+const resident = new Map<string, Uint8Array>();
+let residentBytes = 0;
+
+const mb = (n: number) => (n / 1048576).toFixed(1);
+
+// --- cold-load byte semaphore (FIFO) ---------------------------------------
+// Held from before the read until userWorkers.create() has returned, because the
+// buffer is referenced for that whole span.
+//
+// Strict FIFO, and the full byte size is charged:
+//   * FIFO because waking every waiter does NOT prevent starvation. A large
+//     request that still cannot fit re-queues, and a stream of small releases
+//     lets younger small requests take the capacity ahead of it indefinitely.
+//     Only the head of the queue may acquire, so nothing overtakes a blocked
+//     older request.
+//   * Full size, never clamped to the allowance, because Deno.readFile allocates
+//     the whole bundle regardless of what the allowance says. Charging a clamped
+//     value would let an oversized bundle through while accounting for less than
+//     it actually costs, which is precisely the gap this semaphore exists to close.
+//     A bundle larger than the entire allowance therefore runs ALONE (see
+//     canAdmitCold), and eszipColdLoadHeadroomMb is required by the chart to be
+//     large enough to cover the biggest bundle in the image.
+let coldBytes = 0;
+const coldQueue: Array<{ need: number; resolve: () => void }> = [];
+
+function canAdmitCold(need: number): boolean {
+  // A request bigger than the whole allowance could never satisfy the normal
+  // condition, so it is allowed through when nothing else holds any bytes.
+  if (need > COLD_LOAD_MAX_BYTES) return coldBytes === 0;
+  return coldBytes + need <= COLD_LOAD_MAX_BYTES;
+}
+
+function pumpColdQueue(): void {
+  while (coldQueue.length > 0 && canAdmitCold(coldQueue[0].need)) {
+    const waiter = coldQueue.shift()!;
+    coldBytes += waiter.need;
+    waiter.resolve();
+  }
+}
+
+async function acquireCold(size: number): Promise<void> {
+  // Fast path only when nobody is queued — otherwise this would overtake them.
+  if (coldQueue.length === 0 && canAdmitCold(size)) {
+    coldBytes += size;
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    coldQueue.push({ need: size, resolve });
+    pumpColdQueue();
+  });
+}
+
+function releaseCold(size: number): void {
+  coldBytes -= size;
+  pumpColdQueue();
+}
+
+// --- eviction pins -----------------------------------------------------------
+// A resident buffer being handed to create() must not be evicted out from under
+// that call: dropping it from `resident` would subtract its bytes from
+// residentBytes while the reference is still live, so the accounting would claim
+// memory that is still held. Pinned entries are skipped by eviction instead.
+const pinned = new Map<string, number>();
+
+function pin(name: string): void {
+  pinned.set(name, (pinned.get(name) ?? 0) + 1);
+}
+
+function unpin(name: string): void {
+  const n = (pinned.get(name) ?? 0) - 1;
+  if (n > 0) pinned.set(name, n);
+  else pinned.delete(name);
+  // Reclaim anything that could not be evicted while this entry was in use.
+  enforceBudget();
+}
+
+// Mark `name` most-recently-used. Map iterates in insertion order, so
+// delete + re-set is the entire LRU.
+function touch(name: string, bytes: Uint8Array): void {
+  resident.delete(name);
+  resident.set(name, bytes);
+}
+
+function admit(name: string, bytes: Uint8Array): void {
+  // A single eszip larger than the whole budget is served but never cached;
+  // admitting it would evict everything else to hold one entry.
+  if (bytes.byteLength > ESZIP_CACHE_MAX_BYTES) return;
+  // Re-admission shouldn't happen (`inflight` coalesces, and a hit returns
+  // early), but double-counting here would silently raise the bound this whole
+  // structure exists to enforce, so account for it rather than assume.
+  const existing = resident.get(name);
+  if (existing) residentBytes -= existing.byteLength;
+  touch(name, bytes);
+  residentBytes += bytes.byteLength;
+  enforceBudget();
+}
+
+/**
+ * Evict least-recently-used until residentBytes is back inside the budget.
+ *
+ * Pinned entries are skipped, which is what makes the pin safe — but it also
+ * means a pass can end still over budget if every viable victim is in use. The
+ * newly admitted entry is the most-recently-used, so it is the LAST thing this
+ * loop considers: when pins leave no other room, the new entry is what gets
+ * dropped, i.e. admission is refused rather than the bound being exceeded.
+ * Serving is unaffected, since the caller already holds its own reference.
+ *
+ * unpin() calls this again, so bytes that could not be reclaimed while an entry
+ * was in use are reclaimed as soon as it is released rather than staying resident
+ * forever. Without that retry the "bounded" cache could ratchet upward, one
+ * pinned admission at a time, past the total the chart's assertion certifies.
+ */
+function enforceBudget(): void {
+  for (const victim of [...resident.keys()]) {
+    if (residentBytes <= ESZIP_CACHE_MAX_BYTES) return;
+    if (pinned.has(victim)) continue;
+    const evicted = resident.get(victim)!;
+    resident.delete(victim);
+    residentBytes -= evicted.byteLength;
+    console.log(
+      `[eszip] evicted ${victim} (${mb(evicted.byteLength)}MB), resident ` +
+        `${mb(residentBytes)}MB / ${mb(ESZIP_CACHE_MAX_BYTES)}MB, ${resident.size} functions`
+    );
+  }
+}
 
 // Snapshot the process env ONCE at startup. It's static for the lifetime of the
 // pod, and this runs on the gateway hot path — recomputing it per request would
 // churn allocations needlessly. Workers created below all receive this same array.
 const envVars = Object.entries(Deno.env.toObject()) as [string, string][];
 
+/**
+ * Run `runWithBundle` with this function's bundle, holding the bundle's bytes against a
+ * budget for exactly as long as the reference is live.
+ *
+ * Two cases, deliberately different:
+ *   * Cache HIT — the bytes are already counted in residentBytes, so no extra
+ *     reservation is taken. The entry is pinned instead, so eviction cannot
+ *     subtract its bytes while the reference is still held.
+ *   * Cache MISS — the bytes are not in the cache budget (and may never be, if
+ *     admit() refuses them as oversized or eviction drops them again), so they are
+ *     reserved against COLD_LOAD_MAX_BYTES for the whole span. `stat` gives the
+ *     size before the allocation happens, which is the only way to reserve BEFORE
+ *     the memory is spent rather than after.
+ *
+ * Concurrent misses for the same name each reserve, which over-reserves for one
+ * shared buffer. That errs toward waiting rather than toward exceeding the budget,
+ * which is the direction to err in.
+ */
+async function withEszip<T>(
+  name: string,
+  runWithBundle: (eszip: Uint8Array | null) => Promise<T>
+): Promise<T> {
+  if (resident.has(name)) {
+    pin(name);
+    try {
+      return await runWithBundle(await loadEszip(name));
+    } finally {
+      unpin(name);
+    }
+  }
+
+  if (missing.has(name)) return await runWithBundle(null);
+
+  let size = 0;
+  try {
+    size = (await Deno.stat(`${ESZIP_DIR}/${name}.eszip`)).size;
+  } catch {
+    // No bundle (or unreadable): loadEszip records the negative result and the
+    // caller falls back to the raw servicePath. Nothing to reserve.
+    return await runWithBundle(await loadEszip(name));
+  }
+
+  await acquireCold(size);
+  try {
+    return await runWithBundle(await loadEszip(name));
+  } finally {
+    releaseCold(size);
+  }
+}
+
 function loadEszip(name: string): Promise<Uint8Array | null> {
-  let pending = eszipCache.get(name);
+  const hit = resident.get(name);
+  if (hit) {
+    touch(name, hit);
+    return Promise.resolve(hit);
+  }
+  if (missing.has(name)) return Promise.resolve(null);
+
+  let pending = inflight.get(name);
   if (!pending) {
-    pending = Deno.readFile(`${ESZIP_DIR}/${name}.eszip`).catch((e) => {
-      if (!(e instanceof Deno.errors.NotFound)) {
-        console.error(`failed to read eszip for ${name}:`, (e as Error)?.message ?? e);
-      }
-      return null;
-    });
-    eszipCache.set(name, pending);
+    pending = Deno.readFile(`${ESZIP_DIR}/${name}.eszip`)
+      .then((bytes): Uint8Array | null => {
+        admit(name, bytes);
+        return bytes;
+      })
+      .catch((e) => {
+        if (e instanceof Deno.errors.NotFound) {
+          missing.add(name);
+        } else {
+          // Transient — deliberately NOT remembered, so the next request retries.
+          console.error(`failed to read eszip for ${name}:`, (e as Error)?.message ?? e);
+        }
+        return null;
+      })
+      .finally(() => {
+        inflight.delete(name);
+      });
+    inflight.set(name, pending);
   }
   return pending;
 }
@@ -123,10 +370,18 @@ Deno.serve(async (req: Request) => {
 
   const servicePath = `/home/deno/functions/${serviceName}`;
 
-  const eszip = await loadEszip(serviceName);
-
-  const createWorker = () => {
-    const opts: Record<string, unknown> = {
+  const createWorker = () =>
+    withEszip(serviceName, async (eszip) => {
+      // The bundle is obtained and accounted for by withEszip, which holds it
+      // against a budget for exactly as long as this reference is live and
+      // releases it when create() returns.
+      //
+      // It used to be loaded once per request above callWorker, so the closure
+      // held a 19-59MB buffer for as long as worker.fetch() ran — up to the 400s
+      // worker lifetime. Narrowing it to create() shrank that window; withEszip
+      // is what actually bounds the sum across concurrent cold loads for
+      // DIFFERENT functions, which coalescing on `inflight` never could.
+      const opts: Record<string, unknown> = {
       servicePath,
       memoryLimitMb: MEMORY_LIMIT_MB,
       lowMemoryMultiplier: LOW_MEMORY_MULTIPLIER,
@@ -151,9 +406,12 @@ Deno.serve(async (req: Request) => {
       opts.maybeEszip = eszip;
       opts.maybeEntrypoint = `file:///home/deno/functions/${serviceName}/index.ts`;
     }
-    // @ts-ignore EdgeRuntime is provided by supabase/edge-runtime
-    return EdgeRuntime.userWorkers.create(opts);
-  };
+      // @ts-expect-error EdgeRuntime is an untyped global provided by
+      // supabase/edge-runtime, so this reference always errors under a plain
+      // type-check -- which is what makes expect-error (rather than ignore) the
+      // correct directive here.
+      return await EdgeRuntime.userWorkers.create(opts);
+    });
 
   // Reuse the pooled worker for this function; on retirement, route to a fresh
   // one (create() won't hand back a retired worker). Mirrors the stock

@@ -1,10 +1,10 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 // Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
 // without this Sentry.init never ran and every capture was a silent no-op.
-import "../_shared/SentryInit.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import type {
   DiscordAsyncEnvelope,
   SendMessageArgs,
@@ -27,6 +27,7 @@ import {
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -2512,7 +2513,7 @@ export async function runBatchHandler() {
   }
 }
 
-Deno.serve((req) => {
+serveWithSentryFlush((req) => {
   console.log(`[serve] Received request, method: ${req.method}, url: ${req.url}`);
   const secret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
@@ -2552,7 +2553,7 @@ Deno.serve((req) => {
     // missing-environment-variable check. `.catch` is what makes that throw visible: nothing
     // consumes the promise handed to waitUntil, so without it the one error that can actually end
     // this worker is an unhandled rejection and never reaches Sentry.
-    EdgeRuntime.waitUntil(
+    waitUntilWithSentryFlush(
       runBatchHandler()
         .catch((e) => {
           console.error(`[serve] Batch handler exited with an error:`, e);

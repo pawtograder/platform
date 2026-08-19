@@ -22,7 +22,7 @@ import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandl
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 type RequestBody = { link_id: number };
 

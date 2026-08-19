@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 import { indexSubmission } from "../_shared/CodeSymbolIndexer.ts";
 import type { IndexSubmissionRequest, IndexSubmissionResponse } from "../_shared/FunctionTypes.d.ts";

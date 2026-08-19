@@ -1,7 +1,7 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
@@ -26,6 +26,7 @@ import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -157,12 +158,16 @@ function recordMetric(
       p_status_code: params.status_code,
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   } else {
     // Create new log record (fallback for backward compatibility)
     const log_result = adminSupabase.schema("public").rpc("log_api_gateway_call", {
@@ -173,12 +178,16 @@ function recordMetric(
       p_message_processed_at: new Date().toISOString(),
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   }
 }
 
@@ -2634,7 +2643,7 @@ export async function runBatchHandler() {
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => {
+  serveWithSentryFlush((req) => {
     const secret = req.headers.get("x-edge-function-secret");
     const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
 
@@ -2666,7 +2675,7 @@ if (import.meta.main) {
       // captured, delayed 5s, and retried indefinitely. `.catch` is what makes an exit visible --
       // nothing consumes the promise handed to waitUntil, so a rejection here would otherwise be
       // an unhandled rejection that never reaches Sentry.
-      EdgeRuntime.waitUntil(
+      waitUntilWithSentryFlush(
         runBatchHandler()
           .catch((e) => {
             const scope = new Sentry.Scope();

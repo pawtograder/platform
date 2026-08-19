@@ -26,7 +26,7 @@ import {
   fetchRubricCheckIdsRequiringTargetStudentProfileId
 } from "../_shared/rubricCommentTargetStudentProfileId.ts";
 import { hasGradeableContent, resolveGraderResultConflictVerdict } from "../_shared/graderResultVerdict.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { graderResultErrorsIndicateFailure } from "../_shared/graderResultStatus.ts";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];

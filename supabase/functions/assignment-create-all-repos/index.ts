@@ -8,7 +8,7 @@ import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "..
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   resolveRepoCreationStrategy,
   type AssignmentForRepoCreation,
@@ -23,6 +23,7 @@ import {
   summarizeSettled,
   type SettledSummary
 } from "../_shared/settledSummary.ts";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -601,7 +602,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         Sentry.captureException(error, scope);
       }
     };
-    EdgeRuntime.waitUntil(handler());
+    waitUntilWithSentryFlush(handler());
 
     return new Response(
       JSON.stringify({

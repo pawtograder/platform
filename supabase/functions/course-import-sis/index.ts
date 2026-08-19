@@ -7,7 +7,8 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 type SISSycEnrollmentResult = {
   success: boolean;
@@ -971,7 +972,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     };
 
     // Run in background for cron jobs
-    EdgeRuntime.waitUntil(syncHandler());
+    waitUntilWithSentryFlush(syncHandler());
 
     return {
       message: "SIS sync started in background"
@@ -1291,7 +1292,7 @@ async function routeRequest(req: Request, scope: Sentry.Scope) {
     };
 
     // Run in background for cron jobs
-    EdgeRuntime.waitUntil(syncHandler());
+    waitUntilWithSentryFlush(syncHandler());
 
     return {
       message: "SIS sync started in background",

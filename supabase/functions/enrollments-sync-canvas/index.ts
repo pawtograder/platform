@@ -7,7 +7,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id } = (await req.json()) as { course_id: number };
   if (!course_id) {

@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
@@ -14,6 +14,7 @@ import {
   versionMismatchRowKey,
   type GradebookRowBatchResult
 } from "../_shared/gradebookVersionMismatch.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Declare EdgeRuntime for type safety
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1002,7 +1003,7 @@ export async function runBatchHandler() {
   console.log("Batch handler stopped");
 }
 
-Deno.serve((req) => {
+serveWithSentryFlush((req) => {
   const headers = req.headers;
   const secret = headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
@@ -1036,7 +1037,7 @@ Deno.serve((req) => {
     // Reset on exit: runBatchHandler breaks out of its loop after maxConsecutiveErrors, and without
     // this the flag would stay true forever and the worker would never restart even once the
     // underlying fault cleared.
-    EdgeRuntime.waitUntil(
+    waitUntilWithSentryFlush(
       runBatchHandler().finally(() => {
         started = false;
       })
