@@ -26,6 +26,7 @@ import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -2634,7 +2635,7 @@ export async function runBatchHandler() {
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => {
+  serveWithSentryFlush((req) => {
     const secret = req.headers.get("x-edge-function-secret");
     const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
 

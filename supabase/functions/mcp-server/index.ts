@@ -31,6 +31,7 @@ import {
 } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
@@ -2047,7 +2048,7 @@ function getEndpointUrl(_req: Request): string | null {
 // Main Handler
 // =============================================================================
 
-Deno.serve(async (req: Request): Promise<Response> => {
+serveWithSentryFlush(async (req: Request): Promise<Response> => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });

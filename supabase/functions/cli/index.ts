@@ -71,6 +71,7 @@ import "./commands/helpRequests.ts";
 import "./commands/reviews.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
@@ -80,7 +81,7 @@ if (Deno.env.get("SENTRY_DSN")) {
   });
 }
 
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }

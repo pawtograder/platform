@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 // Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
 // without this Sentry.init never ran and every capture was a silent no-op.
-import "../_shared/SentryInit.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import type {
   DiscordAsyncEnvelope,
   SendMessageArgs,
@@ -2512,7 +2512,7 @@ export async function runBatchHandler() {
   }
 }
 
-Deno.serve((req) => {
+serveWithSentryFlush((req) => {
   console.log(`[serve] Received request, method: ${req.method}, url: ${req.url}`);
   const secret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");

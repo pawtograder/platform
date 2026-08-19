@@ -4,7 +4,7 @@ import { BottleneckLimiterSnapshot, collectBottleneckRedisSnapshots } from "../_
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 // Import for side effect: this function makes Sentry calls but does not import HandlerUtils, so
 // without this Sentry.init never ran and every capture was a silent no-op.
-import "../_shared/SentryInit.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 /** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
@@ -328,7 +328,7 @@ async function authenticateRequest(req: Request): Promise<boolean> {
   }
 }
 
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   // Only allow GET requests
   if (req.method !== "GET") {
     return new Response("Method not allowed", { status: 405 });

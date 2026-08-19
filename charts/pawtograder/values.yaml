@@ -1160,9 +1160,21 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory LIMIT has to hold the whole three-term budget documented above
+  # (eszipCacheMaxMb + maxParallelism x worker.memoryLimitMb + ~90Mi host), which
+  # is asserted at render time by pawtograder.edgeFunctions.assertMemoryBudget.
+  # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi
+  # cache default with maxParallelism 8 -- comes to ~2.6Gi and did not fit 2Gi, so
+  # the old default was a combination the guardrail now rejects outright.
+  #
+  # This is a backstop, not a target: with the cache bounded, a pod's steady state
+  # is the cache plus admitted isolates, and the headroom exists so the runtime
+  # retires an isolate rather than the kernel killing PID 1 and every request on
+  # it. Limits are not scheduled (requests are), so raising it does not change
+  # placement.
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
-    limits: { cpu: "2", memory: "2Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two
   # don't fight). minReplicas should be high enough that a sudden burst spreads
@@ -1562,15 +1574,14 @@ monitoring:
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
     edgeFunctionMemoryRatio: 0.85
-    # Fraction of a node's total memory above which PawtograderEdgeFunctionsNodeMemoryHigh fires.
-    # Covers the axis every other rule here misses: the kernel can OOM-kill a pod that is nowhere
-    # near its own limit, because the NODE is full.
+    # Fraction of a node's ALLOCATABLE memory, used by this release's own pods, above which
+    # PawtograderEdgeFunctionsNodeMemoryHigh fires. Covers the axis every other rule here misses:
+    # the kernel can OOM-kill a pod that is nowhere near its own limit, because the NODE is full.
     #
-    # NOTE: this rule reads node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes, i.e. it
-    # needs node-exporter scraped into the same Prometheus. If those series are absent the rule sits
-    # Inactive forever and looks shipped while being dead on arrival -- the same trap the
-    # container-label comment in prometheus-rules.yaml documents. Confirm the series exists before
-    # relying on this.
+    # Counts only this namespace's usage, so it is a floor on how full the node is, not the whole
+    # picture -- a node filled by another tenant will not fire it. In exchange the rule is scoped to
+    # nodes we actually run on, and depends only on kube-state-metrics + cadvisor, the same
+    # exporters the rest of this rule group already needs.
     nodeMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this

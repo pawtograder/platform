@@ -46,3 +46,28 @@ export function initSentry(): void {
 }
 
 initSentry();
+
+/**
+ * `Deno.serve` plus the flush that `policy: per_request` makes mandatory.
+ *
+ * Under per_request the isolate is destroyed as soon as the response is
+ * returned, taking Sentry's in-memory transport queue with it. Anything
+ * captured but not yet delivered is lost. `wrapRequestHandler` flushes for the
+ * 43 functions routed through it; the ~10 functions that own their `Deno.serve`
+ * boundary need this instead — including the three heaviest reporters in the
+ * tree (github-repo-webhook, github-async-worker, discord-async-worker), which
+ * between them capture 180 exceptions and flushed none of them.
+ *
+ * The flush is in a `finally`, so it covers the throwing path too, and its 2s
+ * ceiling bounds the worst case: losing an event beats holding an isolate (and
+ * one of `maxParallelism` admission slots) open indefinitely.
+ */
+export function serveWithSentryFlush(handler: Deno.ServeHandler): void {
+  Deno.serve(async (req, info) => {
+    try {
+      return await handler(req, info);
+    } finally {
+      await Sentry.flush(2000);
+    }
+  });
+}
