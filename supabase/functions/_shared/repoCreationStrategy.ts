@@ -6,7 +6,11 @@
 import type { BranchProtectionConfig } from "./branchProtection.ts";
 
 export type AssignmentRepoMode =
-  "none" | "template_only_staff" | "template_with_student_forks" | "fork_from_prior_assignment" | "no_submission";
+  | "none"
+  | "template_only_staff"
+  | "template_with_student_forks"
+  | "fork_from_prior_assignment"
+  | "no_submission";
 
 /**
  * Whether an assignment's mode provisions repositories at all. `none` and `no_submission` never
