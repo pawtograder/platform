@@ -455,9 +455,11 @@ jobs:
           # mildest thing in the old set: scoped to one visual-testing project,
           # with no reach into GitHub, Redis, or any student repo.
           #
-          # playwright.config.ts still gates uploads on the token being present,
-          # so a lane without it (local, or a future no-secrets variant) records
-          # results and passes rather than failing on an empty credential.
+          # It has to be passed explicitly here. Argos can authenticate
+          # tokenlessly on GitHub Actions via OIDC -- which is how
+          # playwright-standalone.yml uploads without a token -- but that needs
+          # `id-token: write`, and this job deliberately holds only
+          # `contents: read`.
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
         run: npx playwright test
 
