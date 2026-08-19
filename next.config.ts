@@ -20,6 +20,17 @@ const disableSentryRouteManifestInjection =
 const usingBugsink = !!process.env.SENTRY_URL;
 const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1" || usingBugsink;
 const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1" || usingBugsink;
+// The deploy step is part of that same unimplemented release API. It also has to
+// be disabled explicitly: on Vercel the bundler plugin fills `release.deploy` in
+// from VERCEL_TARGET_ENV whenever we leave it undefined, and then runs
+// `sentry-cli releases deploys <version> new` after the upload regardless of
+// whether `create` ran. Against Bugsink the release does not exist, so the deploy
+// fails with "Release not found" and `errorHandler` turns that into a red build.
+const disableSentryReleaseDeploy = process.env.SENTRY_DISABLE_RELEASE_DEPLOY === "1" || disableSentryReleaseCreate;
+// Only `undefined` re-arms that auto-detection, so switching the deploy off means
+// handing the plugin a value it reads as "set, but falsy". The published type
+// admits an options object and nothing else, hence the cast.
+const suppressedSentryDeploy = null as unknown as undefined;
 const disableSentrySourcemaps = process.env.SENTRY_DISABLE_SOURCEMAPS === "1";
 const useSentryRunAfterProductionCompileHook = process.env.SENTRY_USE_RUN_AFTER_PRODUCTION_COMPILE === "1";
 
@@ -207,8 +218,27 @@ const sentryConfig = {
   useRunAfterProductionCompileHook: useSentryRunAfterProductionCompileHook,
   release: {
     create: !disableSentryReleaseCreate,
-    finalize: !disableSentryReleaseFinalize
+    finalize: !disableSentryReleaseFinalize,
+    ...(disableSentryReleaseDeploy ? { deploy: suppressedSentryDeploy } : {})
   },
+  // …but with `create: false`, `release.deploy` above never reaches the bundler
+  // plugin. `withSentryConfig` resolves no release name when creation is off (it
+  // avoids baking a git hash into an otherwise deterministic build), and
+  // `getWebpackPluginOptions` answers a nameless release by discarding every
+  // release option we passed in favour of a hardcoded
+  // `{ inject: false, create: false, finalize: false }` — `deploy` dropped with
+  // the rest. The plugin then sees `deploy: undefined`, restores its Vercel
+  // default, and annotates a deploy onto a release Bugsink never created.
+  // `unstable_sentryWebpackPluginOptions` is spread over the computed options
+  // last, so it is the only way into that branch. Mirror the hardcoded block so
+  // the override changes nothing but the deploy.
+  ...(disableSentryReleaseCreate
+    ? {
+        unstable_sentryWebpackPluginOptions: {
+          release: { inject: false, create: false, finalize: false, deploy: suppressedSentryDeploy }
+        }
+      }
+    : {}),
   // Quiet for local dev, but never while actually uploading source maps: the
   // build runs inside Docker where CI is unset, and the upload report is the
   // only evidence the upload happened at all.
