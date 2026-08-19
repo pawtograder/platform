@@ -512,8 +512,16 @@ begin
         null
       );
     exception
-      when others then
-        raise warning 'Could not enqueue a repo for group "%" (id %) on assignment %: %. Rename the group to something that survives repo-name normalization, then use Retry.',
+      -- Narrow on purpose. raise_exception covers the two name failures this handler
+      -- exists for -- sanitize_repo_name_component rejecting a separator-only name, and
+      -- the same-name-different-identity guard in enqueue_github_create_repo --
+      -- and unique_violation covers two allowed names colliding after collapse.
+      -- Everything else (a pgmq send failure, a deadlock, a permission error) propagates
+      -- as before: those are not a property of this group's name, they affect every
+      -- group in the pass, and swallowing them would report a success that never
+      -- happened.
+      when raise_exception or unique_violation then
+        raise warning 'Could not enqueue a repo for group "%" (id %) on assignment %: %. Rename the group to something that survives repo-name normalization; no repository will be created for it until then.',
           r_group_name, r_group_id, v_assignment_id, sqlerrm;
     end;
   end loop;
