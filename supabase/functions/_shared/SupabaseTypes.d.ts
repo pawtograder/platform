@@ -6612,10 +6612,12 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at: string;
+          creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
           id: number;
           is_github_ready: boolean;
+          last_creation_attempt_at: string | null;
           profile_id: string | null;
           repository: string;
           rerun_queued_at: string | null;
@@ -6629,10 +6631,12 @@ export type Database = {
           assignment_id: number;
           class_id: number;
           created_at?: string;
+          creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
+          last_creation_attempt_at?: string | null;
           profile_id?: string | null;
           repository: string;
           rerun_queued_at?: string | null;
@@ -6646,10 +6650,12 @@ export type Database = {
           assignment_id?: number;
           class_id?: number;
           created_at?: string;
+          creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
           id?: number;
           is_github_ready?: boolean;
+          last_creation_attempt_at?: string | null;
           profile_id?: string | null;
           repository?: string;
           rerun_queued_at?: string | null;
@@ -13710,6 +13716,7 @@ export type Database = {
         Args: { p_pattern: string; p_text: string };
         Returns: boolean;
       };
+      sanitize_repo_name_component: { Args: { raw: string }; Returns: string };
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;

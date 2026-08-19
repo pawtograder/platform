@@ -4,6 +4,8 @@ import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { assignmentProvisionsRepositories } from "../_shared/repoCreationStrategy.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
@@ -27,7 +29,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   //Valid group names are alphanumeric, hyphens, or underscore, max 36 characters
   if (!/^[a-zA-Z0-9_-]{1,36}$/.test(trimmedName)) {
     throw new IllegalArgumentError(
-      "Group name consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters"
+      "Group name must consist only of letters, numbers, hyphens, or underscores, and be 36 characters or fewer"
     );
   }
   const {
@@ -130,6 +132,40 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
   }
+
+  //Neither the name rules below nor the repo enqueue further down apply to an assignment that never provisions a
+  //repository. Mirrors the repo_mode exemption in validate_assignment_group_name().
+  const providesRepositories = assignmentProvisionsRepositories(assignment.repo_mode);
+  if (providesRepositories) {
+    if (!/[a-zA-Z0-9]/.test(trimmedName)) {
+      throw new IllegalArgumentError("Group name must contain at least one letter or number");
+    }
+    //Two different names can still collide once sanitized for GitHub (e.g. "Team-One" and "Team--One" both become
+    //"Team-One"), and the two groups would then fight over the same repository name
+    const sanitizedName = sanitizeRepoNameComponent(trimmedName).toLowerCase();
+    const { data: assignmentGroups, error: assignmentGroupsError } = await adminSupabase
+      .from("assignment_groups")
+      .select("id, name")
+      .eq("assignment_id", assignment_id);
+    if (assignmentGroupsError) {
+      console.error(assignmentGroupsError);
+      Sentry.captureException(assignmentGroupsError, scope);
+      throw new UserVisibleError(
+        "We could not check the group name against the other groups for this assignment. Try again in a moment."
+      );
+    }
+    const conflictingGroup = (assignmentGroups ?? []).find(
+      //Names stored before this validation existed may sanitize to nothing (which throws); they cannot collide with a
+      //name that has at least one letter or number, so skip them
+      (group) => /[a-zA-Z0-9]/.test(group.name) && sanitizeRepoNameComponent(group.name).toLowerCase() === sanitizedName
+    );
+    if (conflictingGroup) {
+      scope.setTag("existing_group_id", conflictingGroup.id.toString());
+      throw new IllegalArgumentError(
+        `Group name is too similar to the existing group "${conflictingGroup.name}": both become "${sanitizedName}" once normalized for GitHub. Choose a more distinct name.`
+      );
+    }
+  }
   const timeZone = profile.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignment.group_formation_deadline;
   scope.setTag("group_formation_deadline", groupFormationDeadline?.toString() || "unknown");
@@ -218,39 +254,43 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     );
   }
 
-  //Enqueue async repo creation for the group
-  const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
-  scope.setTag("repo_name", repoName);
-  scope.setTag("repo_org", profile.classes!.github_org!);
+  //Enqueue async repo creation for the group, unless this assignment never provisions one
+  if (providesRepositories) {
+    //Sanitize the group-name component the same way every other repo-name derivation does, or this group's repository
+    //is named differently here than in github-user-sync and assignment-create-all-repos
+    const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(trimmedName)}`;
+    scope.setTag("repo_name", repoName);
+    scope.setTag("repo_org", profile.classes!.github_org!);
 
-  // Gather GitHub usernames for all current members
-  const githubUsernames = profile.users.github_username ? [profile.users.github_username] : [];
+    // Gather GitHub usernames for all current members
+    const githubUsernames = profile.users.github_username ? [profile.users.github_username] : [];
 
-  // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
-  const { data: messageId, error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
-    p_class_id: assignment.class_id!,
-    p_org: profile.classes!.github_org!,
-    p_repo_name: repoName,
-    p_template_repo: assignment.template_repo!,
-    p_course_slug: profile.classes!.slug!,
-    p_github_usernames: githubUsernames,
-    p_is_template_repo: false,
-    p_debug_id: `group-create-${newGroup.id}`,
-    p_assignment_id: assignment.id,
-    p_profile_id: undefined, // Group repos don't have a profile_id
-    p_assignment_group_id: newGroup.id,
-    p_latest_template_sha: assignment.latest_template_sha ?? undefined
-  });
+    // Enqueue the repo creation (this will create the repository record and enqueue the GitHub operations)
+    const { data: messageId, error: enqueueError } = await adminSupabase.rpc("enqueue_github_create_repo", {
+      p_class_id: assignment.class_id!,
+      p_org: profile.classes!.github_org!,
+      p_repo_name: repoName,
+      p_template_repo: assignment.template_repo!,
+      p_course_slug: profile.classes!.slug!,
+      p_github_usernames: githubUsernames,
+      p_is_template_repo: false,
+      p_debug_id: `group-create-${newGroup.id}`,
+      p_assignment_id: assignment.id,
+      p_profile_id: undefined, // Group repos don't have a profile_id
+      p_assignment_group_id: newGroup.id,
+      p_latest_template_sha: assignment.latest_template_sha ?? undefined
+    });
 
-  if (enqueueError) {
-    console.error(enqueueError);
-    Sentry.captureException(enqueueError, scope);
-    throw new UserVisibleError(
-      "Your group was created, but we could not start creating the team GitHub repository. Your instructor may need to check the course GitHub connection or template repository. You can still try again from the assignment page in a few minutes."
-    );
+    if (enqueueError) {
+      console.error(enqueueError);
+      Sentry.captureException(enqueueError, scope);
+      throw new UserVisibleError(
+        "Your group was created, but we could not start creating the team GitHub repository. Your instructor may need to check the course GitHub connection or template repository. You can still try again from the assignment page in a few minutes."
+      );
+    }
+
+    console.log(`Enqueued repo creation for group ${newGroup.id}, message ID: ${messageId}`);
   }
-
-  console.log(`Enqueued repo creation for group ${newGroup.id}, message ID: ${messageId}`);
   return {
     message: `Group #${newGroup.id} created successfully`
   };
