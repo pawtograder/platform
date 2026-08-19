@@ -33,7 +33,7 @@ async function instructorCreateAutograderGroup(
   //Valid group names are alphanumeric, hyphens, or underscore, max 36 characters
   if (!/^[a-zA-Z0-9_-]{1,36}$/.test(trimmedName)) {
     throw new IllegalArgumentError(
-      "Group name consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters"
+      "Group name must consist only of letters, numbers, hyphens, or underscores, and be 36 characters or fewer"
     );
   }
   //The group name becomes part of the team's GitHub repository name, and a name made up only of hyphens and

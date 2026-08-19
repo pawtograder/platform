@@ -66,8 +66,8 @@ export default function CreateNewGroup({
                   </Field.Label>
                   <Input name="name" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
                   <Field.ErrorText>
-                    The name must consist only of alphanumeric, hyphens, or underscores, contain at least one letter or
-                    number, and be less than 36 characters.
+                    The name must consist only of letters, numbers, hyphens, or underscores, contain at least one letter
+                    or number, and be 36 characters or fewer.
                   </Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={isGroupInvalid()}>

@@ -109,12 +109,12 @@ function CreateGroupButton({
                 <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
                 <Field.HelperText>
                   Other students will use this name to find your group, and instructors will use this name to identify
-                  the group. The name must consist only of alphanumeric, hyphens, or underscores, contain at least one
-                  letter or number, and be less than 36 characters.
+                  the group. The name must consist only of letters, numbers, hyphens, or underscores, contain at least
+                  one letter or number, and be 36 characters or fewer.
                 </Field.HelperText>
                 <Field.ErrorText>
-                  The name must consist only of alphanumeric, hyphens, or underscores, contain at least one letter or
-                  number, and be less than 36 characters.
+                  The name must consist only of letters, numbers, hyphens, or underscores, contain at least one letter
+                  or number, and be 36 characters or fewer.
                 </Field.ErrorText>
               </Field.Root>
               <Field.Root>

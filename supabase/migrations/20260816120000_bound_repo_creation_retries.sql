@@ -813,9 +813,19 @@ declare
   v_max_attempts constant integer := 8;
   v_max_backoff_doublings constant integer := 5;  -- caps the interval at 32x p_stale_minutes
 begin
-  -- Park anything that has exhausted its automatic retries. Done as a set operation
-  -- before the loop so a row is parked exactly once, and so the loop below never sees
-  -- it again.
+  -- Park anything that has exhausted its automatic retries AND has gone quiet for the
+  -- interval its next attempt would have waited. Done as a set operation before the loop
+  -- so a row is parked exactly once, and so the loop below never sees it again.
+  --
+  -- The staleness term is not belt-and-braces. Attempt eight is enqueued, not completed:
+  -- the job can sit in the queue, and github-async-worker requeues a rate-limited create
+  -- with a long delay. Parking on the attempt count alone means the very next tick
+  -- reports a failure to the instructor while that attempt is still pending, and the
+  -- Retry button they are being pointed at enqueues a second create_repo racing the
+  -- first. Reusing the retry loop's own backoff interval -- deliberately the same
+  -- expression, not a second timing rule that could drift from it -- parks a row exactly
+  -- when it would otherwise have become eligible for attempt nine, which is the moment
+  -- the previous attempt is known not to be coming back.
   update public.repositories rp
      set creation_error = format(
            'Repository creation did not succeed after %s automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.',
@@ -825,6 +835,9 @@ begin
      and rp.is_github_ready = false
      and rp.creation_error is null
      and rp.creation_attempts >= v_max_attempts
+     and rp.updated_at < now() - make_interval(
+           mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
+         )
      and a.repo_mode not in ('none', 'no_submission');
 
   for r in
@@ -880,6 +893,15 @@ comment on function public.reconcile_stuck_repo_creations(int) is
 -- because the row itself is old, and the reconciler would then skip them until an
 -- instructor retried by hand. updated_at measures the thing this cutoff is about: how
 -- long THIS pending state has lasted.
+--
+-- This does NOT need the in-flight guard the reconciler's park just grew. Both cutoffs
+-- here are already staleness cutoffs on updated_at, and both are enormous next to the
+-- reconciler's longest backoff of eight hours: a week of silence in a running class, or
+-- a class that has ended and whose rows the reconciler no longer scans at all. Nothing
+-- plausibly in flight survives either. And parking is recoverable in any case -- if a
+-- late job does succeed, reset_repo_creation_attempts_on_ready clears creation_error and
+-- the attempt count as the row flips ready, so a parked row heals itself rather than
+-- needing the instructor to undo anything.
 update public.repositories rp
    set creation_attempts = 8,
        creation_error = 'Repository creation did not succeed after repeated automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.'
@@ -965,6 +987,37 @@ begin
       raise exception 'Group name "%" cannot be used: a group name needs at least one letter or number in it. This group''s repository is named after it, and GitHub will not accept a name made only of dashes, underscores or dots. Pick a different name for the group.', new.name
         using errcode = 'check_violation';
   end;
+
+  -- Serialize every writer of group names within one assignment. The scan below reads
+  -- committed sibling rows, so without this two concurrent transactions -- one naming a
+  -- group `Team-One`, one naming it `Team--One` -- each scan before the other's row is
+  -- visible, both pass, both commit, and the pair that this trigger exists to prevent
+  -- lands anyway. Neither unique index catches it: the stored names genuinely differ,
+  -- and it is only the NORMALIZED forms that collide, which surfaces later as a
+  -- unique_repo_name violation inside a worker. Assignment-scoped rather than global so
+  -- unrelated classes never wait on each other.
+  --
+  -- A unique index on lower(sanitize_repo_name_component(name)) would be the tempting
+  -- "upgrade" here. It is not available: the function raises on separator-only names, so
+  -- the index expression is not total over existing data, and grandfathered rows that
+  -- already collide (this migration's audit reports them rather than rewriting them)
+  -- would make CREATE INDEX fail and take the deploy with it -- the same reason this PR
+  -- declined a unique index over derived repository names. A lock plus a scan enforces
+  -- the rule for new writes without demanding that history already obey it.
+  --
+  -- Deadlock analysis. This lock is taken in exactly one place, this trigger, and only
+  -- for an insert or a rename of a group. A transaction normally touches one assignment
+  -- -- the student create/join flow, an instructor rename, publish_assignment_group_
+  -- changes and copy_groups_from_assignment all work against a single assignment_id --
+  -- so it is one key per transaction and there is no second key to order against.
+  -- copy_groups_from_assignment inserts many groups into its target and so reaches this
+  -- line once per row, which is free: advisory locks are re-entrant, and repeat
+  -- acquisitions of a key the transaction already holds only bump a reference count. It
+  -- also takes its own `copy_groups:<class>:<target>` lock first and always in that
+  -- order, so the two lock namespaces are acquired in a consistent sequence.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(pg_catalog.format('assignment_group_name:%s', new.assignment_id), 0)
+  );
 
   -- Row-at-a-time rather than one set query so that a grandfathered sibling whose own
   -- name does not sanitize cannot make this trigger raise on an unrelated group: a
