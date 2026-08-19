@@ -31,11 +31,6 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
       "Group name must consist only of letters, numbers, hyphens, or underscores, and be 36 characters or fewer"
     );
   }
-  //The group name becomes part of the team's GitHub repository name, and a name made up only of hyphens and
-  //underscores sanitizes to nothing at all
-  if (!/[a-zA-Z0-9]/.test(trimmedName)) {
-    throw new IllegalArgumentError("Group name must contain at least one letter or number");
-  }
   const {
     data: { user }
   } = await supabase.auth.getUser();
@@ -92,32 +87,6 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     throw new IllegalArgumentError("A group with this name already exists for this assignment");
   }
 
-  //Two different names can still collide once sanitized for GitHub (e.g. "Team-One" and "Team--One" both become
-  //"Team-One"), and the two groups would then fight over the same repository name
-  const sanitizedName = sanitizeRepoNameComponent(trimmedName).toLowerCase();
-  const { data: assignmentGroups, error: assignmentGroupsError } = await adminSupabase
-    .from("assignment_groups")
-    .select("id, name")
-    .eq("assignment_id", assignment_id);
-  if (assignmentGroupsError) {
-    console.error(assignmentGroupsError);
-    Sentry.captureException(assignmentGroupsError, scope);
-    throw new UserVisibleError(
-      "We could not check the group name against the other groups for this assignment. Try again in a moment."
-    );
-  }
-  const conflictingGroup = (assignmentGroups ?? []).find(
-    //Names stored before this validation existed may sanitize to nothing (which throws); they cannot collide with a
-    //name that has at least one letter or number, so skip them
-    (group) => /[a-zA-Z0-9]/.test(group.name) && sanitizeRepoNameComponent(group.name).toLowerCase() === sanitizedName
-  );
-  if (conflictingGroup) {
-    scope.setTag("existing_group_id", conflictingGroup.id.toString());
-    throw new IllegalArgumentError(
-      `Group name is too similar to the existing group "${conflictingGroup.name}": both become "${sanitizedName}" once normalized for GitHub. Choose a more distinct name.`
-    );
-  }
-
   if (invitees.length > 0) {
     const { data: inviteeEnrollments, error: inviteeEnrollmentsError } = await adminSupabase
       .from("user_roles")
@@ -161,6 +130,39 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   const { data: assignment } = await adminSupabase.from("assignments").select("*").eq("id", assignment_id).single();
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
+  }
+
+  //Both checks below exist only to protect the group's GitHub repository name, so they do not apply to assignments
+  //that never provision one. Mirrors the repo_mode exemption in validate_assignment_group_name().
+  if (assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
+    if (!/[a-zA-Z0-9]/.test(trimmedName)) {
+      throw new IllegalArgumentError("Group name must contain at least one letter or number");
+    }
+    //Two different names can still collide once sanitized for GitHub (e.g. "Team-One" and "Team--One" both become
+    //"Team-One"), and the two groups would then fight over the same repository name
+    const sanitizedName = sanitizeRepoNameComponent(trimmedName).toLowerCase();
+    const { data: assignmentGroups, error: assignmentGroupsError } = await adminSupabase
+      .from("assignment_groups")
+      .select("id, name")
+      .eq("assignment_id", assignment_id);
+    if (assignmentGroupsError) {
+      console.error(assignmentGroupsError);
+      Sentry.captureException(assignmentGroupsError, scope);
+      throw new UserVisibleError(
+        "We could not check the group name against the other groups for this assignment. Try again in a moment."
+      );
+    }
+    const conflictingGroup = (assignmentGroups ?? []).find(
+      //Names stored before this validation existed may sanitize to nothing (which throws); they cannot collide with a
+      //name that has at least one letter or number, so skip them
+      (group) => /[a-zA-Z0-9]/.test(group.name) && sanitizeRepoNameComponent(group.name).toLowerCase() === sanitizedName
+    );
+    if (conflictingGroup) {
+      scope.setTag("existing_group_id", conflictingGroup.id.toString());
+      throw new IllegalArgumentError(
+        `Group name is too similar to the existing group "${conflictingGroup.name}": both become "${sanitizedName}" once normalized for GitHub. Choose a more distinct name.`
+      );
+    }
   }
   const timeZone = profile.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignment.group_formation_deadline;

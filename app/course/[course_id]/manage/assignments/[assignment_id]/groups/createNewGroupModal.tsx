@@ -1,4 +1,4 @@
-import { isValidGroupName } from "@/lib/groupNameValidation";
+import { groupNameRequirementsText, isValidGroupName } from "@/lib/groupNameValidation";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersAndMentor } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
@@ -46,7 +46,7 @@ export default function CreateNewGroup({
             </Dialog.Header>
             <Dialog.Body>
               <Flex flexDir="column" gap="15px">
-                <Field.Root invalid={newGroupName.length > 0 && !isValidGroupName(newGroupName)}>
+                <Field.Root invalid={newGroupName.length > 0 && !isValidGroupName(newGroupName, assignment.repo_mode)}>
                   <Field.Label>
                     Choose a name for the group or
                     <Button
@@ -65,10 +65,7 @@ export default function CreateNewGroup({
                     </Button>
                   </Field.Label>
                   <Input name="name" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
-                  <Field.ErrorText>
-                    The name must consist only of letters, numbers, hyphens, or underscores, contain at least one letter
-                    or number, and be 36 characters or fewer.
-                  </Field.ErrorText>
+                  <Field.ErrorText>{groupNameRequirementsText(assignment.repo_mode)}</Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={isGroupInvalid()}>
                   <Field.Label>Select unassigned students to place in the group</Field.Label>
@@ -113,7 +110,7 @@ export default function CreateNewGroup({
                       setSelectedMembers([]);
                     }}
                     colorPalette={"green"}
-                    disabled={!isValidGroupName(newGroupName)}
+                    disabled={!isValidGroupName(newGroupName, assignment.repo_mode)}
                   >
                     Save
                   </Button>

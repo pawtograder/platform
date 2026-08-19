@@ -248,7 +248,7 @@ begin
         if repo_id is null then
           raise exception 'Repository name % is already used by a different assignment, student or group', full_repo_name;
         end if;
-        v_repo_name := split_part(v_existing_name, '/', 2);
+        v_repo_name := substring(v_existing_name from position('/' in v_existing_name) + 1);
       end if;
     else
       -- An existing row's stored name is authoritative: it is what a GitHub repo was
@@ -259,7 +259,7 @@ begin
       -- `…-group-Team-One` -- and the worker marks the row ready by repo_id without
       -- writing the name back, so the row would end up pointing at a repo nobody
       -- created. Use the stored name and leave the row alone.
-      v_repo_name := split_part(v_existing_name, '/', 2);
+      v_repo_name := substring(v_existing_name from position('/' in v_existing_name) + 1);
     end if;
   end if;
 
@@ -637,7 +637,12 @@ begin
   end if;
 
   v_creation_method := case when r.repo_mode = 'template_only_staff' then 'template' else 'fork' end;
-  v_repo_name := split_part(r.repository, '/', 2);
+  -- Strip only the org, i.e. everything up to the FIRST slash. split_part(..., '/', 2)
+  -- would truncate at the SECOND one, and a repository name can legitimately contain a
+  -- slash: nothing constrains class or assignment slugs, and e2e class slugs carry a
+  -- formatted timestamp (`dd/MM/yy`). That truncation silently enqueued a shortened repo
+  -- name for every such class.
+  v_repo_name := substring(r.repository from position('/' in r.repository) + 1);
 
   if r.assignment_group_id is not null then
     -- Group repo: collect member usernames; resolve the prior-assignment source by group name.

@@ -14,7 +14,7 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
-import { isValidGroupName } from "@/lib/groupNameValidation";
+import { groupNameRequirementsText, isValidGroupName } from "@/lib/groupNameValidation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
@@ -104,18 +104,14 @@ function CreateGroupButton({
               <Dialog.Title>Create a new group</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Field.Root invalid={name.length > 0 && !isValidGroupName(name)}>
+              <Field.Root invalid={name.length > 0 && !isValidGroupName(name, assignment.repo_mode)}>
                 <Field.Label>Choose a name for your group</Field.Label>
                 <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
                 <Field.HelperText>
                   Other students will use this name to find your group, and instructors will use this name to identify
-                  the group. The name must consist only of letters, numbers, hyphens, or underscores, contain at least
-                  one letter or number, and be 36 characters or fewer.
+                  the group. {groupNameRequirementsText(assignment.repo_mode)}
                 </Field.HelperText>
-                <Field.ErrorText>
-                  The name must consist only of letters, numbers, hyphens, or underscores, contain at least one letter
-                  or number, and be 36 characters or fewer.
-                </Field.ErrorText>
+                <Field.ErrorText>{groupNameRequirementsText(assignment.repo_mode)}</Field.ErrorText>
               </Field.Root>
               <Field.Root>
                 <Field.Label>Invite other students to join your group</Field.Label>
@@ -135,7 +131,7 @@ function CreateGroupButton({
               </Dialog.ActionTrigger>
               <Button
                 loading={isLoading}
-                disabled={!isValidGroupName(name)}
+                disabled={!isValidGroupName(name, assignment.repo_mode)}
                 colorPalette="green"
                 onClick={() => {
                   setIsLoading(true);
