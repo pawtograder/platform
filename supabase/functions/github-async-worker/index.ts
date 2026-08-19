@@ -158,12 +158,16 @@ function recordMetric(
       p_status_code: params.status_code,
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   } else {
     // Create new log record (fallback for backward compatibility)
     const log_result = adminSupabase.schema("public").rpc("log_api_gateway_call", {
@@ -174,12 +178,16 @@ function recordMetric(
       p_message_processed_at: new Date().toISOString(),
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   }
 }
 

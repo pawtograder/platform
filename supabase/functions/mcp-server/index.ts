@@ -31,7 +31,7 @@ import {
 } from "../_shared/MCPAuth.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
-import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
@@ -2080,11 +2080,17 @@ serveWithSentryFlush(async (req: Request): Promise<Response> => {
       const context = await authenticateMCPRequest(authHeader);
 
       // Update last used timestamp asynchronously
-      updateTokenLastUsed(context.tokenId).catch((err) => {
-        Sentry.captureException(err, {
-          tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-        });
-      });
+      // Detached on purpose: the SSE/JSON response must not wait on a
+      // last-used timestamp write. Routed through the background-work helper
+      // so a late failure still gets flushed -- the request-boundary flush has
+      // already run by the time this settles.
+      waitUntilWithSentryFlush(
+        updateTokenLastUsed(context.tokenId).catch((err) => {
+          Sentry.captureException(err, {
+            tags: { operation: "update_token_last_used", tokenId: context.tokenId }
+          });
+        })
+      );
 
       // Create SSE stream
       const { stream, sse } = createSSEStream();
@@ -2140,11 +2146,17 @@ serveWithSentryFlush(async (req: Request): Promise<Response> => {
     const context = await authenticateMCPRequest(authHeader);
 
     // Update last used timestamp asynchronously
-    updateTokenLastUsed(context.tokenId).catch((err) => {
-      Sentry.captureException(err, {
-        tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-      });
-    });
+    // Detached on purpose: the SSE/JSON response must not wait on a
+    // last-used timestamp write. Routed through the background-work helper
+    // so a late failure still gets flushed -- the request-boundary flush has
+    // already run by the time this settles.
+    waitUntilWithSentryFlush(
+      updateTokenLastUsed(context.tokenId).catch((err) => {
+        Sentry.captureException(err, {
+          tags: { operation: "update_token_last_used", tokenId: context.tokenId }
+        });
+      })
+    );
 
     // Parse the MCP request (can be single or batch)
     const body = await req.json();
