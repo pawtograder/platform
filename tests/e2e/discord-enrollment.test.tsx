@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createClass, createUserInClass, getTestRunPrefix, supabase } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
-import { clearCalls, getCalls, getState, waitForCall } from "@/tests/mocks/discord/client";
+import { clearCalls, getCalls, getState, setState, waitForCall } from "@/tests/mocks/discord/client";
 import {
   GRADER_ROLE_ID,
   INSTRUCTOR_ROLE_ID,
@@ -76,8 +76,20 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const STORM_GUILD = randomGuildId();
   /** Its own guild, because the invite-fallback test applies a scenario with denied channel overwrites. */
   const INVITE_GUILD = randomGuildId();
+  /**
+   * The guild the revocation test releases. Its own, because releasing it is the whole point and a
+   * disconnected class would break every other section's fixtures.
+   */
+  const REVOKE_GUILD = randomGuildId();
+  /**
+   * A guild the revoke class is never connected to and the mock is never given, standing in for one
+   * the class left in an earlier move. Its invite is the already-gone case: Discord answers
+   * `404 / 10006 Unknown Invite` for a code it does not have, which must count as success rather than
+   * dead-letter, because a released invite that somebody already deleted is the common case.
+   */
+  const REVOKE_OLD_GUILD = randomGuildId();
   /** The guilds the mock is given. Deliberately excludes GONE_GUILD -- see below. */
-  const ALL_GUILDS = [SYNC_GUILD, RECON_GUILD, STORM_GUILD, INVITE_GUILD];
+  const ALL_GUILDS = [SYNC_GUILD, RECON_GUILD, STORM_GUILD, INVITE_GUILD, REVOKE_GUILD];
   /**
    * A guild id the mock is NEVER given, so every guild route for it answers 404 / 10004 Unknown
    * Guild -- what Discord says about a server the bot has been removed from, a server that has been
@@ -86,7 +98,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
    */
   const GONE_GUILD = randomGuildId();
   /** Every guild this spec leaves state under, for cleanup. ALL_GUILDS is the mock-backed subset. */
-  const TOUCHED_GUILDS = [...ALL_GUILDS, GONE_GUILD];
+  const TOUCHED_GUILDS = [...ALL_GUILDS, GONE_GUILD, REVOKE_OLD_GUILD];
 
   // Distinct per user: lookupUserIdByDiscordId() uses `.single()`, so two platform users sharing a
   // Discord id would make the worker's reverse lookup fail rather than pick one.
@@ -95,17 +107,21 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const STORM_DISCORD_ID = randomDiscordUserId();
   const INVITE_DISCORD_ID = randomDiscordUserId();
   const GONE_DISCORD_ID = randomDiscordUserId();
+  const REVOKE_DISCORD_ID = randomDiscordUserId();
 
   let syncClassId: number;
   let reconClassId: number;
   let stormClassId: number;
   let inviteClassId: number;
   let goneClassId: number;
+  let revokeClassId: number;
   let syncStudent: TestingUser;
   let reconStudent: TestingUser;
   let stormStudent: TestingUser;
   let inviteStudent: TestingUser;
   let goneStudent: TestingUser;
+  let revokeStudent: TestingUser;
+  let revokeInstructor: TestingUser;
   let mockUp = false;
 
   const membership = () => untypedTable(supabase, "discord_membership_status");
@@ -249,6 +265,24 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
       email: `e2e-denroll-invite-${SAFE_ID}@pawtograder.net`
     });
 
+    const revokeClass = await createClass({ name: `E2E DiscordEnroll Revoke ${RUN_PREFIX}` });
+    revokeClassId = revokeClass.id;
+    revokeStudent = await createUserInClass({
+      role: "student",
+      class_id: revokeClassId,
+      name: `DiscordEnroll Revoke ${RUN_PREFIX}`,
+      email: `e2e-denroll-revoke-${SAFE_ID}@pawtograder.net`
+    });
+    // An instructor, because disconnect_discord_guild() authorizes on the acting user rather than on
+    // the service role: the point of driving the real RPC is that the teardown reached here the way
+    // an instructor pressing Disconnect reaches it.
+    revokeInstructor = await createUserInClass({
+      role: "instructor",
+      class_id: revokeClassId,
+      name: `DiscordEnroll Revoke Staff ${RUN_PREFIX}`,
+      email: `e2e-denroll-revoke-staff-${SAFE_ID}@pawtograder.net`
+    });
+
     const goneClass = await createClass({ name: `E2E DiscordEnroll Gone ${RUN_PREFIX}` });
     goneClassId = goneClass.id;
     goneStudent = await createUserInClass({
@@ -264,6 +298,10 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     await connectClass(goneClassId, GONE_GUILD);
 
     await connectClass(inviteClassId, INVITE_GUILD);
+    await connectClass(revokeClassId, REVOKE_GUILD);
+    // Linked but deliberately NOT a member of REVOKE_GUILD: the invite this test revokes has to be
+    // minted by the real path, and add_member_role only mints one for a student who is absent.
+    await linkDiscord(revokeStudent, REVOKE_DISCORD_ID);
     // Deliberately NOT added to the mock guild: ensureInviteForUser only runs for a student the
     // membership check reports as absent.
     await linkDiscord(inviteStudent, INVITE_DISCORD_ID);
@@ -300,7 +338,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     const guildOf = (row: { message?: { args?: Record<string, unknown> } }) =>
       String((row.message?.args as { guild_id?: string } | undefined)?.guild_id ?? "");
     const mine = new Set(TOUCHED_GUILDS);
-    const myClasses = new Set([syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId]);
+    const myClasses = new Set([syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId, revokeClassId]);
     const isMine = (row: { message?: { class_id?: number; args?: Record<string, unknown> } }) =>
       mine.has(guildOf(row)) || (row.message?.class_id !== undefined && myClasses.has(row.message.class_id));
     // Both queues: a terminal permission failure is dead-lettered rather than retried, so the storm
@@ -320,7 +358,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     // these guilds for the next run and make its worker defer everything.
     await breakers().delete().in("key", TOUCHED_GUILDS);
     await asyncErrors().delete().in("guild_id", TOUCHED_GUILDS);
-    for (const classId of [syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId]) {
+    for (const classId of [syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId, revokeClassId]) {
       if (classId) await supabase.from("classes").update({ discord_server_id: null }).eq("id", classId);
     }
     releaseDiscordMockLock();
@@ -573,6 +611,210 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     expect(row?.state, "a successful fallback must not record cannot_invite").not.toBe("cannot_invite");
 
     await supabase.from("classes").update({ features: null }).eq("id", inviteClassId);
+  });
+
+  test("releasing a guild revokes the class's outstanding invites at Discord", async () => {
+    // The hole this closes. clear_discord_tracking_for_class() dropped every POINTER a class held
+    // into its guild -- roles, channels, messages, the discussion-topic channel id -- and left the one
+    // row that is not a pointer but a live capability: discord_invites. Invites are minted with
+    // max_age = 604800 and max_uses = 5, and the uniqueness index on classes.discord_server_id is
+    // partial on `archived = false`, so the released guild is claimable by another course the instant
+    // the release commits. For up to seven days after that, a former student of this course could
+    // follow their old link into somebody else's server. components/discord/pending-invites.tsx
+    // filters to invites whose guild_id still matches the class's server, so the rows became
+    // invisible at exactly the moment they became dangerous.
+    //
+    // Asserted at BOTH ends, because either half alone passes for the wrong reason: a queue-only
+    // assertion passes against a worker that cannot handle the method, and a call-log-only assertion
+    // cannot tell a revocation from the mint that preceded it. So: the envelope is on the queue, and
+    // the worker really issues `DELETE /invites/{code}` for it.
+    await applyScenarioForGuilds("healthy", ALL_GUILDS);
+    await drainQueue();
+
+    // 1. A real invite, minted by the real path -- not seeded. The code has to exist in Discord for
+    //    the revocation to be observable as anything other than a 404.
+    const { error: featureError } = await supabase
+      .from("classes")
+      .update({ features: [{ name: "discord-student-join", enabled: true }] })
+      .eq("id", revokeClassId);
+    expect(featureError, "enabling student Discord invitations for the revoke class").toBeNull();
+
+    await enqueueRoleSync(revokeStudent.user_id, revokeClassId);
+    const minted = await driveWorker(async () => {
+      const { data } = await supabase
+        .from("discord_invites")
+        .select("invite_code")
+        .eq("class_id", revokeClassId)
+        .eq("guild_id", REVOKE_GUILD);
+      return (data ?? []).length > 0;
+    }, 60_000);
+    expect(minted, "the worker never minted an invite, so there is nothing to revoke").toBe(true);
+
+    const { data: mintedRows, error: mintedError } = await supabase
+      .from("discord_invites")
+      .select("invite_code")
+      .eq("class_id", revokeClassId)
+      .eq("guild_id", REVOKE_GUILD);
+    expect(mintedError).toBeNull();
+    const liveCode = (mintedRows ?? [])[0]?.invite_code as string;
+    expect(liveCode, "no invite_code was stored for the minted invite").toBeTruthy();
+    // It is really live in Discord, which is what makes the DELETE below meaningful.
+    expect(
+      Object.values((await getState()).invites ?? {}).some((invite) => invite.code === liveCode),
+      `the mock does not hold invite ${liveCode}, so revoking it would prove nothing`
+    ).toBe(true);
+
+    // 2. A second live invite whose row is marked `used`. `used` is our own bookkeeping --
+    //    mark_discord_invite_used sets it when the intended student turns up -- and it says nothing
+    //    about Discord's counter, which allows five. A teardown that skipped used rows would leave
+    //    four uses of a live link into a guild another course may already own.
+    const usedCode = `e2eused${SAFE_ID}`.slice(0, 16);
+    const revokeGuildChannels = ((await getState()).guilds[REVOKE_GUILD]?.channels ?? []).filter(
+      (channel) => channel.type === 0
+    );
+    expect(revokeGuildChannels.length, "the healthy scenario should give REVOKE_GUILD a text channel").toBeGreaterThan(
+      0
+    );
+    await setState({
+      invites: {
+        [usedCode]: {
+          code: usedCode,
+          guild_id: REVOKE_GUILD,
+          channel_id: revokeGuildChannels[0].id,
+          max_age: 604800,
+          max_uses: 5,
+          uses: 1,
+          created_at: new Date().toISOString()
+        }
+      }
+    });
+    const { error: usedInsertError } = await supabase.from("discord_invites").insert({
+      user_id: revokeInstructor.user_id,
+      class_id: revokeClassId,
+      guild_id: REVOKE_GUILD,
+      invite_code: usedCode,
+      invite_url: `https://discord.gg/${usedCode}`,
+      expires_at: new Date(Date.now() + 6 * 86_400_000).toISOString(),
+      used: true
+    });
+    expect(usedInsertError, "seeding a used-but-live invite").toBeNull();
+
+    // 3. A row for a guild from an earlier move whose code Discord no longer has. Discord answers
+    //    404 / 10006 Unknown Invite, and revokeInvite() reads that as success -- it is the state the
+    //    request was trying to reach. It must not dead-letter, or every teardown after somebody tidied
+    //    up by hand becomes a DLQ row and an alert.
+    const goneCode = `e2egone${SAFE_ID}`.slice(0, 16);
+    const { error: goneInsertError } = await supabase.from("discord_invites").insert({
+      user_id: revokeStudent.user_id,
+      class_id: revokeClassId,
+      guild_id: REVOKE_OLD_GUILD,
+      invite_code: goneCode,
+      invite_url: `https://discord.gg/${goneCode}`,
+      expires_at: new Date(Date.now() + 6 * 86_400_000).toISOString(),
+      used: false
+    });
+    expect(goneInsertError, "seeding an invite Discord no longer has").toBeNull();
+
+    // 4. An already-expired row, which is skipped: Discord invalidated it when max_age elapsed, so a
+    //    DELETE would spend a request on a guaranteed 404. The row still goes, because a row naming a
+    //    guild the class has left would suppress the replacement invite for that user.
+    const expiredCode = `e2eexpd${SAFE_ID}`.slice(0, 16);
+    const { error: expiredInsertError } = await supabase.from("discord_invites").insert({
+      user_id: revokeInstructor.user_id,
+      class_id: revokeClassId,
+      guild_id: REVOKE_OLD_GUILD,
+      invite_code: expiredCode,
+      invite_url: `https://discord.gg/${expiredCode}`,
+      expires_at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+      used: false
+    });
+    expect(expiredInsertError, "seeding an expired invite").toBeNull();
+
+    // From here the call log contains only teardown traffic, so a DELETE in it cannot be mistaken for
+    // part of the mint above.
+    await drainQueue();
+    await clearCalls();
+
+    // The disconnect itself, through the RPC an instructor's Disconnect button calls. Its BEFORE
+    // trigger is what runs clear_discord_tracking_for_class.
+    const { error: disconnectError } = await untypedRpc(supabase, "disconnect_discord_guild", {
+      p_class_id: revokeClassId,
+      p_actor: revokeInstructor.user_id
+    });
+    expect(disconnectError, "disconnect_discord_guild failed").toBeNull();
+
+    // The revocations are enqueued by the same transaction, so they are on the queue before the
+    // worker is poked at all.
+    const codeOf = (row: { message?: { args?: Record<string, unknown> } }) =>
+      String((row.message?.args as { invite_code?: string } | undefined)?.invite_code ?? "");
+    const isRevocationFor =
+      (code: string) => (row: { message?: { method?: string; args?: Record<string, unknown> } }) =>
+        row.message?.method === "delete_invite" && codeOf(row) === code;
+
+    for (const code of [liveCode, usedCode, goneCode]) {
+      expect(
+        await waitForQueueMessage(isRevocationFor(code), 15_000),
+        `no delete_invite was enqueued for outstanding invite ${code}`
+      ).not.toBeNull();
+    }
+    expect(
+      (await readQueue(DISCORD_QUEUE, 1, 100)).filter(isRevocationFor(expiredCode)),
+      "an invite Discord had already expired does not need a Discord call"
+    ).toHaveLength(0);
+
+    // And the rows are gone, in the same transaction as the sends.
+    const { data: remainingRows, error: remainingError } = await supabase
+      .from("discord_invites")
+      .select("invite_code")
+      .eq("class_id", revokeClassId);
+    expect(remainingError).toBeNull();
+    expect(
+      (remainingRows ?? []).map((row) => row.invite_code),
+      "the teardown left discord_invites rows behind"
+    ).toEqual([]);
+
+    // 5. The half that matters: the worker actually calls Discord.
+    const pathFor = (code: string) => `/invites/${code}`;
+    const revoked = await driveWorker(async () => {
+      const calls = await getCalls();
+      return [liveCode, usedCode, goneCode].every((code) =>
+        calls.some((call) => call.method === "DELETE" && call.path === pathFor(code))
+      );
+    }, 60_000);
+    expect(revoked, "the worker never issued DELETE /invites/{code} for the released invites").toBe(true);
+
+    const calls = await getCalls();
+    const deleteFor = (code: string) => calls.find((call) => call.method === "DELETE" && call.path === pathFor(code));
+    expect(deleteFor(liveCode)?.status, `DELETE ${pathFor(liveCode)} should have succeeded`).toBe(200);
+    expect(deleteFor(usedCode)?.status, "a used invite still has uses left and must be revoked").toBe(200);
+    // The already-gone one is attempted and answered 404 / 10006, which is the success case.
+    expect(deleteFor(goneCode)?.status).toBe(404);
+    expect(deleteFor(goneCode)?.code).toBe(10006);
+    expect(
+      calls.some((call) => call.method === "DELETE" && call.path === pathFor(expiredCode)),
+      "an expired invite must not cost a Discord request"
+    ).toBe(false);
+
+    // Neither invite is live in Discord any more, which is the actual outcome under test.
+    const liveAfter = Object.values((await getState()).invites ?? {}).map((invite) => invite.code);
+    expect(liveAfter, `${liveCode} is still a working invite into ${REVOKE_GUILD}`).not.toContain(liveCode);
+    expect(liveAfter, `${usedCode} is still a working invite into ${REVOKE_GUILD}`).not.toContain(usedCode);
+
+    // Resolved cleanly. A 404 that dead-lettered would turn every tidy-up into an alert, and a
+    // requeued revocation would come back on every visibility timeout.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const isMineRevocation = (row: { message?: { method?: string; args?: Record<string, unknown> } }) =>
+      row.message?.method === "delete_invite" && [liveCode, usedCode, goneCode].includes(codeOf(row));
+    expect(
+      (await readQueue(DISCORD_QUEUE, 1, 100)).filter(isMineRevocation),
+      "a revocation was requeued instead of archived"
+    ).toHaveLength(0);
+    expect(
+      (await readQueue(DISCORD_DLQ, 1, 100)).filter(isMineRevocation),
+      "a revocation was dead-lettered -- a 404 Unknown Invite is the success case, not a failure"
+    ).toHaveLength(0);
+
+    await supabase.from("classes").update({ features: null }).eq("id", revokeClassId);
   });
 
   test("create_channel for a guild the class has left creates nothing there", async () => {

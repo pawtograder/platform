@@ -116,6 +116,17 @@ export type CheckBotInstallationResponse = {
    * anybody, however complete its server-level permissions look.
    */
   can_create_invites: boolean;
+  /**
+   * The configured `discord_channel_group_id` when it is not a live category in this guild.
+   *
+   * The category is the one Discord id still writable as instructor free text -- `discord_server_id`
+   * became claim-only, but this stayed editable because it names something *inside* an already-claimed
+   * guild and carries no cross-tenant risk. It can still be wrong: deleted in Discord, or copied from
+   * another server. `enqueue_discord_channel_creation()` forwards it verbatim as `parent_id`, so every
+   * later assignment, lab and help-queue channel creation is rejected with a terminal 50035 and
+   * dead-lettered, while nothing else in this audit notices.
+   */
+  invalid_channel_category_id: string | null;
   install_url: string;
 };
 
@@ -262,11 +273,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   if (!authHeader) {
     throw new SecurityError("Missing Authorization header");
   }
-  const { supabase } = await assertUserIsInstructorOrGrader(class_id, authHeader);
+  const { supabase, enrollment } = await assertUserIsInstructorOrGrader(class_id, authHeader);
+
+  // assertUserIsInstructorOrGrader() filters on user, class and role, but NOT on `disabled`. Staff are
+  // commonly disabled rather than deleted, so on its own that gate let a former grader keep calling
+  // this endpoint and reading live guild, role, channel and permission detail for a course their
+  // access had been revoked from.
+  //
+  // Checked here rather than by changing the shared helper: `assertUserIsInstructor`,
+  // `assertUserIsInstructorOrGrader` and `assertUserIsInCourse` ALL omit the predicate, so this is a
+  // repo-wide gap across many endpoints, and redefining what those three mean is not something to land
+  // as a side effect of a Discord change. Reported separately.
+  //
+  // The helper selects the whole user_roles row, so `disabled` is already in hand -- no second query.
+  if ((enrollment as { disabled?: boolean } | null)?.disabled) {
+    throw new SecurityError("Your access to this course has been disabled");
+  }
 
   const { data: classRow, error: classError } = await supabase
     .from("classes")
-    .select("discord_server_id")
+    .select("discord_server_id, discord_channel_group_id")
     .eq("id", class_id)
     .maybeSingle();
   if (classError) {
@@ -299,6 +325,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       // No guild, so no channel was asked about. Reported as false for the same reason
       // `can_manage_class_roles` is: nothing works yet, and the fix is the install button.
       can_create_invites: false,
+      // Nothing to validate the category against without a guild.
+      invalid_channel_category_id: null,
       install_url: botInstallUrl({ applicationId })
     };
   }
@@ -334,7 +362,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     channel_permission_problems: [],
     missing_tracked_channel_ids: [],
     can_create_invites: false,
-    // Pinned to the configured guild so the consent screen cannot be pointed at a different server.
+    // Same reason: an unreachable guild yields no channel list to check the category against, and
+    // "your category is wrong" would be a guess on top of a bigger, already-reported problem.
+    invalid_channel_category_id: null,
     install_url: botInstallUrl({ applicationId, guildId })
   };
 
@@ -508,6 +538,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     scope?.setTag("discord_no_invite_channel", "true");
   }
 
+  // The configured channel category, checked against the live guild.
+  //
+  // Suppressed when the listing was unreadable, for the same reason as the tracked channels above: a
+  // category absent from a list that does not exist is not evidence. Type 4 is Discord's category
+  // channel type -- a value naming a text channel is just as unusable as a deleted one, because
+  // enqueue_discord_channel_creation() passes it as `parent_id` and Discord rejects a non-category
+  // parent the same way.
+  const configuredCategoryId = classRow.discord_channel_group_id;
+  let invalidChannelCategoryId: string | null = null;
+  if (channelsReadable && configuredCategoryId) {
+    const category = guildChannels.find((channel) => channel.id === configuredCategoryId);
+    if (!category || category.type !== 4) {
+      invalidChannelCategoryId = configuredCategoryId;
+      scope?.setTag("invalid_channel_category", "true");
+    }
+  }
+
   // Both halves of Discord's rule, because a role assignment needs both and the caller wants to know
   // whether it will work. Which half failed is still recoverable from the response: an empty
   // `missing_permissions` with `can_manage_class_roles: false` is the hierarchy problem, and the two
@@ -529,6 +576,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     channel_permission_problems: channelPermissionProblems,
     missing_tracked_channel_ids: missingTrackedChannels,
     can_create_invites: canCreateInvites,
+    invalid_channel_category_id: invalidChannelCategoryId,
     // Still returned when installed: it is the "fix the permissions" link, since re-running the
     // OAuth flow on an existing guild is how a bot's permission set is widened.
     install_url: botInstallUrl({ applicationId, guildId })

@@ -7,7 +7,7 @@ import {
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
-import { clearCalls, getCalls, setState } from "@/tests/mocks/discord/client";
+import { clearCalls, getCalls, getState, setState } from "@/tests/mocks/discord/client";
 // The mock rewrites channel ids when it clones a scenario's guild under this run's guild id (see
 // cloneGuild in discordMockUtils), so the constants for #general and #announcements would name the
 // TEMPLATE guild's channels, not this class's. The cloned ids are read out of the returned state by
@@ -79,6 +79,8 @@ type CheckResponse = {
   missing_tracked_channel_ids: string[];
   /** False when no candidate the invite path would try permits Create Invite. */
   can_create_invites: boolean;
+  /** Set when discord_channel_group_id is not a live category in the guild. */
+  invalid_channel_category_id: string | null;
   install_url: string;
 };
 
@@ -223,6 +225,37 @@ test.describe("discord-check-bot-installation edge function", () => {
   // ---------------------------------------------------------------------------
   // Authorization — a pure user_roles check, so no Discord call is reached
   // ---------------------------------------------------------------------------
+  test("rejects a DISABLED instructor, who is still an instructor by role", async () => {
+    // Staff are commonly disabled rather than having their user_roles row deleted, and
+    // assertUserIsInstructorOrGrader() filters on user, class and role only. Without the extra
+    // predicate a former grader kept reading live guild, role, channel and permission detail for a
+    // course whose access had been revoked. Asserted on a user who WAS authorized a moment ago, so a
+    // pass cannot come from them never having had access.
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    const ok = await check(instructorA, classAId);
+    expect(ok.error, "the instructor should be authorized before being disabled").toBeNull();
+
+    const { error: disableError } = await supabase
+      .from("user_roles")
+      .update({ disabled: true })
+      .eq("class_id", classAId)
+      .eq("user_id", instructorA.user_id);
+    expect(disableError).toBeNull();
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error, "a disabled instructor must be refused").not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+    // And refused before any Discord call, so a revoked account cannot spend the shared token.
+    expect(await callsForThisClass()).toHaveLength(0);
+
+    await supabase
+      .from("user_roles")
+      .update({ disabled: false })
+      .eq("class_id", classAId)
+      .eq("user_id", instructorA.user_id);
+  });
+
   test("rejects a non-instructor (student) caller before touching Discord", async () => {
     await applyScenarioForGuilds("healthy", [GUILD_ID]);
     await clearCalls();
@@ -784,5 +817,41 @@ test.describe("discord-check-bot-installation edge function", () => {
       // Faults replace rather than merge, so clearing them is one empty array.
       await setState({ faults: [] });
     }
+  });
+
+  test("a channel category that is not a category in this guild is reported, not ignored", async () => {
+    // The category is the last Discord id still writable as instructor free text.
+    // enqueue_discord_channel_creation() forwards it verbatim as parent_id, so a stale value makes
+    // every future assignment, lab and help-queue channel fail with a terminal 50035 -- while nothing
+    // else in this audit notices.
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    const state = await getState();
+    const channels = state.guilds[GUILD_ID].channels;
+    const realCategory = channels.find((c) => c.type === 4);
+    const textChannel = channels.find((c) => c.type === 0);
+    expect(realCategory, "the healthy fixture should have a category").toBeTruthy();
+    expect(textChannel, "the healthy fixture should have a text channel").toBeTruthy();
+
+    // A real category is accepted, so the assertions below are about validity and not about the field
+    // simply being read.
+    await supabase.from("classes").update({ discord_channel_group_id: realCategory!.id }).eq("id", classAId);
+    const good = await check(instructorA, classAId);
+    expect(good.error).toBeNull();
+    expect((good.data as CheckResponse).invalid_channel_category_id).toBeNull();
+
+    // An id no channel has.
+    await supabase.from("classes").update({ discord_channel_group_id: "1490000000000000009" }).eq("id", classAId);
+    const missing = await check(instructorA, classAId);
+    expect(missing.error).toBeNull();
+    expect((missing.data as CheckResponse).invalid_channel_category_id).toBe("1490000000000000009");
+
+    // And a real channel that is NOT a category: Discord rejects a non-category parent the same way,
+    // so reading the id back out of the guild is not sufficient on its own.
+    await supabase.from("classes").update({ discord_channel_group_id: textChannel!.id }).eq("id", classAId);
+    const wrongType = await check(instructorA, classAId);
+    expect(wrongType.error).toBeNull();
+    expect((wrongType.data as CheckResponse).invalid_channel_category_id).toBe(textChannel!.id);
+
+    await supabase.from("classes").update({ discord_channel_group_id: null }).eq("id", classAId);
   });
 });

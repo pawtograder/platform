@@ -597,6 +597,14 @@ export type CheckBotInstallationResponse = {
    * alongside `installed` rather than on its own.
    */
   can_create_invites: boolean;
+  /**
+   * The configured Discord channel category when it is not a live category in the guild.
+   *
+   * The one Discord id still writable as instructor free text. `enqueue_discord_channel_creation()`
+   * passes it verbatim as `parent_id`, so a deleted category — or one copied from another server —
+   * makes every later assignment, lab and help-queue channel creation fail with a terminal 50035.
+   */
+  invalid_channel_category_id: string | null;
   install_url: string;
 };
 

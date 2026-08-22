@@ -14,7 +14,8 @@ import type {
   CreateRoleArgs,
   DeleteRoleArgs,
   AddMemberRoleArgs,
-  RemoveMemberRoleArgs
+  RemoveMemberRoleArgs,
+  DeleteInviteArgs
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
@@ -608,6 +609,18 @@ const DISCORD_CIRCUIT_SCOPE_GUILD = "guild";
  *   - Accounting. A single channel-level overwrite denying Send Messages in one channel produced
  *     50013s that counted toward the guild's threshold, so one locked-down channel could park the
  *     class's role and invite work -- blaming a guild for a channel's configuration.
+ *
+ * `delete_invite` is absent too, and for a third reason: it is the only method whose whole purpose is
+ * a guild the class has LEFT. The breaker is keyed on the guild with no class, so the guild an
+ * outstanding invite points into is very often the one whose misconfiguration got the class
+ * disconnected in the first place -- exactly the breaker that would be open. Gating would then park
+ * the revocation for up to MAX_CIRCUIT_DEFERRALS six-hour windows, which is longer than the invite's
+ * own seven-day life, and the invite stays live in a server another course can already have claimed.
+ * The breaker protects a shared token from per-enrollment fan-out; a revocation is bounded by the
+ * number of invites that were outstanding at teardown, it is issued once, and there is no repeat
+ * enqueue behind it. Accounting is skipped for the same reason and for the one resolveGuildId spells
+ * out: a 403 from a guild this class no longer owns says nothing about the course that owns it now,
+ * and counting it would park that course's work for a predecessor's failure.
  *
  * This is the same separation github-async-worker gets from its `org_method` breaker scope, kept as
  * one scope here because one method set is the whole of the fan-out; see the note on
@@ -3027,6 +3040,48 @@ export async function processEnvelope(
         return true;
       }
 
+      case "delete_invite": {
+        const args = envelope.args as DeleteInviteArgs;
+        console.log(
+          `[processEnvelope] Processing delete_invite: invite_code=${args.invite_code}, guild_id=${args.guild_id ?? "(unrecorded)"}`
+        );
+        Sentry.addBreadcrumb({
+          message: `Revoking Discord invite ${args.invite_code} in guild ${args.guild_id ?? "(unrecorded)"}`,
+          level: "info"
+        });
+
+        // No "is this still current?" guard, unlike create_role / create_channel / add_member_role.
+        // Those drop an envelope naming a guild the class has left; this one exists BECAUSE the class
+        // has left it. The envelope is minted by clear_discord_tracking_for_class in the same
+        // transaction that deletes the discord_invites row, so by now the invite is in no table and
+        // no UI -- there is nothing a later state of the world could make this the wrong thing to do.
+        try {
+          await revokeInvite(args.invite_code, scope);
+          console.log(`[processEnvelope] Invite ${args.invite_code} is no longer live`);
+        } catch (error) {
+          // revokeInvite() classifies every non-404 as non-retriable, which is right for its other
+          // two call sites: both are compensating for an invite they have JUST created, so a retry
+          // re-runs createGuildInvite and mints another one -- the choice there is one dead-letter
+          // row or a growing pile of live invites. This call site has no such coupling. The invite
+          // already exists, `DELETE /invites/{code}` is idempotent, and the reason to revoke -- a
+          // guild another course may already have claimed -- does not expire. So a rate limit, a
+          // timeout or a 5xx is handed back to the ordinary retry path instead of being dead-lettered
+          // on the first attempt, and only a genuinely terminal failure (a 403 saying the bot no
+          // longer holds Manage Channels in a guild it has been thrown out of) becomes a DLQ row.
+          const cause = error instanceof NonRetriableWorkerError && error.cause !== undefined ? error.cause : error;
+          if (!classifyDiscordError(cause).terminal) {
+            throw cause;
+          }
+          throw error;
+        }
+
+        // No local bookkeeping to reconcile, unlike delete_channel and delete_role. Those two own
+        // their tracking row and have to drop it here; the discord_invites row is deleted by the
+        // teardown that enqueued this, in one transaction with the send, so there is nothing left to
+        // point at.
+        console.log(`[processEnvelope] delete_invite completed successfully`);
+        return true;
+      }
       case "register_commands": {
         console.log(`[processEnvelope] Processing register_commands`);
         Sentry.addBreadcrumb({ message: "Registering Discord slash commands", level: "info" });

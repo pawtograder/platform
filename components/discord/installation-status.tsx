@@ -214,6 +214,9 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
   if (!status.can_manage_class_roles) {
     return "The Pawtograder bot's role sits too low in the Discord server to assign the course's roles.";
   }
+  if (status.invalid_channel_category_id) {
+    return "The Discord channel category setting does not match a category in the connected server, so new channels cannot be created.";
+  }
   if (status.stale_class_role_ids.length > 0) {
     const n = status.stale_class_role_ids.length;
     return `The Pawtograder bot is installed, but ${n} tracked role${n === 1 ? "" : "s"} no longer exist${
@@ -267,10 +270,15 @@ function StatusBody({
   // Both drift warnings render together above the healthy panel rather than as competing states: they
   // are independent, and a class can have one of each. Ranked below the permission and hierarchy
   // states because those break everything, while these break the part of the class that names them.
-  if (status.stale_class_role_ids.length > 0 || status.missing_tracked_channel_ids.length > 0) {
+  if (
+    status.stale_class_role_ids.length > 0 ||
+    status.missing_tracked_channel_ids.length > 0 ||
+    status.invalid_channel_category_id
+  ) {
     return (
       <VStack align="stretch" gap={3}>
         {status.stale_class_role_ids.length > 0 && <StaleClassRolesAlert status={status} canManage={canManage} />}
+        {status.invalid_channel_category_id && <InvalidChannelCategoryAlert status={status} />}
         {status.missing_tracked_channel_ids.length > 0 && (
           <MissingTrackedChannelsAlert status={status} canManage={canManage} />
         )}
@@ -577,6 +585,40 @@ function DisconnectButton({ classId, guildName }: { classId: number; guildName: 
  * still true, and the remaining roles keep working. What is broken is one snowflake, and the fix is on
  * the Pawtograder side (re-sync so the dead row is replaced), not in Discord.
  */
+/**
+ * The configured channel category does not exist in this guild, or is not a category.
+ *
+ * A drift warning rather than a blocking state: every role, channel and invite that already exists
+ * keeps working. What is broken is FUTURE channel creation --
+ * `enqueue_discord_channel_creation()` passes this id verbatim as `parent_id`, so Discord rejects each
+ * new assignment, lab and help-queue channel with a terminal 50035 and the worker dead-letters it,
+ * silently, for the rest of the term.
+ */
+function InvalidChannelCategoryAlert({ status }: { status: CheckBotInstallationResponse }) {
+  return (
+    <Alert status="warning" title="The channel category setting does not match this server">
+      <VStack align="stretch" gap={2}>
+        <Text>
+          The Channel Category below is set to a Discord id that{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>{" "}
+          does not have as a category. It was probably deleted in Discord, or copied from a different server. New
+          assignment, lab and help-queue channels cannot be created until it is corrected or cleared — existing ones are
+          unaffected.
+        </Text>
+        <Text fontSize="sm" color="fg.muted">
+          Configured category: <Code>{status.invalid_channel_category_id}</Code>
+        </Text>
+        <Text fontSize="sm">
+          Clear the field to create channels at the top level of the server, or right-click the category in Discord and
+          choose Copy Channel ID to get the right one. Then press Re-check.
+        </Text>
+      </VStack>
+    </Alert>
+  );
+}
+
 function StaleClassRolesAlert({ status, canManage }: { status: CheckBotInstallationResponse; canManage: boolean }) {
   const count = status.stale_class_role_ids.length;
   return (
