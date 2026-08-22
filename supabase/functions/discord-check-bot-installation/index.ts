@@ -49,6 +49,14 @@ export type CheckBotInstallationResponse = {
   installed: boolean;
   guild_id: string | null;
   guild_name: string | null;
+  /**
+   * Human-readable labels of the required permissions the bot does not hold **at the server level**.
+   *
+   * Discord also resolves per-channel and per-category overwrites, which this does not read: a bot
+   * with Send Messages server-wide can still be denied it in one channel. Empty here therefore means
+   * "nothing is missing server-wide", not "every channel will work" -- the settings page says so
+   * rather than implying the stronger claim.
+   */
   missing_permissions: string[];
   can_manage_class_roles: boolean;
   bot_role_position: number | null;

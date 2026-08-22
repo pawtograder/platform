@@ -203,7 +203,7 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
       n === 1 ? "s" : ""
     } in the Discord server.`;
   }
-  return `The Pawtograder bot is installed and healthy in ${status.guild_name ?? "the connected server"}.`;
+  return `The Pawtograder bot is installed in ${status.guild_name ?? "the connected server"} with every server-level permission it needs.`;
 }
 
 function StatusBody({
@@ -487,12 +487,21 @@ function Healthy({
           <Text as="span" fontWeight="semibold">
             {status.guild_name ?? "the connected server"}
           </Text>{" "}
-          with every permission it needs, and its role is high enough to assign this course&apos;s roles.
+          with every server-level permission it needs, and its role is high enough to assign this course&apos;s roles.
         </Text>
       </Alert>
       <VStack align="stretch" gap={0} fontSize="sm" color="fg.muted">
         <Text>
           Server ID: <Code>{status.guild_id}</Code>
+        </Text>
+        {/* Deliberately stated rather than left implied. The check reads the bot's roles at the server
+            level; Discord also allows per-channel and per-category overrides, which can deny View
+            Channel, Send Messages or Create Invite in one place while the server-level answer above
+            stays correct. Claiming "every permission it needs" without that caveat would make this
+            panel confidently wrong in exactly the case an instructor came here to diagnose. */}
+        <Text>
+          Per-channel and per-category permission overrides are not checked. If posting or invites fail in one channel
+          only, check that channel&apos;s permissions for the Pawtograder role.
         </Text>
         {provenance?.claimedAt ? (
           <Text>

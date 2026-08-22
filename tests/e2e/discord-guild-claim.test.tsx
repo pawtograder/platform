@@ -344,12 +344,25 @@ test.describe("claim_discord_guild + discord_server_id RLS", () => {
     expect(await readClass(classBId)).toMatchObject({ discord_server_id: null });
   });
 
-  test("archiving the holder releases the guild", async () => {
+  test("archiving the holder releases the guild AND unlinks the archived class", async () => {
     // The unique index is partial on `archived = false`, and the RPC checks the same condition, so
     // the two cannot disagree about who is holding a server. Archiving the finished course is the
     // documented remediation for the message above; this is that remediation working.
+    //
+    // The second half is the part that matters for isolation. An earlier version of this let the
+    // archived class keep its `discord_server_id`, on the reading that it was harmless history. It was
+    // not: `app/api/discord/interactions/route.ts` resolves a slash command by
+    // `WHERE discord_server_id = <guild>`, so once class B claimed the released guild, a `/sync-roles`
+    // in B's server matched archived class A too and would have assigned A's roles inside B. Releasing
+    // the guild and unlinking the class are now one event (trigger, 20260822150000), so there is no
+    // window in which two classes name the same server.
     const { error: archiveError } = await supabase.from("classes").update({ archived: true }).eq("id", classAId);
     expect(archiveError).toBeNull();
+
+    const archived = await readClass(classAId);
+    expect(archived.discord_server_id, "archiving must clear the link, not just release the index").toBeNull();
+    expect(archived.discord_server_claimed_by).toBeNull();
+    expect(archived.discord_server_claimed_at).toBeNull();
 
     const { error } = await untypedRpc(supabase, "claim_discord_guild", {
       p_class_id: classBId,
@@ -361,8 +374,10 @@ test.describe("claim_discord_guild + discord_server_id RLS", () => {
       discord_server_id: GUILD_CONTESTED,
       discord_server_claimed_by: instructorB.user_id
     });
-    // The archived class keeps its historical server id; that is what the partial index is for.
-    expect(await readClass(classAId)).toMatchObject({ discord_server_id: GUILD_CONTESTED });
+
+    // Exactly one class names the guild. This is the assertion that would have caught the leak.
+    const { data: holders } = await classes().select("id").eq("discord_server_id", GUILD_CONTESTED);
+    expect((holders as { id: number }[]).map((r) => r.id)).toEqual([classBId]);
 
     await supabase.from("classes").update({ archived: false, discord_server_id: null }).eq("id", classAId);
   });

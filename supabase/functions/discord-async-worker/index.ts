@@ -680,10 +680,41 @@ async function resolveGuildId(
   // gated: parking them on one guild's behalf would stop the sweep that serves all the others.
   if (envelope.method === "register_commands" || envelope.method === "batch_role_sync") return undefined;
 
-  const args = envelope.args as { guild_id?: string };
+  const args = envelope.args as { guild_id?: string; channel_id?: string };
   if (typeof args?.guild_id === "string" && args.guild_id !== "") return args.guild_id;
 
   if (!envelope.class_id) return undefined;
+
+  // A channel-scoped envelope with no guild_id of its own cannot be attributed to the class's
+  // *current* guild without checking that the channel still belongs to it.
+  //
+  // The case that matters: a class moves from guild A to guild B while send_message /
+  // update_message envelopes for A's channels are still queued. Those envelopes carry only a
+  // channel_id, so resolving through class_id would hand them B's guild id -- and then ten stale
+  // 403s from A would open B's breaker and park the fresh role and channel work for the server the
+  // course just moved to. Blaming a guild for another guild's failures is worse than not gating
+  // these envelopes at all.
+  //
+  // clear_discord_roles_on_server_change deletes discord_channels on a move, so a channel that is
+  // still tracked for this class is one in the class's present guild, and a stale one has no row.
+  if (typeof args?.channel_id === "string" && args.channel_id !== "") {
+    const { data: tracked, error: trackedError } = await adminSupabase
+      .from("discord_channels")
+      .select("id")
+      .eq("class_id", envelope.class_id)
+      .eq("discord_channel_id", args.channel_id)
+      .maybeSingle();
+    if (trackedError) {
+      console.warn(`[resolveGuildId] Could not verify channel ${args.channel_id}:`, trackedError);
+      return undefined;
+    }
+    if (!tracked) {
+      console.log(
+        `[resolveGuildId] Channel ${args.channel_id} is not tracked for class ${envelope.class_id}; not attributing this envelope to the class's current guild`
+      );
+      return undefined;
+    }
+  }
 
   const cached = guildByClass.get(envelope.class_id);
   if (cached && Date.now() - cached.cachedAt < GUILD_BY_CLASS_TTL_MS) {
