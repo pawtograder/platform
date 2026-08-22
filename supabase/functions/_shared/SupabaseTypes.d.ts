@@ -12403,6 +12403,10 @@ export type Database = {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
       };
+      clear_discord_tracking_for_class: {
+        Args: { p_class_id: number };
+        Returns: undefined;
+      };
       clear_incomplete_assignments_for_user: {
         Args: {
           p_assignee_profile_id: string;
@@ -13887,6 +13891,19 @@ export type Database = {
       soft_delete_survey: {
         Args: { p_survey_id: string; p_survey_logical_id: string };
         Returns: undefined;
+      };
+      store_discord_channel_if_current: {
+        Args: {
+          p_channel_type: Database["public"]["Enums"]["discord_channel_type"];
+          p_class_id: number;
+          p_discord_channel_id: string;
+          p_guild_id: string;
+          p_resource_id?: number;
+        };
+        Returns: {
+          stored: boolean;
+          superseded: boolean;
+        }[];
       };
       store_discord_role_if_current: {
         Args: {

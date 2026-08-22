@@ -72,8 +72,29 @@ detect_network() {
     printf '%s' "$SUPABASE_NETWORK"
     return 0
   fi
+  # SUPABASE_PROJECT names the project under test. CI sets it per run
+  # (pawtograder-platform-<run_id>-<attempt>) so two e2e-local jobs on the same self-hosted runner do
+  # not clobber each other's stack -- which means `head -n 1` over every supabase_db_* container can
+  # pick the OTHER job's database, attach the mock to the wrong network, and leave this job's edge
+  # runtime unable to resolve `discord-mock`. With DISCORD_MOCK_REQUIRED=1 that is not a skip any
+  # more, it is every Discord test failing for a reason that looks nothing like the cause.
   local db
-  db="$(docker ps --filter 'name=^supabase_db_' --format '{{.Names}}' | head -n 1)"
+  if [ -n "${SUPABASE_PROJECT:-}" ] && docker ps --format '{{.Names}}' | grep -qx "supabase_db_${SUPABASE_PROJECT}"; then
+    db="supabase_db_${SUPABASE_PROJECT}"
+  else
+    # No project named, so fall back to discovery -- but refuse to guess between projects rather than
+    # silently attaching to an arbitrary one.
+    local dbs db_count
+    dbs="$(docker ps --filter 'name=^supabase_db_' --format '{{.Names}}' || true)"
+    db_count="$(printf '%s' "$dbs" | grep -c . || true)"
+    if [ "$db_count" -gt 1 ]; then
+      log "ERROR: several Supabase stacks are running:"
+      printf '%s\n' "$dbs" | sed 's/^/         /'
+      log "       set SUPABASE_PROJECT (or SUPABASE_NETWORK) so the mock joins the right one."
+      return 1
+    fi
+    db="$(printf '%s' "$dbs" | head -n 1)"
+  fi
   if [ -n "$db" ]; then
     local from_db
     from_db="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$db" 2>/dev/null |

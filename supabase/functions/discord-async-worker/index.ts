@@ -2148,13 +2148,35 @@ export async function processEnvelope(
               `[processEnvelope] Storing channel tracking: class_id=${envelope.class_id}, channel_type=${envelope.channel_type}, resource_id=${envelope.resource_id ?? "null"}`
             );
             try {
-              await adminSupabase.from("discord_channels").insert({
-                class_id: envelope.class_id,
-                discord_channel_id: result.id,
-                channel_type: envelope.channel_type,
-                resource_id: envelope.resource_id ?? null
+              // Conditional on the class still being on this guild, not a bare insert. The preflight
+              // above closes the queued-envelope window; this closes the window across the
+              // createChannel() call itself. Without it, a move/disconnect/archive committing while
+              // the call was in flight had its teardown undone here -- and the resurrected row is
+              // durable, not transient: the message enqueuers select channels by class and type, so it
+              // keeps posting into the server the class left, and for a resource-scoped channel it can
+              // win the uniqueness race and stop the new guild's channel being tracked at all.
+              //
+              // The channel counterpart of store_discord_role_if_current, and superseded is not a
+              // failure: the channel exists in Discord, it just belongs to a server this class no
+              // longer uses, so it is left orphaned exactly as a move leaves the others.
+              const { data: stored, error: storeError } = await untypedRpc<
+                Array<{ stored: boolean; superseded: boolean }>
+              >(adminSupabase, "store_discord_channel_if_current", {
+                p_class_id: envelope.class_id,
+                p_channel_type: envelope.channel_type,
+                p_discord_channel_id: result.id,
+                p_guild_id: args.guild_id,
+                p_resource_id: envelope.resource_id ?? null
               });
-              console.log(`[processEnvelope] Successfully stored channel tracking`);
+              if (storeError) throw storeError;
+              const row = Array.isArray(stored) ? stored[0] : undefined;
+              if (row?.superseded) {
+                console.log(
+                  `[processEnvelope] Channel ${result.id} was created in ${args.guild_id}, which class ${envelope.class_id} no longer uses; not tracking it`
+                );
+              } else {
+                console.log(`[processEnvelope] Successfully stored channel tracking`);
+              }
             } catch (e) {
               console.error(`[processEnvelope] Failed to store channel tracking:`, e);
               // Log but don't fail - channel was created successfully
