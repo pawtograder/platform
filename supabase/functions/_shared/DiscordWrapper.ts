@@ -9,9 +9,9 @@ import type {
   CreateRoleArgs,
   DeleteRoleArgs,
   AddMemberRoleArgs,
-  RemoveMemberRoleArgs,
-  AddGuildMemberArgs
+  RemoveMemberRoleArgs
 } from "./DiscordAsyncTypes.ts";
+import { discordApiBase } from "./DiscordApiBase.ts";
 
 // Discord rate limits:
 // - Global: 50 requests per second
@@ -120,7 +120,9 @@ async function discordRequest(
   scope?: Sentry.Scope
 ): Promise<Response> {
   const token = getBotToken();
-  const url = `https://discord.com/api/v10${endpoint}`;
+  // Resolved per call rather than at module load: discordApiBase() reads the env override each time
+  // so a restarted mock server is picked up without redeploying this isolate.
+  const url = `${discordApiBase()}${endpoint}`;
 
   const globalLimiter = getGlobalLimiter();
 
@@ -335,35 +337,6 @@ export async function removeMemberRole(args: RemoveMemberRoleArgs, scope?: Sentr
     undefined,
     scope
   );
-}
-
-/**
- * Add a user to a guild (requires OAuth access token with guilds.join scope)
- */
-export async function addGuildMember(
-  args: AddGuildMemberArgs,
-  scope?: Sentry.Scope
-): Promise<{ user: { id: string; username: string } }> {
-  const response = await discordRequest(
-    "PUT",
-    `/guilds/${args.guild_id}/members/${args.user_id}`,
-    {
-      access_token: args.access_token,
-      nick: args.nick,
-      roles: args.roles,
-      mute: args.mute,
-      deaf: args.deaf
-    },
-    scope
-  );
-
-  const data = await response.json();
-  return {
-    user: {
-      id: data.user?.id || args.user_id,
-      username: data.user?.username || ""
-    }
-  };
 }
 
 /**

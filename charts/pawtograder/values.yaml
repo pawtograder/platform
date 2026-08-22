@@ -1590,6 +1590,11 @@ monitoring:
     # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
     # stored score is stale with nothing left to recompute it.
     gradebookRecalcDlqGrowthPerHour: 5
+    # How long a Discord per-guild circuit breaker may stay open before
+    # PawtograderDiscordCircuitBreakerOpen fires. Longer than the breaker's own 30-minute window on
+    # purpose: a single storm parks a guild, reopens, and needs nobody. A breaker still open after
+    # this long is one that keeps re-tripping, i.e. a server whose bot access nobody has restored.
+    discordCircuitOpenFor: 45m
     # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.

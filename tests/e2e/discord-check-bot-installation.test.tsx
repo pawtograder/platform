@@ -1,0 +1,471 @@
+import { expect, test } from "@playwright/test";
+import {
+  createAuthenticatedClient,
+  createClass,
+  createUserInClass,
+  getTestRunPrefix,
+  supabase
+} from "@/tests/e2e/TestingUtils";
+import type { TestingUser } from "@/tests/e2e/TestingUtils";
+import { clearCalls, getCalls } from "@/tests/mocks/discord/client";
+import {
+  GRADER_ROLE_ID,
+  INSTRUCTOR_ROLE_ID,
+  STUDENT_ROLE_ID,
+  applyScenarioForGuilds,
+  discordApiIsMocked,
+  discordMockReachable,
+  DISCORD_DLQ,
+  drainQueue,
+  randomGuildId,
+  releaseDiscordMockLock,
+  takeDiscordMock,
+  touchDiscordMockLock,
+  untypedTable
+} from "@/tests/e2e/discordMockUtils";
+
+// E2E coverage for the `discord-check-bot-installation` edge function
+// (supabase/functions/discord-check-bot-installation/index.ts) — the live install-check the Discord
+// settings page runs before an instructor trusts that role sync will work.
+//
+// Request:  { class_id }
+// Response: { installed, guild_id, guild_name, missing_permissions, can_manage_class_roles,
+//             bot_role_position, highest_class_role_position, install_url }
+// Authz:    caller must be an instructor in `class_id`.
+//
+// UNLIKE its GitHub twin (tests/e2e/github-check-app-installation.test.tsx), the Discord-dependent
+// half of this response IS deterministic here, because tests/mocks/discord/server.ts serves Discord's
+// REST API from state. So this file asserts the whole contract rather than only the authz and
+// validation halves: what makes that possible is the mock being reachable from inside the edge
+// runtime container, which is what scripts/start-discord-mock.sh arranges.
+//
+// The regression this function exists to catch is the `bot-role-too-low` case below. A bot can be
+// installed, hold every required permission, and still fail every role assignment with a bare
+// 403/50013 because its own role ties or sits below the class roles. Discord's rule is strict
+// inequality, so the interesting case is the TIE — `bot_role_position === highest_class_role_position`
+// with an empty `missing_permissions` and `can_manage_class_roles: false`. A `>=` where the code
+// wants `>` passes every other scenario in this file and fails only this one.
+//
+// Requires:
+//   scripts/start-discord-mock.sh
+//   DISCORD_API_BASE_URL=http://discord-mock:8788/api/v10 in the env file that
+//     `npx supabase functions serve --env-file .env.local` was started with
+// No app server (port 3001) is needed: this suite talks to the edge function directly.
+
+type CheckResponse = {
+  installed: boolean;
+  guild_id: string | null;
+  guild_name: string | null;
+  missing_permissions: string[];
+  can_manage_class_roles: boolean;
+  bot_role_position: number | null;
+  highest_class_role_position: number | null;
+  install_url: string;
+};
+
+test.describe.configure({ mode: "serial" });
+
+test.describe("discord-check-bot-installation edge function", () => {
+  test.describe.configure({ timeout: 120_000 });
+
+  const RUN_PREFIX = getTestRunPrefix();
+  const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  // Not DEFAULT_GUILD_ID: `classes_discord_server_id_active_key` permits one unarchived class per
+  // guild and the seeded demo class already holds the mock's default. Cloned into the mock per
+  // scenario by applyScenarioForGuilds.
+  const GUILD_ID = randomGuildId();
+
+  let classAId: number;
+  let classBId: number;
+  let instructorA: TestingUser;
+  let instructorB: TestingUser;
+  let studentA: TestingUser;
+  let studentB: TestingUser; // enrolled in a different class
+  let mockUp = false;
+
+  test.beforeAll(async () => {
+    // The hook's own timeout, not the tests'. takeDiscordMock() below can wait a while: the mock is
+    // one process and one scenario at a time, so every spec file that drives it queues behind the
+    // others -- and Playwright runs this file once per browser project even though neither test here
+    // opens a browser. The default 60s hook timeout is shorter than that queue, and the failure it
+    // produces ("beforeAll hook timeout") looks nothing like the contention that caused it.
+    test.setTimeout(300_000);
+    mockUp = (await discordMockReachable()) && discordApiIsMocked();
+    if (!mockUp) return;
+    await takeDiscordMock();
+
+    const clsA = await createClass({ name: `E2E DiscordCheck A ${RUN_PREFIX}` });
+    classAId = clsA.id;
+    const clsB = await createClass({ name: `E2E DiscordCheck B ${RUN_PREFIX}` });
+    classBId = clsB.id;
+
+    instructorA = await createUserInClass({
+      role: "instructor",
+      class_id: classAId,
+      name: `DiscordCheck Instructor ${RUN_PREFIX}`,
+      email: `e2e-dcheck-instr-${SAFE_ID}@pawtograder.net`
+    });
+    instructorB = await createUserInClass({
+      role: "instructor",
+      class_id: classBId,
+      name: `DiscordCheck Instructor B ${RUN_PREFIX}`,
+      email: `e2e-dcheck-instr-b-${SAFE_ID}@pawtograder.net`
+    });
+    studentA = await createUserInClass({
+      role: "student",
+      class_id: classAId,
+      name: `DiscordCheck Student ${RUN_PREFIX}`,
+      email: `e2e-dcheck-stu-${SAFE_ID}@pawtograder.net`
+    });
+    studentB = await createUserInClass({
+      role: "student",
+      class_id: classBId,
+      name: `DiscordCheck Other ${RUN_PREFIX}`,
+      email: `e2e-dcheck-other-${SAFE_ID}@pawtograder.net`
+    });
+
+    // Class A is connected to the mock's guild; class B deliberately is not, so the
+    // "no server configured" branch has a fixture too.
+    //
+    // Written with the service-role client on purpose: since 20260822130000 an instructor UPDATE
+    // cannot touch discord_server_id (see discord-guild-claim.test.tsx, which is where that is the
+    // property under test) and claim_discord_guild is the only other writer. Service role bypasses
+    // RLS, so this is the cheapest way to pose the connected state.
+    const { error: connectError } = await supabase
+      .from("classes")
+      .update({ discord_server_id: GUILD_ID })
+      .eq("id", classAId);
+    expect(connectError, `failed to point class ${classAId} at guild ${GUILD_ID}`).toBeNull();
+
+    // The class's roles as Pawtograder recorded them, using the mock's role snowflakes. Without
+    // these, `highest_class_role_position` is null and `canManageRoles` short-circuits to true for
+    // an empty list — which would make the hierarchy assertions below vacuous.
+    //
+    // Inserted AFTER the server is set: clear_discord_roles_on_server_change fires BEFORE UPDATE of
+    // discord_server_id and deletes them, so the other order silently leaves no rows.
+    const { error: rolesError } = await supabase.from("discord_roles").insert([
+      { class_id: classAId, discord_role_id: STUDENT_ROLE_ID, role_type: "student" },
+      { class_id: classAId, discord_role_id: GRADER_ROLE_ID, role_type: "grader" },
+      { class_id: classAId, discord_role_id: INSTRUCTOR_ROLE_ID, role_type: "instructor" }
+    ]);
+    expect(rolesError, "failed to seed discord_roles").toBeNull();
+
+    // Connecting a server enqueues create_role and create_channel work via
+    // trg_discord_create_roles_on_server_connect. Nothing in this file wants that work done, and a
+    // worker run started by another spec drains the same queue -- it would find these, fail to create
+    // a role in a guild the mock is not currently posing, and dead-letter them. Dropped here rather
+    // than only in afterAll so that window never opens.
+    await drainQueue((row) => (row.message?.args as { guild_id?: string } | undefined)?.guild_id === GUILD_ID);
+  });
+
+  test.afterAll(async () => {
+    if (!mockUp) return;
+    // Connecting a server enqueues create_role / create_channel work via
+    // trg_discord_create_roles_on_server_connect. Nothing here invokes the worker, so drop those so
+    // a later worker run (this suite's enrollment spec, or a cron poke) does not process them.
+    if (classAId) {
+      const mine = (row: { message?: { args?: Record<string, unknown> } }) =>
+        (row.message?.args as { guild_id?: string } | undefined)?.guild_id === GUILD_ID;
+      await drainQueue(mine);
+      await drainQueue(mine, DISCORD_DLQ);
+      await supabase.from("classes").update({ discord_server_id: null }).eq("id", classAId);
+    }
+    releaseDiscordMockLock();
+  });
+
+  test.beforeEach(async () => {
+    test.skip(
+      !mockUp,
+      "Discord mock is not reachable or the edge runtime is not pointed at it; run scripts/start-discord-mock.sh"
+    );
+    touchDiscordMockLock();
+  });
+
+  /**
+   * The mock's calls for THIS class's guild.
+   *
+   * Scoped rather than "the log is empty", because the log is one process's and a `discord-async-worker`
+   * run started by another spec keeps draining its queue in the background after that spec has
+   * finished -- its requests land here and have nothing to do with this one. Filtering by the guild
+   * keeps the property ("an unauthorized caller causes no traffic for this class's server") while
+   * making it independent of what else is running.
+   */
+  async function callsForThisClass() {
+    return (await getCalls()).filter((call) => call.path.includes(GUILD_ID));
+  }
+
+  async function check(user: TestingUser, classId: number | null | undefined) {
+    const client = await createAuthenticatedClient(user);
+    const body = classId === undefined ? {} : { class_id: classId };
+    return await client.functions.invoke<CheckResponse>("discord-check-bot-installation", { body });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Authorization — a pure user_roles check, so no Discord call is reached
+  // ---------------------------------------------------------------------------
+  test("rejects a non-instructor (student) caller before touching Discord", async () => {
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(studentA, classAId);
+    expect(error).not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+    if (error?.context instanceof Response) {
+      expect(error.context.status).toBe(401);
+    }
+    // The whole point of rejecting first: an unauthorized caller must not be able to make the
+    // deployment spend its single shared bot token's rate limit.
+    expect(await callsForThisClass()).toHaveLength(0);
+  });
+
+  test("rejects a caller who is an instructor in a DIFFERENT class", async () => {
+    await clearCalls();
+    const { data, error } = await check(instructorA, classBId);
+    expect(error).not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+    if (error?.context instanceof Response) {
+      expect(error.context.status).toBe(401);
+    }
+    expect(await callsForThisClass()).toHaveLength(0);
+  });
+
+  test("rejects a student enrolled in another class entirely", async () => {
+    const { data, error } = await check(studentB, classAId);
+    expect(error).not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+  });
+
+  test("service role is not an instructor either: the function is authz-gated, not key-gated", async () => {
+    const { data, error } = await supabase.functions.invoke<CheckResponse>("discord-check-bot-installation", {
+      body: { class_id: classAId }
+    });
+    expect(error).not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Input validation — UserVisibleError 400, before any Discord call
+  // ---------------------------------------------------------------------------
+  test("rejects a missing class_id with a 400", async () => {
+    await clearCalls();
+    const { error } = await check(instructorA, undefined);
+    expect(error).not.toBeNull();
+    if (error?.context instanceof Response) {
+      expect(error.context.status).toBe(400);
+      const body = await error.context.json().catch(() => null);
+      expect(JSON.stringify(body ?? {})).toMatch(/class_id is required/i);
+    }
+    expect(await callsForThisClass()).toHaveLength(0);
+  });
+
+  test("rejects a null class_id with a 400", async () => {
+    const { error } = await check(instructorA, null);
+    expect(error).not.toBeNull();
+    if (error?.context instanceof Response) {
+      expect(error.context.status).toBe(400);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Response shape
+  // ---------------------------------------------------------------------------
+  test("a class with no Discord server reports not-installed with a bare install URL", async () => {
+    const { data, error } = await check(instructorB, classBId);
+    expect(error).toBeNull();
+    expect(data).not.toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(false);
+    expect(body.guild_id).toBeNull();
+    expect(body.guild_name).toBeNull();
+    // Empty rather than the full required list: nothing has failed to grant anything yet, and six
+    // red rows next to an un-pressed install button would be noise, not information.
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.can_manage_class_roles).toBe(false);
+    expect(body.bot_role_position).toBeNull();
+    expect(body.highest_class_role_position).toBeNull();
+    expect(body.install_url).toMatch(/^https:\/\/discord\.com\/oauth2\/authorize\?/);
+    // No guild is pinned, because there is none to pin.
+    expect(body.install_url).not.toContain("guild_id=");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Per-scenario assertions, driven by the mock's state
+  // ---------------------------------------------------------------------------
+  test("healthy: installed, no missing permissions, hierarchy fine", async () => {
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(true);
+    expect(body.guild_id).toBe(GUILD_ID);
+    expect(body.guild_name).toBe("CS 3200 Fall 2026");
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.can_manage_class_roles).toBe(true);
+    // The scenario puts the bot's role at 10 and the highest class role (instructor) at 5.
+    expect(body.bot_role_position).toBe(10);
+    expect(body.highest_class_role_position).toBe(5);
+    // Re-running the OAuth flow is how a bot's permissions are widened, so the URL is still offered,
+    // pinned to the configured guild so the consent screen cannot be pointed elsewhere.
+    expect(body.install_url).toContain(`guild_id=${GUILD_ID}`);
+
+    // Traffic really reached the mock: the guild, the bot's own member object, and the role list.
+    const calls = await callsForThisClass();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(
+      expect.arrayContaining([
+        `GET /guilds/${GUILD_ID}`,
+        `GET /guilds/${GUILD_ID}/members/@me`,
+        `GET /guilds/${GUILD_ID}/roles`
+      ])
+    );
+    expect(calls.every((c) => c.status === 200)).toBe(true);
+  });
+
+  test("bot-not-in-guild: not installed, and the install URL is pinned to the configured guild", async () => {
+    await applyScenarioForGuilds("bot-not-in-guild", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(false);
+    // The configured id is echoed back even though the bot cannot see the guild: that id is what the
+    // instructor has to recognise (or correct).
+    expect(body.guild_id).toBe(GUILD_ID);
+    expect(body.guild_name).toBeNull();
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.can_manage_class_roles).toBe(false);
+    expect(body.install_url).toContain(`guild_id=${GUILD_ID}`);
+
+    // One call, refused the way Discord refuses it. A bot has no way to tell "no such guild" from
+    // "not your guild", so the check stops here rather than asking about roles it cannot see.
+    const guildCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}`);
+    expect(guildCall).toBeTruthy();
+    expect(guildCall?.status).toBe(404);
+    expect(guildCall?.code).toBe(10004);
+  });
+
+  test("guild-gone: a stale discord_server_id reads as not installed", async () => {
+    // No guild in the mock at all, which is what a class pointed at a deleted (or mistyped) server
+    // sees. Indistinguishable from bot-not-in-guild at the API, deliberately.
+    await applyScenarioForGuilds("guild-gone", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(false);
+    expect(body.guild_id).toBe(GUILD_ID);
+    expect(body.bot_role_position).toBeNull();
+    expect(body.highest_class_role_position).toBeNull();
+
+    const guildCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}`);
+    expect(guildCall?.status).toBe(404);
+    expect(guildCall?.code).toBe(10004);
+  });
+
+  test("missing-manage-roles: installed, but the missing permission is named", async () => {
+    await applyScenarioForGuilds("missing-manage-roles", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    // Installed and reachable. Reporting this as "not installed" is the wrong answer that this
+    // response shape exists to avoid: the remediation would be re-inviting a bot that is already in.
+    expect(body.installed).toBe(true);
+    expect(body.missing_permissions).toContain("Manage Roles");
+    // Only that one: the scenario takes Manage Roles off the bot's role and leaves @everyone alone.
+    expect(body.missing_permissions).toEqual(["Manage Roles"]);
+    expect(body.can_manage_class_roles).toBe(false);
+    // The hierarchy is fine here, so the position pair is NOT the evidence — the named permission is.
+    expect(body.bot_role_position).toBe(10);
+    expect(body.highest_class_role_position).toBe(5);
+
+    expect((await callsForThisClass()).some((c) => c.path === `/guilds/${GUILD_ID}/roles`)).toBe(true);
+  });
+
+  test("bot-role-too-low: permissions all held, hierarchy TIES, so role management is refused", async () => {
+    // The regression this whole feature exists to catch. The bot's role is at position 5, the same
+    // as the class's instructor role. Discord's rule is strict inequality, so a tie fails — and it
+    // fails with 403/50013, the same code as not holding Manage Roles at all, which is why it cannot
+    // be diagnosed from the error and has to be preflighted.
+    await applyScenarioForGuilds("bot-role-too-low", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(true);
+    // Nothing is missing: this is not a permissions problem.
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.can_manage_class_roles).toBe(false);
+    // The equal-position case. `<` reports this correctly; `<=` reports a healthy install for a
+    // server where every instructor-role assignment will fail.
+    expect(body.bot_role_position).toBe(5);
+    expect(body.highest_class_role_position).toBe(5);
+    expect(body.bot_role_position).toBe(body.highest_class_role_position);
+
+    expect((await callsForThisClass()).filter((c) => c.status !== 200)).toHaveLength(0);
+  });
+
+  test("rate-limited: a 429 surfaces a retryable error and NEVER 'not installed'", async () => {
+    // 429 says nothing about the guild's configuration — it says the shared bot token is out of
+    // budget. Answering `installed: false` here would be confident, wrong, and would send the
+    // instructor to re-invite a bot that is already installed.
+    await applyScenarioForGuilds("rate-limited", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).not.toBeNull();
+    expect(data?.installed).toBeUndefined();
+    if (error?.context instanceof Response) {
+      // 503, not 502 and not 200: the caller is being told to try again.
+      expect(error.context.status).toBe(503);
+      const payload = (await error.context.json().catch(() => null)) as {
+        error?: { recoverable?: boolean; message?: string };
+      } | null;
+      expect(payload?.error?.recoverable).toBe(true);
+      expect(payload?.error?.message ?? "").toMatch(/try again/i);
+    }
+
+    const guildCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}`);
+    expect(guildCall?.status).toBe(429);
+  });
+
+  test("a discord_roles row naming a role the guild no longer has is skipped, not counted at 0", async () => {
+    // Somebody deleted the role in Discord. Pinning the orphan at position 0 would make the server
+    // look manageable for the wrong reason (0 < 10 for any bot), so those rows are dropped and the
+    // remaining live roles decide the answer.
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    const orphan = "1209999999999999999";
+    const roles = untypedTable(supabase, "discord_roles");
+    const { error: delError } = await roles.delete().eq("class_id", classAId);
+    expect(delError).toBeNull();
+    const { error: insError } = await roles.insert({
+      class_id: classAId,
+      discord_role_id: orphan,
+      role_type: "student"
+    });
+    expect(insError).toBeNull();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(true);
+    // No live class role remains, so there is no position to report and nothing that could be
+    // blocked — canManageRoles returns true for an empty list.
+    expect(body.highest_class_role_position).toBeNull();
+    expect(body.can_manage_class_roles).toBe(true);
+
+    // Restore the fixture for anything that runs after this.
+    await roles.delete().eq("class_id", classAId);
+    await roles.insert([
+      { class_id: classAId, discord_role_id: STUDENT_ROLE_ID, role_type: "student" },
+      { class_id: classAId, discord_role_id: GRADER_ROLE_ID, role_type: "grader" },
+      { class_id: classAId, discord_role_id: INSTRUCTOR_ROLE_ID, role_type: "instructor" }
+    ]);
+  });
+});

@@ -772,6 +772,24 @@ verify_jwt = false
 import_map = "./functions/discord-discussion-stats-update/deno.json"
 entrypoint = "./functions/discord-discussion-stats-update/index.ts"
 
+[functions.discord-check-bot-installation]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-check-bot-installation/deno.json"
+entrypoint = "./functions/discord-check-bot-installation/index.ts"
+
+[functions.discord-list-guilds]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-list-guilds/deno.json"
+entrypoint = "./functions/discord-list-guilds/index.ts"
+
+[functions.discord-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-reconciler/deno.json"
+entrypoint = "./functions/discord-reconciler/index.ts"
+
 [functions.mcp-server]
 enabled = true
 verify_jwt = false

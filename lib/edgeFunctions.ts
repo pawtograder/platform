@@ -539,6 +539,37 @@ export async function checkAppInstallation(
   });
 }
 
+export type CheckBotInstallationResponse = {
+  installed: boolean;
+  guild_id: string | null;
+  guild_name: string | null;
+  /** Human-readable labels of the required permissions the bot does not hold. */
+  missing_permissions: string[];
+  /**
+   * Whether a role assignment would actually succeed. False either because the bot lacks Manage
+   * Roles or because its own role sits at or below a class role -- Discord reports both as the same
+   * error, so the two positions below are what tells them apart.
+   */
+  can_manage_class_roles: boolean;
+  bot_role_position: number | null;
+  highest_class_role_position: number | null;
+  install_url: string;
+};
+
+/**
+ * Checks whether the Pawtograder Discord bot is in the class's server and can work there. Used by
+ * the course Discord settings page: a bot can be installed and still fail every operation, so this
+ * reports the permission gaps and the role-hierarchy problem alongside the boolean.
+ */
+export async function checkDiscordBotInstallation(
+  params: { class_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<CheckBotInstallationResponse> {
+  return await invokeEdgeFunction<CheckBotInstallationResponse>(supabase, "discord-check-bot-installation", {
+    body: params
+  });
+}
+
 export type PrLinkConfirmResponse = { submission_id: number | null };
 
 /**
@@ -736,6 +767,15 @@ export async function unlinkInstructorGitHubAccount(
 }
 export async function listGitHubOrgs(supabase: SupabaseClient<Database>) {
   return await invokeEdgeFunction<FunctionTypes.ListGitHubOrgsResponse>(supabase, "list-github-orgs", { body: {} });
+}
+/**
+ * Lists the Discord servers the bot is in. Admin-only: the bot is one shared account, so the list
+ * spans every course on the deployment.
+ */
+export async function listDiscordGuilds(supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.ListDiscordGuildsResponse>(supabase, "discord-list-guilds", {
+    body: {}
+  });
 }
 export class EdgeFunctionError extends Error {
   details: string;

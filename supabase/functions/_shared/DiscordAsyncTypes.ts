@@ -7,7 +7,6 @@ export type DiscordAsyncMethod =
   | "delete_role"
   | "add_member_role"
   | "remove_member_role"
-  | "add_guild_member"
   | "register_commands"
   | "batch_role_sync";
 
@@ -120,15 +119,10 @@ export type RemoveMemberRoleArgs = {
   role_id: string;
 };
 
-export type AddGuildMemberArgs = {
-  guild_id: string;
-  user_id: string;
-  access_token: string; // User's OAuth access token with guilds.join scope
-  nick?: string;
-  roles?: string[]; // Role IDs to assign
-  mute?: boolean;
-  deaf?: boolean;
-};
+// There is no add_guild_member method. Adding a user to a guild over the REST API requires that
+// user's OAuth token carrying the `guilds.join` scope, and linkDiscordAction requests only
+// `identify email`, so the call could never have been made. Students join through an invite link
+// instead, which is what createGuildInvite and the discord_invites table exist for.
 
 // Args for registering slash commands with Discord
 // No args needed - uses DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN from env
@@ -147,7 +141,6 @@ export type DiscordAsyncArgs =
   | DeleteRoleArgs
   | AddMemberRoleArgs
   | RemoveMemberRoleArgs
-  | AddGuildMemberArgs
   | RegisterCommandsArgs
   | BatchRoleSyncArgs;
 

@@ -1902,6 +1902,8 @@ export type Database = {
           deployment_channel: string;
           description: string | null;
           discord_channel_group_id: string | null;
+          discord_server_claimed_at: string | null;
+          discord_server_claimed_by: string | null;
           discord_server_id: string | null;
           end_date: string | null;
           events_ics_url: string | null;
@@ -1928,6 +1930,8 @@ export type Database = {
           deployment_channel?: string;
           description?: string | null;
           discord_channel_group_id?: string | null;
+          discord_server_claimed_at?: string | null;
+          discord_server_claimed_by?: string | null;
           discord_server_id?: string | null;
           end_date?: string | null;
           events_ics_url?: string | null;
@@ -1954,6 +1958,8 @@ export type Database = {
           deployment_channel?: string;
           description?: string | null;
           discord_channel_group_id?: string | null;
+          discord_server_claimed_at?: string | null;
+          discord_server_claimed_by?: string | null;
           discord_server_id?: string | null;
           end_date?: string | null;
           events_ics_url?: string | null;
@@ -1975,6 +1981,13 @@ export type Database = {
         };
         Relationships: [
           {
+            foreignKeyName: "classes_discord_server_claimed_by_fkey";
+            columns: ["discord_server_claimed_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
             foreignKeyName: "classes_gradebook_id_fkey";
             columns: ["gradebook_id"];
             isOneToOne: false;
@@ -1982,6 +1995,30 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      discord_async_errors: {
+        Row: {
+          created_at: string;
+          error_data: Json;
+          guild_id: string;
+          id: number;
+          method: string;
+        };
+        Insert: {
+          created_at?: string;
+          error_data: Json;
+          guild_id: string;
+          id?: number;
+          method: string;
+        };
+        Update: {
+          created_at?: string;
+          error_data?: Json;
+          guild_id?: string;
+          id?: number;
+          method?: string;
+        };
+        Relationships: [];
       };
       discord_async_worker_dlq_messages: {
         Row: {
@@ -2070,6 +2107,36 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      discord_circuit_breakers: {
+        Row: {
+          key: string;
+          last_reason: string | null;
+          open_until: string | null;
+          scope: string;
+          state: string;
+          trip_count: number;
+          updated_at: string;
+        };
+        Insert: {
+          key: string;
+          last_reason?: string | null;
+          open_until?: string | null;
+          scope: string;
+          state?: string;
+          trip_count?: number;
+          updated_at?: string;
+        };
+        Update: {
+          key?: string;
+          last_reason?: string | null;
+          open_until?: string | null;
+          scope?: string;
+          state?: string;
+          trip_count?: number;
+          updated_at?: string;
+        };
+        Relationships: [];
       };
       discord_invites: {
         Row: {
@@ -12235,6 +12302,10 @@ export type Database = {
         Args: { path: string };
         Returns: boolean;
       };
+      can_respond_to_survey: {
+        Args: { p_profile_id: string; p_survey_id: string };
+        Returns: boolean;
+      };
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
@@ -12254,6 +12325,10 @@ export type Database = {
           p_user_id: string;
         };
         Returns: boolean;
+      };
+      check_discord_error_threshold: {
+        Args: { p_guild_id: string; p_window_minutes?: number };
+        Returns: number;
       };
       check_discord_role_sync_after_link: {
         Args: { p_user_id: string };
@@ -12290,6 +12365,16 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      claim_discord_guild: {
+        Args: { p_claimed_by?: string; p_class_id: number; p_guild_id: string };
+        Returns: {
+          claimed_at: string;
+          claimed_by: string;
+          class_id: number;
+          guild_id: string;
+          previous_guild_id: string;
+        }[];
+      };
       claim_discord_invite: {
         Args: {
           p_class_id: number;
@@ -12304,6 +12389,7 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      cleanup_discord_async_errors: { Args: never; Returns: undefined };
       cleanup_expired_realtime_subscriptions: {
         Args: never;
         Returns: undefined;
@@ -12605,6 +12691,13 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      disconnect_discord_guild: {
+        Args: { p_actor?: string; p_class_id: number };
+        Returns: {
+          class_id: number;
+          previous_guild_id: string;
+        }[];
+      };
       discord_student_join_enabled: {
         Args: { p_class_id: number };
         Returns: boolean;
@@ -12901,6 +12994,24 @@ export type Database = {
           p_test_part?: string;
         };
         Returns: Json;
+      };
+      get_discord_circuit: {
+        Args: { p_key: string; p_scope: string };
+        Returns: {
+          open_until: string;
+          state: string;
+        }[];
+      };
+      get_discord_circuit_breaker_statuses: {
+        Args: never;
+        Returns: {
+          is_open: boolean;
+          key: string;
+          open_until: string;
+          scope: string;
+          state: string;
+          trip_count: number;
+        }[];
       };
       get_discord_membership_status_for_class: {
         Args: { p_class_id: number };
@@ -13380,6 +13491,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_discord_reconciler_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_email_batch_processor_background_task: {
         Args: never;
         Returns: undefined;
@@ -13516,6 +13631,16 @@ export type Database = {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
         Returns: boolean;
       };
+      open_discord_circuit: {
+        Args: {
+          p_event: string;
+          p_key: string;
+          p_reason?: string;
+          p_retry_after_seconds?: number;
+          p_scope: string;
+        };
+        Returns: number;
+      };
       open_github_circuit: {
         Args: {
           p_event: string;
@@ -13606,9 +13731,17 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      reconcile_stuck_discord_memberships: {
+        Args: { p_limit?: number; p_stale_minutes?: number };
+        Returns: number;
+      };
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_discord_async_error: {
+        Args: { p_error_data: Json; p_guild_id: string; p_method: string };
+        Returns: undefined;
       };
       record_discord_membership_status: {
         Args: {
@@ -13660,6 +13793,7 @@ export type Database = {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
       };
+      repo_ids_with_queued_create: { Args: never; Returns: string[] };
       request_discord_reinvite: {
         Args: { p_class_id: number; p_user_id?: string };
         Returns: {
@@ -13779,6 +13913,10 @@ export type Database = {
           p_resource_id: number;
         };
         Returns: Json;
+      };
+      survey_allows_response_editing: {
+        Args: { p_survey_id: string };
+        Returns: boolean;
       };
       sync_calendar_events: {
         Args: {
