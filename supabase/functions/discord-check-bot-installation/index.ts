@@ -2,17 +2,23 @@
  * Checks whether the Pawtograder Discord bot is installed in a class's server and can actually do
  * its job there. The Discord counterpart of github-check-app-installation.
  *
- * Installation is necessary but not sufficient, which is why this reports four things rather than a
- * boolean. A bot can be present in a guild and still fail every operation because it was invited
- * with a hand-edited permission set, or because somebody later dragged its role below the class
- * roles in the server settings. Both surface downstream as bare 403s from unrelated features --
- * roles silently not assigned, channels not created -- so the point of this function is to name the
- * cause before an instructor spends a term wondering why the roster never syncs.
+ * Installation is necessary but not sufficient, which is why this reports several signals rather
+ * than a boolean. A bot can be present in a guild and still fail every operation because it was
+ * invited with a hand-edited permission set, because somebody later dragged its role below the class
+ * roles in the server settings, or because somebody deleted a class role outright and left
+ * Pawtograder holding a dead snowflake. Each surfaces downstream as a bare 403 or 404 from an
+ * unrelated feature -- roles silently not assigned, channels not created -- so the point of this
+ * function is to name the cause before an instructor spends a term wondering why the roster never
+ * syncs.
  *
  * Request:  { class_id: number }
  * Response: see CheckBotInstallationResponse
  *
- * Authorization: caller must be an instructor in `class_id`.
+ * Authorization: instructor OR grader in `class_id`. Read-only, and the Discord settings page admits
+ * graders and renders this panel for them with the management controls disabled -- gating it to
+ * instructors meant every grader saw "Could not check the Discord bot installation" instead of the
+ * diagnosis the page exists to show. Installing, claiming and disconnecting remain instructor-only;
+ * those are mutations and live in separate routes.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { discordBotGet, isTransientDiscordStatus } from "../_shared/DiscordBotRest.ts";
@@ -30,7 +36,7 @@ import {
   NotFoundError,
   SecurityError,
   UserVisibleError,
-  assertUserIsInstructor,
+  assertUserIsInstructorOrGrader,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -47,6 +53,15 @@ export type CheckBotInstallationResponse = {
   can_manage_class_roles: boolean;
   bot_role_position: number | null;
   highest_class_role_position: number | null;
+  /**
+   * Roles Pawtograder still tracks in `discord_roles` that no longer exist in the guild.
+   *
+   * Its own field rather than a term in `can_manage_class_roles`, which stays a statement about
+   * permissions and hierarchy. A deleted role is a different failure with a different fix: every
+   * later assignment of that snowflake 404s, and the surviving tracking row stops role creation from
+   * replacing it, so the class needs the stale row cleared rather than the bot's permissions widened.
+   */
+  stale_class_role_ids: string[];
   install_url: string;
 };
 
@@ -78,7 +93,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   if (!authHeader) {
     throw new SecurityError("Missing Authorization header");
   }
-  const { supabase } = await assertUserIsInstructor(class_id, authHeader);
+  const { supabase } = await assertUserIsInstructorOrGrader(class_id, authHeader);
 
   const { data: classRow, error: classError } = await supabase
     .from("classes")
@@ -109,10 +124,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       can_manage_class_roles: false,
       bot_role_position: null,
       highest_class_role_position: null,
+      stale_class_role_ids: [],
       install_url: botInstallUrl({ applicationId })
     };
   }
   scope?.setTag("discord_guild_id", guildId);
+
+  // claim_discord_guild() validates this shape, but it has only been the sole writer of the column
+  // since migration 20260822130000. Anything a class carried over from the old free-text field is
+  // unconstrained, and every value here is interpolated straight into a Discord REST path below -- so
+  // a legacy value containing a slash or a query string would address an endpoint nobody intended.
+  // Reported rather than silently ignored: an unusable server id is exactly the kind of thing the
+  // instructor needs told, and re-running the install replaces it with a validated one.
+  if (!/^\d{17,20}$/.test(guildId)) {
+    scope?.setTag("error_type", "malformed_guild_id");
+    throw new UserVisibleError(
+      "This course's Discord server ID is not a valid Discord server ID. Re-connect the server to replace it.",
+      409
+    );
+  }
 
   const notInstalled: CheckBotInstallationResponse = {
     installed: false,
@@ -122,6 +152,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     can_manage_class_roles: false,
     bot_role_position: null,
     highest_class_role_position: null,
+    // Empty rather than the tracked list: with the guild unreachable there is no live role list to
+    // compare against, so every tracked role would look deleted.
+    stale_class_role_ids: [],
     // Pinned to the configured guild so the consent screen cannot be pointed at a different server.
     install_url: botInstallUrl({ applicationId, guildId })
   };
@@ -199,13 +232,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   }
 
   const classRoleIds = new Set((classRoles ?? []).map((r) => r.discord_role_id));
-  // Rows naming a role that no longer exists in the guild are skipped rather than counted at
-  // position 0: somebody deleted the role in Discord, so it cannot block anything, and pinning it at
-  // the floor would make an otherwise-fine server look manageable for the wrong reason.
+  // Rows naming a role that no longer exists in the guild are excluded from the hierarchy check
+  // rather than counted at position 0: they cannot be dragged above the bot, and pinning them at the
+  // floor would make an otherwise-fine server look manageable for the wrong reason.
   const classRolePositions = guildRoles
     .filter((role) => classRoleIds.has(role.id))
     .map((role) => (typeof role.position === "number" ? role.position : 0));
   const highestClassRolePosition = classRolePositions.length > 0 ? Math.max(...classRolePositions) : null;
+
+  // Excluded from the hierarchy check, but reported: a role somebody deleted in Discord leaves its
+  // `discord_roles` row behind, and that row is doing active harm. Every subsequent assignment uses a
+  // snowflake Discord no longer knows, and the row's continued existence is what stops the ordinary
+  // create-role path from making a replacement. Silently skipping it here is what let a class with a
+  // broken role read as fully healthy.
+  const liveRoleIds = new Set(guildRoles.map((role) => role.id));
+  const staleClassRoleIds = [...classRoleIds].filter((id) => !liveRoleIds.has(id));
+  if (staleClassRoleIds.length > 0) {
+    scope?.setTag("stale_class_roles", String(staleClassRoleIds.length));
+  }
 
   // Both halves of Discord's rule, because a role assignment needs both and the caller wants to know
   // whether it will work. Which half failed is still recoverable from the response: an empty
@@ -224,6 +268,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     can_manage_class_roles: canManageClassRoles,
     bot_role_position: botPosition,
     highest_class_role_position: highestClassRolePosition,
+    stale_class_role_ids: staleClassRoleIds,
     // Still returned when installed: it is the "fix the permissions" link, since re-running the
     // OAuth flow on an existing guild is how a bot's permission set is widened.
     install_url: botInstallUrl({ applicationId, guildId })

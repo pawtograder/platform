@@ -81,6 +81,106 @@ export function manageDiscordPageUrl(
 /** How long to wait on Discord before giving up on the install confirmation. */
 const GUILD_FETCH_TIMEOUT_MS = 10_000;
 
+export type CodeExchange =
+  /**
+   * Discord accepted the authorization code. `guildId` is the guild the consent screen actually
+   * installed the bot into, as reported by Discord itself.
+   */
+  | { outcome: "ok"; guildId: string; guildName: string | null; scope: string }
+  /** Discord rejected the code: already redeemed, expired, or minted for a different client. */
+  | { outcome: "rejected"; detail: string }
+  /** The exchange could not be completed, so it says nothing either way. */
+  | { outcome: "unavailable"; detail: string };
+
+/**
+ * Redeem the OAuth authorization code from the install callback, and take the guild from the result.
+ *
+ * This is what makes the guild trustworthy, and it is not interchangeable with asking the bot token
+ * whether it can see a guild. `lookupGuildAsBot` proves only that the shared bot is *present*
+ * somewhere -- and one bot serves every course on the deployment, so "present" is true of every
+ * guild any course ever connected. An instructor can legitimately start an install (they are staff
+ * on their own class, so the state and nonce are theirs), then abandon Discord's consent screen and
+ * hand-craft a callback URL naming a different guild the bot already happens to be in. The unique
+ * index stops that when an unarchived class holds the guild, but a guild belonging to an archived
+ * course -- or one the bot joined for any other reason -- would be claimable, and Pawtograder would
+ * start creating roles and channels in a server whose administrators never agreed to it.
+ *
+ * The authorization code closes that: it is issued by Discord to the *browser that completed the
+ * consent screen*, is single-use, and the token response names the guild the bot was actually added
+ * to. A caller cannot mint one for a guild they did not just authorize.
+ *
+ * The bot-token lookup is still worth doing afterwards, for the different question it answers: that
+ * the bot is present *now*, rather than having been added and immediately kicked.
+ */
+export async function exchangeInstallCode(code: string, request: Request): Promise<CodeExchange> {
+  // The application id doubles as the OAuth client id for a Discord app, but the secret is its own
+  // credential and is not interchangeable with the bot token.
+  const clientId = process.env.DISCORD_OAUTH_CLIENT_ID ?? process.env.DISCORD_APPLICATION_ID;
+  const clientSecret = process.env.DISCORD_OAUTH_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return {
+      outcome: "unavailable",
+      detail: "DISCORD_OAUTH_CLIENT_ID / DISCORD_OAUTH_CLIENT_SECRET are not configured on this deployment"
+    };
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "authorization_code",
+    code,
+    // Discord requires this to match the redirect_uri the code was issued for, byte for byte. Both
+    // sides build it from installCallbackUrl(), which is why that has to be configuration-derived
+    // rather than header-derived.
+    redirect_uri: installCallbackUrl(request)
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(`${discordApiBase()}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Pawtograder (install-callback)" },
+      body,
+      signal: AbortSignal.timeout(GUILD_FETCH_TIMEOUT_MS),
+      cache: "no-store"
+    });
+  } catch (e) {
+    return { outcome: "unavailable", detail: e instanceof Error ? e.message : "network error" };
+  }
+
+  const parsed = (await response.json().catch(() => null)) as {
+    guild?: { id?: unknown; name?: unknown } | null;
+    scope?: unknown;
+    error?: unknown;
+    error_description?: unknown;
+  } | null;
+
+  if (!response.ok) {
+    // 400 invalid_grant is the ordinary case: a replayed or expired code. Treated as a rejection
+    // rather than an outage, because retrying it cannot help.
+    if (response.status === 400 || response.status === 401) {
+      const detail = typeof parsed?.error === "string" ? parsed.error : `HTTP ${response.status}`;
+      return { outcome: "rejected", detail };
+    }
+    return { outcome: "unavailable", detail: `Discord answered HTTP ${response.status}` };
+  }
+
+  // A `bot` grant carries the guild it was installed into. Its absence means this code was not a bot
+  // install -- so there is no guild to claim, and falling back to the query parameter is exactly the
+  // trust this function exists to remove.
+  const guildId = parsed?.guild?.id;
+  if (typeof guildId !== "string" || !/^\d{17,20}$/.test(guildId)) {
+    return { outcome: "rejected", detail: "the authorization did not include a Discord server" };
+  }
+
+  return {
+    outcome: "ok",
+    guildId,
+    guildName: typeof parsed?.guild?.name === "string" ? parsed.guild.name : null,
+    scope: typeof parsed?.scope === "string" ? parsed.scope : ""
+  };
+}
+
 export type GuildLookup =
   /** The bot can see the guild. `name` is whatever Discord reports, which may be absent. */
   | { outcome: "visible"; name: string | null }

@@ -142,6 +142,14 @@ export type MockState = {
   invites: Record<string, MockInvite>;
   messages: Record<string, MockMessage>;
   commands: MockCommand[];
+  /**
+   * Outstanding OAuth authorization codes, keyed by code.
+   *
+   * `guildId: null` models a grant that carried no `bot` scope, so the token response names no guild
+   * -- the case the install callback must refuse rather than falling back to its `guild_id` query
+   * parameter. Minted through `POST /__mock/oauth-code`, since there is no consent screen to click.
+   */
+  oauthCodes: Record<string, { guildId: string | null }>;
 };
 
 /**
@@ -269,7 +277,8 @@ function baseState(scenario: string, guilds: MockGuild[], faults: FaultRule[] = 
     guilds: byId,
     invites: {},
     messages: {},
-    commands: []
+    commands: [],
+    oauthCodes: {}
   };
 }
 

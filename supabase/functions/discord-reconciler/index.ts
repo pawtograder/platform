@@ -39,6 +39,15 @@ const MAX_ENQUEUE_PER_PASS = 200;
 
 const ALERT_AFTER_HOURS = 12;
 
+/**
+ * Ceiling on the long-stuck rows one pass pulls back.
+ *
+ * These rows are grouped by class and thrown away, so the cap only has to be large enough that no
+ * affected class goes unnamed. Without it, a deployment-wide permission failure would select one row
+ * per enrolled student -- tens of thousands -- into an isolate that has better uses for the memory.
+ */
+const MAX_STUCK_ROWS_PER_PASS = 2000;
+
 type StuckRow = {
   class_id: number;
   user_id: string;
@@ -144,11 +153,20 @@ serveWithSentryFlush(async (req) => {
         "class_id, user_id, guild_id, discord_error_code, detail, first_observed_at, last_observed_at, classes!inner(name, discord_server_id)"
       )
       .eq("state", "cannot_invite")
-      .lt("first_observed_at", cutoff);
+      .lt("first_observed_at", cutoff)
+      // Bounded for the same reason the enqueue pass is. This runs every fifteen minutes in an edge
+      // isolate with a fixed memory ceiling, and the pathological case -- a deployment where the bot
+      // lost its permissions everywhere -- is one row per enrolled student across every class. The
+      // rows are only used to decide which classes to alert about, and MAX_STUCK_ROWS_PER_PASS is far
+      // more than enough to name every affected class, so the cap costs nothing the alert needs.
+      .limit(MAX_STUCK_ROWS_PER_PASS);
     if (stuckError) {
       console.error("[discord-reconciler] Failed to query long-stuck memberships:", stuckError);
       scope.setContext("stuck_query_error", { error: stuckError.message });
-      throw stuckError;
+      // Wrapped in an Error rather than thrown bare: a PostgrestError is a plain object, so Sentry
+      // records it without a stack and the handler above cannot read `.message` off it reliably.
+      // The branch that reports the enqueue failure already throws a real Error; this matches it.
+      throw new Error(`Failed to query long-stuck Discord memberships: ${stuckError.message}`);
     }
 
     // Rows for a guild the class no longer uses are left behind by a server change and are not a

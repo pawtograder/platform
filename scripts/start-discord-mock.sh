@@ -48,6 +48,17 @@ die() {
   exit 1
 }
 
+# CONTAINER is used both as a Docker object name and as the hostname written into $HOSTS_FILE, and it
+# reaches `docker ps --filter name=^...$` and a `grep -E` pattern, so a value with regex or shell
+# metacharacters in it would be interpreted rather than matched. Docker's own rule for a name is
+# stricter than that, so requiring it up front costs nothing and removes the question.
+case "$CONTAINER" in
+*[!A-Za-z0-9_.-]* | "" | [!A-Za-z0-9]*) die "DISCORD_MOCK_CONTAINER='${CONTAINER}' is not a valid container name or hostname (expected [A-Za-z0-9][A-Za-z0-9_.-]*)" ;;
+esac
+case "$PORT" in
+'' | *[!0-9]*) die "DISCORD_MOCK_PORT='${PORT}' is not a port number" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Which Docker network is Supabase on
 # ---------------------------------------------------------------------------
@@ -168,7 +179,12 @@ ensure_hosts_entry() {
     log "added '${line}' to ${HOSTS_FILE}"
     return 0
   fi
-  if sudo -n sh -c "printf '%s\n' '${line}' >> '${HOSTS_FILE}'" 2>/dev/null; then
+  # `sudo -n tee`, not `sudo -n sh -c "... '$line' >> '$HOSTS_FILE'"`. The second builds a shell
+  # program out of two overridable variables and runs it as root, so a single quote anywhere in
+  # DISCORD_MOCK_CONTAINER or DISCORD_MOCK_HOSTS_FILE ends the quoting and the rest executes with
+  # root's privileges. Here root runs a fixed program and the variables are only ever arguments to
+  # it, which no amount of quoting in their values can change.
+  if printf '%s\n' "$line" | sudo -n tee -a "$HOSTS_FILE" >/dev/null 2>&1; then
     log "added '${line}' to ${HOSTS_FILE} (via sudo)"
     return 0
   fi

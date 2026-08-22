@@ -83,7 +83,14 @@ async function generatePrometheusMetrics(): Promise<Response> {
     // has not yet applied the Discord breaker migration.
     let discordCircuitBreakers: DiscordCircuitRow[] | null = null;
     try {
-      const d = await rpcUntyped<DiscordCircuitRow[]>(supabase, "get_discord_circuit_breaker_statuses");
+      // Bounded like vacuum_health_check and database_ram_metrics below. This handler answers a
+      // Prometheus scrape, so an RPC that hangs does not just lose one gauge -- it stalls the whole
+      // response until the scrape times out and every metric in it is lost.
+      const d = await withTimeout(
+        rpcUntyped<DiscordCircuitRow[]>(supabase, "get_discord_circuit_breaker_statuses"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "get_discord_circuit_breaker_statuses"
+      );
       if (d.error) {
         console.error("Error fetching Discord circuit breaker statuses:", d.error);
       } else {

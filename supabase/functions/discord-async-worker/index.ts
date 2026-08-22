@@ -174,22 +174,48 @@ async function requeueWithDelay(
   console.log(
     `[requeueWithDelay] Requeuing envelope with method=${envelope.method}, retry_count=${newRetryCount}, delay=${delaySeconds}s`
   );
-  const newEnvelope: DiscordAsyncEnvelope = {
-    ...envelope,
-    retry_count: newRetryCount
-  };
+  return await sendReplacement(adminSupabase, { ...envelope, retry_count: newRetryCount }, delaySeconds, scope);
+}
+
+/**
+ * Put a replacement message on the queue WITHOUT charging it a retry.
+ *
+ * For the circuit breaker's deferrals, which are not attempts: no Discord call was made and nothing
+ * about this envelope failed. Spending `retry_count` on them was what dead-lettered work the breaker
+ * was successfully deferring. Deferrals are bounded by their own counter instead -- see
+ * MAX_CIRCUIT_DEFERRALS -- so this is not an unbounded requeue.
+ */
+async function requeueWithoutRetry(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: DiscordAsyncEnvelope,
+  delaySeconds: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  console.log(
+    `[requeueWithoutRetry] Requeuing envelope with method=${envelope.method}, retry_count=${envelope.retry_count ?? 0} (unchanged), delay=${delaySeconds}s`
+  );
+  return await sendReplacement(adminSupabase, envelope, delaySeconds, scope);
+}
+
+/** The pgmq write both requeue paths share. Returns whether the replacement is actually on the queue. */
+async function sendReplacement(
+  adminSupabase: SupabaseClient<Database>,
+  newEnvelope: DiscordAsyncEnvelope,
+  delaySeconds: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: "discord_async_calls",
     message: newEnvelope as unknown as Json,
     sleep_seconds: delaySeconds
   });
   if (result.error) {
-    console.error(`[requeueWithDelay] Failed to requeue:`, result.error);
+    console.error(`[sendReplacement] Failed to requeue:`, result.error);
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
     return false;
   }
-  console.log(`[requeueWithDelay] Successfully requeued envelope`);
+  console.log(`[sendReplacement] Successfully requeued envelope`);
   return true;
 }
 
@@ -565,6 +591,45 @@ const DISCORD_CIRCUIT_SCOPE_GUILD = "guild";
 /** Floor delay applied to an envelope deferred by an open breaker, matching the GitHub worker. */
 const CIRCUIT_OPEN_REQUEUE_SECONDS = 180;
 
+/**
+ * Ceiling on a single circuit deferral, matching the six-hour cap open_discord_circuit escalates to.
+ * A deferral is meant to end when the breaker's window ends, so anything longer than the longest
+ * window the breaker can set would be a stale `open_until` rather than a real wait.
+ */
+const CIRCUIT_MAX_REQUEUE_SECONDS = 21600;
+
+/**
+ * How many times an envelope may be deferred by an open breaker before it is dead-lettered.
+ *
+ * Counted separately from `retry_count` on purpose. A deferral is not a failed attempt -- no Discord
+ * call was made and nothing went wrong with this message -- and sharing the ordinary retry budget
+ * meant a guild parked for the breaker's own 30-minute window burned all five retries in 15 minutes
+ * and dead-lettered work the breaker was successfully protecting. Ten breaker windows is days of
+ * patience at the six-hour cap, and still a bound: a guild nobody ever fixes ends up as DLQ evidence
+ * rather than an envelope circulating forever.
+ */
+const MAX_CIRCUIT_DEFERRALS = 10;
+
+/**
+ * An envelope carrying the circuit-deferral counter.
+ *
+ * Declared here rather than on DiscordAsyncEnvelope because only this worker writes or reads it: it
+ * is set when the worker requeues its own message and is absent from every enqueue the rest of the
+ * platform performs.
+ */
+type CircuitDeferrableEnvelope = DiscordAsyncEnvelope & { circuit_deferrals?: number };
+
+/** How long to park an envelope whose guild is open, given the breaker's own deadline. */
+function circuitDeferralSeconds(openUntil: string | null | undefined): number {
+  if (!openUntil) return CIRCUIT_OPEN_REQUEUE_SECONDS;
+  const remainingMs = new Date(openUntil).getTime() - Date.now();
+  if (!Number.isFinite(remainingMs)) return CIRCUIT_OPEN_REQUEUE_SECONDS;
+  // A few seconds past the deadline, so the envelope does not come back to a breaker that is still
+  // open by a rounding error and spend a deferral on it.
+  const untilOpenEnds = Math.ceil(remainingMs / 1000) + 5;
+  return Math.min(CIRCUIT_MAX_REQUEUE_SECONDS, Math.max(CIRCUIT_OPEN_REQUEUE_SECONDS, untilOpenEnds));
+}
+
 /** Window and count that define "a storm" rather than one misconfigured channel. */
 const PERMISSION_ERROR_WINDOW_MINUTES = 5;
 const PERMISSION_ERROR_TRIP_THRESHOLD = 10;
@@ -647,7 +712,7 @@ async function isGuildCircuitOpen(
   adminSupabase: SupabaseClient<Database>,
   guildId: string,
   scope: Sentry.Scope
-): Promise<{ open: boolean; reason?: string }> {
+): Promise<{ open: boolean; reason?: string; openUntil?: string | null }> {
   const { data, error } = await untypedRpc<Array<{ state?: string; open_until?: string | null }>>(
     adminSupabase,
     "get_discord_circuit",
@@ -663,7 +728,11 @@ async function isGuildCircuitOpen(
   if (!row || row.state !== "open") return { open: false };
   if (row.open_until && new Date(row.open_until) <= new Date()) return { open: false };
   scope.setTag("circuit_open_until", row.open_until ?? "indefinite");
-  return { open: true, reason: row.open_until ? `open until ${row.open_until}` : "open" };
+  return {
+    open: true,
+    reason: row.open_until ? `open until ${row.open_until}` : "open",
+    openUntil: row.open_until ?? null
+  };
 }
 
 /**
@@ -672,8 +741,36 @@ async function isGuildCircuitOpen(
  * Only permission and configuration failures are counted, via the shared classifier: a 429 is
  * handled by the existing backoff and a 404 on one member says nothing about the guild. Counting
  * everything would park a healthy guild for one student's deleted account.
+ *
+ * Cannot throw, for the same reason isGuildCircuitOpen fails open. Both call sites are error paths:
+ * one is the outer catch of processEnvelope, where a rejection here would escape the catch entirely
+ * and leave the message unarchived with no requeue and no dead-letter row, and the other is the
+ * cannot_invite branch, where it would replace a recorded terminal failure with a bookkeeping error
+ * that then gets classified retriable. Losing a breaker sample is the cheaper failure.
  */
 async function noteGuildPermissionFailure(
+  adminSupabase: SupabaseClient<Database>,
+  guildId: string,
+  method: string,
+  error: unknown,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    await recordGuildPermissionFailure(adminSupabase, guildId, method, error, scope);
+  } catch (bookkeepingError) {
+    // Breadcrumb rather than an event: this is attached to whatever the original failure captures,
+    // and on its own it is not worth an issue of its own.
+    console.warn(`[noteGuildPermissionFailure] Breaker accounting failed for guild ${guildId}:`, bookkeepingError);
+    Sentry.addBreadcrumb({
+      message: `Discord breaker accounting failed for guild ${guildId}: ${
+        bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError)
+      }`,
+      level: "warning"
+    });
+  }
+}
+
+async function recordGuildPermissionFailure(
   adminSupabase: SupabaseClient<Database>,
   guildId: string,
   method: string,
@@ -1459,14 +1556,18 @@ export async function processEnvelope(
       if (circuit.open) {
         scope.setTag("circuit_state", "open");
         scope.setTag("circuit_scope", DISCORD_CIRCUIT_SCOPE_GUILD);
-        const currentRetryCount = envelope.retry_count ?? 0;
+        const deferrals = (envelope as CircuitDeferrableEnvelope).circuit_deferrals ?? 0;
+        scope.setTag("circuit_deferrals", String(deferrals));
 
-        // The same ceiling every other failure path in this worker uses. Five deferrals at the floor
-        // delay is roughly fifteen minutes of waiting for a guild whose fix needs a human; past that
-        // the envelope is evidence in the dead letter queue rather than work still being attempted.
-        if (currentRetryCount >= 5) {
+        // Deferrals have their own budget, not `retry_count`'s. The breaker parks a guild for 30
+        // minutes and escalates to six hours, while five requeues at the 180s floor is fifteen
+        // minutes -- so charging deferrals to the retry budget dead-lettered work while the breaker
+        // was doing exactly what it was built to do. What ends an envelope now is the breaker still
+        // being open after MAX_CIRCUIT_DEFERRALS full windows, which means nobody is coming to fix
+        // the server and the DLQ row is the honest outcome.
+        if (deferrals >= MAX_CIRCUIT_DEFERRALS) {
           const error = new Error(
-            `Discord circuit breaker open for guild ${guildId} after ${currentRetryCount} retries (${circuit.reason ?? "open"})`
+            `Discord circuit breaker open for guild ${guildId} after ${deferrals} deferrals (${circuit.reason ?? "open"})`
           );
           console.log(`[processEnvelope] ${error.message}; dead-lettering msg ${meta.msg_id}`);
           if (await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope)) {
@@ -1481,11 +1582,17 @@ export async function processEnvelope(
           return false;
         }
 
+        // Parked until the breaker's own deadline rather than a fixed 180s: waking earlier only
+        // reads a still-open breaker and spends another deferral, and the floor still applies when
+        // `open_until` is missing or nearly past.
+        const delaySeconds = circuitDeferralSeconds(circuit.openUntil);
         console.log(
-          `[processEnvelope] Circuit open for guild ${guildId}; requeuing msg ${meta.msg_id} in ${CIRCUIT_OPEN_REQUEUE_SECONDS}s`
+          `[processEnvelope] Circuit open for guild ${guildId}; requeuing msg ${meta.msg_id} in ${delaySeconds}s (deferral ${deferrals + 1}/${MAX_CIRCUIT_DEFERRALS})`
         );
+        // retry_count is deliberately carried through unchanged; only the deferral count moves.
+        const deferred: CircuitDeferrableEnvelope = { ...envelope, circuit_deferrals: deferrals + 1 };
         // Archived only once the replacement is stored, as everywhere else in this worker.
-        if (await requeueWithDelay(adminSupabase, envelope, CIRCUIT_OPEN_REQUEUE_SECONDS, scope)) {
+        if (await requeueWithoutRetry(adminSupabase, deferred, delaySeconds, scope)) {
           await archiveMessage(adminSupabase, meta.msg_id, scope);
         }
         return false;

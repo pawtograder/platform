@@ -102,10 +102,12 @@ export async function POST(request: NextRequest) {
     }
     scope.setTag("error_type", "disconnect_failed");
     Sentry.captureException(new Error(`disconnect_discord_guild failed: ${error.message}`), scope);
+    // Fixed sentence, not `error.message`: the same reasoning as the install callback. Raw Postgres
+    // text names internals, and this string ends up in the URL as well as on the page.
     return NextResponse.redirect(
       manageDiscordPageUrl(request, classId, {
         error: "discord_disconnect_failed",
-        errorDescription: `The Discord server could not be disconnected: ${error.message}`
+        errorDescription: "The Discord server could not be disconnected. The error has been reported."
       }),
       { status: 303 }
     );

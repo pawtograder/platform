@@ -553,6 +553,14 @@ export type CheckBotInstallationResponse = {
   can_manage_class_roles: boolean;
   bot_role_position: number | null;
   highest_class_role_position: number | null;
+  /**
+   * Roles still tracked in `discord_roles` that no longer exist in the guild.
+   *
+   * Separate from `can_manage_class_roles` because it is a different failure with a different fix:
+   * somebody deleted the role in Discord, so every later assignment of that snowflake 404s, and the
+   * surviving tracking row is what stops the ordinary create-role path from making a replacement.
+   */
+  stale_class_role_ids: string[];
   install_url: string;
 };
 

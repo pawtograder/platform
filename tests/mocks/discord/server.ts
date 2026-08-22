@@ -633,6 +633,63 @@ function handleApplicationRoutes(method: string, segments: string[], body: unkno
   return methodNotAllowed();
 }
 
+/**
+ * `POST /oauth2/token` — the install flow's authorization-code exchange.
+ *
+ * The install callback redeems the `code` here and takes the guild from the response, because that is
+ * the only part of Discord's redirect that proves the instructor completed the consent screen for
+ * that specific guild (the bot token can confirm any guild the shared bot already sits in). So the
+ * mock has to model the two things the callback depends on: a code is single-use, and a `bot` grant
+ * names the guild it installed into.
+ *
+ * Codes are minted by the control plane (`POST /__mock/oauth-code`) rather than by a consent screen
+ * nobody can click here. `client_secret` is not verified -- there is no secret to check against --
+ * but its absence is, because the callback treats "unconfigured" and "rejected" differently and both
+ * paths are worth being able to exercise.
+ */
+function handleOauthRoutes(method: string, segments: string[], body: unknown): Reply {
+  if (segments[1] !== "token") return unknownRoute();
+  if (method !== "POST") return methodNotAllowed();
+
+  // Discord takes this endpoint as form-encoded, which is what the callback sends.
+  const form = body as Record<string, string> | null;
+  const code = form?.code ?? "";
+  const grantType = form?.grant_type ?? "";
+
+  if (grantType !== "authorization_code") {
+    return { status: 400, body: { error: "unsupported_grant_type" } };
+  }
+  if (!form?.client_id || !form?.client_secret) {
+    return { status: 401, body: { error: "invalid_client" } };
+  }
+
+  const issued = state.oauthCodes[code];
+  if (!issued) {
+    // What a replayed or forged code looks like. The callback surfaces this as "installation links
+    // can only be used once" rather than as an outage, so it must be a 400 and not a 5xx.
+    return { status: 400, body: { error: "invalid_grant" } };
+  }
+  // Single-use, like the real thing: redeeming it twice is the replay the callback refuses.
+  delete state.oauthCodes[code];
+
+  if (issued.guildId === null) {
+    // A grant that carried no `bot` scope, so there is no guild to claim. The callback rejects this
+    // rather than falling back to the `guild_id` query parameter.
+    return { status: 200, body: { token_type: "Bearer", access_token: "mock-access-token", scope: "identify" } };
+  }
+
+  const guild = state.guilds[issued.guildId];
+  return {
+    status: 200,
+    body: {
+      token_type: "Bearer",
+      access_token: "mock-access-token",
+      scope: "bot applications.commands",
+      guild: { id: issued.guildId, name: guild?.name ?? "Mock Guild" }
+    }
+  };
+}
+
 function routeDiscord(method: string, path: string, body: unknown, query: Record<string, string>): Reply {
   const segments = path.split("/").filter((segment) => segment !== "");
   if (segments.length === 0) return unknownRoute();
@@ -647,6 +704,8 @@ function routeDiscord(method: string, path: string, body: unknown, query: Record
       return segments.length >= 2 ? handleUserRoutes(method, segments, query) : unknownRoute();
     case "applications":
       return segments.length >= 2 ? handleApplicationRoutes(method, segments, body) : unknownRoute();
+    case "oauth2":
+      return segments.length >= 2 ? handleOauthRoutes(method, segments, body) : unknownRoute();
     default:
       return unknownRoute();
   }
@@ -658,7 +717,16 @@ function routeDiscord(method: string, path: string, body: unknown, query: Record
 
 function skeletonState(): MockState {
   const empty = defaultState();
-  return { ...empty, scenario: "custom", faults: [], guilds: {}, invites: {}, messages: {}, commands: [] };
+  return {
+    ...empty,
+    scenario: "custom",
+    faults: [],
+    guilds: {},
+    invites: {},
+    messages: {},
+    commands: [],
+    oauthCodes: {}
+  };
 }
 
 function routeControl(method: string, path: string, body: unknown): Reply {
@@ -677,6 +745,25 @@ function routeControl(method: string, path: string, body: unknown): Reply {
         guilds: Object.keys(state.guilds).length
       }
     };
+  }
+
+  /**
+   * Mint an OAuth authorization code, standing in for a completed consent screen.
+   *
+   * `POST /__mock/oauth-code {"guild_id": "…"}` -> `{"code": "…"}`. Pass `guild_id: null` for a grant
+   * that carried no `bot` scope, which is the case the install callback has to refuse.
+   */
+  if (resource === "oauth-code" && method === "POST") {
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return { status: 400, body: { error: "Body must be a JSON object" } };
+    }
+    const requested = (body as { guild_id?: unknown }).guild_id;
+    if (requested !== null && typeof requested !== "string") {
+      return { status: 400, body: { error: "guild_id must be a string or null" } };
+    }
+    const code = `mockcode${nextSnowflake()}`;
+    state.oauthCodes[code] = { guildId: requested };
+    return { status: 200, body: { code, guild_id: requested } };
   }
 
   if (resource === "reset" && method === "POST") {
@@ -751,6 +838,18 @@ function readBody(request: IncomingMessage): Promise<{ raw: string; parsed: unkn
       const raw = Buffer.concat(chunks).toString("utf8");
       if (raw.trim() === "") {
         resolve({ raw, parsed: undefined, malformed: false });
+        return;
+      }
+      // Discord's /oauth2/token is form-encoded, unlike every other endpoint here. Parsed by
+      // content-type rather than by sniffing, so a JSON body that happens to look form-ish is still
+      // treated as malformed JSON.
+      const contentType = request.headers["content-type"] ?? "";
+      if (contentType.includes("application/x-www-form-urlencoded")) {
+        const form: Record<string, string> = {};
+        new URLSearchParams(raw).forEach((value, key) => {
+          form[key] = value;
+        });
+        resolve({ raw, parsed: form, malformed: false });
         return;
       }
       try {

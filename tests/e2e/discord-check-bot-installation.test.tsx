@@ -60,6 +60,8 @@ type CheckResponse = {
   can_manage_class_roles: boolean;
   bot_role_position: number | null;
   highest_class_role_position: number | null;
+  /** Tracked roles the guild no longer has. */
+  stale_class_role_ids: string[];
   install_url: string;
 };
 
@@ -435,10 +437,14 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(guildCall?.status).toBe(429);
   });
 
-  test("a discord_roles row naming a role the guild no longer has is skipped, not counted at 0", async () => {
-    // Somebody deleted the role in Discord. Pinning the orphan at position 0 would make the server
-    // look manageable for the wrong reason (0 < 10 for any bot), so those rows are dropped and the
-    // remaining live roles decide the answer.
+  test("a discord_roles row naming a role the guild no longer has is reported, not silently skipped", async () => {
+    // Somebody deleted the role in Discord. Two separate things have to be true. The orphan must not
+    // enter the hierarchy comparison -- pinning it at position 0 would make the server look
+    // manageable for the wrong reason, since 0 < 10 for any bot -- AND it has to be reported, because
+    // the surviving discord_roles row is doing active harm: every assignment of that snowflake 404s,
+    // and the row's existence is what stops the ordinary create-role path from replacing it. Dropping
+    // it from the hierarchy check while saying nothing is what let a class with a broken role read as
+    // fully healthy.
     await applyScenarioForGuilds("healthy", [GUILD_ID]);
     const orphan = "1209999999999999999";
     const roles = untypedTable(supabase, "discord_roles");
@@ -459,6 +465,11 @@ test.describe("discord-check-bot-installation edge function", () => {
     // blocked — canManageRoles returns true for an empty list.
     expect(body.highest_class_role_position).toBeNull();
     expect(body.can_manage_class_roles).toBe(true);
+    // The part that stops this reading as healthy.
+    expect(body.stale_class_role_ids).toEqual([orphan]);
+
+    // And the converse: with the fixture's live roles restored, nothing is reported stale. Without
+    // this the assertion above would still pass if the field simply listed every tracked role.
 
     // Restore the fixture for anything that runs after this.
     await roles.delete().eq("class_id", classAId);
@@ -467,5 +478,8 @@ test.describe("discord-check-bot-installation edge function", () => {
       { class_id: classAId, discord_role_id: GRADER_ROLE_ID, role_type: "grader" },
       { class_id: classAId, discord_role_id: INSTRUCTOR_ROLE_ID, role_type: "instructor" }
     ]);
+
+    const { data: healthy } = await check(instructorA, classAId);
+    expect((healthy as CheckResponse).stale_class_role_ids).toEqual([]);
   });
 });

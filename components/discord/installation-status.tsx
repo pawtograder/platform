@@ -19,11 +19,12 @@ import { BsArrowRepeat, BsDiscord } from "react-icons/bs";
  * the worst possible diagnostic surface: an instructor whose roles never synced had no way to tell a
  * wrong id from a missing permission from the role-hierarchy trap below.
  *
- * The four states are deliberately distinct remediations rather than degrees of the same warning:
+ * The states are deliberately distinct remediations rather than degrees of the same warning:
  *
  *   - not installed        -> add the bot (this is also the initial state for every class)
  *   - missing permissions  -> re-authorize, and here is exactly which ones
  *   - role hierarchy       -> drag the bot's role above the class roles; permissions are fine
+ *   - stale tracked role   -> re-sync; the fix is on Pawtograder's side, not in Discord
  *   - healthy              -> who connected it, and when
  *
  * The third is the point of the panel. Discord reports "cannot assign a role positioned above me"
@@ -196,6 +197,12 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
   if (!status.can_manage_class_roles) {
     return "The Pawtograder bot's role sits too low in the Discord server to assign the course's roles.";
   }
+  if (status.stale_class_role_ids.length > 0) {
+    const n = status.stale_class_role_ids.length;
+    return `The Pawtograder bot is installed, but ${n} tracked role${n === 1 ? "" : "s"} no longer exist${
+      n === 1 ? "s" : ""
+    } in the Discord server.`;
+  }
   return `The Pawtograder bot is installed and healthy in ${status.guild_name ?? "the connected server"}.`;
 }
 
@@ -218,6 +225,12 @@ function StatusBody({
   }
   if (!status.can_manage_class_roles) {
     return <RoleHierarchyProblem status={status} />;
+  }
+  // Checked before Healthy: permissions and hierarchy are fine, so every other signal says the
+  // install works, and it does -- for every role except the deleted one. Reporting this as healthy is
+  // what let a class sit with a role that silently 404s on every assignment.
+  if (status.stale_class_role_ids.length > 0) {
+    return <StaleClassRoles status={status} provenance={provenance} classId={classId} canManage={canManage} />;
   }
   return <Healthy status={status} provenance={provenance} classId={classId} canManage={canManage} />;
 }
@@ -388,14 +401,70 @@ function DisconnectButton({ classId, guildName }: { classId: number; guildName: 
           </Button>
         }
         confirmHeader="Disconnect Discord"
-        confirmText={`This releases ${
+        // Deliberately does not claim the Discord roles and channels are deleted. Disconnecting drops
+        // Pawtograder's *tracking* of them; the roles and channels themselves stay in the server, and
+        // so does everyone's membership. That matches what moving a course to a different server
+        // already does, and saying otherwise would have been the one sentence here that was false.
+        confirmText={`Pawtograder will stop managing ${
           guildName ?? "the connected server"
-        } and deletes the roles, channels and tracked messages Pawtograder created in it. Students already in the server stay in it. You can reconnect later.`}
+        } and will forget the roles and channels it created there. Those roles and channels are left in the server for you to delete, and nobody is removed from it. You can reconnect later.`}
         onConfirm={async () => {
           formRef.current?.submit();
         }}
       />
     </>
+  );
+}
+
+/**
+ * Installed and permitted, but Pawtograder is tracking a role Discord no longer has.
+ *
+ * Rendered as a warning over the healthy panel rather than instead of it: everything the healthy
+ * panel says is still true, and the remaining roles keep working. What is broken is one snowflake,
+ * and the fix is on the Pawtograder side (re-sync so the dead row is replaced), not in Discord.
+ */
+function StaleClassRoles({
+  status,
+  provenance,
+  classId,
+  canManage
+}: {
+  status: CheckBotInstallationResponse;
+  provenance: Provenance | null;
+  classId: number;
+  canManage: boolean;
+}) {
+  const count = status.stale_class_role_ids.length;
+  return (
+    <VStack align="stretch" gap={3}>
+      <Alert
+        status="warning"
+        title={
+          count === 1
+            ? "One tracked role no longer exists in Discord"
+            : `${count} tracked roles no longer exist in Discord`
+        }
+      >
+        <VStack align="stretch" gap={2}>
+          <Text>
+            Pawtograder still has {count === 1 ? "a role" : "roles"} recorded for this course that{" "}
+            {count === 1 ? "has" : "have"} been deleted in{" "}
+            <Text as="span" fontWeight="semibold">
+              {status.guild_name ?? "the connected server"}
+            </Text>
+            . Assigning {count === 1 ? "it" : "them"} will keep failing, and the stale record stops a replacement from
+            being created.
+          </Text>
+          <Text fontSize="sm" color="fg.muted">
+            Deleted role {count === 1 ? "ID" : "IDs"}: <Code>{status.stale_class_role_ids.join(", ")}</Code>
+          </Text>
+          {canManage && (
+            <Text fontSize="sm">Use “Sync Roles” below to recreate the missing {count === 1 ? "role" : "roles"}.</Text>
+          )}
+        </VStack>
+      </Alert>
+      <Healthy status={status} provenance={provenance} classId={classId} canManage={canManage} />
+    </VStack>
   );
 }
 

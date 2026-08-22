@@ -1,20 +1,27 @@
 /**
  * Finish the Discord bot install and record the class's claim on the guild.
  *
- * Discord returns the browser here after the instructor adds the bot, with `guild_id`, `permissions`
- * and the `state` we minted in `app/api/discord/install/route.ts`. None of that is evidence on its
- * own -- the whole query string is attacker-authorable, since it arrives as a plain GET the
- * instructor's browser can be pointed at -- so every step below fails closed and the claim only
- * happens once all four have passed:
+ * Discord returns the browser here after the instructor adds the bot, with `code`, `guild_id`,
+ * `permissions` and the `state` we minted in `app/api/discord/install/route.ts`. Almost none of that
+ * is evidence on its own -- the query string is attacker-authorable, since it arrives as a plain GET
+ * the instructor's browser can be pointed at -- so every step below fails closed and the claim only
+ * happens once all five have passed:
  *
  *   1. the state verifies (signature, expiry) and its nonce matches this browser's cookie,
  *   2. the caller is *still* an instructor of the class in the state,
- *   3. the bot token can see `guild_id`, and
- *   4. claim_discord_guild() accepts the pair.
+ *   3. the authorization `code` redeems, and the guild is taken from Discord's token response,
+ *   4. the bot token can see that guild, and
+ *   5. claim_discord_guild() accepts the pair.
  *
  * Step 2 is not redundant with step 1. The state proves the flow was started for this class by this
  * user; it says nothing about whether that is still true ten minutes later, and an enrollment can be
  * disabled in between.
+ *
+ * Step 3 is not redundant with step 4, and is the one that makes the guild trustworthy. One bot token
+ * serves every course, so step 4 would happily confirm any guild the bot already sits in -- which is
+ * every guild any course has ever connected. Only the authorization code ties this callback to the
+ * consent screen the instructor actually completed. `guild_id` from the query string is used for
+ * cross-checking and logging, never to decide what is claimed.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
@@ -26,7 +33,7 @@ import {
   DISCORD_INSTALL_NONCE_COOKIE_PATH,
   verifyInstallState
 } from "@/lib/discordInstallState";
-import { lookupGuildAsBot, manageDiscordPageUrl, redirectOrigin } from "@/lib/discordInstall";
+import { exchangeInstallCode, lookupGuildAsBot, manageDiscordPageUrl, redirectOrigin } from "@/lib/discordInstall";
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +74,10 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const stateParam = searchParams.get("state");
+  // Read for cross-checking and logging only. The guild that actually gets claimed comes from the
+  // authorization-code exchange further down, never from here.
   const guildId = searchParams.get("guild_id");
+  const code = searchParams.get("code");
   const oauthError = searchParams.get("error");
   const oauthErrorDescription = searchParams.get("error_description");
 
@@ -173,20 +183,51 @@ export async function GET(request: NextRequest) {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. Confirm with the bot token that the bot really is in the guild
+  // 3. Redeem the authorization code, and take the guild from Discord's answer
   // ---------------------------------------------------------------------------
 
-  // Discord sends guild_id only for a bot install that completed. Its absence usually means the
-  // consent screen was finished without adding the bot to a server.
-  if (!guildId || !/^\d{17,20}$/.test(guildId)) {
-    scope.setTag("error_type", "missing_guild_id");
+  // The `guild_id` query parameter is NOT used to decide what gets claimed. It arrives in a URL the
+  // instructor's browser can be handed by anyone, and the bot-token lookup below would confirm any
+  // guild the shared bot already sits in -- which is every guild any course has ever connected. The
+  // authorization code is the only part of this redirect that Discord issued to the browser that
+  // actually completed the consent screen, so the guild named in the token response is the one the
+  // instructor demonstrably installed into. See exchangeInstallCode().
+  if (!code) {
+    scope.setTag("error_type", "missing_code");
     return fail(
-      "Discord did not report which server the bot was added to. Try again and make sure you pick a server on the authorization screen."
+      "Discord did not return an authorization for this installation. Try again from the course settings page."
     );
   }
-  scope.setTag("discord_guild_id", guildId);
 
-  const lookup = await lookupGuildAsBot(guildId);
+  const exchange = await exchangeInstallCode(code, request);
+  if (exchange.outcome === "rejected") {
+    scope.setTag("error_type", "code_rejected");
+    return fail(
+      `Discord would not confirm this installation (${exchange.detail}). Installation links can only be used once — start again from the course settings page.`
+    );
+  }
+  if (exchange.outcome === "unavailable") {
+    scope.setTag("error_type", "code_exchange_unavailable");
+    Sentry.captureMessage(`Discord install code exchange failed: ${exchange.detail}`, { level: "warning" });
+    return fail(
+      "Discord could not be reached to confirm the installation, so nothing was recorded. The bot may well have been added — reload this page in a moment to check before trying again."
+    );
+  }
+
+  const authorizedGuildId = exchange.guildId;
+  scope.setTag("discord_guild_id", authorizedGuildId);
+
+  // A mismatch is not fatal -- the exchange wins either way -- but it means someone edited the
+  // redirect, so it is worth recording rather than silently discarding.
+  if (guildId && guildId !== authorizedGuildId) {
+    scope.setTag("error_type", "guild_id_mismatch");
+    Sentry.captureMessage(
+      `Discord install callback guild_id (${guildId}) did not match the authorized guild (${authorizedGuildId}); using the authorized one`,
+      { level: "warning" }
+    );
+  }
+
+  const lookup = await lookupGuildAsBot(authorizedGuildId);
   if (lookup.outcome === "absent") {
     scope.setTag("error_type", "bot_not_in_guild");
     return fail(
@@ -223,7 +264,7 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient() as any;
   const { data, error } = (await admin.rpc("claim_discord_guild", {
     p_class_id: classId,
-    p_guild_id: guildId,
+    p_guild_id: authorizedGuildId,
     p_claimed_by: user.id
   })) as { data: ClaimRow[] | null; error: { message: string; code?: string } | null };
 
@@ -252,14 +293,18 @@ export async function GET(request: NextRequest) {
     }
     scope.setTag("error_type", "claim_failed");
     Sentry.captureException(new Error(`claim_discord_guild failed: ${error.message}`), scope);
-    return fail(`The Discord server could not be connected: ${error.message}`);
+    // Deliberately not `error.message`. Anything reaching here is an unrecognised Postgres error,
+    // whose text names functions, constraints and columns, and this string is rendered on the
+    // settings page *and* left in the URL -- so it also lands in browser history and any referrer
+    // log. The detail is in Sentry above, which is where it is useful.
+    return fail("The Discord server could not be connected. The error has been reported.");
   }
 
   const claim = data?.[0];
-  const moved = !!claim?.previous_guild_id && claim.previous_guild_id !== guildId;
+  const moved = !!claim?.previous_guild_id && claim.previous_guild_id !== authorizedGuildId;
   // eslint-disable-next-line no-console
   console.log(
-    `[discord install] class ${classId} claimed guild ${guildId} (${lookup.name ?? "unnamed"}) by ${user.id}${
+    `[discord install] class ${classId} claimed guild ${authorizedGuildId} (${lookup.name ?? exchange.guildName ?? "unnamed"}) by ${user.id}${
       moved ? `, replacing ${claim?.previous_guild_id}` : ""
     }`
   );

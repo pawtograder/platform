@@ -174,9 +174,12 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     // opens a browser. The default 60s hook timeout is shorter than that queue, and the failure it
     // produces ("beforeAll hook timeout") looks nothing like the contention that caused it.
     test.setTimeout(300_000);
-    mockUp = (await discordMockReachable()) && discordApiIsMocked();
-    if (!mockUp) return;
+    // `mockUp` is what afterAll releases the lock on, so it is set AFTER the lock is actually held.
+    // Setting it first meant a takeDiscordMock() that timed out still ran the release path, and this
+    // file would then delete a lock another spec file holds.
+    if (!((await discordMockReachable()) && discordApiIsMocked())) return;
     await takeDiscordMock();
+    mockUp = true;
 
     const clsSync = await createClass({ name: `E2E DiscordEnroll Sync ${RUN_PREFIX}` });
     syncClassId = clsSync.id;

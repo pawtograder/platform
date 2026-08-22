@@ -585,9 +585,22 @@ the chart's `auth.yaml`):
   it the "Add Pawtograder to your Discord server" button 500s.
 - `DISCORD_BOT_TOKEN` — the bot token. Required by
   `/api/discord/install/callback`, which calls `GET /guilds/{id}` with it to
-  confirm the bot really is in the server the instructor picked before recording
-  the claim. Without it no installation can be confirmed and no server can be
-  connected.
+  confirm the bot is in the server _now_ before recording the claim. Without it
+  no installation can be confirmed and no server can be connected.
+- `DISCORD_OAUTH_CLIENT_ID` / `DISCORD_OAUTH_CLIENT_SECRET` — the application's
+  OAuth2 credentials (the client id is the same value as
+  `DISCORD_APPLICATION_ID`; the secret is its own credential and is **not** the
+  bot token). Required by `/api/discord/install/callback` to redeem the
+  authorization code.
+
+  This is the step that makes the claimed server trustworthy, so treat it as
+  required rather than optional. One bot token serves every course on the
+  deployment, so the `GET /guilds/{id}` check above confirms any server the bot
+  already sits in — which is every server any course has ever connected. Only
+  the authorization code ties the callback to the consent screen the instructor
+  actually completed; without these two set, the exchange cannot run and no
+  server can be connected.
+
 - (Optional) `DISCORD_INSTALL_STATE_SECRET` — HMAC key for the signed `state` on
   the install round-trip. Falls back to `SUPABASE_SERVICE_ROLE_KEY`, which the
   callback needs anyway; set this to rotate the two independently.

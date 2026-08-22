@@ -20,7 +20,7 @@
  *     the status code readable, so those two are called with plain `fetch`.
  */
 
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -98,7 +98,19 @@ export async function discordMockReachable(): Promise<boolean> {
  */
 export function discordApiIsMocked(): boolean {
   const base = process.env.DISCORD_API_BASE_URL ?? "";
-  return base !== "" && !base.includes("discord.com");
+  if (base === "") return false;
+  // Compared as a parsed host, not as a substring. `base.includes("discord.com")` also matches
+  // `discord.com.example.test` and `http://mock/?upstream=discord.com`, so it could call a run
+  // mocked when it was pointed at a host that merely mentions Discord -- and the assertions here
+  // would then be made against whatever answered.
+  let host: string;
+  try {
+    host = new URL(base).hostname.toLowerCase();
+  } catch {
+    // An unparseable base is not a mock we can vouch for; skip rather than assert.
+    return false;
+  }
+  return host !== "discord.com" && !host.endsWith(".discord.com");
 }
 
 // ============================================================================
@@ -106,8 +118,34 @@ export function discordApiIsMocked(): boolean {
 // ============================================================================
 
 const LOCK_PATH = path.join(os.tmpdir(), "pawtograder-discord-mock.lock");
+/** The token of whoever currently holds the lock, written by the acquirer. */
+const LOCK_OWNER_PATH = path.join(LOCK_PATH, "owner");
 /** A holder that has not touched the lock in this long has died; its lock is taken. */
 const LOCK_STALE_MS = 5 * 60_000;
+
+/**
+ * This process's claim on the lock, or null when it holds nothing.
+ *
+ * The lock needs an owner because it is also breakable. Without one: worker A decides B's lock is
+ * stale and takes it, and then B's `afterAll` deletes the directory -- which is now A's lock -- and
+ * a third worker walks straight into the scenario A is halfway through. So every mutation of the
+ * lock is guarded by "is the token in there still mine", and release is a no-op when it is not.
+ */
+let lockToken: string | null = null;
+
+function readLockOwner(): string | null {
+  try {
+    return fs.readFileSync(LOCK_OWNER_PATH, "utf8").trim();
+  } catch {
+    // No directory, or no owner file yet: not a lock this process can claim to hold.
+    return null;
+  }
+}
+
+/** Whether this process is the current holder. */
+export function holdsDiscordMockLock(): boolean {
+  return lockToken !== null && readLockOwner() === lockToken;
+}
 
 async function acquireDiscordMockLock(timeoutMs = 300_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -116,11 +154,21 @@ async function acquireDiscordMockLock(timeoutMs = 300_000): Promise<void> {
       // mkdir is the atomic primitive here: it fails if the directory exists, which is exactly the
       // test-and-set a lock needs and which writing a file does not give.
       fs.mkdirSync(LOCK_PATH);
+      // Taking the lock and taking ownership of it are the same act, including when the directory
+      // was just broken open as stale: the breaker loops back to this mkdir and stamps its own
+      // token, so the previous holder can no longer release what it lost.
+      const token = `${process.pid}-${randomUUID()}`;
+      fs.writeFileSync(LOCK_OWNER_PATH, token);
+      lockToken = token;
       return;
     } catch {
       try {
         const stat = fs.statSync(LOCK_PATH);
         if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[discord-mock] breaking a stale lock at ${LOCK_PATH} (owner ${readLockOwner() ?? "unknown"}, idle ${Math.round((Date.now() - stat.mtimeMs) / 1000)}s)`
+          );
           fs.rmSync(LOCK_PATH, { recursive: true, force: true });
           continue;
         }
@@ -138,16 +186,27 @@ async function acquireDiscordMockLock(timeoutMs = 300_000): Promise<void> {
 
 /** Keep the lock from looking stale during a long file. Cheap enough to call per test. */
 export function touchDiscordMockLock(): void {
+  // Only our own lock. Refreshing somebody else's mtime would keep a dead holder's lock alive past
+  // the point where breaking it is the right answer.
+  if (!holdsDiscordMockLock()) return;
   try {
     const now = new Date();
     fs.utimesSync(LOCK_PATH, now, now);
   } catch {
-    // Not holding it (or already released): nothing to keep alive.
+    // Released underneath us between the check and here: nothing to keep alive.
   }
 }
 
 export function releaseDiscordMockLock(): void {
+  if (lockToken === null) return;
+  if (readLockOwner() !== lockToken) {
+    // Either already released, or broken as stale and re-taken by somebody else. Deleting it now
+    // would hand the mock to a third process while that owner is still driving it.
+    lockToken = null;
+    return;
+  }
   fs.rmSync(LOCK_PATH, { recursive: true, force: true });
+  lockToken = null;
 }
 
 /** Take the mock for the calling spec file. Pair with `releaseDiscordMockLock()` in `afterAll`. */
@@ -171,8 +230,24 @@ export async function takeDiscordMock(): Promise<void> {
 function cloneGuild(guild: MockGuild, targetId: string): MockGuild {
   const suffix = targetId.slice(-4);
   const channelIds = new Map<string, string>();
-  for (const channel of guild.channels) {
-    channelIds.set(channel.id, channel.id.slice(0, -suffix.length) + suffix);
+  guild.channels.forEach((channel, index) => {
+    // The ordinal is what makes this injective, and it is not optional. Rewriting only the last four
+    // characters collapsed the two default channels onto ONE id: CATEGORY_CHANNEL_ID
+    // (…0000000002) and GENERAL_CHANNEL_ID (…0000000001) differ only in their last digit, so both
+    // mapped to the same clone. `findChannel` returns the first match across every guild, so the
+    // clone's "general" channel and its category were the same channel -- a category, type 4, for
+    // anything that looked one of them up.
+    const ordinal = String(index).padStart(2, "0");
+    channelIds.set(channel.id, channel.id.slice(0, -(ordinal.length + suffix.length)) + ordinal + suffix);
+  });
+  // Asserted rather than reasoned about, so a default channel added later cannot quietly bring the
+  // collision back: two channels sharing an id in this mock is not a test failure with an obvious
+  // cause, it is a channel lookup that silently answers about the wrong channel.
+  const distinct = new Set(channelIds.values());
+  if (distinct.size !== channelIds.size) {
+    throw new Error(
+      `cloneGuild(${guild.id} -> ${targetId}) produced colliding channel ids: ${JSON.stringify([...channelIds])}`
+    );
   }
   return {
     ...guild,

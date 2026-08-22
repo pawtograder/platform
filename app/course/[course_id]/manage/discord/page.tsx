@@ -187,8 +187,9 @@ export default function DiscordManagementPage() {
       {disconnectOutcome === "1" && !installError && (
         <Alert status="success" title="Discord server disconnected">
           <Text>
-            This course no longer has a Discord server. The roles, channels and tracked messages Pawtograder created
-            there have been dropped. Anyone already in the server stays in it — Discord memberships are not revoked.
+            This course no longer has a Discord server. Pawtograder has forgotten the roles and channels it created
+            there; those still exist in Discord and can be deleted by a server administrator. Nobody was removed from
+            the server.
           </Text>
         </Alert>
       )}
