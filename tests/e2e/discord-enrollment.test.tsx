@@ -73,20 +73,25 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const SYNC_GUILD = randomGuildId();
   const RECON_GUILD = randomGuildId();
   const STORM_GUILD = randomGuildId();
-  const ALL_GUILDS = [SYNC_GUILD, RECON_GUILD, STORM_GUILD];
+  /** Its own guild, because the invite-fallback test applies a scenario with denied channel overwrites. */
+  const INVITE_GUILD = randomGuildId();
+  const ALL_GUILDS = [SYNC_GUILD, RECON_GUILD, STORM_GUILD, INVITE_GUILD];
 
   // Distinct per user: lookupUserIdByDiscordId() uses `.single()`, so two platform users sharing a
   // Discord id would make the worker's reverse lookup fail rather than pick one.
   const SYNC_DISCORD_ID = randomDiscordUserId();
   const RECON_DISCORD_ID = randomDiscordUserId();
   const STORM_DISCORD_ID = randomDiscordUserId();
+  const INVITE_DISCORD_ID = randomDiscordUserId();
 
   let syncClassId: number;
   let reconClassId: number;
   let stormClassId: number;
+  let inviteClassId: number;
   let syncStudent: TestingUser;
   let reconStudent: TestingUser;
   let stormStudent: TestingUser;
+  let inviteStudent: TestingUser;
   let mockUp = false;
 
   const membership = () => untypedTable(supabase, "discord_membership_status");
@@ -207,10 +212,23 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
       email: `e2e-denroll-storm-${SAFE_ID}@pawtograder.net`
     });
 
+    const inviteClass = await createClass({ name: `E2E DiscordEnroll Invite ${RUN_PREFIX}` });
+    inviteClassId = inviteClass.id;
+    inviteStudent = await createUserInClass({
+      role: "student",
+      class_id: inviteClassId,
+      name: `DiscordEnroll Invite ${RUN_PREFIX}`,
+      email: `e2e-denroll-invite-${SAFE_ID}@pawtograder.net`
+    });
+
     await connectClass(syncClassId, SYNC_GUILD);
     await connectClass(reconClassId, RECON_GUILD);
     await connectClass(stormClassId, STORM_GUILD);
 
+    await connectClass(inviteClassId, INVITE_GUILD);
+    // Deliberately NOT added to the mock guild: ensureInviteForUser only runs for a student the
+    // membership check reports as absent.
+    await linkDiscord(inviteStudent, INVITE_DISCORD_ID);
     await linkDiscord(syncStudent, SYNC_DISCORD_ID);
     await linkDiscord(reconStudent, RECON_DISCORD_ID);
     await linkDiscord(stormStudent, STORM_DISCORD_ID);
@@ -442,6 +460,61 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
       .eq("class_id", reconClassId)
       .eq("user_id", reconStudent.user_id);
     await membership().delete().eq("class_id", reconClassId);
+  });
+
+  test("an invite falls back to the next channel when the first refuses it", async () => {
+    // The defect this covers: createGuildInvite used to take the FIRST visible text channel and give
+    // up if the POST failed. Discord layers per-channel overwrites on top of guild-level permissions,
+    // and GET /guilds/{id}/channels only hides channels the bot cannot SEE -- a channel that denies
+    // only CREATE_INSTANT_INVITE stays in the list and is a trap. Since invites are the enrollment
+    // mechanism (add_guild_member was removed from this branch, so students join by clicking a link),
+    // one restrictive channel meant nobody in the course could be invited.
+    //
+    // The `channel-invite-denied` scenario is built for exactly this: guild-level permissions are
+    // complete, #general denies Create Invite by overwrite, and a second text channel allows it.
+    await applyScenarioForGuilds("channel-invite-denied", [INVITE_GUILD]);
+
+    // The student must be linked, NOT in the guild, and the course must allow student invitations --
+    // ensureInviteForUser returns "not_offered" without the feature flag and never reaches Discord.
+    const { error: featureError } = await supabase
+      .from("classes")
+      .update({ features: [{ name: "discord-student-join", enabled: true }] })
+      .eq("id", inviteClassId);
+    expect(featureError, "enabling student Discord invitations").toBeNull();
+
+    await drainQueue();
+    await clearCalls();
+    await enqueueRoleSync(inviteStudent.user_id, inviteClassId);
+    const response = await invokeEdgeFunction("discord-async-worker");
+    expect(response.status).toBe(200);
+
+    // The invite exists, which is the outcome that matters.
+    let invite: unknown = null;
+    for (let attempt = 0; attempt < 30 && !invite; attempt += 1) {
+      const invites = Object.values((await getState()).invites ?? {});
+      invite = invites.find((candidate) => candidate.guild_id === INVITE_GUILD) ?? null;
+      if (!invite) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    expect(invite, `no invite was created in ${INVITE_GUILD}`).toBeTruthy();
+
+    // And the route it took, which is what distinguishes a fallback from the first channel simply
+    // having worked. Both POSTs must be present: a refusal followed by a success.
+    const invitePosts = (await getCalls()).filter(
+      (call) => call.method === "POST" && /^\/channels\/\d+\/invites$/.test(call.path)
+    );
+    expect(invitePosts.length, "expected a refused attempt and then a successful one").toBeGreaterThanOrEqual(2);
+    expect(invitePosts.some((call) => call.status === 403 && call.code === 50013)).toBe(true);
+    expect(invitePosts.some((call) => call.status === 200 || call.status === 201)).toBe(true);
+    // The successful one is not the channel that refused.
+    const refused = invitePosts.find((call) => call.status === 403)?.path;
+    const succeeded = invitePosts.find((call) => call.status === 200 || call.status === 201)?.path;
+    expect(succeeded).not.toBe(refused);
+
+    // The student is recorded as invited rather than cannot_invite -- the whole point of the fallback.
+    const row = await membershipRow(inviteClassId, inviteStudent.user_id);
+    expect(row?.state, "a successful fallback must not record cannot_invite").not.toBe("cannot_invite");
+
+    await supabase.from("classes").update({ features: null }).eq("id", inviteClassId);
   });
 
   // ---------------------------------------------------------------------------

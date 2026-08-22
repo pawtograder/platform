@@ -7,7 +7,12 @@ import {
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
-import { clearCalls, getCalls } from "@/tests/mocks/discord/client";
+import { clearCalls, getCalls, setState } from "@/tests/mocks/discord/client";
+// The mock rewrites channel ids when it clones a scenario's guild under this run's guild id (see
+// cloneGuild in discordMockUtils), so the constants for #general and #announcements would name the
+// TEMPLATE guild's channels, not this class's. The cloned ids are read out of the returned state by
+// name instead, which is why only the type is imported here.
+import type { MockState } from "@/tests/mocks/discord/state";
 import {
   GRADER_ROLE_ID,
   INSTRUCTOR_ROLE_ID,
@@ -30,7 +35,8 @@ import {
 //
 // Request:  { class_id }
 // Response: { installed, guild_id, guild_name, missing_permissions, can_manage_class_roles,
-//             bot_role_position, highest_class_role_position, install_url }
+//             bot_role_position, highest_class_role_position, stale_class_role_ids,
+//             channel_permission_problems, can_create_invites, install_url }
 // Authz:    caller must be an instructor in `class_id`.
 //
 // UNLIKE its GitHub twin (tests/e2e/github-check-app-installation.test.tsx), the Discord-dependent
@@ -62,6 +68,10 @@ type CheckResponse = {
   highest_class_role_position: number | null;
   /** Tracked roles the guild no longer has. */
   stale_class_role_ids: string[];
+  /** Tracked channels where a per-channel or per-category overwrite blocks the bot. */
+  channel_permission_problems: { channel_id: string; channel_name: string | null; missing: string[] }[];
+  /** False when no visible text channel permits Create Invite. */
+  can_create_invites: boolean;
   install_url: string;
 };
 
@@ -319,10 +329,17 @@ test.describe("discord-check-bot-installation edge function", () => {
       expect.arrayContaining([
         `GET /guilds/${GUILD_ID}`,
         `GET /guilds/${GUILD_ID}/members/@me`,
-        `GET /guilds/${GUILD_ID}/roles`
+        `GET /guilds/${GUILD_ID}/roles`,
+        // One request for the whole channel audit: GET /guilds/{id}/channels carries every channel's
+        // permission_overwrites inline, so the per-channel answer costs no per-channel fan-out.
+        `GET /guilds/${GUILD_ID}/channels`
       ])
     );
+    expect(calls.filter((c) => c.path === `/guilds/${GUILD_ID}/channels`)).toHaveLength(1);
     expect(calls.every((c) => c.status === 200)).toBe(true);
+    // Nothing is denied per channel, and #general permits Create Invite, so students can be invited.
+    expect(body.channel_permission_problems).toEqual([]);
+    expect(body.can_create_invites).toBe(true);
   });
 
   test("bot-not-in-guild: not installed, and the install URL is pinned to the configured guild", async () => {
@@ -481,5 +498,184 @@ test.describe("discord-check-bot-installation edge function", () => {
 
     const { data: healthy } = await check(instructorA, classAId);
     expect((healthy as CheckResponse).stale_class_role_ids).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // The channel layer — per-channel and per-category overwrites
+  //
+  // Discord resolves permissions in two layers, and every test above reads only the first one. A
+  // guild can grant Send Messages to everyone and deny it in `#general`, or deny Create Invite in the
+  // channel the enrollment path reaches for, and every assertion above still passes. The assertion
+  // these tests share is that `missing_permissions` stays EMPTY: these are not server-level gaps, they
+  // have a different fix (edit that channel), and folding them together would send an instructor to a
+  // re-authorize button that cannot change a channel overwrite.
+  // ---------------------------------------------------------------------------
+
+  /** A cloned guild's channel id, looked up by name because cloneGuild rewrites the ids. */
+  function channelIdByName(state: MockState, name: string): string {
+    const channel = state.guilds[GUILD_ID]?.channels.find((c) => c.name === name);
+    if (!channel) {
+      throw new Error(`the mock's clone of guild ${GUILD_ID} has no channel named "${name}"`);
+    }
+    return channel.id;
+  }
+
+  /** Track a channel for class A the way discord-async-worker does after creating one. */
+  async function trackChannel(channelId: string) {
+    const { error } = await untypedTable(supabase, "discord_channels").insert({
+      class_id: classAId,
+      discord_channel_id: channelId,
+      channel_type: "general"
+    });
+    expect(error, `failed to track channel ${channelId}`).toBeNull();
+  }
+
+  async function untrackChannels() {
+    await untypedTable(supabase, "discord_channels").delete().eq("class_id", classAId);
+  }
+
+  test("channel-send-denied: a tracked channel the bot cannot post in is named, and is NOT a server-level gap", async () => {
+    // Guild-level permissions are complete. #general denies Send Messages to the bot's role by
+    // overwrite, so every notification posted there 403s while the server-level audit stays clean --
+    // which is exactly the state that used to read as "Connected and working".
+    const state = await applyScenarioForGuilds("channel-send-denied", [GUILD_ID]);
+    const generalId = channelIdByName(state, "general");
+    await trackChannel(generalId);
+    await clearCalls();
+
+    try {
+      const { data, error } = await check(instructorA, classAId);
+      expect(error).toBeNull();
+      const body = data as CheckResponse;
+      expect(body.installed).toBe(true);
+      // The assertion that proves the two layers are kept distinct. Nothing is missing server-wide.
+      expect(body.missing_permissions).toEqual([]);
+      expect(body.can_manage_class_roles).toBe(true);
+      expect(body.stale_class_role_ids).toEqual([]);
+      // Named channel, named permission: the remediation is one switch in one channel's settings.
+      expect(body.channel_permission_problems).toEqual([
+        { channel_id: generalId, channel_name: "general", missing: ["Send Messages"] }
+      ]);
+      // Create Invite is untouched here, so enrollment still works. The two channel answers are
+      // separate for that reason.
+      expect(body.can_create_invites).toBe(true);
+
+      const calls = await callsForThisClass();
+      expect(calls.filter((c) => c.path === `/guilds/${GUILD_ID}/channels`)).toHaveLength(1);
+      expect(calls.every((c) => c.status === 200)).toBe(true);
+    } finally {
+      await untrackChannels();
+    }
+  });
+
+  test("channel-send-denied: the same guild with nothing tracked reports no channel problem", async () => {
+    // The scope of `channel_permission_problems` is the class's own channels. A denied channel the
+    // class does not post to is somebody else's business, and reporting it would put a permanent
+    // warning on every course whose server has one locked-down channel.
+    const state = await applyScenarioForGuilds("channel-send-denied", [GUILD_ID]);
+    channelIdByName(state, "general"); // asserts the denied channel is really there
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.channel_permission_problems).toEqual([]);
+    expect(body.can_create_invites).toBe(true);
+  });
+
+  test("channel-invite-denied: one denied text channel does not stop invites when another allows them", async () => {
+    // The first text channel by position denies Create Invite; #announcements allows it. Invites need
+    // ONE usable channel, so the guild can still enroll students and `can_create_invites` stays true.
+    // Reporting false here would send an instructor to fix a channel that is not the problem.
+    const state = await applyScenarioForGuilds("channel-invite-denied", [GUILD_ID]);
+    const generalId = channelIdByName(state, "general");
+    const announcementsId = channelIdByName(state, "announcements");
+    expect(announcementsId).not.toBe(generalId);
+    // Tracked, so the audit definitely looks at the denied channel and still finds nothing to report:
+    // Create Invite is asked of the guild's text channels as a set, not of each tracked channel.
+    await trackChannel(generalId);
+    await clearCalls();
+
+    try {
+      const { data, error } = await check(instructorA, classAId);
+      expect(error).toBeNull();
+      const body = data as CheckResponse;
+      expect(body.installed).toBe(true);
+      // Again: not a server-level gap. The bot holds Create Invite across the guild.
+      expect(body.missing_permissions).toEqual([]);
+      expect(body.can_create_invites).toBe(true);
+      // Posting in #general is unaffected, so there is nothing to report about it either.
+      expect(body.channel_permission_problems).toEqual([]);
+    } finally {
+      await untrackChannels();
+    }
+  });
+
+  test("no-text-channel: a guild with nowhere to invite into cannot enroll anybody", async () => {
+    // The severe half of the channel layer, and the reason it is its own field. Every server-level
+    // permission is held, so `missing_permissions` is empty and the old response would have called
+    // this healthy -- but there is no text channel, so no invite can be created and no student can
+    // reach the server at all.
+    await applyScenarioForGuilds("no-text-channel", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(true);
+    expect(body.missing_permissions).toEqual([]);
+    expect(body.can_manage_class_roles).toBe(true);
+    expect(body.can_create_invites).toBe(false);
+    expect(body.channel_permission_problems).toEqual([]);
+  });
+
+  test("missing-view-channel: a 403 on the channel list is a fact, not a failure", async () => {
+    // The bot cannot see the channel list at all, which Discord answers 403 / 50001. That is terminal
+    // and already named at the server level, so the check keeps the rest of its diagnosis rather than
+    // throwing the whole thing away -- and reports the channel layer as unusable, which it is.
+    await applyScenarioForGuilds("missing-view-channel", [GUILD_ID]);
+    await clearCalls();
+
+    const { data, error } = await check(instructorA, classAId);
+    expect(error).toBeNull();
+    const body = data as CheckResponse;
+    expect(body.installed).toBe(true);
+    expect(body.missing_permissions).toContain("View Channels");
+    expect(body.can_create_invites).toBe(false);
+    // Nothing is claimed about individual channels: their overwrites were never readable.
+    expect(body.channel_permission_problems).toEqual([]);
+
+    const channelsCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}/channels`);
+    expect(channelsCall?.status).toBe(403);
+    expect(channelsCall?.code).toBe(50001);
+  });
+
+  test("a 5xx on the channel list is retryable, and never reported as a channel permission problem", async () => {
+    // The distinction the whole failure-handling discipline in this function exists for. A 503 says
+    // nothing about the guild's channels; answering `can_create_invites: false` on the strength of it
+    // would tell an instructor their server cannot enroll anybody because Discord hiccuped.
+    await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    await setState({ faults: [{ method: "GET", path: "channels$", status: 503 }] });
+    await clearCalls();
+
+    try {
+      const { data, error } = await check(instructorA, classAId);
+      expect(data?.installed).toBeUndefined();
+      expect(error).not.toBeNull();
+      if (error?.context instanceof Response) {
+        // 503 and recoverable: try again, rather than a confident wrong answer about the channels.
+        expect(error.context.status).toBe(503);
+        const payload = (await error.context.json().catch(() => null)) as {
+          error?: { recoverable?: boolean; message?: string };
+        } | null;
+        expect(payload?.error?.recoverable).toBe(true);
+        expect(payload?.error?.message ?? "").toMatch(/channels/i);
+      }
+      const channelsCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}/channels`);
+      expect(channelsCall?.status).toBe(503);
+    } finally {
+      // Faults replace rather than merge, so clearing them is one empty array.
+      await setState({ faults: [] });
+    }
   });
 });

@@ -543,7 +543,13 @@ export type CheckBotInstallationResponse = {
   installed: boolean;
   guild_id: string | null;
   guild_name: string | null;
-  /** Human-readable labels of the required permissions the bot does not hold. */
+  /**
+   * Human-readable labels of the required permissions the bot does not hold **at the server level**.
+   *
+   * Server-level only. Discord layers per-channel and per-category overwrites on top, and those are
+   * reported in `channel_permission_problems` and `can_create_invites` -- an empty list here does not
+   * mean every channel works, and the two have different fixes.
+   */
   missing_permissions: string[];
   /**
    * Whether a role assignment would actually succeed. False either because the bot lacks Manage
@@ -561,6 +567,27 @@ export type CheckBotInstallationResponse = {
    * surviving tracking row is what stops the ordinary create-role path from making a replacement.
    */
   stale_class_role_ids: string[];
+  /**
+   * Tracked channels where a per-channel or per-category overwrite blocks something the bot needs.
+   *
+   * `missing` holds the same labels as `missing_permissions`, so the panel renders both the same way.
+   * The remediation is different, though: edit that channel's permissions for the Pawtograder role.
+   * Re-authorizing the bot cannot clear a channel overwrite.
+   */
+  channel_permission_problems: {
+    channel_id: string;
+    /** From the live guild channel list; null when Discord returned the channel without a name. */
+    channel_name: string | null;
+    missing: string[];
+  }[];
+  /**
+   * False when no visible text channel permits Create Invite, so no student can be invited.
+   *
+   * The most severe of the channel-level answers, because it stops enrollment outright. False also on
+   * a class with no server connected and on a guild whose channels the bot cannot see, so read it
+   * alongside `installed` rather than on its own.
+   */
+  can_create_invites: boolean;
   install_url: string;
 };
 

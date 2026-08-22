@@ -1,5 +1,5 @@
 /**
- * The Discord permissions the Pawtograder bot needs, and the two ways it can fail to have them.
+ * The Discord permissions the Pawtograder bot needs, and the three ways it can fail to have them.
  *
  * An instructor who invites the bot with a hand-edited OAuth URL, or who later tightens the bot's
  * role in the server's settings, gets a guild the bot can see but cannot work in. Every downstream
@@ -7,10 +7,11 @@
  * issued -- and none of it names the missing permission, so this module exists to answer the
  * question before any of that runs.
  *
- * Two separate checks, because Discord enforces two separate rules:
+ * Three separate checks, because Discord enforces three separate rules:
  *
  *   1. Does the bot hold the permission bits at all? -> `missingPermissions`
  *   2. Is the bot's own role high enough to USE them on the class's roles? -> `canManageRoles`
+ *   3. Does a per-channel or per-category overwrite take one back? -> `channelPermissions`
  *
  * The second is the one that bites. Discord refuses to add or remove a role whose `position` is at
  * or above the acting member's highest role, and it reports that refusal as
@@ -19,6 +20,13 @@
  * passes cleanly, still fails every single role assignment, with an error that says the opposite of
  * what is wrong. It is undiagnosable from the error alone; you have to compare positions. Hence
  * `canManageRoles`, and hence the bot's role position being part of the check's response.
+ *
+ * The third is the one a guild-level audit cannot see at all. A server can grant Send Messages to
+ * everyone and deny it in `#general`, or deny Create Invite in the text channel the enrollment path
+ * reaches for, and the guild-level bitfield stays complete while every operation in that channel
+ * 403s. Discord resolves those overwrites in a fixed order with one counter-intuitive rule in it --
+ * denies from every held role are collected before any allow is applied -- so `channelPermissions`
+ * implements the order rather than approximating it.
  *
  * Kept free of Deno, fetch and env reads so it is unit-testable on its own.
  *
@@ -218,9 +226,9 @@ export type DiscordRoleLike = {
  * the guild's own ID, which is why `guildId` is a parameter. Omitting it would under-report on any
  * server whose baseline @everyone permissions are what actually grant the bot View Channel.
  *
- * Channel-level overwrites are NOT modelled. They can only ever subtract from this, so a pass here
- * is necessary but not sufficient; the point is to catch the guild-level misconfiguration, which is
- * the one instructors actually hit.
+ * Channel-level overwrites are not applied here, on purpose: this is the guild-level answer, and it
+ * is the starting point Discord itself layers overwrites onto. For the answer inside a particular
+ * channel -- which can deny what the guild grants -- use `channelPermissions`.
  */
 export function effectivePermissions(args: {
   guildRoles: readonly DiscordRoleLike[];
@@ -277,4 +285,169 @@ export function canManageRoles(args: { botHighestPosition: number; classRolePosi
   const { botHighestPosition, classRolePositions } = args;
   if (classRolePositions.length === 0) return true;
   return classRolePositions.every((position) => position < botHighestPosition);
+}
+
+/**
+ * A channel permission overwrite, exactly as Discord serialises it on a channel object.
+ *
+ * `type` is Discord's own encoding -- 0 for a role, 1 for a single member -- and `allow` / `deny` are
+ * decimal bitfield strings for the same 64-bit reason a role's `permissions` is. Declared here rather
+ * than imported from the mock's `MockPermissionOverwrite`: production code must not depend on a test
+ * fixture's shape, and the two are free to describe the same wire format independently.
+ */
+export type DiscordPermissionOverwriteLike = {
+  id: string;
+  /** 0 = role, 1 = member. Anything else is ignored rather than guessed at. */
+  type: number;
+  allow?: string | number | bigint | null;
+  deny?: string | number | bigint | null;
+};
+
+/** Discord's `type` values on an overwrite. Named because `o.type === 0` reads as nothing. */
+const OVERWRITE_TYPE_ROLE = 0;
+const OVERWRITE_TYPE_MEMBER = 1;
+
+/**
+ * The bot's effective permissions **inside one channel**, applying Discord's overwrite precedence.
+ *
+ * `effectivePermissions` answers a strictly weaker question. Guild-level bits are the starting point;
+ * Discord then layers per-channel and per-category overwrites on top, and those can deny what the
+ * server grants. A guild that grants Send Messages server-wide and denies it in `#general` passes
+ * every guild-level audit and still 403s on every post -- which is the whole reason this exists.
+ *
+ * The order below is Discord's, and every step of it matters:
+ *
+ *   1. Base: `@everyone` OR'd with every role the member holds (that is `effectivePermissions`).
+ *   2. Administrator short-circuits. It bypasses overwrites entirely, so a denied bit is still held.
+ *   3. The `@everyone` channel overwrite -- whose id is the guild id -- deny first, then allow.
+ *   4. The union of the role overwrites for roles the member holds: ALL denies collected, then ALL
+ *      allows, then applied deny-before-allow. Applying each role's pair in sequence instead is the
+ *      classic bug: it lets the order the overwrites happen to arrive in decide the answer, so a role
+ *      that allows a bit "wins" only when it happens to be listed after the role that denies it.
+ *      Discord has no such ordering -- an allow anywhere in the held set beats a deny anywhere in it.
+ *   5. The member-specific overwrite (`type: 1`, id = the bot's own user id), deny then allow. It
+ *      outranks every role, which is how one member is exempted from a channel-wide role deny.
+ *
+ * `VIEW_CHANNEL` is deliberately NOT special-cased here: this returns the raw resolved bitfield, and
+ * `grantsChannelPermission` is where "no View Channel makes everything else moot" is applied. Callers
+ * that do their own bit math need that helper, not `& bit`.
+ *
+ * Category inheritance is modelled by applying the parent's overwrites as a first layer and the
+ * channel's as a second, so a channel-level entry overrides its category for every bit it names.
+ * (Discord itself copies a category's overwrites onto a synced channel rather than resolving them at
+ * request time, so on live data `channelOverwrites` is usually complete on its own and the parent
+ * layer changes nothing. It is applied anyway because an unsynced channel that omits a target
+ * inherits that target's category entry, and because dropping it would silently under-report.)
+ *
+ * Pure, like the rest of this module: no fetch, no env, so the precedence rules are unit-testable.
+ */
+export function channelPermissions(args: {
+  guildRoles: readonly DiscordRoleLike[];
+  memberRoleIds: readonly string[];
+  /** Also `@everyone`'s role id, and the id its channel overwrite carries. */
+  guildId: string;
+  /**
+   * The bot's own user id, for the member-specific overwrite. Omitted, that layer is skipped rather
+   * than guessed: matching the wrong id would apply another member's exemption to the bot.
+   */
+  memberUserId?: string | null;
+  channelOverwrites?: readonly DiscordPermissionOverwriteLike[] | null;
+  parentOverwrites?: readonly DiscordPermissionOverwriteLike[] | null;
+}): bigint {
+  const base = effectivePermissions({
+    guildRoles: args.guildRoles,
+    memberRoleIds: args.memberRoleIds,
+    guildId: args.guildId
+  });
+  if (hasAdministrator(base)) return base;
+
+  const held = new Set<string>(args.memberRoleIds);
+  let granted = base;
+
+  for (const overwrites of [args.parentOverwrites ?? [], args.channelOverwrites ?? []]) {
+    if (overwrites.length === 0) continue;
+
+    const everyone = overwrites.find((o) => o.type === OVERWRITE_TYPE_ROLE && o.id === args.guildId);
+    if (everyone) {
+      granted &= ~parsePermissionBits(everyone.deny);
+      granted |= parsePermissionBits(everyone.allow);
+    }
+
+    let roleDeny = 0n;
+    let roleAllow = 0n;
+    for (const overwrite of overwrites) {
+      if (overwrite.type !== OVERWRITE_TYPE_ROLE) continue;
+      // @everyone was applied above and must not be folded into the role union, where its deny would
+      // outrank nothing and its allow would.
+      if (overwrite.id === args.guildId) continue;
+      if (!held.has(overwrite.id)) continue;
+      roleDeny |= parsePermissionBits(overwrite.deny);
+      roleAllow |= parsePermissionBits(overwrite.allow);
+    }
+    granted &= ~roleDeny;
+    granted |= roleAllow;
+
+    if (args.memberUserId) {
+      const mine = overwrites.find((o) => o.type === OVERWRITE_TYPE_MEMBER && o.id === args.memberUserId);
+      if (mine) {
+        granted &= ~parsePermissionBits(mine.deny);
+        granted |= parsePermissionBits(mine.allow);
+      }
+    }
+  }
+
+  return granted;
+}
+
+/**
+ * Whether a resolved channel bitfield actually permits `bit`.
+ *
+ * Two rules that `granted & bit` misses, and that are exactly the two an instructor's server can
+ * trip:
+ *
+ *   - Administrator holds everything, including bits that are nowhere in the field.
+ *   - Without `VIEW_CHANNEL` nothing else in that channel works. A channel that grants Send Messages
+ *     and denies View Channel grants nothing; reporting Send Messages as held there would send an
+ *     instructor looking at the wrong setting.
+ */
+export function grantsChannelPermission(granted: bigint, bit: bigint): boolean {
+  if (hasAdministrator(granted)) return true;
+  if (bit !== DISCORD_PERMISSION_BITS.VIEW_CHANNEL && (granted & DISCORD_PERMISSION_BITS.VIEW_CHANNEL) === 0n) {
+    return false;
+  }
+  return (granted & bit) !== 0n;
+}
+
+/**
+ * The permissions Pawtograder needs in a channel it has been given to post in.
+ *
+ * A subset of `REQUIRED_BOT_PERMISSIONS`, filtered from it rather than rewritten, so a label can
+ * never differ between the server-level list and the per-channel one. Manage Roles and Manage
+ * Channels are absent because they are guild-level answers, and Create Invite is absent because it is
+ * asked of the guild's text channels as a set (any one of them will do) rather than of each tracked
+ * channel individually.
+ */
+const CHANNEL_PERMISSION_FLAGS: ReadonlySet<keyof typeof DISCORD_PERMISSION_BITS> = new Set([
+  "VIEW_CHANNEL",
+  "SEND_MESSAGES",
+  "READ_MESSAGE_HISTORY"
+]);
+
+export const REQUIRED_CHANNEL_PERMISSIONS: readonly RequiredPermission[] = REQUIRED_BOT_PERMISSIONS.filter((p) =>
+  CHANNEL_PERMISSION_FLAGS.has(p.flag)
+);
+
+/**
+ * Labels of the channel-level permissions `granted` does not permit, in declaration order.
+ *
+ * Empty for an Administrator bot. A `VIEW_CHANNEL` denial comes back as the whole `required` list
+ * rather than as one entry, because that is the truth of it -- none of those operations work in that
+ * channel -- and View Channels leads the list, so the fix is still the first thing read.
+ */
+export function missingChannelPermissions(
+  granted: bigint,
+  required: readonly RequiredPermission[] = REQUIRED_CHANNEL_PERMISSIONS
+): string[] {
+  if (hasAdministrator(granted)) return [];
+  return required.filter((p) => !grantsChannelPermission(granted, p.bit)).map((p) => p.label);
 }

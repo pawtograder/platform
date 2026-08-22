@@ -50,6 +50,19 @@ export type MockMember = {
   joined_at?: string;
 };
 
+/**
+ * A Discord channel permission overwrite.
+ *
+ * `type` is Discord's: 0 = role, 1 = member. `allow` and `deny` are decimal bitfield STRINGS, which
+ * is how Discord serialises them.
+ */
+export type MockPermissionOverwrite = {
+  id: string;
+  type: 0 | 1;
+  allow: string;
+  deny: string;
+};
+
 export type MockChannel = {
   id: string;
   name: string;
@@ -59,6 +72,14 @@ export type MockChannel = {
   parent_id?: string | null;
   topic?: string | null;
   position?: number;
+  /**
+   * Per-channel overwrites, serialised on the channel object exactly as Discord does.
+   *
+   * These are the reason a guild-level permission check is not sufficient: a bot can hold Send
+   * Messages across the server and be denied it in one channel. The mock enforces them so that
+   * failure is reachable, rather than only describable.
+   */
+  permission_overwrites?: MockPermissionOverwrite[];
 };
 
 export type MockGuild = {
@@ -175,6 +196,8 @@ export const UNROLED_MEMBER_ID = "2000000000000000002";
 export const ABSENT_MEMBER_ID = "2000000000000000003";
 export const GENERAL_CHANNEL_ID = "1400000000000000001";
 export const CATEGORY_CHANNEL_ID = "1400000000000000002";
+/** A second text channel, so a scenario can deny one and leave another usable. */
+export const ANNOUNCEMENTS_CHANNEL_ID = "1400000000000000003";
 
 function bits(...flags: PermissionFlag[]): string {
   return flags.reduce((acc, flag) => acc | DISCORD_PERMISSION_BITS[flag], 0n).toString();
@@ -291,6 +314,10 @@ export const SCENARIO_DESCRIPTIONS: Record<string, string> = {
   "bot-role-too-low":
     "Bot has Manage Roles but its role ties the instructor role's position, so that write is refused.",
   "no-text-channel": "Guild has only a category, so createGuildInvite fails before any invite request.",
+  "channel-invite-denied":
+    "Guild-level permissions are complete, but the FIRST text channel denies Create Invite by overwrite while a second text channel allows it. An invite path that tries only the first channel fails here.",
+  "channel-send-denied":
+    "Guild-level permissions are complete, but #general denies Send Messages by overwrite. A guild-level-only audit reports this server healthy.",
   "member-not-joined": "Guild is healthy but has no members, so member lookups answer 404 / 10007.",
   "rate-limited": "Every route answers 429 with a Retry-After of 1.5 seconds."
 };
@@ -319,6 +346,56 @@ export function scenarioState(name: string): MockState | null {
       // the student and grader roles at 3 and 4 still succeed, which is what makes this scenario
       // sharper than simply putting the bot at the bottom.
       return baseState("bot-role-too-low", [guildTemplate({ botRolePosition: 5 })]);
+    case "channel-invite-denied": {
+      // Two text channels. The first by position denies CREATE_INSTANT_INVITE to the bot's role; the
+      // second grants it. Both remain VISIBLE, which is the point: a VIEW_CHANNEL denial would remove
+      // the channel from GET /guilds/{id}/channels altogether and the caller would simply skip it.
+      // Denying only the invite bit keeps the channel in the list and makes it a trap.
+      const guildId = DEFAULT_GUILD_ID;
+      return baseState("channel-invite-denied", [
+        guildTemplate({
+          channels: [
+            { id: CATEGORY_CHANNEL_ID, name: "pawtograder", type: 4, guild_id: guildId, parent_id: null, position: 0 },
+            {
+              id: GENERAL_CHANNEL_ID,
+              name: "general",
+              type: 0,
+              guild_id: guildId,
+              parent_id: CATEGORY_CHANNEL_ID,
+              position: 1,
+              permission_overwrites: [{ id: BOT_ROLE_ID, type: 0, allow: "0", deny: bits("CREATE_INSTANT_INVITE") }]
+            },
+            {
+              id: ANNOUNCEMENTS_CHANNEL_ID,
+              name: "announcements",
+              type: 0,
+              guild_id: guildId,
+              parent_id: CATEGORY_CHANNEL_ID,
+              position: 2
+            }
+          ]
+        })
+      ]);
+    }
+    case "channel-send-denied": {
+      const guildId = DEFAULT_GUILD_ID;
+      return baseState("channel-send-denied", [
+        guildTemplate({
+          channels: [
+            { id: CATEGORY_CHANNEL_ID, name: "pawtograder", type: 4, guild_id: guildId, parent_id: null, position: 0 },
+            {
+              id: GENERAL_CHANNEL_ID,
+              name: "general",
+              type: 0,
+              guild_id: guildId,
+              parent_id: CATEGORY_CHANNEL_ID,
+              position: 1,
+              permission_overwrites: [{ id: BOT_ROLE_ID, type: 0, allow: "0", deny: bits("SEND_MESSAGES") }]
+            }
+          ]
+        })
+      ]);
+    }
     case "no-text-channel":
       return baseState("no-text-channel", [
         guildTemplate({
@@ -373,6 +450,73 @@ export function botPermissions(guild: MockGuild): bigint {
 }
 
 /** True when the bot holds the flag, or holds Administrator, which Discord treats as holding all. */
+/**
+ * The bot's effective permissions **in a channel**, applying Discord's overwrite precedence.
+ *
+ * Order is Discord's, and the order matters: base role permissions, then the @everyone overwrite,
+ * then the union of role overwrites (all denies collected before any allow), then the member-specific
+ * overwrite. Administrator short-circuits before any of it. Denying VIEW_CHANNEL makes the rest moot,
+ * which callers handle by checking VIEW_CHANNEL first.
+ */
+export function botChannelPermissions(guild: MockGuild, channel: MockChannel, botUserId?: string): bigint {
+  const base = botPermissions(guild);
+  if ((base & DISCORD_PERMISSION_BITS.ADMINISTRATOR) !== 0n) return base;
+
+  // A channel inherits its category's overwrites unless it has its own for the same target. Modelled
+  // by applying the parent's first, so a channel-level entry wins.
+  const parent = channel.parent_id ? (guild.channels.find((c) => c.id === channel.parent_id) ?? null) : null;
+  const layers = [parent?.permission_overwrites ?? [], channel.permission_overwrites ?? []];
+
+  let acc = base;
+  for (const overwrites of layers) {
+    if (overwrites.length === 0) continue;
+    const held = new Set<string>(guild.bot_roles);
+
+    // 1. @everyone, whose overwrite id is the guild id.
+    const everyone = overwrites.find((o) => o.id === guild.id && o.type === 0);
+    if (everyone) {
+      acc &= ~parsePermissionBits(everyone.deny);
+      acc |= parsePermissionBits(everyone.allow);
+    }
+
+    // 2. Role overwrites, denies before allows across the whole set -- not per role. Applying each
+    //    role's deny/allow in sequence would let role order decide the answer, which Discord does not.
+    let roleDeny = 0n;
+    let roleAllow = 0n;
+    for (const o of overwrites) {
+      if (o.type !== 0 || o.id === guild.id || !held.has(o.id)) continue;
+      roleDeny |= parsePermissionBits(o.deny);
+      roleAllow |= parsePermissionBits(o.allow);
+    }
+    acc &= ~roleDeny;
+    acc |= roleAllow;
+
+    // 3. The member-specific overwrite, which outranks every role.
+    // The bot's user id is on MockState, not on the guild, so callers pass it. Absent, the
+    // member-specific layer is skipped rather than guessed.
+    const member = botUserId ? overwrites.find((o) => o.id === botUserId && o.type === 1) : undefined;
+    if (member) {
+      acc &= ~parsePermissionBits(member.deny);
+      acc |= parsePermissionBits(member.allow);
+    }
+  }
+  return acc;
+}
+
+/** Whether the bot holds `flag` in this specific channel. */
+export function botHasChannelPermission(
+  guild: MockGuild,
+  channel: MockChannel,
+  flag: PermissionFlag,
+  botUserId?: string
+): boolean {
+  const granted = botChannelPermissions(guild, channel, botUserId);
+  if ((granted & DISCORD_PERMISSION_BITS.ADMINISTRATOR) !== 0n) return true;
+  // VIEW_CHANNEL is a precondition for everything else in a channel.
+  if (flag !== "VIEW_CHANNEL" && (granted & DISCORD_PERMISSION_BITS.VIEW_CHANNEL) === 0n) return false;
+  return (granted & DISCORD_PERMISSION_BITS[flag]) !== 0n;
+}
+
 export function botHasPermission(guild: MockGuild, flag: PermissionFlag): boolean {
   const granted = botPermissions(guild);
   if ((granted & DISCORD_PERMISSION_BITS.ADMINISTRATOR) !== 0n) return true;

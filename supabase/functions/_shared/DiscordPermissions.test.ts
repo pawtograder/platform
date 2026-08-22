@@ -12,11 +12,15 @@ import { assertEquals } from "jsr:@std/assert@^1";
 import {
   DISCORD_PERMISSION_BITS,
   REQUIRED_BOT_PERMISSIONS,
+  REQUIRED_CHANNEL_PERMISSIONS,
   botInstallUrl,
   canManageRoles,
+  channelPermissions,
   effectivePermissions,
+  grantsChannelPermission,
   hasAdministrator,
   highestRolePosition,
+  missingChannelPermissions,
   missingPermissions,
   parsePermissionBits,
   requiredPermissionsBits
@@ -185,4 +189,233 @@ Deno.test("botInstallUrl: stays on discord.com, which is not the API base", () =
   // The API base is overridable so REST calls can be pointed at a mock. This link is handed to a
   // human in a browser and a mock has no consent screen, so it must not follow that override.
   assertEquals(botInstallUrl({ applicationId: "1" }).startsWith("https://discord.com/oauth2/authorize?"), true);
+});
+
+// ---------------------------------------------------------------------------
+// channelPermissions: Discord's per-channel overwrite precedence
+//
+// The guild-level tests above are necessary but not sufficient, and these are the cases where the
+// difference is the whole answer: a server that grants Send Messages to everyone and denies it in one
+// channel passes every test above and 403s on every post. Each test below pins one step of Discord's
+// documented order, because a plausible-looking implementation gets most of them right and one of
+// them wrong -- and the one it gets wrong (per-role sequential application, below) depends on the
+// order Discord happened to serialise the overwrites in, so it fails intermittently.
+// ---------------------------------------------------------------------------
+
+const P = DISCORD_PERMISSION_BITS;
+/** @everyone's role id is the guild id, in the overwrite list as much as in the role list. */
+const GUILD_ID = "1142900000000000000";
+const BOT_ROLE_ID = "1200000000000000001";
+const SECOND_ROLE_ID = "1200000000000000002";
+const UNHELD_ROLE_ID = "1200000000000000009";
+const BOT_USER_ID = "1300000000000000001";
+
+/** A course server's typical baseline: @everyone carries the posting bits, the bot role the rest. */
+const CHANNEL_TEST_ROLES: DiscordRoleForTest[] = [
+  {
+    id: GUILD_ID,
+    name: "@everyone",
+    permissions: String(P.VIEW_CHANNEL | P.SEND_MESSAGES | P.READ_MESSAGE_HISTORY | P.CREATE_INSTANT_INVITE)
+  },
+  { id: BOT_ROLE_ID, name: "Pawtograder", permissions: String(P.MANAGE_CHANNELS | P.MANAGE_ROLES) },
+  { id: SECOND_ROLE_ID, name: "Bots", permissions: "0" },
+  { id: UNHELD_ROLE_ID, name: "Moderators", permissions: String(P.SEND_MESSAGES) }
+];
+
+type DiscordRoleForTest = { id: string; name?: string; permissions?: string; position?: number };
+
+/** One overwrite, with the decimal-string bitfields Discord actually sends. */
+function overwrite(id: string, type: 0 | 1, allow: bigint, deny: bigint) {
+  return { id, type, allow: allow.toString(), deny: deny.toString() };
+}
+
+/** Resolve a channel for the bot, holding the bot role, over the baseline above. */
+function resolve(args: {
+  channel?: ReturnType<typeof overwrite>[];
+  parent?: ReturnType<typeof overwrite>[];
+  memberRoleIds?: string[];
+  memberUserId?: string | null;
+  guildRoles?: DiscordRoleForTest[];
+}): bigint {
+  return channelPermissions({
+    guildRoles: args.guildRoles ?? CHANNEL_TEST_ROLES,
+    memberRoleIds: args.memberRoleIds ?? [BOT_ROLE_ID],
+    guildId: GUILD_ID,
+    memberUserId: args.memberUserId === undefined ? BOT_USER_ID : args.memberUserId,
+    channelOverwrites: args.channel,
+    parentOverwrites: args.parent
+  });
+}
+
+const CHANNEL_BASE = effectivePermissions({
+  guildRoles: CHANNEL_TEST_ROLES,
+  memberRoleIds: [BOT_ROLE_ID],
+  guildId: GUILD_ID
+});
+
+Deno.test("channelPermissions: a channel with no overwrites is exactly the guild-level answer", () => {
+  assertEquals(resolve({}), CHANNEL_BASE);
+  assertEquals(resolve({ channel: [], parent: [] }), CHANNEL_BASE);
+});
+
+Deno.test("channelPermissions: a role overwrite denies what the guild grants", () => {
+  // The case the guild-level audit cannot see: Send Messages is held server-wide and taken away here.
+  const granted = resolve({ channel: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)] });
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), false);
+  // And only that one. A deny must not be read as a reset.
+  assertEquals(grantsChannelPermission(granted, P.VIEW_CHANNEL), true);
+  assertEquals(grantsChannelPermission(granted, P.READ_MESSAGE_HISTORY), true);
+  assertEquals(missingChannelPermissions(granted), ["Send Messages"]);
+});
+
+Deno.test("channelPermissions: an @everyone channel deny applies, and a role allow re-grants it", () => {
+  const everyoneDeny = overwrite(GUILD_ID, 0, 0n, P.SEND_MESSAGES);
+  assertEquals(grantsChannelPermission(resolve({ channel: [everyoneDeny] }), P.SEND_MESSAGES), false);
+
+  // The ordinary shape of a locked-down announcements channel: nobody may post, the bot may. The
+  // @everyone layer has to be applied BEFORE the role layer for this to come out granted.
+  const withRoleAllow = resolve({ channel: [everyoneDeny, overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)] });
+  assertEquals(grantsChannelPermission(withRoleAllow, P.SEND_MESSAGES), true);
+  assertEquals(missingChannelPermissions(withRoleAllow), []);
+});
+
+Deno.test("channelPermissions: an allow in the SAME overwrite beats that overwrite's deny", () => {
+  // Discord applies deny before allow within a layer, so a bit in both comes out granted. Not a
+  // shape Discord's own UI can produce, but it is the difference between the documented order and
+  // "apply allow, then deny", and a hand-built overwrite can carry both.
+  const granted = resolve({ channel: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, P.SEND_MESSAGES)] });
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), true);
+});
+
+Deno.test("channelPermissions: denies are unioned across held roles, so role ORDER cannot decide it", () => {
+  // THE case a naive implementation gets wrong. One held role denies Send Messages, another allows
+  // it. Discord collects every deny across the held set and every allow across the held set, then
+  // applies deny-before-allow -- so the allow wins, whichever order the overwrites arrive in.
+  // Applying each role's own deny-then-allow in sequence gives "granted" for one ordering and
+  // "denied" for the other, which is a bug that reproduces only when Discord reorders the array.
+  const deny = overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES);
+  const allow = overwrite(SECOND_ROLE_ID, 0, P.SEND_MESSAGES, 0n);
+  const held = [BOT_ROLE_ID, SECOND_ROLE_ID];
+
+  const denyFirst = resolve({ channel: [deny, allow], memberRoleIds: held });
+  const allowFirst = resolve({ channel: [allow, deny], memberRoleIds: held });
+  assertEquals(denyFirst, allowFirst);
+  assertEquals(grantsChannelPermission(denyFirst, P.SEND_MESSAGES), true);
+  assertEquals(grantsChannelPermission(allowFirst, P.SEND_MESSAGES), true);
+});
+
+Deno.test("channelPermissions: an overwrite for a role the member does not hold is ignored", () => {
+  const granted = resolve({ channel: [overwrite(UNHELD_ROLE_ID, 0, 0n, P.SEND_MESSAGES | P.VIEW_CHANNEL)] });
+  assertEquals(granted, CHANNEL_BASE);
+  assertEquals(missingChannelPermissions(granted), []);
+});
+
+Deno.test("channelPermissions: the member-specific overwrite outranks a role deny", () => {
+  // How one bot is exempted from a channel-wide role deny. The member layer is applied last, so its
+  // allow survives the role union's deny.
+  const granted = resolve({
+    channel: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES), overwrite(BOT_USER_ID, 1, P.SEND_MESSAGES, 0n)]
+  });
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), true);
+
+  // And the other direction: a member deny takes away what the role layer allows.
+  const denied = resolve({
+    channel: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n), overwrite(BOT_USER_ID, 1, 0n, P.SEND_MESSAGES)]
+  });
+  assertEquals(grantsChannelPermission(denied, P.SEND_MESSAGES), false);
+});
+
+Deno.test("channelPermissions: a member overwrite is skipped when no user id is supplied", () => {
+  // Not guessed at. Matching an unknown id would apply some other member's exemption to the bot.
+  const channel = [overwrite(BOT_USER_ID, 1, 0n, P.SEND_MESSAGES)];
+  assertEquals(resolve({ channel, memberUserId: null }), CHANNEL_BASE);
+  assertEquals(grantsChannelPermission(resolve({ channel }), P.SEND_MESSAGES), false);
+});
+
+Deno.test("channelPermissions: Administrator short-circuits an explicit channel deny", () => {
+  // Administrator bypasses overwrites entirely. A per-bit reading of the resolved field would report
+  // Send Messages missing on a server where the bot can do everything.
+  const adminRoles: DiscordRoleForTest[] = [
+    { id: GUILD_ID, name: "@everyone", permissions: "0" },
+    { id: BOT_ROLE_ID, name: "Pawtograder", permissions: String(P.ADMINISTRATOR) }
+  ];
+  const granted = resolve({
+    guildRoles: adminRoles,
+    channel: [
+      overwrite(GUILD_ID, 0, 0n, P.VIEW_CHANNEL),
+      overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES),
+      overwrite(BOT_USER_ID, 1, 0n, P.READ_MESSAGE_HISTORY)
+    ]
+  });
+  assertEquals(hasAdministrator(granted), true);
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), true);
+  assertEquals(grantsChannelPermission(granted, P.VIEW_CHANNEL), true);
+  assertEquals(missingChannelPermissions(granted), []);
+});
+
+Deno.test("channelPermissions: a channel inherits its category's overwrites", () => {
+  // The trap that makes a per-channel audit insufficient on its own: the channel carries no
+  // overwrites of its own and is still denied, because the category above it says so.
+  const granted = resolve({ parent: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)] });
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), false);
+  assertEquals(missingChannelPermissions(granted), ["Send Messages"]);
+});
+
+Deno.test("channelPermissions: a channel-level entry overrides its category, both ways", () => {
+  // Category denies, channel allows -> allowed.
+  const reAllowed = resolve({
+    parent: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)],
+    channel: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)]
+  });
+  assertEquals(grantsChannelPermission(reAllowed, P.SEND_MESSAGES), true);
+
+  // Category allows, channel denies -> denied. Without the channel layer being applied second, this
+  // one comes out granted and the audit reports a channel the bot cannot post in as healthy.
+  const reDenied = resolve({
+    parent: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)],
+    channel: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)]
+  });
+  assertEquals(grantsChannelPermission(reDenied, P.SEND_MESSAGES), false);
+});
+
+Deno.test("channelPermissions: a category @everyone deny is re-granted by a channel role allow", () => {
+  // Both layers and both targets at once, which is what a real locked-down category looks like.
+  const granted = resolve({
+    parent: [overwrite(GUILD_ID, 0, 0n, P.VIEW_CHANNEL | P.SEND_MESSAGES)],
+    channel: [overwrite(BOT_ROLE_ID, 0, P.VIEW_CHANNEL | P.SEND_MESSAGES, 0n)]
+  });
+  assertEquals(missingChannelPermissions(granted), []);
+});
+
+Deno.test("grantsChannelPermission: a View Channel denial makes every other permission moot", () => {
+  const granted = resolve({ channel: [overwrite(BOT_ROLE_ID, 0, 0n, P.VIEW_CHANNEL)] });
+  // The bits are still set in the field -- @everyone granted them and nothing took them away -- so a
+  // bare `granted & bit` reports Send Messages as held in a channel the bot cannot even see.
+  assertEquals((granted & P.SEND_MESSAGES) !== 0n, true);
+  assertEquals(grantsChannelPermission(granted, P.VIEW_CHANNEL), false);
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), false);
+  assertEquals(grantsChannelPermission(granted, P.READ_MESSAGE_HISTORY), false);
+  // Reported as the whole list, because none of it works here, with the actual fix listed first.
+  assertEquals(missingChannelPermissions(granted), ["View Channels", "Send Messages", "Read Message History"]);
+});
+
+Deno.test("missingChannelPermissions: nothing missing in an unrestricted channel", () => {
+  assertEquals(missingChannelPermissions(CHANNEL_BASE), []);
+});
+
+Deno.test("REQUIRED_CHANNEL_PERMISSIONS: the per-channel subset, sharing the server-level labels", () => {
+  // Filtered from REQUIRED_BOT_PERMISSIONS rather than rewritten, so a label cannot differ between
+  // the two lists an instructor reads in the same panel.
+  assertEquals(
+    REQUIRED_CHANNEL_PERMISSIONS.map((p) => p.flag),
+    ["VIEW_CHANNEL", "SEND_MESSAGES", "READ_MESSAGE_HISTORY"]
+  );
+  for (const permission of REQUIRED_CHANNEL_PERMISSIONS) {
+    assertEquals(REQUIRED_BOT_PERMISSIONS.includes(permission), true);
+  }
+  // Guild-level answers, deliberately not asked of each channel.
+  const flags = REQUIRED_CHANNEL_PERMISSIONS.map((p) => p.flag);
+  assertEquals(flags.includes("MANAGE_ROLES"), false);
+  assertEquals(flags.includes("MANAGE_CHANNELS"), false);
+  assertEquals(flags.includes("CREATE_INSTANT_INVITE"), false);
 });

@@ -285,7 +285,15 @@ function cloneGuild(guild: MockGuild, targetId: string): MockGuild {
       ...channel,
       id: channelIds.get(channel.id) ?? channel.id,
       guild_id: targetId,
-      parent_id: channel.parent_id ? (channelIds.get(channel.parent_id) ?? channel.parent_id) : channel.parent_id
+      parent_id: channel.parent_id ? (channelIds.get(channel.parent_id) ?? channel.parent_id) : channel.parent_id,
+      // permission_overwrites carries through the spread, but an @everyone entry is keyed by the
+      // GUILD id, which this clone changes -- and the roles array above is rewritten for exactly that
+      // reason. Left alone, an @everyone overwrite would point at the source guild and silently stop
+      // applying, so a scenario built on one would pass for the wrong reason. Role and member entries
+      // keep their ids, which the clone does not touch.
+      permission_overwrites: channel.permission_overwrites?.map((overwrite) =>
+        overwrite.id === guild.id && overwrite.type === 0 ? { ...overwrite, id: targetId } : { ...overwrite }
+      )
     })),
     members: Object.fromEntries(
       Object.entries(guild.members).map(([id, member]) => [id, { ...member, roles: [...member.roles] }])

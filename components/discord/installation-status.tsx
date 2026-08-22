@@ -23,9 +23,16 @@ import { BsArrowRepeat, BsDiscord } from "react-icons/bs";
  *
  *   - not installed        -> add the bot (this is also the initial state for every class)
  *   - missing permissions  -> re-authorize, and here is exactly which ones
+ *   - no invite channel    -> allow Create Invite in a text channel; nobody can be enrolled until then
+ *   - channel overwrite    -> edit that one channel's permissions; the server-level ones are fine
  *   - role hierarchy       -> drag the bot's role above the class roles; permissions are fine
  *   - stale tracked role   -> re-sync; the fix is on Pawtograder's side, not in Discord
  *   - healthy              -> who connected it, and when
+ *
+ * The two channel states are separate from "missing permissions" because re-authorizing the bot does
+ * nothing for either: Discord resolves per-channel and per-category overwrites on top of the
+ * server-level bits, and the button that widens the server-level bits cannot touch them. The fix is in
+ * one channel's own permission settings, so the panel has to say which channel.
  *
  * The third is the point of the panel. Discord reports "cannot assign a role positioned above me"
  * with 50013 Missing Permissions -- the same code as not holding Manage Roles at all -- so from the
@@ -194,6 +201,13 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
       status.missing_permissions.length === 1 ? "" : "s"
     }: ${status.missing_permissions.join(", ")}.`;
   }
+  if (!status.can_create_invites) {
+    return "No Discord channel allows the Pawtograder bot to create invites, so no student can be invited to the server.";
+  }
+  if (status.channel_permission_problems.length > 0) {
+    const n = status.channel_permission_problems.length;
+    return `The Pawtograder bot is blocked by channel permissions in ${n} Discord channel${n === 1 ? "" : "s"}.`;
+  }
   if (!status.can_manage_class_roles) {
     return "The Pawtograder bot's role sits too low in the Discord server to assign the course's roles.";
   }
@@ -203,7 +217,7 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
       n === 1 ? "s" : ""
     } in the Discord server.`;
   }
-  return `The Pawtograder bot is installed in ${status.guild_name ?? "the connected server"} with every server-level permission it needs.`;
+  return `The Pawtograder bot is installed in ${status.guild_name ?? "the connected server"} with every permission it needs, in the server and in its channels.`;
 }
 
 function StatusBody({
@@ -222,6 +236,16 @@ function StatusBody({
   }
   if (status.missing_permissions.length > 0) {
     return <MissingPermissions status={status} canManage={canManage} />;
+  }
+  // Ranked above the channel-overwrite panel, and above the hierarchy one: with no channel that
+  // permits Create Invite, no student reaches the server at all, so nothing further can matter to
+  // them. It is checked after `missing_permissions` because a server-level Create Invite denial is
+  // already named there, with the re-authorize button that fixes it.
+  if (!status.can_create_invites) {
+    return <NoInviteChannel status={status} />;
+  }
+  if (status.channel_permission_problems.length > 0) {
+    return <ChannelPermissionProblems status={status} />;
   }
   if (!status.can_manage_class_roles) {
     return <RoleHierarchyProblem status={status} />;
@@ -334,6 +358,111 @@ function MissingPermissions({ status, canManage }: { status: CheckBotInstallatio
           </Text>
         </VStack>
       )}
+    </VStack>
+  );
+}
+
+/**
+ * No text channel in the server permits Create Invite, so enrollment cannot happen.
+ *
+ * The most severe of the channel-level states and ranked first among them: an invite is how a student
+ * reaches the server at all, so until one channel allows it nothing else about the install matters to
+ * anybody but the instructor. Reached only when the server-level permissions are complete, which is
+ * what makes it a channel problem: the "re-authorize" button widens server-level permissions and can
+ * do nothing about a channel that overrides them, so this panel deliberately does not offer it.
+ */
+function NoInviteChannel({ status }: { status: CheckBotInstallationResponse }) {
+  return (
+    <VStack align="stretch" gap={3}>
+      {/* `title` carries the state in words; the Alert's colour and icon only reinforce it. */}
+      <Alert status="error" title="No channel allows invites, so no student can be added">
+        <Text>
+          Pawtograder holds Create Invite across{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>
+          , but every text channel it can see overrides that and denies it — or the server has no text channel at all.
+          Invites are made in a channel, so student enrollment will keep failing until one channel permits it.
+        </Text>
+        <Text mt={2}>
+          To fix it, open{" "}
+          <Text as="span" fontWeight="semibold">
+            Edit Channel → Permissions
+          </Text>{" "}
+          on a text channel students can see, add the{" "}
+          <Text as="span" fontWeight="semibold">
+            Pawtograder
+          </Text>{" "}
+          role, and allow{" "}
+          <Text as="span" fontWeight="semibold">
+            Create Invite
+          </Text>
+          . Check the channel&apos;s category too — a channel inherits its category&apos;s overrides. Then press
+          Re-check.
+        </Text>
+        <Text fontSize="sm" mt={2} color="fg.muted">
+          Re-authorizing the bot will not clear this. Channel overrides sit above the server-level permissions the
+          authorization screen grants.
+        </Text>
+      </Alert>
+    </VStack>
+  );
+}
+
+/**
+ * A channel override blocks the bot in one or more of the channels Pawtograder posts to.
+ *
+ * Named per channel and per permission on purpose. The symptom an instructor sees is that
+ * notifications stopped appearing in one place, and the server-level panel above would have said
+ * everything was fine, so the only useful thing this can do is point at the exact channel and the
+ * exact switch inside it.
+ */
+function ChannelPermissionProblems({ status }: { status: CheckBotInstallationResponse }) {
+  const problems = status.channel_permission_problems;
+  const count = problems.length;
+  return (
+    <VStack align="stretch" gap={3}>
+      <Alert
+        status="error"
+        title={count === 1 ? "One channel's permissions block the bot" : `${count} channels' permissions block the bot`}
+      >
+        <Text>
+          Every server-level permission is granted in{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>
+          , and its role is high enough to assign this course&apos;s roles. Discord applies per-channel and per-category
+          overrides on top of that, and {count === 1 ? "this channel takes" : "these channels take"} back what the
+          server grants, so Pawtograder&apos;s messages there fail with a bare 403.
+        </Text>
+        <List.Root fontSize="sm" pl={4} mt={2}>
+          {problems.map((problem) => (
+            <List.Item key={problem.channel_id}>
+              <Text as="span" fontWeight="medium">
+                {problem.channel_name ? `#${problem.channel_name}` : "Channel"}
+              </Text>{" "}
+              (<Code>{problem.channel_id}</Code>) — denied {problem.missing.join(", ")}
+            </List.Item>
+          ))}
+        </List.Root>
+        <Text mt={2}>
+          To fix it, open{" "}
+          <Text as="span" fontWeight="semibold">
+            Edit Channel → Permissions
+          </Text>{" "}
+          on {count === 1 ? "that channel" : "each channel"}, find the{" "}
+          <Text as="span" fontWeight="semibold">
+            Pawtograder
+          </Text>{" "}
+          role, and allow the permission{count === 1 && problems[0].missing.length === 1 ? "" : "s"} listed above. A
+          channel with no override of its own inherits its category&apos;s, so check the category as well. Then press
+          Re-check.
+        </Text>
+        <Text fontSize="sm" mt={2} color="fg.muted">
+          Re-authorizing the bot will not clear this. Channel overrides sit above the server-level permissions the
+          authorization screen grants.
+        </Text>
+      </Alert>
     </VStack>
   );
 }
@@ -487,21 +616,13 @@ function Healthy({
           <Text as="span" fontWeight="semibold">
             {status.guild_name ?? "the connected server"}
           </Text>{" "}
-          with every server-level permission it needs, and its role is high enough to assign this course&apos;s roles.
+          with every permission it needs, its role is high enough to assign this course&apos;s roles, and no channel
+          override blocks it from posting or from inviting students.
         </Text>
       </Alert>
       <VStack align="stretch" gap={0} fontSize="sm" color="fg.muted">
         <Text>
           Server ID: <Code>{status.guild_id}</Code>
-        </Text>
-        {/* Deliberately stated rather than left implied. The check reads the bot's roles at the server
-            level; Discord also allows per-channel and per-category overrides, which can deny View
-            Channel, Send Messages or Create Invite in one place while the server-level answer above
-            stays correct. Claiming "every permission it needs" without that caveat would make this
-            panel confidently wrong in exactly the case an instructor came here to diagnose. */}
-        <Text>
-          Per-channel and per-category permission overrides are not checked. If posting or invites fail in one channel
-          only, check that channel&apos;s permissions for the Pawtograder role.
         </Text>
         {provenance?.claimedAt ? (
           <Text>

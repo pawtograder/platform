@@ -27,6 +27,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename } from "node:path";
 import {
   applyPatch,
+  botHasChannelPermission,
   botHasPermission,
   botHighestPosition,
   botPermissions,
@@ -162,6 +163,21 @@ function permissionError(flag: PermissionFlag): Reply {
 function requirePermissions(guild: MockGuild, flags: PermissionFlag[]): Reply | null {
   for (const flag of flags) {
     if (!botHasPermission(guild, flag)) return permissionError(flag);
+  }
+  return null;
+}
+
+/**
+ * The same check, but for an operation that acts on one channel.
+ *
+ * Guild-level permissions are necessary and not sufficient: Discord layers per-channel and
+ * per-category overwrites on top, so a bot with Send Messages server-wide can be denied it in one
+ * channel. Every route that addresses `/channels/{id}/...` goes through this, so that failure is
+ * reachable in a test rather than merely describable.
+ */
+function requireChannelPermissions(guild: MockGuild, channel: MockChannel, flags: PermissionFlag[]): Reply | null {
+  for (const flag of flags) {
+    if (!botHasChannelPermission(guild, channel, flag, state.bot.id)) return permissionError(flag);
   }
   return null;
 }
@@ -342,7 +358,15 @@ function handleGuildChannelRoutes(method: string, segments: string[], body: unkn
     // createGuildInvite lists channels first, and a bot without View Channel never gets that far.
     const denied = requirePermissions(guild, ["VIEW_CHANNEL"]);
     if (denied) return denied;
-    return { status: 200, body: guild.channels };
+    // Discord returns only the channels the bot can actually see, so a VIEW_CHANNEL denial on one
+    // channel removes it from the listing entirely rather than returning it with a flag. That is what
+    // makes "the bot cannot see #general" and "there is no #general" indistinguishable to a caller,
+    // and it is why createGuildInvite picking from this list is not sufficient on its own: a channel
+    // that survives the filter can still deny CREATE_INSTANT_INVITE.
+    const visible = guild.channels.filter((channel) =>
+      botHasChannelPermission(guild, channel, "VIEW_CHANNEL", state.bot.id)
+    );
+    return { status: 200, body: visible };
   }
 
   if (method !== "POST") return methodNotAllowed();
@@ -442,7 +466,7 @@ function handleChannelRoutes(method: string, segments: string[], body: unknown):
     }
     if (method !== "DELETE") return methodNotAllowed();
     if (!located) return errorReply(404, 10003);
-    const denied = requirePermissions(located.guild, ["MANAGE_CHANNELS"]);
+    const denied = requireChannelPermissions(located.guild, located.channel, ["MANAGE_CHANNELS"]);
     if (denied) return denied;
     located.guild.channels = located.guild.channels.filter((candidate) => candidate.id !== channelId);
     return { status: 200, body: located.channel };
@@ -454,7 +478,7 @@ function handleChannelRoutes(method: string, segments: string[], body: unknown):
 
     if (segments.length === 3) {
       if (method !== "POST") return methodNotAllowed();
-      const denied = requirePermissions(guild, ["VIEW_CHANNEL", "SEND_MESSAGES"]);
+      const denied = requireChannelPermissions(guild, located.channel, ["VIEW_CHANNEL", "SEND_MESSAGES"]);
       if (denied) return denied;
       const args = (body ?? {}) as { content?: string; embeds?: unknown[] };
       const embeds = Array.isArray(args.embeds) ? args.embeds : [];
@@ -479,7 +503,7 @@ function handleChannelRoutes(method: string, segments: string[], body: unknown):
       if (!existing || existing.channel_id !== channelId) return errorReply(404, 10008);
       if (method === "GET") return { status: 200, body: existing };
       if (method !== "PATCH") return methodNotAllowed();
-      const denied = requirePermissions(guild, ["VIEW_CHANNEL", "READ_MESSAGE_HISTORY"]);
+      const denied = requireChannelPermissions(guild, located.channel, ["VIEW_CHANNEL", "READ_MESSAGE_HISTORY"]);
       if (denied) return denied;
       if (existing.author.id !== state.bot.id) return errorReply(403, 50005);
       const args = (body ?? {}) as { content?: string; embeds?: unknown[] };
@@ -496,7 +520,7 @@ function handleChannelRoutes(method: string, segments: string[], body: unknown):
     if (method !== "POST") return methodNotAllowed();
     if (!located) return errorReply(404, 10003);
     const { guild, channel } = located;
-    const denied = requirePermissions(guild, ["VIEW_CHANNEL", "CREATE_INSTANT_INVITE"]);
+    const denied = requireChannelPermissions(guild, located.channel, ["VIEW_CHANNEL", "CREATE_INSTANT_INVITE"]);
     if (denied) return denied;
     const args = (body ?? {}) as { max_age?: number; max_uses?: number };
     const invite = {
