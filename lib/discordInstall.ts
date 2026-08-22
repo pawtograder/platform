@@ -19,18 +19,23 @@ import { discordApiBase } from "@/lib/discordApiBase";
  * header is not a property this module should depend on.
  *
  * `NEXT_PUBLIC_PAWTOGRADER_WEB_URL` is already the canonical public origin elsewhere in the app (see
- * `app/actions.ts`), with `VERCEL_PROJECT_PRODUCTION_URL` preferred on Vercel preview/production. It
- * also has to be the origin here for a second reason: `installCallbackUrl` below has to match a
- * redirect URI registered on the Discord application exactly, and a value derived from an inbound
- * header cannot be registered in advance.
+ * `app/actions.ts`). It also has to be the origin here for a second reason: `installCallbackUrl`
+ * below must match a redirect URI registered on the Discord application exactly, and a value derived
+ * from an inbound header cannot be registered in advance.
+ *
+ * `VERCEL_PROJECT_PRODUCTION_URL` is deliberately NOT preferred, unlike in `app/actions.ts`. On a
+ * preview deployment it names the *production* hostname, so the callback would land on production
+ * while the install nonce was set as a host-only cookie on the preview host -- guaranteeing a nonce
+ * mismatch after the instructor has already authorized the bot in Discord, which is the most
+ * confusing possible failure. Preferring the deployment's own configured origin means a preview
+ * either works (because that origin is registered) or fails at Discord's `redirect_uri` check with a
+ * message that names the cause.
  *
  * Falling back to the request's own origin keeps a misconfigured deployment working rather than
  * redirecting to `undefined/...`, and is safe because it is this server's real origin.
  */
 export function redirectOrigin(request: Request): string {
-  const configured = process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL;
+  const configured = process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL;
   if (configured) {
     try {
       // Normalised through URL so a trailing slash or a stray path in the env var cannot produce a

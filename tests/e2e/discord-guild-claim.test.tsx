@@ -356,6 +356,20 @@ test.describe("claim_discord_guild + discord_server_id RLS", () => {
     // in B's server matched archived class A too and would have assigned A's roles inside B. Releasing
     // the guild and unlinking the class are now one event (trigger, 20260822150000), so there is no
     // window in which two classes name the same server.
+    // Seeded so the teardown assertions below have something to prove. Without this the class has no
+    // tracked rows and "nothing survived" is true for the wrong reason.
+    await untypedTable(supabase, "discord_roles").insert({
+      class_id: classAId,
+      role_type: "student",
+      discord_role_id: "1200000000000000002"
+    });
+    await untypedTable(supabase, "discord_channels").insert({
+      class_id: classAId,
+      channel_type: "general",
+      discord_channel_id: "1300000000000000333"
+    });
+    await supabase.from("classes").update({ discord_channel_group_id: "1400000000000000009" }).eq("id", classAId);
+
     const { error: archiveError } = await supabase.from("classes").update({ archived: true }).eq("id", classAId);
     expect(archiveError).toBeNull();
 
@@ -363,6 +377,21 @@ test.describe("claim_discord_guild + discord_server_id RLS", () => {
     expect(archived.discord_server_id, "archiving must clear the link, not just release the index").toBeNull();
     expect(archived.discord_server_claimed_by).toBeNull();
     expect(archived.discord_server_claimed_at).toBeNull();
+    expect(archived.discord_channel_group_id, "the category id is an id in the released guild").toBeNull();
+
+    // The teardown, asserted separately because the first attempt at this fix released the guild
+    // WITHOUT it. `clear_discord_roles_on_server_change` is `BEFORE UPDATE OF discord_server_id`, and
+    // an archive statement names only `archived`, so PostgreSQL never scheduled it -- however the
+    // archive trigger mutated NEW. Measured: roles=2, channels=1 survived with the server released.
+    // Asserting the post-state alone is not enough here: these rows have to be seeded first, or the
+    // assertion passes on a class that never had any.
+    for (const table of ["discord_roles", "discord_channels", "discord_messages"] as const) {
+      const { data: leftovers, error: leftoverError } = await untypedTable(supabase, table)
+        .select("id")
+        .eq("class_id", classAId);
+      expect(leftoverError, `reading ${table} failed`).toBeNull();
+      expect((leftovers as unknown[]).length, `${table} must not survive archiving`).toBe(0);
+    }
 
     const { error } = await untypedRpc(supabase, "claim_discord_guild", {
       p_class_id: classBId,
