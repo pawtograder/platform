@@ -222,7 +222,14 @@ secrets:
     # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
     # edgeFunctionsBundles explicitly in new overlays.
     bundles: []
-    webBundles: []                # usually: web
+    webBundles: []                # usually: web, llm, discord
+                                  #   `discord` belongs here as well as in
+                                  #   edgeFunctionsBundles: DISCORD_APPLICATION_ID
+                                  #   and DISCORD_BOT_TOKEN are read by the Next.js
+                                  #   bot-install routes (app/api/discord/install
+                                  #   and .../install/callback), not only by the
+                                  #   worker. Omitting it makes the install button
+                                  #   answer 500.
     edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
                                   #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name

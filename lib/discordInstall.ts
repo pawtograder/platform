@@ -67,8 +67,13 @@ export function installCallbackUrl(request: Request): string {
  * state, and the path is built from an integer. There is nothing for an open redirect to work on, so
  * the safe thing here is to keep it that way rather than to add a sanitiser.
  *
- * `error_description` is the same param the rest of the app already surfaces (the GitHub link banner,
- * `/api/discord/oauth/callback`), so the message renders without new plumbing.
+ * Prefixed `discord_error` / `discord_error_description` rather than the bare `error` /
+ * `error_description` the rest of the app uses for redirected failures. Reusing those names looked
+ * free -- the settings page could render the message with no new plumbing -- but the destination is a
+ * page that already hosts `LinkDiscordAccount`, and that component reads `error_description` too and
+ * titles it "Discord Connection Error". A failed bot install therefore raised a second, false alert
+ * about the instructor's own Discord ACCOUNT, on every staff member who has not linked one. The bare
+ * names are a shared channel with one reader per page, and this page has two.
  */
 export function manageDiscordPageUrl(
   request: Request,
@@ -76,8 +81,8 @@ export function manageDiscordPageUrl(
   result: { error?: string; errorDescription?: string; installed?: string; disconnected?: string }
 ): string {
   const url = new URL(`${redirectOrigin(request)}/course/${classId}/manage/discord`);
-  if (result.error) url.searchParams.set("error", result.error);
-  if (result.errorDescription) url.searchParams.set("error_description", result.errorDescription);
+  if (result.error) url.searchParams.set("discord_error", result.error);
+  if (result.errorDescription) url.searchParams.set("discord_error_description", result.errorDescription);
   if (result.installed) url.searchParams.set("discord_installed", result.installed);
   if (result.disconnected) url.searchParams.set("discord_disconnected", result.disconnected);
   return url.toString();

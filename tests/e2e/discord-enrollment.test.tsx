@@ -111,6 +111,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const membership = () => untypedTable(supabase, "discord_membership_status");
   const breakers = () => untypedTable(supabase, "discord_circuit_breakers");
   const asyncErrors = () => untypedTable(supabase, "discord_async_errors");
+  const channelsTable = () => untypedTable(supabase, "discord_channels");
 
   /** Point a class at a guild and record the class roles the mock's snowflakes stand for. */
   async function connectClass(classId: number, guildId: string): Promise<void> {
@@ -141,8 +142,21 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   }
 
   async function membershipRow(classId: number, userId: string): Promise<Record<string, unknown> | null> {
-    const { data, error } = await membership()
-      .select("class_id, user_id, guild_id, state, detail, last_observed_at, last_retry_requested_at")
+    // Type-erased for `last_reconciled_at`, which lands with migration 20260822190000; SupabaseTypes.d.ts
+    // is regenerated centrally once all of this branch's migrations are in, so the column is not in the
+    // typed column union yet. Same escape hatch the branch uses for its not-yet-generated RPCs.
+    const query = membership() as unknown as {
+      select: (columns: string) => {
+        eq: (
+          column: string,
+          value: number
+        ) => Promise<{ data: Record<string, unknown>[] | null; error: { message: string } | null }>;
+      };
+    };
+    const { data, error } = await query
+      .select(
+        "class_id, user_id, guild_id, state, detail, last_observed_at, last_retry_requested_at, last_reconciled_at"
+      )
       .eq("class_id", classId);
     expect(error).toBeNull();
     return (data ?? []).find((row) => row.user_id === userId) ?? null;
@@ -430,15 +444,24 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     expect(queued, `no add_member_role queued for ${RECON_DISCORD_ID} in ${RECON_GUILD}`).toBeTruthy();
     expect((queued?.message.args as { role_id?: string })?.role_id).toBe(STUDENT_ROLE_ID);
 
-    // And the row is stamped, so the next pass does not pile a second copy on top of this one.
+    // The row is stamped, so the next pass does not pile a second copy on top of this one -- but on
+    // last_reconciled_at, the reconciler's OWN throttle.
     const row = await membershipRow(reconClassId, reconStudent.user_id);
-    expect(row?.last_retry_requested_at).toBeTruthy();
+    expect(row?.last_reconciled_at).toBeTruthy();
+
+    // And it leaves the instructor's Re-invite throttle alone. This is the regression the separate
+    // column exists for: the reconciler fires at minutes 7, 22, 37 and 52, and while it was stamping
+    // last_retry_requested_at, request_discord_reinvite() skipped these students for the next five
+    // minutes and components/discord/reinvite-button.tsx rendered the button as already-just-used --
+    // on exactly the stuck students an instructor opens the roster to retry.
+    expect(row?.last_retry_requested_at, "the reconciler must not spend the instructor's retry throttle").toBeNull();
   });
 
   test("a second reconciler pass does not re-enqueue the same user", async () => {
-    // last_retry_requested_at is inside the same window now, so this candidate is being handled and
-    // must be left alone. Without that guard the reconciler would quadruple the hourly sync's Discord
-    // calls, which is worse than the failure it repairs.
+    // last_reconciled_at is inside the same window now, so this candidate is being handled and must be
+    // left alone. Without that guard the reconciler would quadruple the hourly sync's Discord calls,
+    // which is worse than the failure it repairs -- and an envelope that dead-letters would come back
+    // on every pass forever, because nothing else updates last_observed_at for it.
     await drainQueue();
     const response = await invokeEdgeFunction("discord-reconciler");
     expect(response.status).toBe(200);
@@ -744,6 +767,138 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
 
     const stormCalls = (await getCalls()).filter((call) => call.path.includes(STORM_GUILD));
     expect(stormCalls, `parked guild ${STORM_GUILD} should have received no requests`).toHaveLength(0);
+  });
+
+  test("a notification is not parked by a circuit opened for a ROLE failure", async () => {
+    // The scoping the breaker did NOT have. STORM_GUILD is parked by the two tests above, and it was
+    // parked for 403/50013 on add_member_role -- a role-hierarchy or Manage Roles problem, which is
+    // exactly what discord-check-bot-installation exists to diagnose.
+    //
+    // Before CIRCUIT_GATED_METHODS the breaker gated EVERY guild-scoped envelope, so that role failure
+    // also parked the class's send_message and update_message work: help requests, regrade requests
+    // and discussion notifications. They are per-event rather than per-enrollment, so they were never
+    // the fan-out the breaker protects the shared token from -- and after MAX_CIRCUIT_DEFERRALS windows
+    // they DEAD-LETTER. A student's help request silently never reached Discord because of an unrelated
+    // role position in the server settings, and nothing in the product said so.
+    const { data: openRows } = await breakers().select("key, state, open_until").eq("key", STORM_GUILD);
+    const stillOpen = (openRows ?? []).some(
+      (row) => row.state === "open" && (!row.open_until || new Date(String(row.open_until)).getTime() > Date.now())
+    );
+    // Guarded, because "the notification went through" is also what a CLOSED breaker produces. Without
+    // this the test would keep passing after a regression that simply never opened the circuit.
+    expect(stillOpen, `${STORM_GUILD}'s breaker must still be open for this test to mean anything`).toBe(true);
+
+    // A tracked text channel in the parked guild. Tracked matters: send_message's own preflight drops
+    // an envelope for a channel the class no longer tracks, so an untracked one would be dropped for
+    // the wrong reason and the assertion below would fail without telling us why.
+    const mockState = (await getState()) as unknown as {
+      guilds?: Record<string, { channels?: Array<{ id: string; type: number }> }>;
+    };
+    const textChannel = (mockState.guilds?.[STORM_GUILD]?.channels ?? []).find((channel) => channel.type === 0);
+    expect(textChannel, `mock guild ${STORM_GUILD} has no text channel to post into`).toBeTruthy();
+    const channelId = String(textChannel?.id);
+
+    await channelsTable().delete().eq("class_id", stormClassId);
+    const { error: channelError } = await channelsTable().insert({
+      class_id: stormClassId,
+      discord_channel_id: channelId,
+      channel_type: "operations",
+      resource_id: null
+    });
+    expect(channelError, "seeding a tracked channel").toBeNull();
+
+    await clearCalls();
+    await drainQueue();
+
+    const { error: sendError } = await supabase.schema("pgmq_public").rpc("send", {
+      queue_name: "discord_async_calls",
+      message: {
+        method: "send_message",
+        class_id: stormClassId,
+        args: { channel_id: channelId, content: "e2e: a help request notification" }
+      },
+      sleep_seconds: 0
+    } as never);
+    expect(sendError, "enqueueing a send_message envelope").toBeNull();
+
+    const delivered = await driveWorker(async () => {
+      const calls = await getCalls();
+      return calls.some((call) => call.method === "POST" && call.path === `/channels/${channelId}/messages`);
+    }, 45_000);
+    expect(delivered, "a notification was withheld from a guild parked for a role failure").toBe(true);
+
+    // And it was never charged a deferral, which is the mechanism that would have dead-lettered it.
+    const remaining = await readQueue();
+    const deferrals = remaining.filter(
+      (row) =>
+        row.message?.method === "send_message" &&
+        Boolean((row.message as { circuit_deferrals?: number }).circuit_deferrals)
+    );
+    expect(deferrals, "send_message was charged a circuit deferral").toHaveLength(0);
+
+    await channelsTable().delete().eq("class_id", stormClassId);
+    await drainQueue();
+  });
+
+  test("a discussion notification survives even though its channel is not in discord_channels", async () => {
+    // The other channel source, and the reason the message preflight cannot simply ask "is this channel
+    // tracked". discussion_topics.discord_channel_id is a free-text field an instructor types on the
+    // discussion-topics settings page (see createTopicModal); nothing writes it into discord_channels
+    // and nothing clears it. So a discussion notification's channel is routinely absent from the
+    // tracking table, and a preflight keyed on tracking alone would silently stop every discussion
+    // notification on the platform while looking like a safety improvement.
+    //
+    // RECON_GUILD, not STORM_GUILD: this is about the channel source, and running it against a parked
+    // guild would tangle it with the breaker-scope property the previous test covers.
+    const mockState = (await getState()) as unknown as {
+      guilds?: Record<string, { channels?: Array<{ id: string; type: number }> }>;
+    };
+    const textChannel = (mockState.guilds?.[RECON_GUILD]?.channels ?? []).find((channel) => channel.type === 0);
+    expect(textChannel, `mock guild ${RECON_GUILD} has no text channel to post into`).toBeTruthy();
+    const channelId = String(textChannel?.id);
+
+    // Deliberately NOT tracked: the whole point is that discord_channels does not know this channel.
+    await channelsTable().delete().eq("class_id", reconClassId);
+    // Idempotent setup. The cleanup at the end of this test does not run when an assertion fails, and a
+    // leaked topic row makes the NEXT run fail on the insert instead of on the behaviour -- which reads
+    // as a different bug entirely.
+    const topicName = `${getTestRunPrefix()}-discord-topic`;
+    await supabase.from("discussion_topics").delete().eq("class_id", reconClassId).eq("topic", topicName);
+    const { data: topicRow, error: topicError } = await supabase
+      .from("discussion_topics")
+      .insert({
+        class_id: reconClassId,
+        topic: topicName,
+        description: "e2e: a topic whose Discord channel the instructor typed in",
+        color: "#336699",
+        discord_channel_id: channelId
+      })
+      .select("id")
+      .single();
+    expect(topicError, "seeding a discussion topic").toBeNull();
+
+    await clearCalls();
+    await drainQueue();
+
+    const { error: sendError } = await supabase.schema("pgmq_public").rpc("send", {
+      queue_name: "discord_async_calls",
+      message: {
+        method: "send_message",
+        class_id: reconClassId,
+        args: { channel_id: channelId, content: "e2e: a discussion notification" }
+      },
+      sleep_seconds: 0
+    } as never);
+    expect(sendError, "enqueueing a send_message envelope").toBeNull();
+
+    const delivered = await driveWorker(async () => {
+      const calls = await getCalls();
+      return calls.some((call) => call.method === "POST" && call.path === `/channels/${channelId}/messages`);
+    }, 45_000);
+    expect(delivered, "a discussion notification was dropped because its channel is not tracked").toBe(true);
+
+    if (topicRow?.id) await supabase.from("discussion_topics").delete().eq("id", topicRow.id);
+    await drainQueue();
   });
 
   test("a guild Discord does not have opens the breaker too, not just a permission storm", async () => {

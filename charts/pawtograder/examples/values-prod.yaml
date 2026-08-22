@@ -97,9 +97,21 @@ secrets:
     # `llm` carries the LLM-hint provider API keys (OPENAI_API_KEY,
     # ANTHROPIC_API_KEY, ...) read by app/api/llm-hint/route.ts — without it the
     # LLM-hint route returns 500 "API key is required".
+    # `discord` is listed here AS WELL AS under edgeFunctionsBundles, and both are
+    # required. It carries DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN, which the
+    # Next.js bot-install routes read directly: /api/discord/install uses the
+    # application id as the authorize URL's client_id, and
+    # /api/discord/install/callback uses the bot token to confirm the bot is really
+    # in the guild before recording the claim. Without it here the install button
+    # answers 500 and no course can connect a Discord server -- and the failure
+    # lands after the instructor has already authorized the bot on Discord's own
+    # screen, which is the most confusing place for it to surface. Two ExternalSecret
+    # entries reading one Bao path is deliberate: the alternative is a second copy of
+    # the same two credentials in the `web` bundle, and two copies rotate apart.
     webBundles:
       - web
       - llm
+      - discord
     # Edge runtime bundles. These all land in pawtograder-edge-functions.
     # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
     # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths

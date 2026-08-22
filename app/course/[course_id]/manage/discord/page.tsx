@@ -45,7 +45,14 @@ export default function DiscordManagementPage() {
   // failures, so the outcome of a trip through Discord is reported on the page that started it.
   const searchParams = useSearchParams();
   const installOutcome = searchParams.get("discord_installed");
-  const installError = searchParams.get("error_description");
+  // `discord_error_description`, not the bare `error_description`: LinkDiscordAccount below reads that
+  // one and titles it "Discord Connection Error", so a failed *install* used to raise a second, false
+  // alert about the instructor's own Discord account. See manageDiscordPageUrl.
+  const installError = searchParams.get("discord_error_description");
+  // Which operation failed. Both the install callback and the disconnect route redirect here with a
+  // description, and a single fixed title reported a failed disconnect as "The Discord server was not
+  // connected" -- the opposite of what happened, on the page whose job is to say what the state is.
+  const installErrorKind = searchParams.get("discord_error");
   // "noop" when there was nothing connected, so a double-submitted disconnect stays quiet rather
   // than announcing a teardown that did not happen.
   const disconnectOutcome = searchParams.get("discord_disconnected");
@@ -58,14 +65,25 @@ export default function DiscordManagementPage() {
   const [eventsIcsUrl, setEventsIcsUrl] = useState(course?.events_ics_url || "");
   const [isCalendarSaving, setIsCalendarSaving] = useState(false);
 
-  // Update ICS URLs when course changes
+  // Re-seed each field from the course only when THAT field's stored value changes, not on every new
+  // `course` object.
+  //
+  // useCourseController applies realtime updates with `setCourse(c => ({ ...c, ...updated }))`, so any
+  // UPDATE to the classes row -- including claim_discord_guild() stamping discord_server_claimed_at,
+  // and including this page's own save -- produces a fresh object identity. Depending on `course`
+  // therefore re-ran on writes that touched none of these columns and overwrote whatever the
+  // instructor had typed, mid-edit, with the stored value. Depending on the primitive columns means
+  // the effect fires only when the stored value genuinely differs, which is the case it exists for
+  // (another tab, another instructor) and the only case where discarding local input is correct.
   useEffect(() => {
-    if (course) {
-      setOfficeHoursIcsUrl(course.office_hours_ics_url || "");
-      setEventsIcsUrl(course.events_ics_url || "");
-      setDiscordChannelGroupId(course.discord_channel_group_id || "");
-    }
-  }, [course]);
+    setOfficeHoursIcsUrl(course?.office_hours_ics_url || "");
+  }, [course?.office_hours_ics_url]);
+  useEffect(() => {
+    setEventsIcsUrl(course?.events_ics_url || "");
+  }, [course?.events_ics_url]);
+  useEffect(() => {
+    setDiscordChannelGroupId(course?.discord_channel_group_id || "");
+  }, [course?.discord_channel_group_id]);
 
   // Whether a server is *named*. Whether the bot is actually in it, and can work there, is what
   // DiscordInstallationStatus answers -- the two are not the same thing, which is the whole reason
@@ -163,7 +181,14 @@ export default function DiscordManagementPage() {
           a failure is the first thing on the page, and titled in words rather than signalled only by
           the alert's colour. */}
       {installError && (
-        <Alert status="error" title="The Discord server was not connected">
+        <Alert
+          status="error"
+          title={
+            installErrorKind === "discord_disconnect_failed"
+              ? "The Discord server was not disconnected"
+              : "The Discord server was not connected"
+          }
+        >
           <Text>{installError}</Text>
         </Alert>
       )}

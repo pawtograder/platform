@@ -62,6 +62,16 @@ const MAX_STUCK_ROWS_PER_PASS = 2000;
  */
 const ENROLLMENT_LOOKUP_CHUNK = 100;
 
+/**
+ * Row cap for one enrollment chunk, kept below PostgREST's `max_rows = 1000`.
+ *
+ * The point is not the ceiling but being able to SEE it: PostgREST truncates at max_rows and answers
+ * 200, so an unbounded `.select()` cannot tell a complete reply from a clipped one. Asking for a
+ * bound we chose means hitting it is a fact the code can act on. One chunk is 100 users scoped to the
+ * classes being alerted on, so reaching 900 rows means an assumption is wrong, not that a class is big.
+ */
+const ENROLLMENT_LOOKUP_ROW_CAP = 900;
+
 type StuckRow = {
   class_id: number;
   user_id: string;
@@ -70,8 +80,37 @@ type StuckRow = {
   detail: string | null;
   first_observed_at: string;
   last_observed_at: string;
-  classes: { name: string | null; discord_server_id: string | null } | null;
+  classes: {
+    name: string | null;
+    discord_server_id: string | null;
+    archived: boolean | null;
+    end_date: string | null;
+  } | null;
 };
+
+/**
+ * The TypeScript half of `is_class_active(archived, end_date)`.
+ *
+ * reconcile_stuck_discord_memberships() scopes its re-enqueue on that function, and the alerting pass
+ * below had no equivalent -- so a course that finished last term but was never archived kept its guild
+ * and its cannot_invite rows, was correctly excluded from the re-enqueue as "finished, not stuck", and
+ * then paged Sentry about the same class every fifteen minutes forever. The two halves have to agree
+ * on what "still running" means or the reconciler alerts on precisely the classes it has decided not
+ * to repair.
+ *
+ * Archived classes need no term here: the archive trigger nulls `discord_server_id`, so they are
+ * already dropped by the current-guild filter. It is kept anyway because relying on another trigger's
+ * side effect to enforce this one's predicate is how 20260822150000 went wrong.
+ */
+const ACTIVE_CLASS_GRACE_DAYS = 30;
+
+function isClassActive(archived: boolean | null, endDate: string | null): boolean {
+  if (archived === true) return false;
+  if (!endDate) return true;
+  const end = new Date(endDate).getTime();
+  if (!Number.isFinite(end)) return true;
+  return end >= Date.now() - ACTIVE_CLASS_GRACE_DAYS * 24 * 60 * 60 * 1000;
+}
 
 /**
  * Call an RPC that is not in the generated `Database` type yet.
@@ -164,7 +203,7 @@ serveWithSentryFlush(async (req) => {
     const { data: stuckRows, error: stuckError } = await supabase
       .from("discord_membership_status")
       .select(
-        "class_id, user_id, guild_id, discord_error_code, detail, first_observed_at, last_observed_at, classes!inner(name, discord_server_id)"
+        "class_id, user_id, guild_id, discord_error_code, detail, first_observed_at, last_observed_at, classes!inner(name, discord_server_id, archived, end_date)"
       )
       .eq("state", "cannot_invite")
       .lt("first_observed_at", cutoff)
@@ -173,6 +212,12 @@ serveWithSentryFlush(async (req) => {
       // lost its permissions everywhere -- is one row per enrolled student across every class. The
       // rows are only used to decide which classes to alert about, and MAX_STUCK_ROWS_PER_PASS is far
       // more than enough to name every affected class, so the cap costs nothing the alert needs.
+      // Ordered, so the cap takes a defined sample rather than whatever the planner happened to emit.
+      // Unordered, a deployment-wide failure could return 2000 rows all belonging to one class -- or
+      // all belonging to students who have since been dropped, which the filter below then removes,
+      // producing zero alerts while other classes really were stuck. Oldest first is the right sample
+      // because it is the one the alert is about.
+      .order("first_observed_at", { ascending: true })
       .limit(MAX_STUCK_ROWS_PER_PASS);
     if (stuckError) {
       console.error("[discord-reconciler] Failed to query long-stuck memberships:", stuckError);
@@ -187,7 +232,10 @@ serveWithSentryFlush(async (req) => {
     // live failure -- get_discord_membership_status_for_class() hides them from instructors for the
     // same reason, and alerting on them would page for a server nobody is using any more.
     const onCurrentGuild = ((stuckRows ?? []) as unknown as StuckRow[]).filter(
-      (row) => row.classes?.discord_server_id === row.guild_id
+      (row) =>
+        row.classes?.discord_server_id === row.guild_id &&
+        // Same predicate the re-enqueue half scopes on. See isClassActive.
+        isClassActive(row.classes?.archived ?? null, row.classes?.end_date ?? null)
     );
 
     // Rows for somebody who is no longer an active member of the class are not a live failure either.
@@ -203,6 +251,7 @@ serveWithSentryFlush(async (req) => {
     let stuck = onCurrentGuild;
     if (onCurrentGuild.length > 0) {
       const userIds = [...new Set(onCurrentGuild.map((row) => row.user_id))];
+      const alertedClassIds = [...new Set(onCurrentGuild.map((row) => row.class_id))];
       const active = new Set<string>();
       for (let offset = 0; offset < userIds.length; offset += ENROLLMENT_LOOKUP_CHUNK) {
         const chunk = userIds.slice(offset, offset + ENROLLMENT_LOOKUP_CHUNK);
@@ -210,12 +259,30 @@ serveWithSentryFlush(async (req) => {
           .from("user_roles")
           .select("class_id, user_id")
           .eq("disabled", false)
-          .in("user_id", chunk);
+          .in("user_id", chunk)
+          // Narrowed to the classes actually being alerted on, and bounded explicitly.
+          //
+          // Without the class filter this asked for every enrollment each of these users has in every
+          // course on the deployment. A user with rows in several classes multiplies, and PostgREST
+          // applies `max_rows = 1000` (supabase/config.toml) by TRUNCATING rather than erroring -- so
+          // the reply came back short, the missing pairs read as "not enrolled", and whole classes were
+          // silently dropped from the >12h alert. Silently, because a truncated 200 is
+          // indistinguishable from a complete one.
+          .in("class_id", alertedClassIds)
+          .limit(ENROLLMENT_LOOKUP_ROW_CAP);
         if (rolesError) {
           // Fail loud rather than alerting on an unfiltered set: a silent fallback here would restore
           // exactly the noise this filter exists to remove. Thrown on the first failing chunk, so a
           // partial `active` set is never used to decide who is enrolled.
           throw new Error(`Failed to read active enrollments for stuck Discord memberships: ${rolesError.message}`);
+        }
+        if ((activeRoles ?? []).length >= ENROLLMENT_LOOKUP_ROW_CAP) {
+          // At the cap the result may be truncated and there is no way to tell, so the enrollment set
+          // is not trustworthy. Thrown for the same reason the branch above throws: alerting on a set
+          // we know might be short is how a real outage goes unreported.
+          throw new Error(
+            `Active-enrollment lookup for stuck Discord memberships hit its ${ENROLLMENT_LOOKUP_ROW_CAP}-row cap; refusing to alert on a possibly truncated enrollment set`
+          );
         }
         for (const role of activeRoles ?? []) active.add(`${role.class_id}:${role.user_id}`);
       }

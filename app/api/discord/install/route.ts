@@ -76,15 +76,35 @@ export async function GET(request: Request) {
     );
   }
 
+  // Every credential the ROUND TRIP needs, checked here rather than only the one this leg needs.
+  //
+  // The callback cannot record a claim without the OAuth client secret (it redeems the authorization
+  // code) or the bot token (it confirms the bot is really in the guild), and it reports both as
+  // "Discord could not be reached" -- a message that invites a retry which cannot ever pass. Checking
+  // them only there meant the instructor was sent to Discord, granted the bot real permissions on
+  // their own server, came back, and was told to try again. Failing before the state is minted keeps
+  // a misconfigured deployment from making an irreversible change on somebody else's Discord server
+  // and then disowning it.
   const applicationId = process.env.DISCORD_APPLICATION_ID;
-  if (!applicationId) {
-    // Reported, not silently degraded: without it there is no client_id and therefore no consent
-    // screen, and the button would appear to do nothing.
-    Sentry.captureMessage("DISCORD_APPLICATION_ID not configured; Discord install unavailable", {
+  const missingConfig = [
+    ["DISCORD_APPLICATION_ID", applicationId],
+    // Falls back to DISCORD_APPLICATION_ID in exchangeInstallCode(), so it is only missing when both are.
+    ["DISCORD_OAUTH_CLIENT_ID", process.env.DISCORD_OAUTH_CLIENT_ID ?? applicationId],
+    ["DISCORD_OAUTH_CLIENT_SECRET", process.env.DISCORD_OAUTH_CLIENT_SECRET],
+    ["DISCORD_BOT_TOKEN", process.env.DISCORD_BOT_TOKEN]
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+  if (!applicationId || missingConfig.length > 0) {
+    // Reported, not silently degraded: without these there is no consent screen to send anyone to, or
+    // no way to confirm what came back, and the button would appear to do nothing.
+    Sentry.captureMessage(`Discord install unavailable; unset: ${missingConfig.join(", ")}`, {
       level: "error"
     });
     return NextResponse.json(
-      { error: "Discord is not configured on this deployment (DISCORD_APPLICATION_ID is unset)." },
+      {
+        error: `Discord is not fully configured on this deployment, so a server cannot be connected (unset: ${missingConfig.join(", ")}).`
+      },
       { status: 500, headers: NO_STORE }
     );
   }

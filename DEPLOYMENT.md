@@ -576,6 +576,14 @@ the chart's `auth.yaml`):
 
 **Web app** (`pawtograder-web` Secret / `.env.local`):
 
+> On Kubernetes, `pawtograder-web` is filled by the bundles named in
+> `secrets.externalSecret.webBundles`. `DISCORD_APPLICATION_ID` and
+> `DISCORD_BOT_TOKEN` live in the `discord` bundle, so that bundle has to be
+> listed under **`webBundles` as well as `edgeFunctionsBundles`** — the install
+> routes below are Next.js, not Edge Functions. With `webBundles: [web, llm]`
+> alone the install button answers 500 and the callback can never confirm a
+> guild.
+
 - `DISCORD_PUBLIC_KEY` — the application's public key; verifies signatures on the
   `/api/discord/interactions` endpoint. Hex-encoded.
 - `DISCORD_WEBHOOK_PUBLIC_KEY` — the webhook's public key; verifies ed25519

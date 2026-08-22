@@ -184,7 +184,13 @@ async function handleSyncRolesCommand(interaction: DiscordInteraction, scope: Se
     .from("classes")
     .select("id, name, slug")
     .eq("discord_server_id", guildId)
-    .eq("archived", false);
+    // `not is true`, not `eq false`: classes.archived is nullable (added as
+    // `boolean DEFAULT false` with no NOT NULL, and every SQL predicate in the Discord schema wraps it
+    // in COALESCE for that reason). `.eq("archived", false)` is SQL equality, so a row with
+    // archived IS NULL matches neither -- and this filter decides whether a slash command resolves to
+    // a course at all, so a NULL there would answer a student's /sync-roles with "no course is linked
+    // to this server".
+    .not("archived", "is", true);
 
   if (classesError) {
     scope.setContext("classes_error", { error: classesError.message });

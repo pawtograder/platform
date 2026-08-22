@@ -2198,6 +2198,7 @@ export type Database = {
           guild_id: string;
           id: number;
           last_observed_at: string;
+          last_reconciled_at: string | null;
           last_retry_requested_at: string | null;
           observed_count: number;
           observed_discord_id: string | null;
@@ -2212,6 +2213,7 @@ export type Database = {
           guild_id: string;
           id?: number;
           last_observed_at?: string;
+          last_reconciled_at?: string | null;
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;
@@ -2226,6 +2228,7 @@ export type Database = {
           guild_id?: string;
           id?: number;
           last_observed_at?: string;
+          last_reconciled_at?: string | null;
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;

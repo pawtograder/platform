@@ -12,7 +12,7 @@ import type {
   RemoveMemberRoleArgs
 } from "./DiscordAsyncTypes.ts";
 import { discordApiBase } from "./DiscordApiBase.ts";
-import { isBotPermissionProblem, isRateLimitError } from "./DiscordErrorClassification.ts";
+import { isBotPermissionProblem, isMemberNotFound, isRateLimitError } from "./DiscordErrorClassification.ts";
 import {
   ALL_CHANNELS_REFUSED_INVITE,
   describeCandidate,
@@ -367,8 +367,18 @@ export async function getGuildMember(
       roles: data.roles || []
     };
   } catch (error) {
-    // 404 means user is not in guild
-    if (error instanceof Error && error.message.includes("404")) {
+    // The shared classifier, not `message.includes("404")`.
+    //
+    // That substring test read the whole error string, which carries the interpolated guild and user
+    // snowflakes and, on a timeout, the millisecond deadline -- so `GET /guilds/1404.../members/...`
+    // and `Discord API timeout after 10404ms` both answered "this user is not in the server". The
+    // sibling predicate isRateLimitError() documents the identical near-miss for "429" and keys on
+    // the parsed status for exactly this reason; this call site was the one left doing it by hand.
+    //
+    // It matters because of what the caller does with `null`: it records the student as not joined,
+    // overwriting an in_guild row, and mints a fresh invite. A transient timeout against an unlucky
+    // guild id therefore un-enrolled students who were already in the server.
+    if (isMemberNotFound(error)) {
       return null;
     }
     throw error;

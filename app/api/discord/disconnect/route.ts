@@ -57,8 +57,13 @@ export async function POST(request: NextRequest) {
     rawClassId = typeof value === "string" ? value : null;
   }
 
+  // The shape is checked, not just the parse, matching app/api/discord/install/route.ts. `Number` is
+  // far more permissive than it looks: `Number("1e30")` is 1e30 and `Number.isInteger` accepts it, so
+  // the id reached isInstructorOfClass() and the RPC as a value no bigint column can hold, and the
+  // 403 that came back named an authorization problem for what is a malformed request. `" 12 "` and
+  // `"0x0c"` parsed too.
   const classId = Number(rawClassId);
-  if (!rawClassId || !Number.isInteger(classId) || classId <= 0) {
+  if (!rawClassId || !/^\d+$/.test(rawClassId) || !Number.isSafeInteger(classId) || classId <= 0) {
     return NextResponse.json({ error: "A valid class_id is required" }, { status: 400, headers: NO_STORE });
   }
   scope.setTag("class_id", String(classId));
