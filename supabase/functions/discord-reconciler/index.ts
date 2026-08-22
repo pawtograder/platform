@@ -48,6 +48,20 @@ const ALERT_AFTER_HOURS = 12;
  */
 const MAX_STUCK_ROWS_PER_PASS = 2000;
 
+/**
+ * How many user ids one `user_roles` lookup may name.
+ *
+ * supabase-js encodes `.in(...)` into the PostgREST request URL, and a UUID costs 37 characters
+ * there. The full MAX_STUCK_ROWS_PER_PASS set -- which a broad Discord outage really does produce,
+ * since every enrolled student in every class reaches cannot_invite together -- is around 74KB of
+ * request line, well past the 8KB a gateway typically accepts before answering 414 without ever
+ * reaching Postgres. The reconciler throws on that read by design, which would suppress every
+ * long-stuck class alert precisely during the outage the alerts exist for.
+ *
+ * 100 keeps each URL near 4KB and costs at most 20 requests per pass at the row cap.
+ */
+const ENROLLMENT_LOOKUP_CHUNK = 100;
+
 type StuckRow = {
   class_id: number;
   user_id: string;
@@ -188,18 +202,26 @@ serveWithSentryFlush(async (req) => {
     // setting it to NULL already deletes the rows.
     let stuck = onCurrentGuild;
     if (onCurrentGuild.length > 0) {
-      const { data: activeRoles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("class_id, user_id")
-        .eq("disabled", false)
-        .in("class_id", [...new Set(onCurrentGuild.map((row) => row.class_id))])
-        .in("user_id", [...new Set(onCurrentGuild.map((row) => row.user_id))]);
-      if (rolesError) {
-        // Fail loud rather than alerting on an unfiltered set: a silent fallback here would restore
-        // exactly the noise this filter exists to remove.
-        throw new Error(`Failed to read active enrollments for stuck Discord memberships: ${rolesError.message}`);
+      const userIds = [...new Set(onCurrentGuild.map((row) => row.user_id))];
+      const active = new Set<string>();
+      for (let offset = 0; offset < userIds.length; offset += ENROLLMENT_LOOKUP_CHUNK) {
+        const chunk = userIds.slice(offset, offset + ENROLLMENT_LOOKUP_CHUNK);
+        const { data: activeRoles, error: rolesError } = await supabase
+          .from("user_roles")
+          .select("class_id, user_id")
+          .eq("disabled", false)
+          .in("user_id", chunk);
+        if (rolesError) {
+          // Fail loud rather than alerting on an unfiltered set: a silent fallback here would restore
+          // exactly the noise this filter exists to remove. Thrown on the first failing chunk, so a
+          // partial `active` set is never used to decide who is enrolled.
+          throw new Error(`Failed to read active enrollments for stuck Discord memberships: ${rolesError.message}`);
+        }
+        for (const role of activeRoles ?? []) active.add(`${role.class_id}:${role.user_id}`);
       }
-      const active = new Set((activeRoles ?? []).map((r) => `${r.class_id}:${r.user_id}`));
+      // The class is matched here rather than in the query. A `class_id` predicate would add its own
+      // list to every URL above for no benefit: the pair key already requires the row to be for this
+      // class, and a user's other classes contribute keys that simply never match.
       stuck = onCurrentGuild.filter((row) => active.has(`${row.class_id}:${row.user_id}`));
     }
 

@@ -23,6 +23,7 @@ import {
   isBotPermissionProblem,
   isRateLimitError,
   isResourceGone,
+  parseDiscordApiError,
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
 import { discordApiBase, isDiscordApiMocked } from "../_shared/DiscordApiBase.ts";
@@ -764,6 +765,38 @@ async function isGuildCircuitOpen(
     reason: row.open_until ? `open until ${row.open_until}` : "open",
     openUntil: row.open_until ?? null
   };
+}
+
+/**
+ * Whether a failure says the bot cannot act in this guild at all, which is what the breaker is for.
+ *
+ * Wider than isBotPermissionProblem() by exactly one case: 10004 Unknown Guild. Discord returns it
+ * as a 404, so the classifier -- which keys on 50001, 50013, the empty-guild message and HTTP 403 --
+ * excludes it, while TERMINAL_DISCORD_ERROR_CODES includes it. The combination was the worst of
+ * both: every envelope for a guild the bot has been removed from (or that has been deleted, or whose
+ * discord_server_id was always wrong) dead-lettered immediately and counted toward nothing, so a
+ * role sync for a 200-student course spent 200 requests of the shared bot token and wrote 200
+ * dead-letter rows without ever tripping the breaker built to stop exactly that.
+ *
+ * Deliberately local rather than a change to isBotPermissionProblem(). That predicate has callers
+ * that word the *reason shown to an instructor* -- the cannot_invite detail below, and the
+ * remediation text -- where "the bot lacks a permission in your server" and "Discord has no server
+ * with this ID" are different sentences pointing at different fixes, and widening it would collapse
+ * them. "The bot cannot act in this guild" is a superset of "the bot lacks a permission", so the
+ * superset lives here, at the one call site that wants it.
+ *
+ * On whether the guild breaker is the right lever for a guild that no longer exists: the breaker's
+ * job is to stop the per-enrollment stampede against a token every course shares, not to wait for a
+ * permission to be restored. A guild that is gone never gets fixed, so it re-trips and escalates to
+ * open_discord_circuit's six-hour cap -- which is the correct end state, not a wasted wait: it turns
+ * 200 doomed requests per sync into ten per six hours, and the cannot_invite rows and the
+ * PawtograderDiscordCircuitBreakerOpen alert are what actually route a human at it. Unlinking the
+ * class from the dead guild is a destructive action that belongs to the instructor-facing disconnect
+ * flow, not to an error path in a queue worker.
+ */
+function isGuildUnusableFailure(error: unknown): boolean {
+  if (isBotPermissionProblem(error)) return true;
+  return parseDiscordApiError(error).code === DISCORD_UNKNOWN_GUILD;
 }
 
 /**
@@ -2062,6 +2095,35 @@ export async function processEnvelope(
           level: "info"
         });
 
+        // Superseded envelopes are dropped before any Discord call, the same check create_role and
+        // add_member_role already make. trigger_discord_create_roles_on_server_connect enqueues the
+        // #scheduling and #operations channels the moment a server is connected, so a class that is
+        // moved -- or disconnected, or archived, both of which null discord_server_id -- while those
+        // envelopes are queued had them create channels in the guild it left. That guild may already
+        // belong to another course: the uniqueness index only covers unarchived classes, so archiving
+        // releases the server immediately and a channel named after this course could appear in
+        // somebody else's server. Nothing local would even record it -- the tracking insert below
+        // would write a discord_channels row for a channel in a guild the class no longer has.
+        //
+        // Returning true, not throwing: a superseded envelope is stale work, not a failure, so it is
+        // archived without a retry and without a dead-letter row.
+        if (envelope.class_id) {
+          const { data: currentClass, error: currentClassError } = await adminSupabase
+            .from("classes")
+            .select("discord_server_id")
+            .eq("id", envelope.class_id)
+            .maybeSingle();
+          if (currentClassError) {
+            throw currentClassError;
+          }
+          if (currentClass?.discord_server_id !== args.guild_id) {
+            console.log(
+              `[processEnvelope] Dropping create_channel ${args.name} for guild ${args.guild_id}; class ${envelope.class_id} now uses ${currentClass?.discord_server_id ?? "no server"}`
+            );
+            return true;
+          }
+        }
+
         const result = await discord.createChannel(args, scope);
         console.log(`[processEnvelope] Successfully created channel, id=${result.id}`);
 
@@ -2587,8 +2649,10 @@ export async function processEnvelope(
               // branch never reaches it: the failure is recorded against the student and the
               // envelope returns success. That makes this the single largest source of the storm the
               // breaker exists for -- a guild the bot cannot read produces one of these per enrolled
-              // student, each having already cost a getGuildMember plus a channel listing.
-              if (isBotPermissionProblem(inviteError)) {
+              // student, each having already cost a getGuildMember plus a channel listing. A guild
+              // Discord does not have arrives here too: getGuildMember reads its 404 as "not in
+              // guild", so every enrolled student reaches the invite call that then fails 10004.
+              if (isGuildUnusableFailure(inviteError)) {
                 await noteGuildPermissionFailure(adminSupabase, args.guild_id, envelope.method, inviteError, scope);
               }
 
@@ -2729,10 +2793,12 @@ export async function processEnvelope(
     console.error(`[processEnvelope] Error processing envelope:`, error);
     console.trace(error);
 
-    // Count bot-permission failures against the guild before deciding what to do with the message.
-    // These arrive once per enrolled student and are individually terminal, so without the breaker
-    // each one costs its own Discord round trip on the token every other course shares.
-    if (guildId && isBotPermissionProblem(error)) {
+    // Count failures that mean the bot cannot act in this guild before deciding what to do with the
+    // message. These arrive once per enrolled student and are individually terminal, so without the
+    // breaker each one costs its own Discord round trip on the token every other course shares.
+    // Counted before the terminal branch below on purpose: a terminal failure is dead-lettered here
+    // and never comes back, so this is the only chance to observe it at guild scope.
+    if (guildId && isGuildUnusableFailure(error)) {
       await noteGuildPermissionFailure(adminSupabase, guildId, envelope.method, error, scope);
     }
 

@@ -15,9 +15,9 @@
  * permissions in two layers, and the guild-level layer is the only one an audit of role bitfields can
  * see: a server can grant Send Messages everywhere and deny it in `#general`, or deny Create Invite
  * in its text channels and make enrollment impossible, while every server-level signal here stays
- * clean. Those answers are `channel_permission_problems` and `can_create_invites`, kept apart from
- * `missing_permissions` because their fix is editing one channel's permissions, not re-authorizing
- * the bot.
+ * clean. Those answers are `channel_permission_problems`, `missing_tracked_channel_ids` and
+ * `can_create_invites`, kept apart from `missing_permissions` because their fix is editing one
+ * channel's permissions (or re-syncing a channel that is gone), not re-authorizing the bot.
  *
  * Request:  { class_id: number }
  * Response: see CheckBotInstallationResponse
@@ -31,7 +31,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { discordBotGet, isTransientDiscordStatus } from "../_shared/DiscordBotRest.ts";
 import { DISCORD_UNKNOWN_GUILD, DISCORD_MISSING_ACCESS } from "../_shared/DiscordErrorClassification.ts";
-import { inviteCandidateChannels } from "../_shared/DiscordInviteChannels.ts";
+import { MAX_INVITE_CHANNEL_ATTEMPTS, inviteCandidateChannels } from "../_shared/DiscordInviteChannels.ts";
 import {
   DISCORD_PERMISSION_BITS,
   botInstallUrl,
@@ -65,8 +65,8 @@ export type CheckBotInstallationResponse = {
   /**
    * Human-readable labels of the required permissions the bot does not hold **at the server level**.
    *
-   * Server-level only, deliberately. Discord resolves per-channel and per-category overwrites on top
-   * of these, and those are reported separately in `channel_permission_problems` and
+   * Server-level only, deliberately. Discord resolves each channel's own overwrites on top of these,
+   * and those are reported separately in `channel_permission_problems` and
    * `can_create_invites`. Folding a channel result in here would send an instructor to the
    * re-authorize button, which cannot fix a channel overwrite -- the two failures have different
    * remediations, so they stay different fields.
@@ -85,12 +85,29 @@ export type CheckBotInstallationResponse = {
    */
   stale_class_role_ids: string[];
   /**
-   * Tracked channels where a per-channel or per-category overwrite blocks an operation the bot needs.
+   * Tracked channels where the channel's own permission overwrites block an operation the bot needs.
    *
    * Empty on a guild whose channel list could not be read, which is why it is not the only new
    * signal: absence of a problem here is not proof of health unless the check reached the channels.
    */
   channel_permission_problems: ChannelPermissionProblem[];
+  /**
+   * Channels Pawtograder still tracks in `discord_channels` that the guild's channel list does not
+   * return.
+   *
+   * "Missing" covers two states this API genuinely cannot tell apart: the channel was deleted, or an
+   * overwrite denies the bot View Channel so Discord omits it. Both are reported here because both
+   * have the same consequence -- every notification aimed at that channel fails -- and the same pair
+   * of remediations (re-sync so a replacement is created, or grant the bot access to it).
+   *
+   * Its own field rather than a term in `channel_permission_problems`, which claims specifically that
+   * an overwrite blocks an operation. That claim cannot be made about a channel whose overwrites were
+   * never read. This mirrors `stale_class_role_ids`, which is the same problem for roles.
+   *
+   * Empty when the channel list could not be read at all: with no listing, every tracked channel
+   * would look missing.
+   */
+  missing_tracked_channel_ids: string[];
   /**
    * False when no visible text channel permits Create Invite, so no student can be invited.
    *
@@ -122,7 +139,6 @@ type GuildChannelResponse = {
   id?: string;
   name?: string | null;
   type?: number;
-  parent_id?: string | null;
   permission_overwrites?: DiscordPermissionOverwriteLike[];
 };
 
@@ -152,17 +168,17 @@ const MESSAGEABLE_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
  * see, which is itself a fact: a channel whose overwrites deny View Channel is absent from it
  * entirely, indistinguishable from a channel that was deleted.
  *
- * Two different questions, deliberately answered separately:
+ * Three different questions, deliberately answered separately:
  *
  *   - Which of the class's TRACKED channels can the bot not work in? Those are the ones Pawtograder
  *     posts to, so an overwrite there silently drops notifications and digests.
- *   - Can ANY channel be used to create an invite? Invites are the enrollment path, and any one usable
- *     channel is enough -- a guild where every candidate denies Create Invite can enroll nobody, no
- *     matter how complete its server-level permissions are. The candidate set comes from
- *     `inviteCandidateChannels`, the same function the invite path itself uses: computing it here from
- *     a private idea of what counts as a text channel is how a check ends up disagreeing with the code
- *     it is checking. (Its ordering and its attempt cap are the invite path's own business; this only
- *     asks whether any candidate at all would be permitted.)
+ *   - Which tracked channels are not in the listing at all? Either somebody deleted one, or an
+ *     overwrite hid it -- the API gives no way to tell those apart, and the remediation covers both.
+ *   - Can an invite be created? Invites are the enrollment path, and one usable channel is enough --
+ *     but only within the same budget the invite path spends. The candidate set and its order come
+ *     from `inviteCandidateChannels`, the same function the invite path itself uses, and the same
+ *     `MAX_INVITE_CHANNEL_ATTEMPTS` cap is applied to it: computing either from a private idea of what
+ *     counts as usable is how a check ends up disagreeing with the code it is checking.
  */
 function auditChannels(args: {
   channels: readonly GuildChannelResponse[];
@@ -171,27 +187,26 @@ function auditChannels(args: {
   guildId: string;
   botUserId: string | null;
   trackedChannelIds: ReadonlySet<string>;
-}): { problems: ChannelPermissionProblem[]; canCreateInvites: boolean } {
+}): { problems: ChannelPermissionProblem[]; canCreateInvites: boolean; missingTrackedChannelIds: string[] } {
   const visible = args.channels.filter((channel): channel is GuildChannelResponse & { id: string } => {
     return typeof channel.id === "string" && channel.id !== "";
   });
   const byId = new Map(visible.map((channel) => [channel.id, channel]));
 
-  const resolve = (channel: GuildChannelResponse & { id: string }): bigint => {
-    // The parent's overwrites, when the parent is itself visible. An invisible category cannot be
-    // read, so its overwrites are simply absent here -- this under-reports rather than inventing a
-    // deny, which is the right direction for a check whose false positives cost an instructor a
-    // pointless trip through the Discord settings UI.
-    const parent = channel.parent_id ? byId.get(channel.parent_id) : undefined;
-    return channelPermissions({
+  // The channel's own overwrites and nothing else -- no walk up to `parent_id`. That is Discord's
+  // documented algorithm, and a synced category reaches its children by having its overwrite set
+  // COPIED onto them, so a synced child's list is already complete. Layering the category underneath
+  // used to invent permissions for an UNSYNCED child: a category-level allow the child had dropped
+  // came back out as granted, and this check would then report an operation as permitted that Discord
+  // answers 403 to. See the note on `channelPermissions`.
+  const resolve = (channel: GuildChannelResponse & { id: string }): bigint =>
+    channelPermissions({
       guildRoles: args.guildRoles,
       memberRoleIds: args.memberRoleIds,
       guildId: args.guildId,
       memberUserId: args.botUserId,
-      channelOverwrites: channel.permission_overwrites,
-      parentOverwrites: parent?.permission_overwrites
+      channelOverwrites: channel.permission_overwrites
     });
-  };
 
   const problems: ChannelPermissionProblem[] = [];
   for (const channel of visible) {
@@ -204,12 +219,25 @@ function auditChannels(args: {
     problems.push({ channel_id: channel.id, channel_name: channel.name ?? null, missing });
   }
 
-  const canCreateInvites = inviteCandidateChannels(visible).some((candidate) => {
-    const channel = byId.get(candidate.id);
-    return channel ? grantsChannelPermission(resolve(channel), DISCORD_PERMISSION_BITS.CREATE_INSTANT_INVITE) : false;
-  });
+  // A tracked channel that is not in the listing at all. Discord omits a channel the bot cannot see
+  // exactly as it omits one that was deleted, so this cannot say which -- and it does not try to. It
+  // is a separate answer from `problems` for that reason: the claim there is "an overwrite blocks
+  // this", which cannot be made about overwrites that were never read.
+  const missingTrackedChannelIds = [...args.trackedChannelIds].filter((id) => !byId.has(id));
 
-  return { problems, canCreateInvites };
+  // Capped exactly as the invite path caps itself. createGuildInvite slices the same ordered
+  // candidates to MAX_INVITE_CHANNEL_ATTEMPTS, so a guild whose fifth candidate is the only one
+  // permitting Create Invite reports `can_create_invites: true` from an uncapped scan and then has
+  // every student fail with `cannot_invite`. This field's only consumer is a prediction of that path,
+  // so it has to be the same prediction: same candidate order, same number of tries.
+  const canCreateInvites = inviteCandidateChannels(visible)
+    .slice(0, MAX_INVITE_CHANNEL_ATTEMPTS)
+    .some((candidate) => {
+      const channel = byId.get(candidate.id);
+      return channel ? grantsChannelPermission(resolve(channel), DISCORD_PERMISSION_BITS.CREATE_INSTANT_INVITE) : false;
+    });
+
+  return { problems, canCreateInvites, missingTrackedChannelIds };
 }
 
 function resolveApplicationId(): string {
@@ -267,6 +295,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       highest_class_role_position: null,
       stale_class_role_ids: [],
       channel_permission_problems: [],
+      missing_tracked_channel_ids: [],
       // No guild, so no channel was asked about. Reported as false for the same reason
       // `can_manage_class_roles` is: nothing works yet, and the fix is the install button.
       can_create_invites: false,
@@ -300,8 +329,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     // Empty rather than the tracked list: with the guild unreachable there is no live role list to
     // compare against, so every tracked role would look deleted.
     stale_class_role_ids: [],
-    // Same reasoning: the channel list was never read, so there is nothing to report about it.
+    // Same reasoning: the channel list was never read, so there is nothing to report about it, and
+    // every tracked channel would otherwise look deleted.
     channel_permission_problems: [],
+    missing_tracked_channel_ids: [],
     can_create_invites: false,
     // Pinned to the configured guild so the consent screen cannot be pointed at a different server.
     install_url: botInstallUrl({ applicationId, guildId })
@@ -449,13 +480,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     throw new UserVisibleError(`Could not read the class's Discord channels: ${channelsError.message}`, 503);
   }
 
-  // Tracked channels missing from the visible list are NOT reported here. Discord omits a channel the
-  // bot cannot see, which is indistinguishable from one that was deleted, and this field's claim is
-  // specifically that an overwrite blocks an operation -- a claim that cannot be made about a channel
-  // whose overwrites were never read.
   const guildChannels: GuildChannelResponse[] =
     channelsReadable && Array.isArray(channelsResult.data) ? (channelsResult.data as GuildChannelResponse[]) : [];
-  const { problems: channelPermissionProblems, canCreateInvites } = auditChannels({
+  const {
+    problems: channelPermissionProblems,
+    canCreateInvites,
+    missingTrackedChannelIds
+  } = auditChannels({
     channels: guildChannels,
     guildRoles,
     memberRoleIds,
@@ -463,8 +494,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     botUserId,
     trackedChannelIds: new Set((classChannels ?? []).map((row) => row.discord_channel_id))
   });
+  // Suppressed when the listing itself was unreadable: with no channels to compare against, every
+  // tracked channel is absent from a list that does not exist, and reporting all of them as missing
+  // would bury the real finding (View Channels, already named at the server level).
+  const missingTrackedChannels = channelsReadable ? missingTrackedChannelIds : [];
   if (channelPermissionProblems.length > 0) {
     scope?.setTag("channel_permission_problems", String(channelPermissionProblems.length));
+  }
+  if (missingTrackedChannels.length > 0) {
+    scope?.setTag("missing_tracked_channels", String(missingTrackedChannels.length));
   }
   if (!canCreateInvites) {
     scope?.setTag("discord_no_invite_channel", "true");
@@ -489,6 +527,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     highest_class_role_position: highestClassRolePosition,
     stale_class_role_ids: staleClassRoleIds,
     channel_permission_problems: channelPermissionProblems,
+    missing_tracked_channel_ids: missingTrackedChannels,
     can_create_invites: canCreateInvites,
     // Still returned when installed: it is the "fix the permissions" link, since re-running the
     // OAuth flow on an existing guild is how a bot's permission set is widened.

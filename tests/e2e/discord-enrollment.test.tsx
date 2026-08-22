@@ -16,6 +16,7 @@ import {
   invokeEdgeFunction,
   randomDiscordUserId,
   randomGuildId,
+  readQueue,
   releaseDiscordMockLock,
   takeDiscordMock,
   touchDiscordMockLock,
@@ -75,7 +76,17 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const STORM_GUILD = randomGuildId();
   /** Its own guild, because the invite-fallback test applies a scenario with denied channel overwrites. */
   const INVITE_GUILD = randomGuildId();
+  /** The guilds the mock is given. Deliberately excludes GONE_GUILD -- see below. */
   const ALL_GUILDS = [SYNC_GUILD, RECON_GUILD, STORM_GUILD, INVITE_GUILD];
+  /**
+   * A guild id the mock is NEVER given, so every guild route for it answers 404 / 10004 Unknown
+   * Guild -- what Discord says about a server the bot has been removed from, a server that has been
+   * deleted, and a discord_server_id that was always wrong. Kept out of ALL_GUILDS because
+   * applyScenarioForGuilds() creates the ids it is handed, which would defeat the whole fixture.
+   */
+  const GONE_GUILD = randomGuildId();
+  /** Every guild this spec leaves state under, for cleanup. ALL_GUILDS is the mock-backed subset. */
+  const TOUCHED_GUILDS = [...ALL_GUILDS, GONE_GUILD];
 
   // Distinct per user: lookupUserIdByDiscordId() uses `.single()`, so two platform users sharing a
   // Discord id would make the worker's reverse lookup fail rather than pick one.
@@ -83,15 +94,18 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   const RECON_DISCORD_ID = randomDiscordUserId();
   const STORM_DISCORD_ID = randomDiscordUserId();
   const INVITE_DISCORD_ID = randomDiscordUserId();
+  const GONE_DISCORD_ID = randomDiscordUserId();
 
   let syncClassId: number;
   let reconClassId: number;
   let stormClassId: number;
   let inviteClassId: number;
+  let goneClassId: number;
   let syncStudent: TestingUser;
   let reconStudent: TestingUser;
   let stormStudent: TestingUser;
   let inviteStudent: TestingUser;
+  let goneStudent: TestingUser;
   let mockUp = false;
 
   const membership = () => untypedTable(supabase, "discord_membership_status");
@@ -221,9 +235,19 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
       email: `e2e-denroll-invite-${SAFE_ID}@pawtograder.net`
     });
 
+    const goneClass = await createClass({ name: `E2E DiscordEnroll Gone ${RUN_PREFIX}` });
+    goneClassId = goneClass.id;
+    goneStudent = await createUserInClass({
+      role: "student",
+      class_id: goneClassId,
+      name: `DiscordEnroll Gone ${RUN_PREFIX}`,
+      email: `e2e-denroll-gone-${SAFE_ID}@pawtograder.net`
+    });
+
     await connectClass(syncClassId, SYNC_GUILD);
     await connectClass(reconClassId, RECON_GUILD);
     await connectClass(stormClassId, STORM_GUILD);
+    await connectClass(goneClassId, GONE_GUILD);
 
     await connectClass(inviteClassId, INVITE_GUILD);
     // Deliberately NOT added to the mock guild: ensureInviteForUser only runs for a student the
@@ -232,6 +256,17 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     await linkDiscord(syncStudent, SYNC_DISCORD_ID);
     await linkDiscord(reconStudent, RECON_DISCORD_ID);
     await linkDiscord(stormStudent, STORM_DISCORD_ID);
+    // Not added to any mock guild: the unknown-guild test needs the membership lookup to miss, and
+    // GONE_GUILD does not exist in the mock for it to be added to.
+    await linkDiscord(goneStudent, GONE_DISCORD_ID);
+    // The unknown-guild storm happens on the invite call, which is only reached for a course that
+    // has opted in to student invitations. Set here rather than in the test so the fixture is one
+    // statement away from connectClass, which is what makes the storm reproducible.
+    const { error: goneFeatureError } = await supabase
+      .from("classes")
+      .update({ features: [{ name: "discord-student-join", enabled: true }] })
+      .eq("id", goneClassId);
+    expect(goneFeatureError, "enabling student Discord invitations for the unknown-guild class").toBeNull();
 
     // Everything already on the queue is residue: connecting a server enqueues create_role and
     // create_channel work, seeding all three discord_roles rows fires
@@ -250,8 +285,8 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     if (!mockUp) return;
     const guildOf = (row: { message?: { args?: Record<string, unknown> } }) =>
       String((row.message?.args as { guild_id?: string } | undefined)?.guild_id ?? "");
-    const mine = new Set(ALL_GUILDS);
-    const myClasses = new Set([syncClassId, reconClassId, stormClassId]);
+    const mine = new Set(TOUCHED_GUILDS);
+    const myClasses = new Set([syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId]);
     const isMine = (row: { message?: { class_id?: number; args?: Record<string, unknown> } }) =>
       mine.has(guildOf(row)) || (row.message?.class_id !== undefined && myClasses.has(row.message.class_id));
     // Both queues: a terminal permission failure is dead-lettered rather than retried, so the storm
@@ -269,9 +304,9 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     await drainQueue(isMine, DISCORD_DLQ, 15_000);
     // Breaker and error rows are global state keyed on the guild, so leaving them behind would park
     // these guilds for the next run and make its worker defer everything.
-    await breakers().delete().in("key", ALL_GUILDS);
-    await asyncErrors().delete().in("guild_id", ALL_GUILDS);
-    for (const classId of [syncClassId, reconClassId, stormClassId]) {
+    await breakers().delete().in("key", TOUCHED_GUILDS);
+    await asyncErrors().delete().in("guild_id", TOUCHED_GUILDS);
+    for (const classId of [syncClassId, reconClassId, stormClassId, inviteClassId, goneClassId]) {
       if (classId) await supabase.from("classes").update({ discord_server_id: null }).eq("id", classId);
     }
     releaseDiscordMockLock();
@@ -517,6 +552,94 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     await supabase.from("classes").update({ features: null }).eq("id", inviteClassId);
   });
 
+  test("create_channel for a guild the class has left creates nothing there", async () => {
+    // create_role and add_member_role both re-read classes.discord_server_id and drop an envelope
+    // that names a different guild. create_channel did not, and it is the one method that is
+    // enqueued automatically the instant a server is connected -- trigger_discord_create_roles_on_
+    // server_connect queues #scheduling and #operations -- so it is the most likely of the three to
+    // still be in flight when the class moves. Applied against the old guild it puts a channel named
+    // after this course inside a server the course has left, and archiving releases a guild for
+    // another class to claim immediately (the uniqueness index is partial on archived = false), so
+    // that server may already belong to somebody else.
+    //
+    // Asserted with a control in the SAME worker run: "no channel in the old guild" is also what a
+    // worker that never ran would produce, and the control is the evidence that it ran and
+    // discriminated.
+    await applyScenarioForGuilds("healthy", ALL_GUILDS);
+    await drainQueue();
+    await clearCalls();
+    // So the tracking-row count below is unambiguous. connectClass() in beforeAll enqueued channel
+    // work for this class, which the beforeAll drain removed before it could run, but a local stack
+    // can carry rows from an earlier run.
+    await supabase.from("discord_channels").delete().eq("class_id", syncClassId);
+
+    const staleName = `e2e-stale-${SAFE_ID}`;
+    const currentName = `e2e-current-${SAFE_ID}`;
+
+    // The superseded envelope. syncClassId is on SYNC_GUILD; this one names INVITE_GUILD, which is
+    // exactly the shape an envelope minted before a move has. INVITE_GUILD rather than STORM_GUILD
+    // because the storm test parks STORM_GUILD's breaker, and a parked guild's envelope is DEFERRED
+    // before the handler is reached -- which would pass this test for the wrong reason.
+    const { error: staleError } = await untypedRpc(supabase, "enqueue_discord_channel_creation", {
+      p_class_id: syncClassId,
+      p_channel_type: "scheduling",
+      p_resource_id: null,
+      p_channel_name: staleName,
+      p_guild_id: INVITE_GUILD
+    });
+    expect(staleError, "enqueueing the superseded create_channel").toBeNull();
+
+    const { error: currentError } = await untypedRpc(supabase, "enqueue_discord_channel_creation", {
+      p_class_id: syncClassId,
+      p_channel_type: "operations",
+      p_resource_id: null,
+      p_channel_name: currentName,
+      p_guild_id: SYNC_GUILD
+    });
+    expect(currentError, "enqueueing the control create_channel").toBeNull();
+
+    const served = await driveWorker(async () => {
+      const calls = await getCalls();
+      return calls.some((call) => call.method === "POST" && call.path === `/guilds/${SYNC_GUILD}/channels`);
+    }, 45_000);
+    expect(served, "the control create_channel never reached Discord, so this test proves nothing").toBe(true);
+
+    const staleCreates = (await getCalls()).filter(
+      (call) => call.method === "POST" && call.path === `/guilds/${INVITE_GUILD}/channels`
+    );
+    expect(
+      staleCreates,
+      `a create_channel naming ${INVITE_GUILD} must not reach Discord for a class on ${SYNC_GUILD}`
+    ).toHaveLength(0);
+    expect(
+      Object.values((await getState()).guilds[INVITE_GUILD]?.channels ?? []).some((c) => c.name === staleName)
+    ).toBe(false);
+
+    // Only the control is tracked. A discord_channels row for the stale channel would be worse than
+    // the stray channel itself: later syncs would route this course's messages into the other guild.
+    const { data: tracked, error: trackedError } = await supabase
+      .from("discord_channels")
+      .select("discord_channel_id, channel_type")
+      .eq("class_id", syncClassId);
+    expect(trackedError).toBeNull();
+    expect((tracked ?? []).map((row) => row.channel_type)).toEqual(["operations"]);
+
+    // Resolved cleanly, which is the other half of the fix: stale work is not an error, so it is
+    // archived rather than requeued (it would come back every visibility timeout) or dead-lettered
+    // (it would show up as a failure that needs investigating).
+    const isStale = (row: { message?: { method?: string; args?: Record<string, unknown> } }) =>
+      row.message?.method === "create_channel" &&
+      (row.message.args as { name?: string } | undefined)?.name === staleName;
+    expect(
+      (await readQueue(DISCORD_QUEUE, 1, 100)).filter(isStale),
+      "the superseded envelope was requeued instead of archived"
+    ).toHaveLength(0);
+    expect(
+      (await readQueue(DISCORD_DLQ, 1, 100)).filter(isStale),
+      "stale work was dead-lettered as a failure"
+    ).toHaveLength(0);
+  });
+
   // ---------------------------------------------------------------------------
   // 3. Circuit breaker
   // ---------------------------------------------------------------------------
@@ -621,5 +744,85 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
 
     const stormCalls = (await getCalls()).filter((call) => call.path.includes(STORM_GUILD));
     expect(stormCalls, `parked guild ${STORM_GUILD} should have received no requests`).toHaveLength(0);
+  });
+
+  test("a guild Discord does not have opens the breaker too, not just a permission storm", async () => {
+    // The gap this closes. isBotPermissionProblem() -- which the worker used to gate its breaker
+    // accounting on -- answers true for 50001, 50013, the empty-guild message and HTTP 403. Discord
+    // reports 10004 Unknown Guild as a 404, so it fell outside that predicate while sitting INSIDE
+    // TERMINAL_DISCORD_ERROR_CODES. The combination was the worst of both: a bot removed from a
+    // configured server produced one immediate dead-letter per enrolled student and counted toward
+    // nothing, so the breaker built to stop exactly that storm never opened for the loudest version
+    // of it. A 200-student course meant 200 requests against the token every course shares.
+    //
+    // GONE_GUILD is never given to the mock, so every guild route for it answers 404 / 10004 -- the
+    // same thing Discord says when the bot is kicked, when the server is deleted, and when
+    // discord_server_id was mistyped.
+    await applyScenarioForGuilds("healthy", ALL_GUILDS);
+    await clearCalls();
+    await drainQueue();
+    // Scoped to GONE_GUILD, NOT to TOUCHED_GUILDS: the breaker rows are shared state and the
+    // deferral test above depends on STORM_GUILD's staying open, so a blanket delete here silently
+    // unparks that guild and the deferral assertion then measures a worker with nothing to defer.
+    await breakers().delete().eq("key", GONE_GUILD);
+    await asyncErrors().delete().eq("guild_id", GONE_GUILD);
+
+    // Same shape as the permission-storm test: the threshold is 10 in 5 minutes, 12 leaves room for
+    // the breaker to open before the last of them.
+    const ATTEMPTS = 12;
+    for (let i = 0; i < ATTEMPTS; i += 1) {
+      await enqueueRoleSync(goneStudent.user_id, goneClassId);
+    }
+
+    const opened = await driveWorker(async () => {
+      const { data } = await breakers().select("key, state").eq("key", GONE_GUILD);
+      return (data ?? []).some((row) => row.state === "open");
+    }, 90_000);
+    expect(opened, `an unknown-guild storm in ${GONE_GUILD} never opened its circuit`).toBe(true);
+
+    const { data: goneBreaker } = await breakers()
+      .select("scope, key, state, open_until, trip_count, last_reason")
+      .eq("key", GONE_GUILD);
+    const breaker = (goneBreaker ?? [])[0];
+    expect(breaker).toBeTruthy();
+    expect(breaker.scope).toBe("guild");
+    expect(breaker.state).toBe("open");
+    expect(new Date(String(breaker.open_until)).getTime()).toBeGreaterThan(Date.now());
+
+    // The failures really were 10004, not some other 404 that happens to trip the same threshold.
+    // This is the assertion that fails if the classification regresses: with the old predicate the
+    // rows are absent entirely, because nothing counted them.
+    const { data: errorRows } = await asyncErrors().select("guild_id, method, error_data").eq("guild_id", GONE_GUILD);
+    expect((errorRows ?? []).length, "unknown-guild failures were not charged to the guild").toBeGreaterThanOrEqual(10);
+    expect(
+      (errorRows ?? []).some(
+        (row) => Number((row.error_data as { discord_error_code?: number })?.discord_error_code) === 10004
+      ),
+      "expected at least one recorded failure to carry Discord code 10004"
+    ).toBe(true);
+
+    // The RPC the worker itself consults agrees, so the next envelope for this guild is deferred
+    // rather than spending another round trip -- which is the whole point of counting these.
+    const { data: circuit, error: circuitError } = await untypedRpc<Array<{ state: string }>>(
+      supabase,
+      "get_discord_circuit",
+      { p_scope: "guild", p_key: GONE_GUILD }
+    );
+    expect(circuitError).toBeNull();
+    expect((circuit ?? [])[0]?.state).toBe("open");
+
+    // Still scoped. A wider predicate must not turn one dead server into a platform-wide park.
+    for (const other of [SYNC_GUILD, RECON_GUILD]) {
+      const { data: otherRows } = await breakers().select("key, state").eq("key", other);
+      expect(
+        (otherRows ?? []).filter((row) => row.state === "open"),
+        `guild ${other} should not have been parked by ${GONE_GUILD}`
+      ).toHaveLength(0);
+    }
+
+    // And the student is told what is actually wrong, which is a different sentence from a missing
+    // permission -- the reason isBotPermissionProblem() was left alone rather than widened.
+    const row = await membershipRow(goneClassId, goneStudent.user_id);
+    expect(row?.state).toBe("cannot_invite");
   });
 });

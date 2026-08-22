@@ -404,30 +404,48 @@ spec:
               the last hour — rows exhausted their version-mismatch retry budget, so their stored
               scores are stale and nothing will recompute them. Inspect
               pgmq.q_gradebook_row_recalculate_dlq and re-enqueue after fixing the contention source.
-        # Discord per-guild circuit breaker stuck open.
+        # Discord per-guild circuit breaker open.
         #
         # A level alert is right here, unlike for the DLQs: the breaker closes itself when its window
-        # expires, so this cannot fire forever the way a dead-letter backlog does. It fires only for a
-        # guild that keeps re-tripping, which means nobody has restored the bot's access.
+        # expires, so this cannot fire forever the way a dead-letter backlog does.
         #
         # This one matters beyond the affected course. One bot token serves every course, so
         # Discord's 50 rps primary limit is charged platform-wide: the guild being parked here is a
         # guild that was consuming everyone else's Discord budget to rediscover the same 403.
+        #
+        # `for` MUST stay below the breaker's shortest window, which is thirty minutes: that is the
+        # permission_storm base in open_discord_circuit(), and
+        # get_discord_circuit_breaker_statuses() computes is_open as
+        # `state = 'open' AND open_until >= now()`, so the gauge drops to 0 the moment open_until
+        # passes. A `for` of 45m -- what this rule shipped with -- therefore could not fire on a
+        # first trip at all: the condition it waited for was 45 minutes of uninterrupted open on a
+        # gauge that is true for 30. It became reachable only from the second trip onward, where the
+        # exponential backoff widens the window to 60m, i.e. the alert was silent for exactly the
+        # first hour of every incident and then arrived 15 minutes before the breaker reopened.
+        #
+        # 10m is the compromise: long enough that a scrape gap, a metrics-endpoint timeout or a
+        # single re-evaluation cannot flap it (the endpoint is scraped every 30-60s, so this is ten
+        # or more consecutive samples), and short enough to leave 20 minutes of margin inside the
+        # shortest window. The "is this worth waking someone" filter is not `for`'s job here and
+        # never was -- the breaker only trips after ten unretriable failures from one guild in five
+        # minutes, which is already a misconfigured server burning a shared rate limit, and the
+        # severity is warning.
         - alert: PawtograderDiscordCircuitBreakerOpen
           expr: |
             max by (namespace, key) (pawtograder_discord_circuit_breaker_open{namespace="{{ $ns }}"}) > 0
-          for: {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "45m" }}
+          for: {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "10m" }}
           labels:
             severity: warning
           annotations:
             summary: "Pawtograder Discord circuit breaker open for guild {{`{{ $labels.key }}`}}"
             description: >-
               The Discord circuit breaker for guild {{`{{ $labels.key }}`}} in {{ $ns }} has been open
-              for over {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "45m" }},
-              so that guild's role and invite work is being deferred. The usual cause is the bot
-              having been removed from the server or lost its channel-view permission; check
-              public.discord_circuit_breakers.last_reason and the class's discord_membership_status
-              rows, then have a server admin restore the bot's access.
+              for over {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "10m" }},
+              so that guild's role and invite work is being deferred. The usual causes are the bot
+              having been removed from the server, having lost its channel-view permission, or the
+              server no longer existing at all; check public.discord_circuit_breakers.last_reason and
+              trip_count, and the class's discord_membership_status rows. A trip_count above 1 means
+              the guild has re-tripped after its window expired, so nobody has fixed it yet.
     - name: pawtograder.edgefunctions
       rules:
         # Edge-function pods being OOM-killed.

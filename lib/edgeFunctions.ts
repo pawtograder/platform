@@ -568,7 +568,7 @@ export type CheckBotInstallationResponse = {
    */
   stale_class_role_ids: string[];
   /**
-   * Tracked channels where a per-channel or per-category overwrite blocks something the bot needs.
+   * Tracked channels whose own permission overwrites block something the bot needs.
    *
    * `missing` holds the same labels as `missing_permissions`, so the panel renders both the same way.
    * The remediation is different, though: edit that channel's permissions for the Pawtograder role.
@@ -580,6 +580,15 @@ export type CheckBotInstallationResponse = {
     channel_name: string | null;
     missing: string[];
   }[];
+  /**
+   * Tracked channels the guild's channel list does not return at all.
+   *
+   * Covers two states Discord's API cannot distinguish: the channel was deleted, or an overwrite
+   * denies the bot View Channel so the listing omits it. Separate from `channel_permission_problems`,
+   * which claims an overwrite blocks an operation -- unreadable overwrites support no such claim.
+   * Empty when the channel list could not be read at all.
+   */
+  missing_tracked_channel_ids: string[];
   /**
    * False when no visible text channel permits Create Invite, so no student can be invited.
    *

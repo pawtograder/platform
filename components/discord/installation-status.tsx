@@ -27,12 +27,15 @@ import { BsArrowRepeat, BsDiscord } from "react-icons/bs";
  *   - channel overwrite    -> edit that one channel's permissions; the server-level ones are fine
  *   - role hierarchy       -> drag the bot's role above the class roles; permissions are fine
  *   - stale tracked role   -> re-sync; the fix is on Pawtograder's side, not in Discord
+ *   - missing channel      -> re-sync, or give the bot access to the channel it can no longer see
  *   - healthy              -> who connected it, and when
  *
  * The two channel states are separate from "missing permissions" because re-authorizing the bot does
- * nothing for either: Discord resolves per-channel and per-category overwrites on top of the
- * server-level bits, and the button that widens the server-level bits cannot touch them. The fix is in
- * one channel's own permission settings, so the panel has to say which channel.
+ * nothing for either: Discord resolves a channel's own overwrites on top of the server-level bits, and
+ * the button that widens the server-level bits cannot touch them. The fix is in one channel's own
+ * permission settings, so the panel has to say which channel. (A category reaches a channel by having
+ * its overrides copied onto it when the two are synced, which is why the copy below says to check the
+ * category as well -- but the entries that decide the answer are always the channel's own.)
  *
  * The third is the point of the panel. Discord reports "cannot assign a role positioned above me"
  * with 50013 Missing Permissions -- the same code as not holding Manage Roles at all -- so from the
@@ -217,6 +220,12 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
       n === 1 ? "s" : ""
     } in the Discord server.`;
   }
+  if (status.missing_tracked_channel_ids.length > 0) {
+    const n = status.missing_tracked_channel_ids.length;
+    return `The Pawtograder bot is installed, but ${n} tracked channel${n === 1 ? "" : "s"} ${
+      n === 1 ? "is" : "are"
+    } missing from the Discord server — deleted, or hidden from the bot.`;
+  }
   return `The Pawtograder bot is installed in ${status.guild_name ?? "the connected server"} with every permission it needs, in the server and in its channels.`;
 }
 
@@ -251,10 +260,23 @@ function StatusBody({
     return <RoleHierarchyProblem status={status} />;
   }
   // Checked before Healthy: permissions and hierarchy are fine, so every other signal says the
-  // install works, and it does -- for every role except the deleted one. Reporting this as healthy is
-  // what let a class sit with a role that silently 404s on every assignment.
-  if (status.stale_class_role_ids.length > 0) {
-    return <StaleClassRoles status={status} provenance={provenance} classId={classId} canManage={canManage} />;
+  // install works, and it does -- for every role and channel except the ones Pawtograder is tracking
+  // and Discord no longer has. Reporting either as healthy is what let a class sit with a role that
+  // silently 404s on every assignment, or a channel whose notifications go nowhere.
+  //
+  // Both drift warnings render together above the healthy panel rather than as competing states: they
+  // are independent, and a class can have one of each. Ranked below the permission and hierarchy
+  // states because those break everything, while these break the part of the class that names them.
+  if (status.stale_class_role_ids.length > 0 || status.missing_tracked_channel_ids.length > 0) {
+    return (
+      <VStack align="stretch" gap={3}>
+        {status.stale_class_role_ids.length > 0 && <StaleClassRolesAlert status={status} canManage={canManage} />}
+        {status.missing_tracked_channel_ids.length > 0 && (
+          <MissingTrackedChannelsAlert status={status} canManage={canManage} />
+        )}
+        <Healthy status={status} provenance={provenance} classId={classId} canManage={canManage} alongsideWarning />
+      </VStack>
+    );
   }
   return <Healthy status={status} provenance={provenance} classId={classId} canManage={canManage} />;
 }
@@ -397,8 +419,8 @@ function NoInviteChannel({ status }: { status: CheckBotInstallationResponse }) {
           <Text as="span" fontWeight="semibold">
             Create Invite
           </Text>
-          . Check the channel&apos;s category too — a channel inherits its category&apos;s overrides. Then press
-          Re-check.
+          . If the channel is synced to a category, allow it on the category and re-sync, since syncing copies the
+          category&apos;s overrides onto the channel. Then press Re-check.
         </Text>
         <Text fontSize="sm" mt={2} color="fg.muted">
           Re-authorizing the bot will not clear this. Channel overrides sit above the server-level permissions the
@@ -431,7 +453,7 @@ function ChannelPermissionProblems({ status }: { status: CheckBotInstallationRes
           <Text as="span" fontWeight="semibold">
             {status.guild_name ?? "the connected server"}
           </Text>
-          , and its role is high enough to assign this course&apos;s roles. Discord applies per-channel and per-category
+          , and its role is high enough to assign this course&apos;s roles. Discord applies each channel&apos;s own
           overrides on top of that, and {count === 1 ? "this channel takes" : "these channels take"} back what the
           server grants, so Pawtograder&apos;s messages there fail with a bare 403.
         </Text>
@@ -458,8 +480,8 @@ function ChannelPermissionProblems({ status }: { status: CheckBotInstallationRes
             Pawtograder
           </Text>{" "}
           role, and allow the permission{count === 1 && problems[0].missing.length === 1 ? "" : "s"} listed above. A
-          channel with no override of its own inherits its category&apos;s, so check the category as well. Then press
-          Re-check.
+          channel synced to a category carries a copy of the category&apos;s overrides, so if it is synced, fix the
+          category and re-sync. Then press Re-check.
         </Text>
         <Text fontSize="sm" mt={2} color="fg.muted">
           Re-authorizing the bot will not clear this. Channel overrides sit above the server-level permissions the
@@ -551,52 +573,101 @@ function DisconnectButton({ classId, guildName }: { classId: number; guildName: 
 /**
  * Installed and permitted, but Pawtograder is tracking a role Discord no longer has.
  *
- * Rendered as a warning over the healthy panel rather than instead of it: everything the healthy
- * panel says is still true, and the remaining roles keep working. What is broken is one snowflake,
- * and the fix is on the Pawtograder side (re-sync so the dead row is replaced), not in Discord.
+ * An alert over the healthy panel rather than instead of it: everything the healthy panel says is
+ * still true, and the remaining roles keep working. What is broken is one snowflake, and the fix is on
+ * the Pawtograder side (re-sync so the dead row is replaced), not in Discord.
  */
-function StaleClassRoles({
+function StaleClassRolesAlert({ status, canManage }: { status: CheckBotInstallationResponse; canManage: boolean }) {
+  const count = status.stale_class_role_ids.length;
+  return (
+    <Alert
+      status="warning"
+      title={
+        count === 1
+          ? "One tracked role no longer exists in Discord"
+          : `${count} tracked roles no longer exist in Discord`
+      }
+    >
+      <VStack align="stretch" gap={2}>
+        <Text>
+          Pawtograder still has {count === 1 ? "a role" : "roles"} recorded for this course that{" "}
+          {count === 1 ? "has" : "have"} been deleted in{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>
+          . Assigning {count === 1 ? "it" : "them"} will keep failing, and the stale record stops a replacement from
+          being created.
+        </Text>
+        <Text fontSize="sm" color="fg.muted">
+          Deleted role {count === 1 ? "ID" : "IDs"}: <Code>{status.stale_class_role_ids.join(", ")}</Code>
+        </Text>
+        {canManage && (
+          <Text fontSize="sm">Use “Sync Roles” below to recreate the missing {count === 1 ? "role" : "roles"}.</Text>
+        )}
+      </VStack>
+    </Alert>
+  );
+}
+
+/**
+ * Installed and permitted, but a channel Pawtograder posts to is not in the server's channel list.
+ *
+ * The channel counterpart of the stale-role alert, and deliberately vague about the cause, because
+ * Discord's API is: `GET /guilds/{id}/channels` omits a channel that was deleted and a channel the bot
+ * cannot see in exactly the same way, with nothing to distinguish them. Saying "deleted" would be a
+ * guess an instructor could waste an afternoon on, so the copy names both and the remediation covers
+ * both. Without this the panel said "Connected and working" while every notification aimed at that
+ * channel failed.
+ */
+function MissingTrackedChannelsAlert({
   status,
-  provenance,
-  classId,
   canManage
 }: {
   status: CheckBotInstallationResponse;
-  provenance: Provenance | null;
-  classId: number;
   canManage: boolean;
 }) {
-  const count = status.stale_class_role_ids.length;
+  const count = status.missing_tracked_channel_ids.length;
   return (
-    <VStack align="stretch" gap={3}>
-      <Alert
-        status="warning"
-        title={
-          count === 1
-            ? "One tracked role no longer exists in Discord"
-            : `${count} tracked roles no longer exist in Discord`
-        }
-      >
-        <VStack align="stretch" gap={2}>
-          <Text>
-            Pawtograder still has {count === 1 ? "a role" : "roles"} recorded for this course that{" "}
-            {count === 1 ? "has" : "have"} been deleted in{" "}
-            <Text as="span" fontWeight="semibold">
-              {status.guild_name ?? "the connected server"}
-            </Text>
-            . Assigning {count === 1 ? "it" : "them"} will keep failing, and the stale record stops a replacement from
-            being created.
+    <Alert
+      status="warning"
+      title={
+        count === 1
+          ? "One tracked channel is missing from the Discord server"
+          : `${count} tracked channels are missing from the Discord server`
+      }
+    >
+      <VStack align="stretch" gap={2}>
+        <Text>
+          Pawtograder posts to {count === 1 ? "a channel" : "channels"} that{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>{" "}
+          does not list. Either {count === 1 ? "it was" : "they were"} deleted in Discord, or a permission override
+          hides {count === 1 ? "it" : "them"} from the bot — Discord&apos;s API reports those two the same way, so
+          Pawtograder cannot tell you which. Either way, anything sent there fails.
+        </Text>
+        <Text fontSize="sm" color="fg.muted">
+          Missing channel {count === 1 ? "ID" : "IDs"}: <Code>{status.missing_tracked_channel_ids.join(", ")}</Code>
+        </Text>
+        <Text fontSize="sm">
+          To fix it, either re-sync so Pawtograder creates{" "}
+          {count === 1 ? "a replacement channel" : "replacement channels"}, or, if the channel still exists, open{" "}
+          <Text as="span" fontWeight="semibold">
+            Edit Channel → Permissions
+          </Text>{" "}
+          and allow the{" "}
+          <Text as="span" fontWeight="semibold">
+            Pawtograder
+          </Text>{" "}
+          role to{" "}
+          <Text as="span" fontWeight="semibold">
+            View Channel
           </Text>
-          <Text fontSize="sm" color="fg.muted">
-            Deleted role {count === 1 ? "ID" : "IDs"}: <Code>{status.stale_class_role_ids.join(", ")}</Code>
-          </Text>
-          {canManage && (
-            <Text fontSize="sm">Use “Sync Roles” below to recreate the missing {count === 1 ? "role" : "roles"}.</Text>
-          )}
-        </VStack>
-      </Alert>
-      <Healthy status={status} provenance={provenance} classId={classId} canManage={canManage} />
-    </VStack>
+          . Then press Re-check.
+          {canManage ? "" : " An instructor has to run the re-sync."}
+        </Text>
+      </VStack>
+    </Alert>
   );
 }
 
@@ -604,16 +675,30 @@ function Healthy({
   status,
   provenance,
   classId,
-  canManage
+  canManage,
+  /**
+   * True when a drift warning is rendered directly above this panel.
+   *
+   * Without it this said "Connected and working" and claimed nothing was wrong, immediately below an
+   * alert saying a tracked channel is missing and anything sent there fails. Both statements were
+   * true of what they each checked, and side by side they read as a contradiction -- in a panel whose
+   * whole job is telling an instructor whether they need to act. So the headline narrows to the
+   * checks that actually passed and leaves the exception to the alert above.
+   */
+  alongsideWarning = false
 }: {
   status: CheckBotInstallationResponse;
   provenance: Provenance | null;
   classId: number;
   canManage: boolean;
+  alongsideWarning?: boolean;
 }) {
   return (
     <VStack align="stretch" gap={3}>
-      <Alert status="success" title="Connected and working">
+      <Alert
+        status="success"
+        title={alongsideWarning ? "Server permissions are all in order" : "Connected and working"}
+      >
         <Text>
           Pawtograder is in{" "}
           <Text as="span" fontWeight="semibold">
@@ -621,6 +706,7 @@ function Healthy({
           </Text>{" "}
           with every permission it needs, its role is high enough to assign this course&apos;s roles, and no channel
           override blocks it from posting or from inviting students.
+          {alongsideWarning ? " The warning above is the exception, and it needs fixing separately." : ""}
         </Text>
       </Alert>
       <VStack align="stretch" gap={0} fontSize="sm" color="fg.muted">
@@ -658,8 +744,9 @@ function Healthy({
             <DisconnectButton classId={classId} guildName={status.guild_name} />
           </HStack>
           <Text fontSize="xs" color="fg.muted">
-            Moving this course to a different Discord server deletes the roles, channels and tracked messages
-            Pawtograder created in this one, and creates them again in the new server.
+            Moving this course to a different Discord server makes Pawtograder forget the roles, channels and tracked
+            messages it created in this one and create them again in the new server. The originals are left in the old
+            server for an administrator to delete, and nobody is removed from it.
           </Text>
         </VStack>
       )}

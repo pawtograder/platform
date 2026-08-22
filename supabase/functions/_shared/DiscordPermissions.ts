@@ -11,7 +11,7 @@
  *
  *   1. Does the bot hold the permission bits at all? -> `missingPermissions`
  *   2. Is the bot's own role high enough to USE them on the class's roles? -> `canManageRoles`
- *   3. Does a per-channel or per-category overwrite take one back? -> `channelPermissions`
+ *   3. Does a channel's own overwrite take one back? -> `channelPermissions`
  *
  * The second is the one that bites. Discord refuses to add or remove a role whose `position` is at
  * or above the acting member's highest role, and it reports that refusal as
@@ -26,7 +26,9 @@
  * reaches for, and the guild-level bitfield stays complete while every operation in that channel
  * 403s. Discord resolves those overwrites in a fixed order with one counter-intuitive rule in it --
  * denies from every held role are collected before any allow is applied -- so `channelPermissions`
- * implements the order rather than approximating it.
+ * implements the order rather than approximating it. It reads one channel's own overwrite list and
+ * nothing else, which is also exactly what Discord does; see the note on `channelPermissions` for why
+ * a category is not a second layer.
  *
  * Kept free of Deno, fetch and env reads so it is unit-testable on its own.
  *
@@ -311,9 +313,9 @@ const OVERWRITE_TYPE_MEMBER = 1;
  * The bot's effective permissions **inside one channel**, applying Discord's overwrite precedence.
  *
  * `effectivePermissions` answers a strictly weaker question. Guild-level bits are the starting point;
- * Discord then layers per-channel and per-category overwrites on top, and those can deny what the
- * server grants. A guild that grants Send Messages server-wide and denies it in `#general` passes
- * every guild-level audit and still 403s on every post -- which is the whole reason this exists.
+ * Discord then applies the channel's own overwrites on top, and those can deny what the server
+ * grants. A guild that grants Send Messages server-wide and denies it in `#general` passes every
+ * guild-level audit and still 403s on every post -- which is the whole reason this exists.
  *
  * The order below is Discord's, and every step of it matters:
  *
@@ -332,12 +334,19 @@ const OVERWRITE_TYPE_MEMBER = 1;
  * `grantsChannelPermission` is where "no View Channel makes everything else moot" is applied. Callers
  * that do their own bit math need that helper, not `& bit`.
  *
- * Category inheritance is modelled by applying the parent's overwrites as a first layer and the
- * channel's as a second, so a channel-level entry overrides its category for every bit it names.
- * (Discord itself copies a category's overwrites onto a synced channel rather than resolving them at
- * request time, so on live data `channelOverwrites` is usually complete on its own and the parent
- * layer changes nothing. It is applied anyway because an unsynced channel that omits a target
- * inherits that target's category entry, and because dropping it would silently under-report.)
+ * The channel's OWN overwrite list is the only thing read, and there is deliberately no traversal up
+ * to the parent category. That is Discord's documented algorithm: `compute_overwrites` takes
+ * `channel.permission_overwrites` and nothing else. A "synced" category is a client-side convenience
+ * that COPIES the category's overwrite set onto each child, so a synced child already carries those
+ * entries in its own list and needs no second layer -- while an unsynced child genuinely does not
+ * inherit the entries it omits.
+ *
+ * An earlier version of this function applied the parent's overwrites as a layer beneath the child's,
+ * which invented permissions: a category-level ALLOW that an unsynced child had deliberately dropped
+ * came back out of this function as granted, so the audit reported an operation as permitted that
+ * Discord answers 403 to. `botChannelPermissions` in tests/mocks/discord/state.ts mirrors this
+ * function and carries the same note; the two have to agree or the mock is more permissive than
+ * production, which is the one direction that makes a test useless.
  *
  * Pure, like the rest of this module: no fetch, no env, so the precedence rules are unit-testable.
  */
@@ -352,7 +361,6 @@ export function channelPermissions(args: {
    */
   memberUserId?: string | null;
   channelOverwrites?: readonly DiscordPermissionOverwriteLike[] | null;
-  parentOverwrites?: readonly DiscordPermissionOverwriteLike[] | null;
 }): bigint {
   const base = effectivePermissions({
     guildRoles: args.guildRoles,
@@ -361,38 +369,37 @@ export function channelPermissions(args: {
   });
   if (hasAdministrator(base)) return base;
 
+  const overwrites = args.channelOverwrites ?? [];
+  if (overwrites.length === 0) return base;
+
   const held = new Set<string>(args.memberRoleIds);
   let granted = base;
 
-  for (const overwrites of [args.parentOverwrites ?? [], args.channelOverwrites ?? []]) {
-    if (overwrites.length === 0) continue;
+  const everyone = overwrites.find((o) => o.type === OVERWRITE_TYPE_ROLE && o.id === args.guildId);
+  if (everyone) {
+    granted &= ~parsePermissionBits(everyone.deny);
+    granted |= parsePermissionBits(everyone.allow);
+  }
 
-    const everyone = overwrites.find((o) => o.type === OVERWRITE_TYPE_ROLE && o.id === args.guildId);
-    if (everyone) {
-      granted &= ~parsePermissionBits(everyone.deny);
-      granted |= parsePermissionBits(everyone.allow);
-    }
+  let roleDeny = 0n;
+  let roleAllow = 0n;
+  for (const overwrite of overwrites) {
+    if (overwrite.type !== OVERWRITE_TYPE_ROLE) continue;
+    // @everyone was applied above and must not be folded into the role union, where its deny would
+    // outrank nothing and its allow would.
+    if (overwrite.id === args.guildId) continue;
+    if (!held.has(overwrite.id)) continue;
+    roleDeny |= parsePermissionBits(overwrite.deny);
+    roleAllow |= parsePermissionBits(overwrite.allow);
+  }
+  granted &= ~roleDeny;
+  granted |= roleAllow;
 
-    let roleDeny = 0n;
-    let roleAllow = 0n;
-    for (const overwrite of overwrites) {
-      if (overwrite.type !== OVERWRITE_TYPE_ROLE) continue;
-      // @everyone was applied above and must not be folded into the role union, where its deny would
-      // outrank nothing and its allow would.
-      if (overwrite.id === args.guildId) continue;
-      if (!held.has(overwrite.id)) continue;
-      roleDeny |= parsePermissionBits(overwrite.deny);
-      roleAllow |= parsePermissionBits(overwrite.allow);
-    }
-    granted &= ~roleDeny;
-    granted |= roleAllow;
-
-    if (args.memberUserId) {
-      const mine = overwrites.find((o) => o.type === OVERWRITE_TYPE_MEMBER && o.id === args.memberUserId);
-      if (mine) {
-        granted &= ~parsePermissionBits(mine.deny);
-        granted |= parsePermissionBits(mine.allow);
-      }
+  if (args.memberUserId) {
+    const mine = overwrites.find((o) => o.type === OVERWRITE_TYPE_MEMBER && o.id === args.memberUserId);
+    if (mine) {
+      granted &= ~parsePermissionBits(mine.deny);
+      granted |= parsePermissionBits(mine.allow);
     }
   }
 

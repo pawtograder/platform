@@ -13,7 +13,11 @@ import { clearCalls, getCalls, setState } from "@/tests/mocks/discord/client";
 // TEMPLATE guild's channels, not this class's. The cloned ids are read out of the returned state by
 // name instead, which is why only the type is imported here.
 import type { MockState } from "@/tests/mocks/discord/state";
+// The bit is read from the production module, not retyped: a deny of the wrong bit would make the
+// fixture below pass for a reason that has nothing to do with Create Invite.
+import { DISCORD_PERMISSION_BITS } from "@/supabase/functions/_shared/DiscordPermissions";
 import {
+  BOT_ROLE_ID,
   GRADER_ROLE_ID,
   INSTRUCTOR_ROLE_ID,
   STUDENT_ROLE_ID,
@@ -36,7 +40,8 @@ import {
 // Request:  { class_id }
 // Response: { installed, guild_id, guild_name, missing_permissions, can_manage_class_roles,
 //             bot_role_position, highest_class_role_position, stale_class_role_ids,
-//             channel_permission_problems, can_create_invites, install_url }
+//             channel_permission_problems, missing_tracked_channel_ids, can_create_invites,
+//             install_url }
 // Authz:    caller must be an instructor in `class_id`.
 //
 // UNLIKE its GitHub twin (tests/e2e/github-check-app-installation.test.tsx), the Discord-dependent
@@ -68,9 +73,11 @@ type CheckResponse = {
   highest_class_role_position: number | null;
   /** Tracked roles the guild no longer has. */
   stale_class_role_ids: string[];
-  /** Tracked channels where a per-channel or per-category overwrite blocks the bot. */
+  /** Tracked channels whose own overwrites block the bot. */
   channel_permission_problems: { channel_id: string; channel_name: string | null; missing: string[] }[];
-  /** False when no visible text channel permits Create Invite. */
+  /** Tracked channels the guild's channel list does not return: deleted, or hidden from the bot. */
+  missing_tracked_channel_ids: string[];
+  /** False when no candidate the invite path would try permits Create Invite. */
   can_create_invites: boolean;
   install_url: string;
 };
@@ -339,6 +346,7 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(calls.every((c) => c.status === 200)).toBe(true);
     // Nothing is denied per channel, and #general permits Create Invite, so students can be invited.
     expect(body.channel_permission_problems).toEqual([]);
+    expect(body.missing_tracked_channel_ids).toEqual([]);
     expect(body.can_create_invites).toBe(true);
   });
 
@@ -611,6 +619,95 @@ test.describe("discord-check-bot-installation edge function", () => {
     }
   });
 
+  test("the invite audit stops where the invite path stops, so a fifth usable candidate is not counted", async () => {
+    // The panel's job is to predict the invite path, and that path tries at most
+    // MAX_INVITE_CHANNEL_ATTEMPTS (4) of the ordered candidates. A guild whose first four candidates
+    // deny Create Invite and whose fifth allows it would report `can_create_invites: true` from an
+    // uncapped scan, and then every student in the class would still land on `cannot_invite` -- the
+    // panel confidently disagreeing with the worker about the same guild.
+    //
+    // The names avoid every hint in PREFERRED_NAME_HINTS so the candidate order is decided by
+    // `position` alone, which is what makes "the fifth one" a statement about this fixture and not
+    // about the name ranking.
+    const denied = (n: number, position: number) => ({
+      id: `14500000000000000${String(n).padStart(2, "0")}`,
+      name: `locked-${n}`,
+      type: 0,
+      guild_id: GUILD_ID,
+      parent_id: null,
+      position,
+      permission_overwrites: [
+        { id: BOT_ROLE_ID, type: 0, allow: "0", deny: DISCORD_PERMISSION_BITS.CREATE_INSTANT_INVITE.toString() }
+      ]
+    });
+    const open = (position: number) => ({
+      id: "1450000000000000099",
+      name: "open-room",
+      type: 0,
+      guild_id: GUILD_ID,
+      parent_id: null,
+      position
+    });
+
+    // Four denied candidates ahead of the only usable one: the worker never reaches it.
+    await applyScenarioForGuilds("healthy", [GUILD_ID], () => ({
+      channels: [denied(1, 1), denied(2, 2), denied(3, 3), denied(4, 4), open(5)]
+    }));
+    await clearCalls();
+    const { data: capped, error: cappedError } = await check(instructorA, classAId);
+    expect(cappedError).toBeNull();
+    const cappedBody = capped as CheckResponse;
+    expect(cappedBody.installed).toBe(true);
+    // Not a server-level gap: the bot holds Create Invite across the guild, as every other test here.
+    expect(cappedBody.missing_permissions).toEqual([]);
+    expect(cappedBody.can_create_invites).toBe(false);
+
+    // A-B on the one thing that changed: with three denied candidates the usable channel is the
+    // fourth, inside the budget, and the same guild reports true. Without this the assertion above
+    // would also pass if the usable channel were simply misconfigured.
+    await applyScenarioForGuilds("healthy", [GUILD_ID], () => ({
+      channels: [denied(1, 1), denied(2, 2), denied(3, 3), open(4)]
+    }));
+    const { data: withinBudget, error: budgetError } = await check(instructorA, classAId);
+    expect(budgetError).toBeNull();
+    expect((withinBudget as CheckResponse).can_create_invites).toBe(true);
+  });
+
+  test("a tracked channel the guild does not return is reported as missing, not as healthy", async () => {
+    // A Discord admin deleted a Pawtograder-managed channel. The discord_channels row survives, and
+    // the audit's permission pass can say nothing about a channel whose overwrites it never read -- so
+    // before this field the row was silently skipped and the panel said "Connected and working" while
+    // every notification aimed at that channel failed.
+    //
+    // The same signal covers a channel hidden by a View Channel denial, because
+    // GET /guilds/{id}/channels omits both cases identically and the API offers nothing to tell them
+    // apart. The remediation ("re-sync, or grant the bot access") is written to cover both.
+    const state = await applyScenarioForGuilds("healthy", [GUILD_ID]);
+    const generalId = channelIdByName(state, "general");
+    const deletedId = "1409999999999999999";
+    await trackChannel(generalId);
+    await trackChannel(deletedId);
+    await clearCalls();
+
+    try {
+      const { data, error } = await check(instructorA, classAId);
+      expect(error).toBeNull();
+      const body = data as CheckResponse;
+      expect(body.installed).toBe(true);
+      expect(body.missing_permissions).toEqual([]);
+      expect(body.can_manage_class_roles).toBe(true);
+      // The one that is gone, and only that one: #general is present and healthy.
+      expect(body.missing_tracked_channel_ids).toEqual([deletedId]);
+      // Deliberately NOT folded in here. This field's claim is that an overwrite blocks an operation,
+      // which is unsupportable for a channel that was never in the listing.
+      expect(body.channel_permission_problems).toEqual([]);
+      // Enrollment is unaffected: invites are asked of the guild's channels, not of the tracked ones.
+      expect(body.can_create_invites).toBe(true);
+    } finally {
+      await untrackChannels();
+    }
+  });
+
   test("no-text-channel: a guild with nowhere to invite into cannot enroll anybody", async () => {
     // The severe half of the channel layer, and the reason it is its own field. Every server-level
     // permission is held, so `missing_permissions` is empty and the old response would have called
@@ -633,21 +730,31 @@ test.describe("discord-check-bot-installation edge function", () => {
     // The bot cannot see the channel list at all, which Discord answers 403 / 50001. That is terminal
     // and already named at the server level, so the check keeps the rest of its diagnosis rather than
     // throwing the whole thing away -- and reports the channel layer as unusable, which it is.
-    await applyScenarioForGuilds("missing-view-channel", [GUILD_ID]);
+    const state = await applyScenarioForGuilds("missing-view-channel", [GUILD_ID]);
+    // Tracked, so "nothing is reported missing" below is a decision rather than an empty input: this
+    // channel exists in the guild and is absent from a listing the bot cannot read.
+    await trackChannel(channelIdByName(state, "general"));
     await clearCalls();
 
-    const { data, error } = await check(instructorA, classAId);
-    expect(error).toBeNull();
-    const body = data as CheckResponse;
-    expect(body.installed).toBe(true);
-    expect(body.missing_permissions).toContain("View Channels");
-    expect(body.can_create_invites).toBe(false);
-    // Nothing is claimed about individual channels: their overwrites were never readable.
-    expect(body.channel_permission_problems).toEqual([]);
+    try {
+      const { data, error } = await check(instructorA, classAId);
+      expect(error).toBeNull();
+      const body = data as CheckResponse;
+      expect(body.installed).toBe(true);
+      expect(body.missing_permissions).toContain("View Channels");
+      expect(body.can_create_invites).toBe(false);
+      // Nothing is claimed about individual channels: their overwrites were never readable.
+      expect(body.channel_permission_problems).toEqual([]);
+      // And nothing is claimed to be MISSING either. With no listing at all every tracked channel is
+      // absent from it, so reporting them would be an artefact of the 403 rather than a finding.
+      expect(body.missing_tracked_channel_ids).toEqual([]);
 
-    const channelsCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}/channels`);
-    expect(channelsCall?.status).toBe(403);
-    expect(channelsCall?.code).toBe(50001);
+      const channelsCall = (await callsForThisClass()).find((c) => c.path === `/guilds/${GUILD_ID}/channels`);
+      expect(channelsCall?.status).toBe(403);
+      expect(channelsCall?.code).toBe(50001);
+    } finally {
+      await untrackChannels();
+    }
   });
 
   test("a 5xx on the channel list is retryable, and never reported as a channel permission problem", async () => {

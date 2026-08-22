@@ -287,6 +287,14 @@ export async function GET(request: NextRequest) {
       scope.setTag("error_type", "claim_forbidden");
       return fail("You must be an instructor of this course to connect a Discord server.");
     }
+    if (error.message.includes("DISCORD_CLAIM_CLASS_ARCHIVED")) {
+      // The archive trigger only clears discord_server_id on the false->true transition, so nothing
+      // else stops an instructor still attached to an archived course from completing an install and
+      // parking a guild the uniqueness index no longer guards. claim_discord_guild() refuses it; this
+      // turns that refusal into the one action available.
+      scope.setTag("error_type", "claim_class_archived");
+      return fail("This course is archived, so it cannot connect a Discord server. Un-archive it first.");
+    }
     if (error.message.includes("DISCORD_CLAIM_INVALID")) {
       scope.setTag("error_type", "claim_invalid");
       return fail("Discord reported a server id Pawtograder cannot use. Nothing was connected.");

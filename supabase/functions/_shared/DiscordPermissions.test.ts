@@ -232,7 +232,6 @@ function overwrite(id: string, type: 0 | 1, allow: bigint, deny: bigint) {
 /** Resolve a channel for the bot, holding the bot role, over the baseline above. */
 function resolve(args: {
   channel?: ReturnType<typeof overwrite>[];
-  parent?: ReturnType<typeof overwrite>[];
   memberRoleIds?: string[];
   memberUserId?: string | null;
   guildRoles?: DiscordRoleForTest[];
@@ -242,8 +241,7 @@ function resolve(args: {
     memberRoleIds: args.memberRoleIds ?? [BOT_ROLE_ID],
     guildId: GUILD_ID,
     memberUserId: args.memberUserId === undefined ? BOT_USER_ID : args.memberUserId,
-    channelOverwrites: args.channel,
-    parentOverwrites: args.parent
+    channelOverwrites: args.channel
   });
 }
 
@@ -255,7 +253,7 @@ const CHANNEL_BASE = effectivePermissions({
 
 Deno.test("channelPermissions: a channel with no overwrites is exactly the guild-level answer", () => {
   assertEquals(resolve({}), CHANNEL_BASE);
-  assertEquals(resolve({ channel: [], parent: [] }), CHANNEL_BASE);
+  assertEquals(resolve({ channel: [] }), CHANNEL_BASE);
 });
 
 Deno.test("channelPermissions: a role overwrite denies what the guild grants", () => {
@@ -353,38 +351,48 @@ Deno.test("channelPermissions: Administrator short-circuits an explicit channel 
   assertEquals(missingChannelPermissions(granted), []);
 });
 
-Deno.test("channelPermissions: a channel inherits its category's overwrites", () => {
-  // The trap that makes a per-channel audit insufficient on its own: the channel carries no
-  // overwrites of its own and is still denied, because the category above it says so.
-  const granted = resolve({ parent: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)] });
+Deno.test("channelPermissions: a synced category's entries arrive as the channel's own, and apply", () => {
+  // What "synced to category" actually is on the wire: Discord's client copies the category's
+  // overwrite set onto each child, so a synced child's own list already contains the category's deny.
+  // It applies here because it is in the channel's list, not because anything walked up to the parent.
+  const categoryEntries = [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)];
+  const granted = resolve({ channel: [...categoryEntries] });
   assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), false);
   assertEquals(missingChannelPermissions(granted), ["Send Messages"]);
 });
 
-Deno.test("channelPermissions: a channel-level entry overrides its category, both ways", () => {
-  // Category denies, channel allows -> allowed.
-  const reAllowed = resolve({
-    parent: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)],
-    channel: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)]
-  });
-  assertEquals(grantsChannelPermission(reAllowed, P.SEND_MESSAGES), true);
-
-  // Category allows, channel denies -> denied. Without the channel layer being applied second, this
-  // one comes out granted and the audit reports a channel the bot cannot post in as healthy.
-  const reDenied = resolve({
-    parent: [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)],
-    channel: [overwrite(BOT_ROLE_ID, 0, 0n, P.SEND_MESSAGES)]
-  });
-  assertEquals(grantsChannelPermission(reDenied, P.SEND_MESSAGES), false);
+Deno.test("channelPermissions: a category entry the channel omits is NOT applied", () => {
+  // The other half of the same fact, and the reason there is no parent layer. Discord's documented
+  // compute_overwrites reads `channel.permission_overwrites` and nothing else, so an UNSYNCED channel
+  // -- one whose own list does not name the bot's role -- does not inherit the category's entry for
+  // it. Same category deny as the test above; this channel simply omits it, and the bot may post.
+  const granted = resolve({ channel: [overwrite(UNHELD_ROLE_ID, 0, 0n, P.SEND_MESSAGES)] });
+  assertEquals(grantsChannelPermission(granted, P.SEND_MESSAGES), true);
+  assertEquals(missingChannelPermissions(granted), []);
 });
 
-Deno.test("channelPermissions: a category @everyone deny is re-granted by a channel role allow", () => {
-  // Both layers and both targets at once, which is what a real locked-down category looks like.
-  const granted = resolve({
-    parent: [overwrite(GUILD_ID, 0, 0n, P.VIEW_CHANNEL | P.SEND_MESSAGES)],
-    channel: [overwrite(BOT_ROLE_ID, 0, P.VIEW_CHANNEL | P.SEND_MESSAGES, 0n)]
-  });
-  assertEquals(missingChannelPermissions(granted), []);
+Deno.test("channelPermissions: a category ALLOW the channel omits does not invent the permission", () => {
+  // The direction that made the removed parent layer a correctness bug rather than a wasted lookup.
+  // Nothing at the guild level grants Send Messages here, so the only thing that could is an
+  // overwrite. Applying the category's set underneath the channel's would report the bot as able to
+  // post in a channel Discord answers 403 for -- a check that is more permissive than the runtime it
+  // is checking is worse than no check.
+  const noSendRoles: DiscordRoleForTest[] = [
+    { id: GUILD_ID, name: "@everyone", permissions: String(P.VIEW_CHANNEL | P.READ_MESSAGE_HISTORY) },
+    { id: BOT_ROLE_ID, name: "Pawtograder", permissions: String(P.MANAGE_CHANNELS | P.MANAGE_ROLES) }
+  ];
+  const categoryAllow = [overwrite(BOT_ROLE_ID, 0, P.SEND_MESSAGES, 0n)];
+
+  // The channel omits the bot's role, so the category's allow reaches it not at all.
+  const unsynced = resolve({ guildRoles: noSendRoles, channel: [overwrite(UNHELD_ROLE_ID, 0, P.SEND_MESSAGES, 0n)] });
+  assertEquals(grantsChannelPermission(unsynced, P.SEND_MESSAGES), false);
+  assertEquals(missingChannelPermissions(unsynced), ["Send Messages"]);
+
+  // A-B against the identical entry sitting in the channel's own list, so the assertion above cannot
+  // pass merely because the overwrite was malformed or the role unheld.
+  const synced = resolve({ guildRoles: noSendRoles, channel: [...categoryAllow] });
+  assertEquals(grantsChannelPermission(synced, P.SEND_MESSAGES), true);
+  assertEquals(missingChannelPermissions(synced), []);
 });
 
 Deno.test("grantsChannelPermission: a View Channel denial makes every other permission moot", () => {

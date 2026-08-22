@@ -462,10 +462,17 @@ export function botChannelPermissions(guild: MockGuild, channel: MockChannel, bo
   const base = botPermissions(guild);
   if ((base & DISCORD_PERMISSION_BITS.ADMINISTRATOR) !== 0n) return base;
 
-  // A channel inherits its category's overwrites unless it has its own for the same target. Modelled
-  // by applying the parent's first, so a channel-level entry wins.
-  const parent = channel.parent_id ? (guild.channels.find((c) => c.id === channel.parent_id) ?? null) : null;
-  const layers = [parent?.permission_overwrites ?? [], channel.permission_overwrites ?? []];
+  // Only the channel's OWN overwrites. Discord's documented algorithm computes channel permissions
+  // from `channel.permission_overwrites` alone -- there is no category traversal at request time.
+  // "Synced" categories are a client-side convenience that COPIES the category's overwrite set onto
+  // each child, so a synced child already carries them, and an unsynced child genuinely does not
+  // inherit the entries it omits.
+  //
+  // An earlier version layered the parent's overwrites underneath the channel's, which invented
+  // permissions for unsynced channels: a category-level allow the child had deliberately dropped
+  // would still be granted here, so the mock would answer 200 where Discord answers 403 -- the mock
+  // being more permissive than production is the one direction that makes a test useless.
+  const layers = [channel.permission_overwrites ?? []];
 
   let acc = base;
   for (const overwrites of layers) {
