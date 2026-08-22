@@ -441,7 +441,10 @@ function ChannelPermissionProblems({ status }: { status: CheckBotInstallationRes
               <Text as="span" fontWeight="medium">
                 {problem.channel_name ? `#${problem.channel_name}` : "Channel"}
               </Text>{" "}
-              (<Code>{problem.channel_id}</Code>) — denied {problem.missing.join(", ")}
+              {/* No wrapping parentheses: <Code> carries its own horizontal padding, so "(id)" renders
+                  with a visible gap inside each bracket and reads as a spacing bug. The chip already
+                  separates the id from the name on its own. */}
+              <Code>{problem.channel_id}</Code> — denied {problem.missing.join(", ")}
             </List.Item>
           ))}
         </List.Root>
