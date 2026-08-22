@@ -86,7 +86,29 @@ export async function discordMockReachable(): Promise<boolean> {
   } catch {
     reachable = false;
   }
+  if (!reachable) requireMockOrThrow("the Discord mock is not reachable");
   return reachable;
+}
+
+/**
+ * Turn a skip into a failure where a skip would be a lie.
+ *
+ * Skipping is right on a developer machine that has not run `scripts/start-discord-mock.sh`: there is
+ * nothing under test, and failing would say "Discord is broken" when it means "the mock is not
+ * running". It is wrong in CI, where a skip reports coverage that never executed -- which is exactly
+ * what happened before the workflow learned to start the mock: `e2e-local` went green with 136 Discord
+ * tests silently skipped.
+ *
+ * So CI sets DISCORD_MOCK_REQUIRED=1 and gets a loud failure instead. The health check in the
+ * workflow catches a mock that failed to start; this also catches the subtler case where the mock is
+ * up but the edge runtime was never pointed at it, which no amount of curling the mock would reveal.
+ */
+function requireMockOrThrow(reason: string): void {
+  if (process.env.DISCORD_MOCK_REQUIRED !== "1") return;
+  throw new Error(
+    `DISCORD_MOCK_REQUIRED=1 but ${reason}. These specs must not be skipped here — start it with ` +
+      `scripts/start-discord-mock.sh and point DISCORD_API_BASE_URL at it.`
+  );
 }
 
 /**
@@ -98,7 +120,10 @@ export async function discordMockReachable(): Promise<boolean> {
  */
 export function discordApiIsMocked(): boolean {
   const base = process.env.DISCORD_API_BASE_URL ?? "";
-  if (base === "") return false;
+  if (base === "") {
+    requireMockOrThrow("DISCORD_API_BASE_URL is unset");
+    return false;
+  }
   // Compared as a parsed host, not as a substring. `base.includes("discord.com")` also matches
   // `discord.com.example.test` and `http://mock/?upstream=discord.com`, so it could call a run
   // mocked when it was pointed at a host that merely mentions Discord -- and the assertions here
@@ -110,7 +135,9 @@ export function discordApiIsMocked(): boolean {
     // An unparseable base is not a mock we can vouch for; skip rather than assert.
     return false;
   }
-  return host !== "discord.com" && !host.endsWith(".discord.com");
+  const mocked = host !== "discord.com" && !host.endsWith(".discord.com");
+  if (!mocked) requireMockOrThrow(`DISCORD_API_BASE_URL points at ${host}`);
+  return mocked;
 }
 
 // ============================================================================

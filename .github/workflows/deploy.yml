@@ -474,6 +474,9 @@ jobs:
       - name: Run Playwright tests
         env:
           BASE_URL: http://localhost:3001
+          # A skipped Discord spec here would report coverage that never ran, which is exactly how
+          # `e2e-local` went green with 136 of them silently skipped. With this set they fail instead.
+          DISCORD_MOCK_REQUIRED: "1"
           SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
