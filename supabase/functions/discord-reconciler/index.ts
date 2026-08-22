@@ -172,9 +172,36 @@ serveWithSentryFlush(async (req) => {
     // Rows for a guild the class no longer uses are left behind by a server change and are not a
     // live failure -- get_discord_membership_status_for_class() hides them from instructors for the
     // same reason, and alerting on them would page for a server nobody is using any more.
-    const stuck = ((stuckRows ?? []) as unknown as StuckRow[]).filter(
+    const onCurrentGuild = ((stuckRows ?? []) as unknown as StuckRow[]).filter(
       (row) => row.classes?.discord_server_id === row.guild_id
     );
+
+    // Rows for somebody who is no longer an active member of the class are not a live failure either.
+    // A student who reached cannot_invite and was then dropped keeps their status row -- nothing
+    // deletes it on disable, deliberately, since an instructor re-enabling them should not lose the
+    // history -- so without this the class was paged every fifteen minutes about a person who is not
+    // expected in the server at all. get_discord_membership_status_for_class() hides these from the
+    // roster for the same reason, and this is the alerting half of that predicate.
+    //
+    // Unlinking Discord needs no filter here: clear_discord_membership_status_on_identity_change is
+    // `AFTER UPDATE OF discord_id ... WHEN (new.discord_id IS DISTINCT FROM old.discord_id)`, so
+    // setting it to NULL already deletes the rows.
+    let stuck = onCurrentGuild;
+    if (onCurrentGuild.length > 0) {
+      const { data: activeRoles, error: rolesError } = await supabase
+        .from("user_roles")
+        .select("class_id, user_id")
+        .eq("disabled", false)
+        .in("class_id", [...new Set(onCurrentGuild.map((row) => row.class_id))])
+        .in("user_id", [...new Set(onCurrentGuild.map((row) => row.user_id))]);
+      if (rolesError) {
+        // Fail loud rather than alerting on an unfiltered set: a silent fallback here would restore
+        // exactly the noise this filter exists to remove.
+        throw new Error(`Failed to read active enrollments for stuck Discord memberships: ${rolesError.message}`);
+      }
+      const active = new Set((activeRoles ?? []).map((r) => `${r.class_id}:${r.user_id}`));
+      stuck = onCurrentGuild.filter((row) => active.has(`${row.class_id}:${row.user_id}`));
+    }
 
     // Grouped per class before capturing. One misconfigured guild affects every enrolled student, so
     // per-row events would be the dead-letter flood again, in Sentry instead of pgmq.

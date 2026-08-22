@@ -399,6 +399,51 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
     expect(queued, "the same stale row was re-enqueued twice").toBeNull();
   });
 
+  test("a dropped student's stuck membership stops being alerted on", async () => {
+    // A student who reached cannot_invite and was then dropped keeps their status row: nothing
+    // deletes it on disable, deliberately, so re-enabling them does not lose the history. The
+    // reconciler must still stop paging the class about somebody who is no longer expected in the
+    // server. Asserted as a DELTA rather than an absolute, because `long_stuck_users` counts every
+    // affected class on the deployment and other specs seed their own.
+    const staleAt = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
+    await membership().delete().eq("class_id", reconClassId);
+    const { error: insertError } = await membership().insert({
+      class_id: reconClassId,
+      user_id: reconStudent.user_id,
+      guild_id: RECON_GUILD,
+      state: "cannot_invite",
+      discord_error_code: 50013,
+      detail: "e2e: bot cannot invite",
+      first_observed_at: staleAt,
+      last_observed_at: staleAt
+    });
+    expect(insertError, "seeding a long-stuck cannot_invite row").toBeNull();
+
+    const withActive = await invokeEdgeFunction("discord-reconciler");
+    const activeCount = (withActive.body as { long_stuck_users?: number }).long_stuck_users ?? 0;
+    expect(activeCount, "an active student's stuck row should be alerted on").toBeGreaterThanOrEqual(1);
+
+    // Drop them.
+    const { error: disableError } = await supabase
+      .from("user_roles")
+      .update({ disabled: true })
+      .eq("class_id", reconClassId)
+      .eq("user_id", reconStudent.user_id);
+    expect(disableError, "disabling the enrollment").toBeNull();
+
+    const withDropped = await invokeEdgeFunction("discord-reconciler");
+    const droppedCount = (withDropped.body as { long_stuck_users?: number }).long_stuck_users ?? 0;
+    expect(droppedCount, "a dropped student must not be counted as a live failure").toBe(activeCount - 1);
+
+    // Put the enrollment back so later tests in this file see the fixture they expect.
+    await supabase
+      .from("user_roles")
+      .update({ disabled: false })
+      .eq("class_id", reconClassId)
+      .eq("user_id", reconStudent.user_id);
+    await membership().delete().eq("class_id", reconClassId);
+  });
+
   // ---------------------------------------------------------------------------
   // 3. Circuit breaker
   // ---------------------------------------------------------------------------
