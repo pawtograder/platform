@@ -10,7 +10,7 @@ import {
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 import { DISCORD_DLQ, drainQueue, randomGuildId, untypedRpc, untypedTable } from "@/tests/e2e/discordMockUtils";
 
-// Security coverage for the Discord guild claim (supabase/migrations/20260822130000_discord_guild_claim.sql).
+// Security coverage for the Discord guild claim (supabase/migrations/20260822120000_discord_install_flow_and_durability.sql).
 //
 // WHAT CHANGED AND WHY IT NEEDS A TEST
 //
@@ -354,7 +354,7 @@ test.describe("claim_discord_guild + discord_server_id RLS", () => {
     // not: `app/api/discord/interactions/route.ts` resolves a slash command by
     // `WHERE discord_server_id = <guild>`, so once class B claimed the released guild, a `/sync-roles`
     // in B's server matched archived class A too and would have assigned A's roles inside B. Releasing
-    // the guild and unlinking the class are now one event (trigger, 20260822150000), so there is no
+    // the guild and unlinking the class are now one event (trg_release_discord_server_on_archive), so there is no
     // window in which two classes name the same server.
     // Seeded so the teardown assertions below have something to prove. Without this the class has no
     // tracked rows and "nothing survived" is true for the wrong reason.

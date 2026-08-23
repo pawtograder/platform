@@ -41,7 +41,7 @@ import {
 // Response: { installed, guild_id, guild_name, missing_permissions, can_manage_class_roles,
 //             bot_role_position, highest_class_role_position, stale_class_role_ids,
 //             channel_permission_problems, missing_tracked_channel_ids, can_create_invites,
-//             install_url }
+//             invalid_channel_category_id }
 // Authz:    caller must be an instructor in `class_id`.
 //
 // UNLIKE its GitHub twin (tests/e2e/github-check-app-installation.test.tsx), the Discord-dependent
@@ -78,10 +78,9 @@ type CheckResponse = {
   /** Tracked channels the guild's channel list does not return: deleted, or hidden from the bot. */
   missing_tracked_channel_ids: string[];
   /** False when no candidate the invite path would try permits Create Invite. */
-  can_create_invites: boolean;
+  can_create_invites: boolean | null;
   /** Set when discord_channel_group_id is not a live category in the guild. */
   invalid_channel_category_id: string | null;
-  install_url: string;
 };
 
 test.describe.configure({ mode: "serial" });
@@ -149,7 +148,7 @@ test.describe("discord-check-bot-installation edge function", () => {
     // Class A is connected to the mock's guild; class B deliberately is not, so the
     // "no server configured" branch has a fixture too.
     //
-    // Written with the service-role client on purpose: since 20260822130000 an instructor UPDATE
+    // Written with the service-role client on purpose: an instructor UPDATE
     // cannot touch discord_server_id (see discord-guild-claim.test.tsx, which is where that is the
     // property under test) and claim_discord_guild is the only other writer. Service role bypasses
     // RLS, so this is the cheapest way to pose the connected state.
@@ -336,9 +335,6 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(body.can_manage_class_roles).toBe(false);
     expect(body.bot_role_position).toBeNull();
     expect(body.highest_class_role_position).toBeNull();
-    expect(body.install_url).toMatch(/^https:\/\/discord\.com\/oauth2\/authorize\?/);
-    // No guild is pinned, because there is none to pin.
-    expect(body.install_url).not.toContain("guild_id=");
   });
 
   // ---------------------------------------------------------------------------
@@ -359,9 +355,6 @@ test.describe("discord-check-bot-installation edge function", () => {
     // The scenario puts the bot's role at 10 and the highest class role (instructor) at 5.
     expect(body.bot_role_position).toBe(10);
     expect(body.highest_class_role_position).toBe(5);
-    // Re-running the OAuth flow is how a bot's permissions are widened, so the URL is still offered,
-    // pinned to the configured guild so the consent screen cannot be pointed elsewhere.
-    expect(body.install_url).toContain(`guild_id=${GUILD_ID}`);
 
     // Traffic really reached the mock: the guild, the bot's own member object, and the role list.
     const calls = await callsForThisClass();
@@ -397,7 +390,6 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(body.guild_name).toBeNull();
     expect(body.missing_permissions).toEqual([]);
     expect(body.can_manage_class_roles).toBe(false);
-    expect(body.install_url).toContain(`guild_id=${GUILD_ID}`);
 
     // One call, refused the way Discord refuses it. A bot has no way to tell "no such guild" from
     // "not your guild", so the check stops here rather than asking about roles it cannot see.

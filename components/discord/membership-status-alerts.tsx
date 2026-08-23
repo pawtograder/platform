@@ -123,6 +123,21 @@ function StudentList({ rows }: { rows: DiscordMembershipRow[] }) {
  *
  * Renders nothing when there is nothing to act on.
  */
+/** How many distinct error details one alert spells out before summarising the rest. */
+const MAX_DETAILS_SHOWN = 3;
+
+/** The distinct `detail` strings in a group, in first-seen order, capped for readability. */
+function distinctDetails(rows: DiscordMembershipRow[]): string[] {
+  const seen = [...new Set(rows.map((row) => row.detail ?? "an error"))];
+  return seen.slice(0, MAX_DETAILS_SHOWN);
+}
+
+/** How many distinct details were left out of the list above. */
+function extraDetailCount(rows: DiscordMembershipRow[]): number {
+  const total = new Set(rows.map((row) => row.detail ?? "an error")).size;
+  return Math.max(0, total - MAX_DETAILS_SHOWN);
+}
+
 export default function DiscordMembershipStatusAlerts({
   classId,
   /**
@@ -195,11 +210,25 @@ export default function DiscordMembershipStatusAlerts({
           title={`The Discord bot cannot invite ${rows.length} ${rows.length === 1 ? "student" : "students"}`}
         >
           <Text>
-            Discord refused the invite with{" "}
-            <Text as="span" fontFamily="mono">
-              {rows[0].detail ?? "an error"}
-            </Text>
-            . {remediationFor(rows[0])} Until then their Pawtograder roles will not appear in Discord.
+            {/* Every distinct detail in the group, not the first row's. groupByCause keys on the
+                REMEDIATION, and remediationFor collapses a null code, 50001 and 50013 into one
+                sentence -- so a group legitimately holds students whose Discord errors differ. The
+                wrapper's own message even varies per student ("tried N of M visible channels (...)"),
+                so attributing rows[0]'s text to everyone named below is the same conflation the
+                grouping comment above says it exists to prevent, fixed for the advice but not for the
+                evidence. Capped at three: past that the list stops being readable and the remediation
+                is the same for all of them anyway. */}
+            Discord refused the {rows.length === 1 ? "invite" : "invites"} with{" "}
+            {distinctDetails(rows).map((detail, index, all) => (
+              <span key={detail}>
+                <Text as="span" fontFamily="mono">
+                  {detail}
+                </Text>
+                {index < all.length - 1 ? ", " : ""}
+              </span>
+            ))}
+            {extraDetailCount(rows) > 0 ? ` and ${extraDetailCount(rows)} more` : ""}. {remediationFor(rows[0])} Until
+            then their Pawtograder roles will not appear in Discord.
           </Text>
           <StudentList rows={rows} />
         </Alert>

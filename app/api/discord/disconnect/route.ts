@@ -4,7 +4,7 @@
  * The inverse of the install flow. `claim_discord_guild()` is the only writer of
  * `classes.discord_server_id` and it refuses anything that is not a snowflake, so without this route
  * an instructor who connected the wrong server has no way back -- see
- * `supabase/migrations/20260822140000_discord_guild_disconnect.sql`.
+ * `supabase/migrations/20260822120000_discord_install_flow_and_durability.sql`.
  *
  * POST rather than GET, because it changes state: a GET here would be triggerable by any image tag
  * pointed at the URL. Supabase's session cookies are `SameSite=Lax`, which already means a
@@ -20,7 +20,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/client";
 import { isInstructorOfClass } from "@/lib/lti/auth";
-import { manageDiscordPageUrl } from "@/lib/discordInstall";
+import { manageDiscordPageUrl, redirectOrigin } from "@/lib/discordInstall";
 
 export const dynamic = "force-dynamic";
 
@@ -72,14 +72,28 @@ export async function POST(request: NextRequest) {
   const {
     data: { user }
   } = await supabase.auth.getUser();
+  // Redirects, not JSON, from here on: DisconnectButton submits a real form, so whatever this route
+  // returns replaces the page. The likeliest failure by far is an expired session on a settings page
+  // that has been open a while, and answering that with a raw `{"error":"Not signed in"}` body leaves
+  // the instructor on a dead end with no way back. Same choice app/api/discord/install/route.ts makes
+  // for the identical case, and the same 303 the RPC-error branch below already uses. The 400 above
+  // stays JSON because without a usable class id there is no settings page to send anyone to.
   if (!user) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401, headers: NO_STORE });
+    scope.setTag("error_type", "not_signed_in");
+    const back = `/course/${classId}/manage/discord`;
+    return NextResponse.redirect(`${redirectOrigin(request)}/sign-in?redirect=${encodeURIComponent(back)}`, {
+      status: 303,
+      headers: NO_STORE
+    });
   }
   if (!(await isInstructorOfClass(supabase, classId))) {
     scope.setTag("error_type", "not_instructor");
-    return NextResponse.json(
-      { error: "You must be an instructor of this course to disconnect its Discord server." },
-      { status: 403, headers: NO_STORE }
+    return NextResponse.redirect(
+      manageDiscordPageUrl(request, classId, {
+        error: "discord_disconnect_forbidden",
+        errorDescription: "You must be an instructor of this course to disconnect its Discord server."
+      }),
+      { status: 303, headers: NO_STORE }
     );
   }
 
@@ -88,7 +102,7 @@ export async function POST(request: NextRequest) {
   // instructor must not be able to reach either directly. The actor is passed explicitly because a
   // service-role call carries no auth.uid(), and the function re-checks that they are staff.
   //
-  // Type-erased because the RPC lands with migration 20260822140000 and SupabaseTypes.d.ts is
+  // Type-erased because the RPC lands with the Discord install-flow migration and SupabaseTypes.d.ts is
   // regenerated centrally once all of this branch's migrations are in.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = createAdminClient() as any;
@@ -100,9 +114,14 @@ export async function POST(request: NextRequest) {
   if (error) {
     if (error.message.includes("DISCORD_CLAIM_FORBIDDEN")) {
       scope.setTag("error_type", "disconnect_forbidden");
-      return NextResponse.json(
-        { error: "You must be an instructor of this course to disconnect its Discord server." },
-        { status: 403, headers: NO_STORE }
+      // Redirected for the same reason as the pre-RPC checks above: this is a form navigation, and the
+      // RPC's own staff re-check failing is the same situation to the instructor as ours failing.
+      return NextResponse.redirect(
+        manageDiscordPageUrl(request, classId, {
+          error: "discord_disconnect_forbidden",
+          errorDescription: "You must be an instructor of this course to disconnect its Discord server."
+        }),
+        { status: 303, headers: NO_STORE }
       );
     }
     scope.setTag("error_type", "disconnect_failed");

@@ -596,7 +596,11 @@ export type CheckBotInstallationResponse = {
    * a class with no server connected and on a guild whose channels the bot cannot see, so read it
    * alongside `installed` rather than on its own.
    */
-  can_create_invites: boolean;
+  /**
+   * Null when the channel listing could not be read: "we never got a list", as distinct from false's
+   * "we looked and nowhere allows it". Keep in step with the edge function's own type.
+   */
+  can_create_invites: boolean | null;
   /**
    * The configured Discord channel category when it is not a live category in the guild.
    *
@@ -605,7 +609,6 @@ export type CheckBotInstallationResponse = {
    * makes every later assignment, lab and help-queue channel creation fail with a terminal 50035.
    */
   invalid_channel_category_id: string | null;
-  install_url: string;
 };
 
 /**

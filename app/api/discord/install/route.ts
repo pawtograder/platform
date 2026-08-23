@@ -8,11 +8,17 @@
  * of control: the instructor is sent to Discord's own consent screen and adds the bot themselves,
  * which requires Manage Server on the guild they pick.
  *
- * Deliberately no `guild_id` on the authorize URL. Pinning the consent screen to a guild we were
- * handed would remove the server picker, and the picker is exactly what makes this an authorization
- * step: Discord only lists servers the signed-in Discord user may add a bot to. (The re-authorize
- * link on the settings page does pass `guild_id`, via the edge function's `install_url`, because
- * there the class already owns the guild and narrowing the choice is the safer option.)
+ * No `guild_id` on the authorize URL by default. Pinning the consent screen to a guild we were handed
+ * would remove the server picker, and the picker is exactly what makes this an authorization step:
+ * Discord only lists servers the signed-in Discord user may add a bot to.
+ *
+ * `?pinned=1` is the re-authorize case, where the class already owns a guild and narrowing the choice
+ * is the safer option. The guild is read from the class row rather than taken from the query string --
+ * it only pins the consent screen (the callback still takes the guild from the code exchange, never
+ * from a parameter), so this is not a trust decision, but reading it from the row costs one query and
+ * removes the question. The settings page used to link straight to the edge function's `install_url`
+ * for this, which is `botInstallUrl()` with no `redirect_uri`: Discord showed its own "Authorized"
+ * page and never came back, so `claim_discord_guild()` never ran and the re-authorize cleared nothing.
  *
  * The return trip is `app/api/discord/install/callback/route.ts`.
  */
@@ -109,6 +115,20 @@ export async function GET(request: Request) {
     );
   }
 
+  // The re-authorize case pins the consent screen to the server the class already holds, so an
+  // instructor widening permissions cannot pick a different server by mistake. Read from the row, not
+  // from the query string; a class with no server yet falls back to the picker, which is the right
+  // answer rather than an error.
+  let pinnedGuildId: string | null = null;
+  if (new URL(request.url).searchParams.get("pinned") === "1") {
+    const { data: classRow } = await supabase
+      .from("classes")
+      .select("discord_server_id")
+      .eq("id", classId)
+      .maybeSingle();
+    pinnedGuildId = classRow?.discord_server_id ?? null;
+  }
+
   const nonce = randomInstallNonce();
   const state = await createInstallState({ classId, userId: user.id, nonce });
 
@@ -117,7 +137,7 @@ export async function GET(request: Request) {
   // `state`, `redirect_uri` and `response_type` are added here rather than there because they are
   // properties of this round-trip, not of the bot: without a redirect_uri Discord shows an
   // "Authorized" page and never comes back, which is how the old flow had no callback to secure.
-  const authorizeUrl = new URL(botInstallUrl({ applicationId }));
+  const authorizeUrl = new URL(botInstallUrl({ applicationId, guildId: pinnedGuildId }));
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("redirect_uri", installCallbackUrl(request));
   authorizeUrl.searchParams.set("state", state);

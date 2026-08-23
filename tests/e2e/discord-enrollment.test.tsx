@@ -131,7 +131,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
 
   /** Point a class at a guild and record the class roles the mock's snowflakes stand for. */
   async function connectClass(classId: number, guildId: string): Promise<void> {
-    // Service role, because since 20260822130000 discord_server_id is written only by
+    // Service role, because discord_server_id is written only by
     // claim_discord_guild() (see discord-guild-claim.test.tsx). Service role bypasses RLS.
     const { error: connectError } = await supabase
       .from("classes")
@@ -158,7 +158,7 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
   }
 
   async function membershipRow(classId: number, userId: string): Promise<Record<string, unknown> | null> {
-    // Type-erased for `last_reconciled_at`, which lands with migration 20260822190000; SupabaseTypes.d.ts
+    // Type-erased for `last_reconciled_at`, which lands with the Discord install-flow migration; SupabaseTypes.d.ts
     // is regenerated centrally once all of this branch's migrations are in, so the column is not in the
     // typed column union yet. Same escape hatch the branch uses for its not-yet-generated RPCs.
     const query = membership() as unknown as {

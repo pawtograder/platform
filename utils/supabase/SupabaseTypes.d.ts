@@ -13175,6 +13175,19 @@ export type Database = {
         };
         Returns: number[];
       };
+      get_stuck_discord_membership_alerts: {
+        Args: { p_hours?: number };
+        Returns: {
+          affected_users: number;
+          class_id: number;
+          class_name: string;
+          detail: string;
+          discord_error_code: number;
+          guild_id: string;
+          last_observed_at: string;
+          oldest_first_observed_at: string;
+        }[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;

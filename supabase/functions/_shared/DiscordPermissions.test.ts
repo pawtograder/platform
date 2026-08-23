@@ -82,10 +82,15 @@ Deno.test("missingPermissions: unrelated permissions do not satisfy the requirem
 
 Deno.test("parsePermissionBits: reads Discord's decimal strings, and fails closed", () => {
   assertEquals(parsePermissionBits("268435456"), 268435456n);
-  assertEquals(parsePermissionBits(1024), 1024n);
   assertEquals(parsePermissionBits(8n), 8n);
-  // A field past 2^53, which is why the module uses BigInt at all.
-  assertEquals(parsePermissionBits("140737488355328"), 140737488355328n);
+  // Past 2^53, which is why the module uses BigInt at all. 2^53 + 1 is the smallest value that
+  // proves it: `Number("9007199254740993")` collapses to ...992, so routing this through a double
+  // fails here. The previous fixture was 140737488355328, which is 2^47 -- comfortably inside the
+  // safe-integer range, so the whole suite passed with `BigInt(Number(text))` in place.
+  assertEquals(parsePermissionBits("9007199254740993"), (1n << 53n) + 1n);
+  // Discord's own flag table already reaches bit 50, so a real bitfield combining the high flags
+  // lands well past the double's precision.
+  assertEquals(parsePermissionBits("2251799813685248"), 1n << 51n);
   // Unreadable must never mean "has everything".
   assertEquals(parsePermissionBits(null), 0n);
   assertEquals(parsePermissionBits(undefined), 0n);

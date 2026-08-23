@@ -257,7 +257,7 @@ export async function GET(request: NextRequest) {
   // function re-checks that they are staff of the class.
   //
   // Type-erased for the same reason as lib/metrics.ts: the RPC lands with migration
-  // 20260822130000_discord_guild_claim.sql, and SupabaseTypes.d.ts is regenerated centrally once all
+  // 20260822120000_discord_install_flow_and_durability.sql, and SupabaseTypes.d.ts is regenerated centrally once all
   // of this branch's migrations are in, so the name is not in the typed union yet. Runtime behaviour
   // is identical to a typed call.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

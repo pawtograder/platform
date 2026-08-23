@@ -487,17 +487,44 @@ async function recordMembershipStatus(
   }
 }
 
-/** Resolve a Discord snowflake to a Pawtograder user id, which is what the status table keys on. */
+/**
+ * Resolve a Discord snowflake to a Pawtograder user id, which is what the status table keys on.
+ *
+ * Tolerant of duplicates on purpose. `users.discord_id` carries no unique index, and a stale row --
+ * `public.users` has no foreign key to `auth.users` and nothing clears `discord_id` when an identity
+ * is unlinked or an auth user is deleted -- lets one Discord account appear twice. With `.single()`
+ * that returned PGRST116 and this function answered null, which is far worse than it looks: every
+ * `discord_membership_status` write on every add_member_role path is gated on the id, so the student
+ * got no status row at all. They were then invisible on the instructor's roster *and* permanently
+ * re-selected by the reconciler, whose `last_reconciled_at` throttle cannot stamp a row that does not
+ * exist -- one add_member_role every fifteen minutes, forever, per affected student.
+ *
+ * Picking the oldest row is arbitrary but consistent, and it is reported rather than hidden: an
+ * ambiguous mapping is a data-integrity problem for a human, not something the worker can resolve.
+ */
 async function lookupUserIdByDiscordId(
   adminSupabase: SupabaseClient<Database>,
   discordId: string
 ): Promise<string | null> {
-  const { data, error } = await adminSupabase.from("users").select("user_id").eq("discord_id", discordId).single();
-  if (error || !data) {
-    console.warn(`[lookupUserIdByDiscordId] No user found for discord_id=${discordId}`, error);
+  const { data, error } = await adminSupabase
+    .from("users")
+    .select("user_id")
+    .eq("discord_id", discordId)
+    .order("user_id", { ascending: true })
+    .limit(2);
+  if (error) {
+    console.warn(`[lookupUserIdByDiscordId] Lookup failed for discord_id=${discordId}`, error);
     return null;
   }
-  return data.user_id;
+  if (!data || data.length === 0) {
+    console.warn(`[lookupUserIdByDiscordId] No user found for discord_id=${discordId}`);
+    return null;
+  }
+  if (data.length > 1) {
+    console.warn(`[lookupUserIdByDiscordId] discord_id=${discordId} maps to more than one user; using the first`);
+    Sentry.captureMessage(`Discord id ${discordId} is linked to more than one Pawtograder user`, { level: "warning" });
+  }
+  return data[0].user_id;
 }
 
 /**

@@ -158,15 +158,19 @@ export function missingPermissions(granted: bigint): string[] {
 /**
  * Parse a permission bitfield as Discord sends it.
  *
- * Discord serialises permissions as a decimal string (`"268435456"`), but role and member payloads
- * from other sources -- fixtures, mocks, older code -- sometimes carry a number. Anything absent or
- * unparseable becomes 0n: an unreadable field must not be read as "has everything", or the audit
- * would pass on exactly the malformed responses it should flag.
+ * Discord serialises permissions as a decimal string (`"268435456"`), and a string is the only
+ * lossless form: a JSON number is already truncated by `JSON.parse` before anything here could see
+ * it, so accepting `number` only offered a way to be silently wrong about the high flags. It is
+ * deliberately not in the signature -- the mock serialises these fields as strings for the same
+ * reason (tests/mocks/discord/state.ts).
+ *
+ * Anything absent or unparseable becomes 0n: an unreadable field must not be read as "has
+ * everything", or the audit would pass on exactly the malformed responses it should flag.
  */
-export function parsePermissionBits(value: string | number | bigint | null | undefined): bigint {
+export function parsePermissionBits(value: string | bigint | null | undefined): bigint {
   if (value === null || value === undefined) return 0n;
   if (typeof value === "bigint") return value;
-  const text = String(value).trim();
+  const text = value.trim();
   if (text === "" || !/^\d+$/.test(text)) return 0n;
   try {
     return BigInt(text);
@@ -215,7 +219,7 @@ export type DiscordRoleLike = {
   id: string;
   name?: string;
   /** Decimal string, per Discord's own serialisation. */
-  permissions?: string | number | bigint | null;
+  permissions?: string | bigint | null;
   position?: number | null;
 };
 
@@ -301,8 +305,8 @@ export type DiscordPermissionOverwriteLike = {
   id: string;
   /** 0 = role, 1 = member. Anything else is ignored rather than guessed at. */
   type: number;
-  allow?: string | number | bigint | null;
-  deny?: string | number | bigint | null;
+  allow?: string | bigint | null;
+  deny?: string | bigint | null;
 };
 
 /** Discord's `type` values on an overwrite. Named because `o.type === 0` reads as nothing. */

@@ -177,7 +177,7 @@ async function handleSyncRolesCommand(interaction: DiscordInteraction, scope: Se
   // Archived classes are excluded. The guild uniqueness index stops covering a class once it is
   // archived, so a finished course's server can be claimed by a new one, and a command in the new
   // owner's server must not resolve to the old course. A BEFORE UPDATE trigger already clears
-  // discord_server_id when a class is archived (20260822150000), so this filter should never have
+  // discord_server_id when a class is archived (trg_release_discord_server_on_archive), so this filter should never have
   // anything to exclude -- it is here because "a slash command acted on the wrong course's server" is
   // not a failure worth leaving to a single trigger.
   const { data: classes, error: classesError } = await adminSupabase

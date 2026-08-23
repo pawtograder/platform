@@ -29,12 +29,11 @@
  * those are mutations and live in separate routes.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { discordBotGet, isTransientDiscordStatus } from "../_shared/DiscordBotRest.ts";
+import { discordBotGet, isDiscordCredentialFailure, isTransientDiscordStatus } from "../_shared/DiscordBotRest.ts";
 import { DISCORD_UNKNOWN_GUILD, DISCORD_MISSING_ACCESS } from "../_shared/DiscordErrorClassification.ts";
 import { MAX_INVITE_CHANNEL_ATTEMPTS, inviteCandidateChannels } from "../_shared/DiscordInviteChannels.ts";
 import {
   DISCORD_PERMISSION_BITS,
-  botInstallUrl,
   canManageRoles,
   channelPermissions,
   effectivePermissions,
@@ -114,8 +113,12 @@ export type CheckBotInstallationResponse = {
    * The most severe of the channel-level answers and its own field for that reason: a guild where
    * every text channel denies Create Invite -- or that has no text channel at all -- cannot enroll
    * anybody, however complete its server-level permissions look.
+   *
+   * Null when the channel listing could not be read, which is not the same claim. False is "we looked
+   * and nowhere allows it"; null is "we never got a list". Reporting the former for the latter sends
+   * the instructor to edit channel permissions that were never the problem.
    */
-  can_create_invites: boolean;
+  can_create_invites: boolean | null;
   /**
    * The configured `discord_channel_group_id` when it is not a live category in this guild.
    *
@@ -127,7 +130,6 @@ export type CheckBotInstallationResponse = {
    * dead-lettered, while nothing else in this audit notices.
    */
   invalid_channel_category_id: string | null;
-  install_url: string;
 };
 
 /** One tracked channel the bot cannot work in, and what it is short of there. */
@@ -251,14 +253,23 @@ function auditChannels(args: {
   return { problems, canCreateInvites, missingTrackedChannelIds };
 }
 
-function resolveApplicationId(): string {
-  const applicationId = Deno.env.get("DISCORD_APPLICATION_ID");
-  if (!applicationId) {
-    // Without it there is no install link to offer, and an install link is the only actionable part
-    // of a negative answer, so a blank one would make the whole response useless.
-    throw new UserVisibleError("Discord is not configured on this deployment (DISCORD_APPLICATION_ID is unset)", 500);
-  }
-  return applicationId;
+/**
+ * Raise the platform-credential failure, loudly and with copy that does not blame the class.
+ *
+ * A 401 is the one Discord answer that is about Pawtograder rather than about this server, so it gets
+ * its own message and a Sentry event: nobody watching an instructor's settings page can fix it, and
+ * the "try again" copy the transient branch uses would have them retrying until the token is rotated.
+ */
+function throwCredentialFailure(what: string, scope?: Sentry.Scope): never {
+  scope?.setTag("discord_credential_failure", "true");
+  Sentry.captureMessage(`Discord rejected the Pawtograder bot token (401) while reading ${what}`, {
+    level: "error"
+  });
+  throw new UserVisibleError(
+    "Discord rejected Pawtograder's credentials, so the bot could not be checked. This is a problem with " +
+      "the Pawtograder deployment's Discord bot token, not with your server -- it has been reported.",
+    500
+  );
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBotInstallationResponse> {
@@ -302,11 +313,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     throw new NotFoundError(`Class ${class_id} not found`);
   }
 
-  const applicationId = resolveApplicationId();
   const guildId = classRow.discord_server_id;
 
   // No server configured yet. This is the ordinary starting state for every class, not an error --
-  // the instructor has simply not installed the bot, and the actionable answer is the install URL.
+  // the instructor has simply not installed the bot, and the actionable answer is the install button.
   // `missing_permissions` is empty rather than the full required list: with no guild there is
   // nothing that has failed to grant anything, and listing all six here would render as a wall of
   // red next to an "install" button that has not been pressed.
@@ -326,14 +336,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       // `can_manage_class_roles` is: nothing works yet, and the fix is the install button.
       can_create_invites: false,
       // Nothing to validate the category against without a guild.
-      invalid_channel_category_id: null,
-      install_url: botInstallUrl({ applicationId })
+      invalid_channel_category_id: null
     };
   }
   scope?.setTag("discord_guild_id", guildId);
 
   // claim_discord_guild() validates this shape, but it has only been the sole writer of the column
-  // since migration 20260822130000. Anything a class carried over from the old free-text field is
+  // since the Discord install-flow migration. Anything a class carried over from the old free-text field is
   // unconstrained, and every value here is interpolated straight into a Discord REST path below -- so
   // a legacy value containing a slash or a query string would address an endpoint nobody intended.
   // Reported rather than silently ignored: an unusable server id is exactly the kind of thing the
@@ -364,14 +373,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     can_create_invites: false,
     // Same reason: an unreachable guild yields no channel list to check the category against, and
     // "your category is wrong" would be a guess on top of a bigger, already-reported problem.
-    invalid_channel_category_id: null,
-    install_url: botInstallUrl({ applicationId, guildId })
+    invalid_channel_category_id: null
   };
 
   const guildResult = await discordBotGet(`/guilds/${guildId}`, scope);
   if (!guildResult.ok) {
     // A transient failure must never be reported as "not installed": that answer is confident,
     // wrong, and the remediation it implies is re-inviting a bot that is already there.
+    if (isDiscordCredentialFailure(guildResult.status)) {
+      throwCredentialFailure("the guild", scope);
+    }
     if (isTransientDiscordStatus(guildResult.status)) {
       throw new UserVisibleError(
         `Discord could not be reached to check the bot installation (HTTP ${guildResult.status}). Try again.`,
@@ -419,6 +430,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     ["the server's roles", rolesResult]
   ] as const) {
     if (!result.ok) {
+      if (isDiscordCredentialFailure(result.status)) {
+        throwCredentialFailure(label, scope);
+      }
       const status = isTransientDiscordStatus(result.status) ? 503 : 502;
       throw new UserVisibleError(`Discord could not report ${label} (HTTP ${result.status})`, status);
     }
@@ -426,7 +440,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
 
   // The channel list is handled apart from those two, because its failures mean different things.
   //
-  //   - Transient (5xx / 429 / 401) is not evidence about the guild. Treating it as "no channel
+  //   - Transient (5xx / 429) is not evidence about the guild. Treating it as "no channel
   //     permits Create Invite" would report a healthy server as unable to enroll anybody, which is
   //     the same class of confident-wrong answer the guild fetch above refuses to give.
   //   - 403 / 50001 Missing Access and 404 / 10004 are facts, not errors: the bot cannot see this
@@ -437,6 +451,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   // Anything else terminal is a shape nobody predicted, and is raised rather than guessed at.
   let channelsReadable = true;
   if (!channelsResult.ok) {
+    if (isDiscordCredentialFailure(channelsResult.status)) {
+      throwCredentialFailure("the server's channels", scope);
+    }
     if (isTransientDiscordStatus(channelsResult.status)) {
       throw new UserVisibleError(
         `Discord could not report the server's channels (HTTP ${channelsResult.status}). Try again.`,
@@ -528,13 +545,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   // tracked channel is absent from a list that does not exist, and reporting all of them as missing
   // would bury the real finding (View Channels, already named at the server level).
   const missingTrackedChannels = channelsReadable ? missingTrackedChannelIds : [];
+  // Null, not false, when the listing was unreadable. `canCreateInvites` is a `.some()` over the
+  // channel list, so an empty list makes it false -- which the UI renders as "every text channel the
+  // bot can see denies Create Invite", a confident diagnosis of something we never managed to look
+  // at. The two suppressions above and below exist for exactly this reason; this one was missed
+  // because false is a plausible-looking value rather than an obviously empty one.
+  const inviteCapability: boolean | null = channelsReadable ? canCreateInvites : null;
   if (channelPermissionProblems.length > 0) {
     scope?.setTag("channel_permission_problems", String(channelPermissionProblems.length));
   }
   if (missingTrackedChannels.length > 0) {
     scope?.setTag("missing_tracked_channels", String(missingTrackedChannels.length));
   }
-  if (!canCreateInvites) {
+  if (inviteCapability === false) {
     scope?.setTag("discord_no_invite_channel", "true");
   }
 
@@ -575,11 +598,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     stale_class_role_ids: staleClassRoleIds,
     channel_permission_problems: channelPermissionProblems,
     missing_tracked_channel_ids: missingTrackedChannels,
-    can_create_invites: canCreateInvites,
-    invalid_channel_category_id: invalidChannelCategoryId,
-    // Still returned when installed: it is the "fix the permissions" link, since re-running the
-    // OAuth flow on an existing guild is how a bot's permission set is widened.
-    install_url: botInstallUrl({ applicationId, guildId })
+    can_create_invites: inviteCapability,
+    invalid_channel_category_id: invalidChannelCategoryId
   };
 }
 

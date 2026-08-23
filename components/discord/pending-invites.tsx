@@ -119,6 +119,9 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   }
 
   if (invites.length === 0) {
+    // Nothing to show. A student who has just linked has their add_member_role envelope already in
+    // flight -- trg_update_discord_profile_on_insert enqueues it on the link itself -- so this is a
+    // gap of one worker poll rather than something needing its own explanatory panel.
     return null;
   }
 

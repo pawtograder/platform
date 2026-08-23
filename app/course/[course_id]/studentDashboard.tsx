@@ -27,6 +27,7 @@ import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-sum
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
+import LinkDiscordAccount from "@/components/discord/link-account";
 import PendingInvites from "@/components/discord/pending-invites";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
@@ -209,6 +210,14 @@ export default async function StudentDashboard({
        * invite under the student's dashboard and hand them a SyncRolesButton that mutates their own
        * Discord roles -- neither of which is what "view as" is meant to show.
        */}
+      {/*
+       * The link control comes first, because it is the step that unblocks everything below it. A
+       * student with no linked Discord account has no invite row -- every enqueuer requires
+       * users.discord_id -- so PendingInvites renders nothing and the dashboard used to be simply
+       * blank for them, with no way to proceed and nothing saying why. LinkDiscordAccount checks the
+       * same feature flag itself and renders nothing once an account is linked.
+       */}
+      {discordConfigured && !isViewingAsStudent && <LinkDiscordAccount />}
       {discordConfigured && !isViewingAsStudent && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>

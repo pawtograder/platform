@@ -106,12 +106,29 @@ export async function discordBotGet(path: string, scope?: Sentry.Scope): Promise
 
 /**
  * True when a failed response says nothing about the guild's configuration, only that Discord is
- * unwell -- a 5xx, or the 401/429 shapes that mean our own credentials or budget rather than the
- * class's server.
+ * unwell or rate-limiting us -- a 5xx or a 429.
  *
  * Callers turn these into a thrown error. Everything else is a fact about the guild that the check
  * is supposed to report.
+ *
+ * 401 is deliberately NOT here. It is not transient in any useful sense: it means the platform's bot
+ * token is wrong, and every subsequent call will answer the same way until somebody rotates a secret.
+ * Grouping it with the 5xxs made the instructor-facing check say "Discord could not be reached ... Try
+ * again", under a heading that disclaims saying anything about the installation -- so a deployment-wide
+ * credential failure was indistinguishable from a blip, on every instructor's settings page, forever.
+ * `isDiscordCredentialFailure` is the branch for it.
  */
 export function isTransientDiscordStatus(status: number): boolean {
-  return status >= 500 || status === 429 || status === 401;
+  return status >= 500 || status === 429;
+}
+
+/**
+ * True when Discord rejected our own credentials rather than answering about the guild.
+ *
+ * Separated from the transient statuses because the remediation has nothing to do with the class: no
+ * amount of retrying, re-authorizing, or editing channel permissions changes it. The only fix is on
+ * the platform side, so the message has to say so and the event has to reach whoever holds the secret.
+ */
+export function isDiscordCredentialFailure(status: number): boolean {
+  return status === 401;
 }

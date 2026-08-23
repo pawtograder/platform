@@ -47,6 +47,15 @@ import { BsArrowRepeat, BsDiscord } from "react-icons/bs";
 type Provenance = {
   claimedAt: string | null;
   claimedBy: string | null;
+  /**
+   * True when the read itself failed, as distinct from succeeding and finding nothing recorded.
+   *
+   * The panel has to tell those apart. "No row" is a real fact about an install that predates the
+   * claim columns, and the copy for it invites the instructor to re-run the install; a failed read is
+   * not a fact about anything, and showing that same copy sends them through an OAuth consent screen
+   * for provenance that is already on the row.
+   */
+  readFailed: boolean;
 };
 
 /** The `classes` columns and embedded claimer this panel reads. */
@@ -87,23 +96,36 @@ export default function DiscordInstallationStatus({
       // needs the diagnosis above it.
       //
       // Cast because discord_server_claimed_at / _by land with migration
-      // 20260822130000_discord_guild_claim.sql and SupabaseTypes.d.ts is regenerated centrally once
+      // 20260822120000_discord_install_flow_and_durability.sql and SupabaseTypes.d.ts is regenerated centrally once
       // all of this branch's migrations are in.
-      let claimed: Provenance = { claimedAt: null, claimedBy: null };
+      let claimed: Provenance = { claimedAt: null, claimedBy: null, readFailed: false };
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const untyped = supabase as any;
-        const { data } = (await untyped
+        // `error` is read, not just `data`. supabase-js resolves with `{ data: null, error }` rather
+        // than throwing, so the catch below never fires for a query failure -- and a discarded error
+        // is indistinguishable here from a class that genuinely has no claim recorded. The realistic
+        // trigger is the PostgREST schema-cache window right after these migrations deploy, since
+        // `discord_server_claimed_by` is a brand-new foreign key. (An RLS-blocked embed is not this
+        // case: that returns 200 with `users: null` and the timestamp intact, which is why claimedBy
+        // is allowed to be null on its own.)
+        const { data, error } = (await untyped
           .from("classes")
           .select("discord_server_claimed_at, users!discord_server_claimed_by(name, email)")
           .eq("id", classId)
-          .maybeSingle()) as { data: ProvenanceRow | null };
-        claimed = {
-          claimedAt: data?.discord_server_claimed_at ?? null,
-          claimedBy: data?.users?.name ?? data?.users?.email ?? null
-        };
+          .maybeSingle()) as { data: ProvenanceRow | null; error: { message: string } | null };
+        if (error) {
+          claimed = { claimedAt: null, claimedBy: null, readFailed: true };
+        } else {
+          claimed = {
+            claimedAt: data?.discord_server_claimed_at ?? null,
+            claimedBy: data?.users?.name ?? data?.users?.email ?? null,
+            readFailed: false
+          };
+        }
       } catch {
-        // Leave provenance blank; the healthy panel simply omits the "connected by" line.
+        // A genuine throw (offline, aborted fetch) is the same situation as an error result.
+        claimed = { claimedAt: null, claimedBy: null, readFailed: true };
       }
       return { installation, claimed };
     };
@@ -204,7 +226,9 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
       status.missing_permissions.length === 1 ? "" : "s"
     }: ${status.missing_permissions.join(", ")}.`;
   }
-  if (!status.can_create_invites) {
+  // `=== false` rather than falsy: null means the channel listing could not be read, which is not a
+  // finding about invites. See can_create_invites in lib/edgeFunctions.ts.
+  if (status.can_create_invites === false) {
     return "No Discord channel allows the Pawtograder bot to create invites, so no student can be invited to the server.";
   }
   if (status.channel_permission_problems.length > 0) {
@@ -247,13 +271,17 @@ function StatusBody({
     return <NotInstalled status={status} classId={classId} canManage={canManage} />;
   }
   if (status.missing_permissions.length > 0) {
-    return <MissingPermissions status={status} canManage={canManage} />;
+    return <MissingPermissions status={status} classId={classId} canManage={canManage} />;
   }
   // Ranked above the channel-overwrite panel, and above the hierarchy one: with no channel that
   // permits Create Invite, no student reaches the server at all, so nothing further can matter to
   // them. It is checked after `missing_permissions` because a server-level Create Invite denial is
   // already named there, with the re-authorize button that fixes it.
-  if (!status.can_create_invites) {
+  // `=== false`, not falsy. Null is "the channel listing could not be read", and this panel's copy
+  // asserts that every channel the bot can see denies Create Invite -- a claim about a list we never
+  // got. The listing only fails on 403/404, which a server-level View Channels denial already reports
+  // through missing_permissions above.
+  if (status.can_create_invites === false) {
     return <NoInviteChannel status={status} />;
   }
   if (status.channel_permission_problems.length > 0) {
@@ -353,7 +381,15 @@ function NotInstalled({
   );
 }
 
-function MissingPermissions({ status, canManage }: { status: CheckBotInstallationResponse; canManage: boolean }) {
+function MissingPermissions({
+  status,
+  classId,
+  canManage
+}: {
+  status: CheckBotInstallationResponse;
+  classId: number;
+  canManage: boolean;
+}) {
   const count = status.missing_permissions.length;
   return (
     <VStack align="stretch" gap={3}>
@@ -375,16 +411,19 @@ function MissingPermissions({ status, canManage }: { status: CheckBotInstallatio
       {canManage && (
         <VStack align="stretch" gap={1}>
           <HStack>
+            {/* The install route, not the edge function's `install_url`: only the route adds the
+                `redirect_uri` that returns through the callback, and the callback is what clears this
+                guild's circuit breaker once the permissions are granted. See the same button on the
+                healthy panel. */}
             <Button asChild colorPalette="blue" size="sm">
-              <a href={status.install_url} target="_blank" rel="noopener noreferrer">
+              <a href={`/api/discord/install?class_id=${classId}&pinned=1`}>
                 <Icon as={BsDiscord} />
                 Re-authorize the bot with the required permissions
               </a>
             </Button>
           </HStack>
           <Text fontSize="xs" color="fg.muted">
-            Opens Discord in a new tab, pinned to this course&apos;s server. Come back and press Re-check when you are
-            done.
+            Takes you to Discord, pinned to this course&apos;s server, and brings you back here when you are done.
           </Text>
         </VStack>
       )}
@@ -644,7 +683,18 @@ function StaleClassRolesAlert({ status, canManage }: { status: CheckBotInstallat
           Deleted role {count === 1 ? "ID" : "IDs"}: <Code>{status.stale_class_role_ids.join(", ")}</Code>
         </Text>
         {canManage && (
-          <Text fontSize="sm">Use “Sync Roles” below to recreate the missing {count === 1 ? "role" : "roles"}.</Text>
+          // Not "Sync Roles". That button calls trigger_discord_role_sync_for_user, which enqueues
+          // add_member_role for the clicking user's own roles and never creates a role -- and with a
+          // stale tracking row it enqueues one carrying a snowflake Discord has deleted, which fails
+          // 10011. request_discord_reinvite only repairs role types with NO row at all, so it skips
+          // these too. Nothing in the product deletes a stale discord_roles row, so the only repair is
+          // the one named here. Pointing at a control that cannot work is worse than saying so.
+          <Text fontSize="sm">
+            Recreating {count === 1 ? "it" : "them"} needs the course disconnected from this server and reconnected to
+            it, below: Pawtograder only creates class roles when a server is first connected, and the stale record
+            blocks a replacement until it is cleared. Nobody is removed from the server, and the roles students already
+            hold are left alone.
+          </Text>
         )}
       </VStack>
     </Alert>
@@ -691,9 +741,12 @@ function MissingTrackedChannelsAlert({
         <Text fontSize="sm" color="fg.muted">
           Missing channel {count === 1 ? "ID" : "IDs"}: <Code>{status.missing_tracked_channel_ids.join(", ")}</Code>
         </Text>
+        {/* "re-sync" named a control that does not exist. All four create_channel producers are guarded
+            on the discord_channels row being absent, so a stale row blocks every one of them, and no
+            RPC or button deletes that row. Reconnecting is the only path -- and it only restores the
+            standing channels, so the copy has to say what it does not bring back. */}
         <Text fontSize="sm">
-          To fix it, either re-sync so Pawtograder creates{" "}
-          {count === 1 ? "a replacement channel" : "replacement channels"}, or, if the channel still exists, open{" "}
+          If the channel still exists, open{" "}
           <Text as="span" fontWeight="semibold">
             Edit Channel → Permissions
           </Text>{" "}
@@ -706,8 +759,15 @@ function MissingTrackedChannelsAlert({
             View Channel
           </Text>
           . Then press Re-check.
-          {canManage ? "" : " An instructor has to run the re-sync."}
         </Text>
+        {canManage && (
+          <Text fontSize="sm">
+            If {count === 1 ? "it was" : "they were"} deleted, recreating {count === 1 ? "it" : "them"} needs the course
+            disconnected from this server and reconnected to it, below — the stale record blocks a replacement until it
+            is cleared. That restores the standing course channels only; per-assignment and per-lab channels are created
+            when the assignment or lab section is, so those have to be recreated by hand.
+          </Text>
+        )}
       </VStack>
     </Alert>
   );
@@ -760,6 +820,10 @@ function Healthy({
             Connected {provenance.claimedBy ? `by ${provenance.claimedBy} ` : ""}on{" "}
             <TimeZoneAwareDate date={provenance.claimedAt} format="full" />
           </Text>
+        ) : provenance?.readFailed ? (
+          // Says nothing about whether the claim was recorded, because the read that would have told
+          // us failed. The "re-run the install" advice below would be wrong here as often as right.
+          <Text color="fg.muted">Who connected this server could not be read.</Text>
         ) : (
           <Text>
             Connected before Pawtograder recorded who did it. Re-running the install records it, without disturbing the
@@ -770,10 +834,14 @@ function Healthy({
       {canManage && (
         <VStack align="stretch" gap={2}>
           <HStack gap={2} flexWrap="wrap">
-            {/* Pinned to this server by the edge function (`disable_guild_select`), so it can only
-                widen permissions here — it cannot move the course by mistake. */}
+            {/* The install route with `pinned=1`, not the edge function's `install_url`. Both pin the
+                consent screen to this server, but only the route adds the `redirect_uri` that brings
+                the instructor back through the callback — and the callback is the only caller of
+                claim_discord_guild(), which is what clears this guild's circuit breaker and records
+                who re-authorized. Linking to `install_url` made this button widen permissions in
+                Discord and change nothing on our side. */}
             <Button asChild variant="outline" size="sm">
-              <a href={status.install_url} target="_blank" rel="noopener noreferrer">
+              <a href={`/api/discord/install?class_id=${classId}&pinned=1`}>
                 <Icon as={BsDiscord} />
                 Re-authorize permissions in this server
               </a>
