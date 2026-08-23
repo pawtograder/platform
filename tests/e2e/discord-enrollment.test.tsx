@@ -545,17 +545,24 @@ test.describe("Discord enrollment: worker, reconciler, circuit breaker", () => {
       .eq("user_id", reconStudent.user_id);
     expect(disableError, "disabling the enrollment").toBeNull();
 
-    const withDropped = await invokeEdgeFunction("discord-reconciler");
-    const droppedCount = (withDropped.body as { long_stuck_users?: number }).long_stuck_users ?? 0;
-    expect(droppedCount, "a dropped student must not be counted as a live failure").toBe(activeCount - 1);
-
-    // Put the enrollment back so later tests in this file see the fixture they expect.
-    await supabase
-      .from("user_roles")
-      .update({ disabled: false })
-      .eq("class_id", reconClassId)
-      .eq("user_id", reconStudent.user_id);
-    await membership().delete().eq("class_id", reconClassId);
+    // try/finally, because everything from here to the restore can throw. A failed assertion -- or a
+    // reconciler call that rejects -- used to skip the re-enable and leave reconStudent disabled with
+    // its stuck membership row still present, so every later spec in this file ran against a fixture
+    // it did not expect. That turns one real failure into a cascade of unrelated ones, which is the
+    // expensive kind: the first failure is the only true one and it is no longer the obvious one.
+    try {
+      const withDropped = await invokeEdgeFunction("discord-reconciler");
+      const droppedCount = (withDropped.body as { long_stuck_users?: number }).long_stuck_users ?? 0;
+      expect(droppedCount, "a dropped student must not be counted as a live failure").toBe(activeCount - 1);
+    } finally {
+      // Put the enrollment back so later tests in this file see the fixture they expect.
+      await supabase
+        .from("user_roles")
+        .update({ disabled: false })
+        .eq("class_id", reconClassId)
+        .eq("user_id", reconStudent.user_id);
+      await membership().delete().eq("class_id", reconClassId);
+    }
   });
 
   test("an invite falls back to the next channel when the first refuses it", async () => {

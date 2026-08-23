@@ -120,6 +120,14 @@ export type CheckBotInstallationResponse = {
    */
   can_create_invites: boolean | null;
   /**
+   * Role types Pawtograder never managed to create in this guild.
+   *
+   * Distinct from `stale_class_role_ids`, which names rows pointing at roles deleted in Discord. This
+   * names role types with no row at all -- a `create_role` that failed and was never retried. Both
+   * mean students cannot be given that role; only this one leaves nothing behind to notice it by.
+   */
+  missing_class_role_types: string[];
+  /**
    * The configured `discord_channel_group_id` when it is not a live category in this guild.
    *
    * The category is the one Discord id still writable as instructor free text -- `discord_server_id`
@@ -193,6 +201,12 @@ const MESSAGEABLE_CHANNEL_TYPES: ReadonlySet<number> = new Set([0, 5, 15]);
  *     `MAX_INVITE_CHANNEL_ATTEMPTS` cap is applied to it: computing either from a private idea of what
  *     counts as usable is how a check ends up disagreeing with the code it is checking.
  */
+/**
+ * The role types every connected class is expected to have, per `discord_roles_role_type_check` and
+ * what enqueue_discord_roles_creation() creates on connect.
+ */
+const EXPECTED_CLASS_ROLE_TYPES = ["student", "grader", "instructor"] as const;
+
 function auditChannels(args: {
   channels: readonly GuildChannelResponse[];
   guildRoles: readonly DiscordRoleLike[];
@@ -335,6 +349,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       // No guild, so no channel was asked about. Reported as false for the same reason
       // `can_manage_class_roles` is: nothing works yet, and the fix is the install button.
       can_create_invites: false,
+      // No guild, so nothing has been created and nothing is "missing" in a way anyone can act on.
+      missing_class_role_types: [],
       // Nothing to validate the category against without a guild.
       invalid_channel_category_id: null
     };
@@ -371,6 +387,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     channel_permission_problems: [],
     missing_tracked_channel_ids: [],
     can_create_invites: false,
+    // Unreadable guild: the discord_roles rows may be complete or not, and saying which would be a guess.
+    missing_class_role_types: [],
     // Same reason: an unreachable guild yields no channel list to check the category against, and
     // "your category is wrong" would be a guess on top of a bigger, already-reported problem.
     invalid_channel_category_id: null
@@ -491,7 +509,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   // live guild role list is the only trustworthy source for them.
   const { data: classRoles, error: rolesError } = await supabase
     .from("discord_roles")
-    .select("discord_role_id")
+    .select("discord_role_id, role_type")
     .eq("class_id", class_id);
   if (rolesError) {
     throw new UserVisibleError(`Could not read the class's Discord roles: ${rolesError.message}`, 503);
@@ -515,6 +533,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
   const staleClassRoleIds = [...classRoleIds].filter((id) => !liveRoleIds.has(id));
   if (staleClassRoleIds.length > 0) {
     scope?.setTag("stale_class_roles", String(staleClassRoleIds.length));
+  }
+
+  // A role type with no `discord_roles` row at all, which is a different failure from a stale one and
+  // was previously invisible. A stale row names a snowflake Discord has deleted; this is a create_role
+  // that never succeeded, so there is no row to be stale. Nothing else notices: the row is absent from
+  // classRoleIds, so it is in neither staleClassRoleIds nor classRolePositions, and canManageRoles()
+  // documents that an empty position list means "nothing that could be blocked" -- which is true, and
+  // is exactly why a class whose role creation failed outright read as fully healthy while none of its
+  // students could ever be given a role.
+  const presentRoleTypes = new Set((classRoles ?? []).map((r) => r.role_type));
+  const missingClassRoleTypes = EXPECTED_CLASS_ROLE_TYPES.filter((type) => !presentRoleTypes.has(type));
+  if (missingClassRoleTypes.length > 0) {
+    scope?.setTag("missing_class_role_types", missingClassRoleTypes.join(","));
   }
 
   // The class's tracked channels, for the per-channel audit. Only the snowflake is stored, so the
@@ -599,6 +630,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
     channel_permission_problems: channelPermissionProblems,
     missing_tracked_channel_ids: missingTrackedChannels,
     can_create_invites: inviteCapability,
+    missing_class_role_types: missingClassRoleTypes,
     invalid_channel_category_id: invalidChannelCategoryId
   };
 }

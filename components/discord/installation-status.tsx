@@ -241,6 +241,11 @@ function summarize({ status, error }: { status: CheckBotInstallationResponse | n
   if (status.invalid_channel_category_id) {
     return "The Discord channel category setting does not match a category in the connected server, so new channels cannot be created.";
   }
+  if (status.missing_class_role_types.length > 0) {
+    return `${status.missing_class_role_types.length} Discord course role${
+      status.missing_class_role_types.length === 1 ? " was" : "s were"
+    } never created, so students cannot be given ${status.missing_class_role_types.length === 1 ? "it" : "them"}.`;
+  }
   if (status.stale_class_role_ids.length > 0) {
     const n = status.stale_class_role_ids.length;
     return `The Pawtograder bot is installed, but ${n} tracked role${n === 1 ? "" : "s"} no longer exist${
@@ -295,16 +300,18 @@ function StatusBody({
   // and Discord no longer has. Reporting either as healthy is what let a class sit with a role that
   // silently 404s on every assignment, or a channel whose notifications go nowhere.
   //
-  // Both drift warnings render together above the healthy panel rather than as competing states: they
-  // are independent, and a class can have one of each. Ranked below the permission and hierarchy
+  // The drift warnings render together above the healthy panel rather than as competing states: they
+  // are independent, and a class can have several. Ranked below the permission and hierarchy
   // states because those break everything, while these break the part of the class that names them.
   if (
     status.stale_class_role_ids.length > 0 ||
+    status.missing_class_role_types.length > 0 ||
     status.missing_tracked_channel_ids.length > 0 ||
     status.invalid_channel_category_id
   ) {
     return (
       <VStack align="stretch" gap={3}>
+        {status.missing_class_role_types.length > 0 && <MissingClassRolesAlert status={status} canManage={canManage} />}
         {status.stale_class_role_ids.length > 0 && <StaleClassRolesAlert status={status} canManage={canManage} />}
         {status.invalid_channel_category_id && <InvalidChannelCategoryAlert status={status} />}
         {status.missing_tracked_channel_ids.length > 0 && (
@@ -653,6 +660,46 @@ function InvalidChannelCategoryAlert({ status }: { status: CheckBotInstallationR
           Clear the field to create channels at the top level of the server, or right-click the category in Discord and
           choose Copy Channel ID to get the right one. Then press Re-check.
         </Text>
+      </VStack>
+    </Alert>
+  );
+}
+
+/**
+ * Installed and permitted, but a class role was never created in the first place.
+ *
+ * The counterpart to the stale-role alert, and the more dangerous of the two because it leaves nothing
+ * behind: a stale row at least names a snowflake somebody can look up, while a create_role that failed
+ * outright leaves no row, no position to check, and so no signal anywhere. Without this the panel
+ * reported "Connected and working" for a class whose students could never be given a role.
+ */
+function MissingClassRolesAlert({ status, canManage }: { status: CheckBotInstallationResponse; canManage: boolean }) {
+  const types = status.missing_class_role_types;
+  return (
+    <Alert
+      status="error"
+      title={
+        types.length === 1
+          ? "One course role was never created in Discord"
+          : `${types.length} course roles were never created in Discord`
+      }
+    >
+      <VStack align="stretch" gap={2}>
+        <Text>
+          Pawtograder has no record of creating {types.length === 1 ? "this role" : "these roles"} in{" "}
+          <Text as="span" fontWeight="semibold">
+            {status.guild_name ?? "the connected server"}
+          </Text>
+          , so nobody can be given {types.length === 1 ? "it" : "them"}: <Code>{types.join(", ")}</Code>. The usual
+          cause is that the role creation failed when the server was connected and was never retried.
+        </Text>
+        {canManage && (
+          <Text fontSize="sm">
+            Use &ldquo;Retry Discord for this course&rdquo; on the roster below, which re-requests the roles that have
+            no record. If that does not clear it, the bot most likely lacked Manage Roles at the time; grant it above
+            and retry.
+          </Text>
+        )}
       </VStack>
     </Alert>
   );

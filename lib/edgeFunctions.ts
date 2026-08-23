@@ -597,6 +597,12 @@ export type CheckBotInstallationResponse = {
    * alongside `installed` rather than on its own.
    */
   /**
+   * Role types Pawtograder never managed to create in this guild -- a `create_role` that failed and was
+   * never retried, as distinct from `stale_class_role_ids`, which names rows whose role was deleted in
+   * Discord. Both mean students cannot be given that role.
+   */
+  missing_class_role_types: string[];
+  /**
    * Null when the channel listing could not be read: "we never got a list", as distinct from false's
    * "we looked and nowhere allows it". Keep in step with the edge function's own type.
    */
