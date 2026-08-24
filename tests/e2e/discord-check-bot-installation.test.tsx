@@ -357,11 +357,17 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(body.highest_class_role_position).toBe(5);
 
     // Traffic really reached the mock: the guild, the bot's own member object, and the role list.
+    //
+    // The member fetch names the bot by its snowflake. `@me` is not a GET route on Discord -- it is
+    // accepted only on the PATCH, and the GET answers 400 / 50035 "is not snowflake" -- so the id is
+    // read out of the mock's state rather than spelled here. The preceding `GET /users/@me` that
+    // resolves it is not asserted: it carries no guild id, so callsForThisClass filters it out.
+    const botUserId = (await getState()).bot.id;
     const calls = await callsForThisClass();
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(
       expect.arrayContaining([
         `GET /guilds/${GUILD_ID}`,
-        `GET /guilds/${GUILD_ID}/members/@me`,
+        `GET /guilds/${GUILD_ID}/members/${botUserId}`,
         `GET /guilds/${GUILD_ID}/roles`,
         // One request for the whole channel audit: GET /guilds/{id}/channels carries every channel's
         // permission_overwrites inline, so the per-channel answer costs no per-channel fan-out.
