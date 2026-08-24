@@ -521,6 +521,66 @@ jobs:
               ;;
           esac
 
+      - name: Start hook-job log capture
+        # `kubectl logs job/x` after the fact only works while a pod still
+        # exists, and a failed hook job's pod does not survive: once the Job
+        # hits its backoff limit the Job controller deletes the pod, typically
+        # a couple of seconds after the container exits. So the failure
+        # snapshot below reliably lost exactly the output we needed — a seed
+        # failure showed up as nothing but `error: timed out waiting for the
+        # condition`, and diagnosing it meant re-running the job by hand
+        # against the live preview.
+        #
+        # Follow every batch job pod from the moment it appears instead, and
+        # spool it to disk. `--pod-running-timeout` makes each follower wait
+        # out ContainerCreating rather than erroring on a not-yet-started
+        # container, and `-f` returns on its own when the pod ends or is
+        # deleted, so the followers wind themselves up.
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hook-logs"
+          cat > "$RUNNER_TEMP/follow-hook-logs.sh" <<'EOS'
+          #!/usr/bin/env bash
+          # usage: follow-hook-logs.sh <namespace> <output-dir>
+          ns="$1"; dir="$2"
+
+          follow_pod() {
+            local pod="$1" out="$2" phase i
+            for i in $(seq 1 900); do
+              phase=$(kubectl -n "$ns" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+              # Pod is gone (deleted, or never observed) — nothing left to read.
+              [ -z "$phase" ] && return 0
+              # `kubectl logs -f <pod>` does NOT wait out ContainerCreating: it
+              # errors immediately with "is waiting to start", and
+              # --pod-running-timeout only applies to selector/controller
+              # lookups, not a named pod. So poll until the container exists.
+              if [ "$phase" = "Pending" ]; then sleep 1; continue; fi
+              # Succeeded/Failed pods that still exist return their full log and
+              # exit 0 immediately; Running pods stream until the pod ends.
+              kubectl -n "$ns" logs -f --all-containers --timestamps "$pod" >>"$out" 2>/dev/null && return 0
+              sleep 1
+            done
+          }
+
+          while :; do
+            for pod in $(kubectl -n "$ns" get pods -l batch.kubernetes.io/job-name \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+              marker="$dir/.$pod.following"
+              [ -e "$marker" ] && continue
+              : > "$marker"
+              follow_pod "$pod" "$dir/$pod.log" &
+            done
+            sleep 2
+          done
+          EOS
+          chmod +x "$RUNNER_TEMP/follow-hook-logs.sh"
+          nohup "$RUNNER_TEMP/follow-hook-logs.sh" "$NS" "$RUNNER_TEMP/hook-logs" \
+            > "$RUNNER_TEMP/hook-logs/.watcher.out" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/hook-logs/.watcher.pid"
+          echo "following batch job pods in $NS (pid $(cat "$RUNNER_TEMP/hook-logs/.watcher.pid"))"
+
       - name: helm upgrade --install
         env:
           RELEASE: ${{ needs.meta.outputs.release }}
@@ -566,16 +626,48 @@ jobs:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           kubectl -n "$NS" get pods,jobs 2>&1 | head -50
-          for j in $(kubectl -n "$NS" get jobs -o name); do
-            echo "=== $j ==="
-            kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>&1 | tail -200 || true
+
+          # Captured live by the follower above, so this survives the Job
+          # controller deleting a failed pod. Print the tail of every hook pod
+          # we managed to follow, failures last-and-loudest.
+          shopt -s nullglob
+          for f in "$RUNNER_TEMP"/hook-logs/*.log; do
+            echo "=== $(basename "$f" .log) (captured live) ==="
+            tail -200 "$f"
           done
+
+          # Best-effort fallback for anything the follower missed (a pod that
+          # came and went inside one poll interval, or a job whose pod is
+          # somehow still around).
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            pod_logs=$(kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>/dev/null || true)
+            [ -z "$pod_logs" ] && continue
+            echo "=== $j (live pod) ==="
+            printf '%s\n' "$pod_logs" | tail -200
+          done
+
+          # Whatever the seed/migration containers printed, the Job's own
+          # failure reason (BackoffLimitExceeded, DeadlineExceeded, an image
+          # pull that never resolved) is only on the Job object and its events.
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            echo "=== $j conditions ==="
+            kubectl -n "$NS" get "$j" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} — {.message}{"\n"}{end}' 2>&1 || true
+          done
+          echo "=== recent events ==="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -30
 
       - name: Status snapshot
         if: always()
         env:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
+          # Wind up the log follower before the runner does it for us — an
+          # `kubectl logs -f` left attached keeps the job alive to its cleanup
+          # phase and shows up as "Cleaning up orphan processes".
+          if [ -f "$RUNNER_TEMP/hook-logs/.watcher.pid" ]; then
+            pkill -P "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+            kill "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+          fi
           kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
 
       - name: Comment URL on PR
