@@ -101,21 +101,23 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   // their invite is minted would otherwise wait for the next hour boundary. That is the wait the
   // panel's old "within an hour" copy and its sync button described; this replaces both.
   //
-  // The trigger is deliberately NOT "once on mount". The join opens discord.gg in a new tab, so the
-  // dashboard stays mounted the whole time: a mount-only request fires while the student is still
-  // absent, the worker takes the "no role to add" exit, and nothing runs again when they come back --
-  // which is the one moment the check would succeed. Re-running on visibility is what makes this
-  // correspond to "the student has joined": returning to this tab is the observable event.
+  // Nothing is requested on mount, and that omission is load-bearing twice over.
   //
-  // The mount case is kept as well, for a student who joined earlier and was never provisioned, and
-  // whose invite is therefore still sitting here -- a fresh page load fires no focus or visibility
-  // event, so without it that student gets nothing until the next hour.
+  // The join opens discord.gg in a NEW TAB, so this dashboard stays mounted throughout: a mount
+  // request goes out while the student is still absent, the worker takes its "no role to add" exit,
+  // and the moment that would actually succeed -- their return -- has already been spent. Worse, it
+  // poisons the retry. By the time an invite can render here the worker has already written the
+  // student's `not_joined` row (recordMembershipStatus runs immediately after storing the invite), so
+  // a mount request always finds a row to stamp last_retry_requested_at on, and the RPC's five-minute
+  // predicate then rejects the request made on return. Asking eagerly would disable the handler below.
   //
-  // Its cost is bounded and worth naming: for a student who ALREADY has a membership row, the mount
-  // request stamps last_retry_requested_at, so if they join within the next five minutes the return
-  // trip is throttled in SQL and they wait out that window. Five minutes, not the hour this replaces.
-  // A student seeing their first invite has no row yet, and request_discord_reinvite deliberately
-  // writes none, so the common first-join path is not throttled by the mount request at all.
+  // Returning to this tab is the only observable "the student has joined" signal available, so it is
+  // the only thing that triggers a request.
+  //
+  // The cost of that restraint: a student who joined earlier, was never provisioned, and loads this
+  // page without ever leaving and returning to it gets no request, and waits for the hourly batch.
+  // That is the behaviour before this change, so it is a gap this does not close rather than a
+  // regression it introduces.
   //
   // request_discord_reinvite enqueues exactly the work the hourly batch would, and is already the
   // student-facing half of that RPC: it permits a caller to retry their OWN membership, verifies the
@@ -129,6 +131,7 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     const request = () => {
       // Client-side floor so tab-flipping cannot spray requests. The real guard is the RPC's own
       // five-minute SQL throttle; this only keeps us from paying for calls it will reject anyway.
+      // Starts at 0 so the first return trip is never delayed by it.
       const now = Date.now();
       if (now - lastProvisionAt.current < 60_000) return;
       lastProvisionAt.current = now;
@@ -145,8 +148,6 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
           }
         });
     };
-
-    request();
 
     const onVisible = () => {
       if (document.visibilityState === "visible") request();
