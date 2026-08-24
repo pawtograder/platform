@@ -34,11 +34,8 @@ function toDateTimeLocal(date: Date): string {
 }
 
 /**
- * Selects by href rather than accessible name, for two reasons: the mobile and desktop navs are
- * both in the DOM so the name is ambiguous, and the desktop nav's links currently compute an
- * *empty* accessible name — `dynamicCourseNav.tsx` wraps their content in `role="group"`, which
- * does not support name-from-content. That is a real a11y bug, but it is not this test's subject,
- * and pinning the selector to it would make this test fail for the wrong reason once it is fixed.
+ * Selects by href rather than accessible name: the mobile and desktop navs are both in the DOM,
+ * so a name-based selector is ambiguous. (The names themselves are asserted separately below.)
  */
 function courseNavLink(page: Page, href: string) {
   return page.locator(`nav[aria-label="Course navigation"]:visible a[href="${href}"]`).first();
@@ -64,7 +61,11 @@ test.describe("Manage Assignments list freshness", () => {
 
   test("a newly created assignment is listed after navigating back, without a reload", async ({ page }) => {
     const title = `Freshness Target ${RUN_PREFIX}`;
-    const slug = `lf-${RUN_PREFIX.slice(-6)}`;
+    // Derive the slug from SAFE_ID, not from RUN_PREFIX: the form only accepts
+    // /^[a-z0-9_-]+$/, and `RUN_PREFIX.slice(-6)` reaches back into the `#<random>` segment
+    // whenever the trailing TEST_WORKER_INDEX is short or empty, which would make Save silently
+    // reject the form.
+    const slug = `lf-${SAFE_ID.slice(-8)}`;
 
     await loginAsUser(page, instructor!, course);
 
@@ -98,5 +99,19 @@ test.describe("Manage Assignments list freshness", () => {
     // wait longer than the stale window and the cache entry expires on its own, and this test
     // passes whether or not the bug is fixed.
     await expect(page.getByRole("link", { name: title })).toBeVisible({ timeout: 10_000 });
+  });
+
+  // Regression guard for the a11y bug found while writing the test above: the desktop nav wrapped
+  // each link's label in `role="group"`, which does not support accessible-name-from-content, so
+  // every link in the primary course navigation exposed an EMPTY name — screen readers announced
+  // a bare "link" (WCAG 2.4.4 / 4.1.2). It was invisible to sighted users and to any selector
+  // that matches on href, which is why it survived.
+  test("course navigation links expose their label as an accessible name", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/assignments`);
+
+    const nav = page.locator('nav[aria-label="Course navigation"]:visible').first();
+    await expect(nav.getByRole("link", { name: "Manage Assignments", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Discussion", exact: true })).toBeVisible();
   });
 });

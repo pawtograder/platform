@@ -75,9 +75,19 @@ CREATE TRIGGER invalidate_classes_course_cache_delete
 -- 2. assignment_groups_members -> assignment_groups:<class_id|assignment_id>:<role>
 --                                and user_roles:<class_id>:<role>
 --
--- invalidate_assignment_groups_cache() already emits both assignment_groups forms from a table
--- carrying class_id + assignment_id, which assignment_groups_members does. The roster bundle is
--- the extra: it embeds these rows but is tagged on user_roles.
+-- Mirrors invalidate_assignment_groups_cache()'s class+assignment tag pair, plus the roster
+-- bundle, which embeds these rows but is tagged on user_roles.
+--
+-- Emits ONE pg_net request per distinct tag set per transaction, not per statement.
+--
+-- `publish_assignment_group_changes` fulfils a manifest by deleting and inserting memberships
+-- one row at a time inside a PL/pgSQL loop, so a statement-level trigger fires up to twice per
+-- moved student. Every one of those firings would otherwise queue the same tags for the same
+-- class and assignment — moving 200 students meant ~800 identical `net.http_post` calls. The
+-- transaction-local GUC below collapses that to one, keyed on the tag set so a transaction that
+-- genuinely touches a second class or assignment still invalidates both. Tag invalidation is
+-- idempotent and pg_net only dispatches after commit, so emitting once per transaction loses
+-- nothing.
 CREATE OR REPLACE FUNCTION public.invalidate_assignment_group_members_cache()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -89,6 +99,8 @@ DECLARE
   assignment_ids bigint[];
   class_id_value bigint;
   assignment_id_value bigint;
+  tags text[] := ARRAY[]::text[];
+  dedupe_key text;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     SELECT ARRAY_AGG(DISTINCT class_id ORDER BY class_id), ARRAY_AGG(DISTINCT assignment_id ORDER BY assignment_id)
@@ -103,24 +115,38 @@ BEGIN
   IF class_ids IS NOT NULL AND array_length(class_ids, 1) IS NOT NULL THEN
     FOREACH class_id_value IN ARRAY class_ids
     LOOP
-      PERFORM public.call_cache_invalidate(ARRAY[
+      tags := tags || ARRAY[
         'assignment_groups:' || class_id_value || ':staff',
         'assignment_groups:' || class_id_value || ':student',
         'user_roles:' || class_id_value || ':staff',
         'user_roles:' || class_id_value || ':student'
-      ]);
+      ];
     END LOOP;
   END IF;
 
   IF assignment_ids IS NOT NULL AND array_length(assignment_ids, 1) IS NOT NULL THEN
     FOREACH assignment_id_value IN ARRAY assignment_ids
     LOOP
-      PERFORM public.call_cache_invalidate(ARRAY[
+      tags := tags || ARRAY[
         'assignment_groups:' || assignment_id_value || ':staff',
         'assignment_groups:' || assignment_id_value || ':student'
-      ]);
+      ];
     END LOOP;
   END IF;
+
+  IF array_length(tags, 1) IS NULL THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- md5 keeps the GUC name inside the identifier length limit regardless of how many ids the
+  -- statement touched. `set_config(..., true)` scopes the marker to this transaction.
+  dedupe_key := 'pawtograder.ci_' || md5(array_to_string(tags, ','));
+  IF COALESCE(current_setting(dedupe_key, true), '') = '1' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  PERFORM set_config(dedupe_key, '1', true);
+
+  PERFORM public.call_cache_invalidate(tags);
 
   RETURN COALESCE(NEW, OLD);
 END;

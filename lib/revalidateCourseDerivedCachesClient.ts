@@ -10,9 +10,17 @@ import type { ClassScopedCachedTable } from "@/lib/next-cache-tags";
  * `useRevalidateServerCaches()` (hooks/useRevalidateServerCaches.ts) rather than calling this
  * directly, so both halves happen in the right order.
  *
+ * Callers await this before navigating, so it is deliberately bounded: an unreachable or slow
+ * endpoint (or a stalled Redis-backed cache handler) must not strand the user on the form they
+ * just submitted. On timeout we give up on the server-cache half and let the caller proceed —
+ * the Router Cache refresh, which is the part issue #937 was actually about, still happens, and
+ * the Postgres triggers invalidate the same tags independently.
+ *
  * @param tables Class-scoped tables the write touched. Omit to fall back to the whole
  *   class-scoped set, which is correct but evicts more than necessary.
  */
+export const REVALIDATE_TAGS_TIMEOUT_MS = 3000;
+
 export async function revalidateCourseDerivedCachesClient(
   classId: number,
   tables?: readonly ClassScopedCachedTable[]
@@ -22,7 +30,13 @@ export async function revalidateCourseDerivedCachesClient(
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tables ? { classId, tables } : { classId })
+      body: JSON.stringify(tables ? { classId, tables } : { classId }),
+      // `AbortSignal.timeout` is guarded rather than assumed: this runs in the browser, and a
+      // missing implementation should degrade to the old unbounded behaviour, not throw.
+      signal:
+        typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(REVALIDATE_TAGS_TIMEOUT_MS)
+          : undefined
     });
     if (!res.ok) {
       // eslint-disable-next-line no-console -- operational visibility for cache misses

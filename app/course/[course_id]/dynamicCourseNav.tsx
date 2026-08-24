@@ -546,7 +546,12 @@ export default function DynamicCourseNav() {
                         href={link.target || "#"}
                         aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
                       >
-                        <Flex align="center" role="group">
+                        {/* No role="group" here (WCAG 2.4.4 / 4.1.2): `group` does not support
+                            accessible-name-from-content, so wrapping the label in it left every
+                            desktop nav link with an EMPTY accessible name — screen readers
+                            announced them as bare "link". Nothing styles off it (no _groupHover
+                            in this file), so it was purely vestigial. */}
+                        <Flex align="center">
                           <HStack>
                             {React.createElement(link.icon)}
                             {link.name}

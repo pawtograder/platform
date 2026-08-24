@@ -26,7 +26,9 @@ import type { ClassScopedCachedTable } from "@/lib/next-cache-tags";
  *
  *  - The tag revalidation is awaited *before* `router.refresh()`. Otherwise the refetch that
  *    `refresh()` kicks off can be served from a server cache entry that is evicted a moment
- *    later, and the user sees pre-write data anyway.
+ *    later, and the user sees pre-write data anyway. That await is bounded
+ *    (`REVALIDATE_TAGS_TIMEOUT_MS`) so a slow or unreachable endpoint cannot strand the user on
+ *    the form they just submitted — the refresh and any navigation still happen.
  *  - When the caller is also navigating, pass `navigateTo` instead of calling `router.push()`
  *    afterwards. `router.refresh()` followed by `router.push()` silently does nothing:
  *    dispatching a navigation marks the pending action as discarded so its state is never
