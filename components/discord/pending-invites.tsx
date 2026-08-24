@@ -91,9 +91,9 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     return () => clearInterval(interval);
   }, [user, classId, showAll]);
 
-  // Landing here with an invite still outstanding asks for the roles to be provisioned.
+  // Coming BACK to this page with an invite still outstanding asks for the roles to be provisioned.
   //
-  // An unused invite row IS the "not provisioned yet" signal: `mark_discord_invite_used` runs in the
+  // An unused invite row is the "not provisioned yet" signal: `mark_discord_invite_used` runs in the
   // same worker step that adds the roles, so a row still at `used = false` means the worker has not
   // yet seen this student in the guild. Nothing re-checks that promptly on its own --
   // `discord-batch-role-sync-hourly` is `0 * * * *`, and discord-reconciler only repairs a sync that
@@ -101,31 +101,65 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   // their invite is minted would otherwise wait for the next hour boundary. That is the wait the
   // panel's old "within an hour" copy and its sync button described; this replaces both.
   //
+  // The trigger is deliberately NOT "once on mount". The join opens discord.gg in a new tab, so the
+  // dashboard stays mounted the whole time: a mount-only request fires while the student is still
+  // absent, the worker takes the "no role to add" exit, and nothing runs again when they come back --
+  // which is the one moment the check would succeed. Re-running on visibility is what makes this
+  // correspond to "the student has joined": returning to this tab is the observable event.
+  //
+  // The mount case is kept as well, for a student who joined earlier and was never provisioned, and
+  // whose invite is therefore still sitting here -- a fresh page load fires no focus or visibility
+  // event, so without it that student gets nothing until the next hour.
+  //
+  // Its cost is bounded and worth naming: for a student who ALREADY has a membership row, the mount
+  // request stamps last_retry_requested_at, so if they join within the next five minutes the return
+  // trip is throttled in SQL and they wait out that window. Five minutes, not the hour this replaces.
+  // A student seeing their first invite has no row yet, and request_discord_reinvite deliberately
+  // writes none, so the common first-join path is not throttled by the mount request at all.
+  //
   // request_discord_reinvite enqueues exactly the work the hourly batch would, and is already the
   // student-facing half of that RPC: it permits a caller to retry their OWN membership, verifies the
   // enrollment, throttles to one retry per user per five minutes in SQL, and takes a class-scoped
   // advisory lock. So this needs no new state and cannot be used to enqueue work for anyone else.
-  //
-  // Fired once per mount rather than on every 30s poll: the SQL throttle makes repeats harmless but
-  // not free, and one request per visit is all it takes to close the gap.
-  const provisionRequested = useRef(false);
+  const invitesOutstanding = invites.length > 0;
+  const lastProvisionAt = useRef(0);
   useEffect(() => {
-    if (showAll || !user || !classId) return;
-    if (invites.length === 0 || provisionRequested.current) return;
-    provisionRequested.current = true;
+    if (showAll || !user || !classId || !invitesOutstanding) return;
 
-    createClient()
-      .rpc("request_discord_reinvite", { p_class_id: classId, p_user_id: user.id })
-      .then(({ error: rpcError }) => {
-        if (rpcError) {
-          // Deliberately not surfaced. The hourly sync still covers this student, so a failure here
-          // costs them time rather than correctness, and an error banner on a panel whose whole
-          // message is "this is being handled" would be worse than the delay.
-          // eslint-disable-next-line no-console
-          console.warn("Discord role provisioning request failed:", rpcError);
-        }
-      });
-  }, [invites.length, showAll, user, classId]);
+    const request = () => {
+      // Client-side floor so tab-flipping cannot spray requests. The real guard is the RPC's own
+      // five-minute SQL throttle; this only keeps us from paying for calls it will reject anyway.
+      const now = Date.now();
+      if (now - lastProvisionAt.current < 60_000) return;
+      lastProvisionAt.current = now;
+
+      createClient()
+        .rpc("request_discord_reinvite", { p_class_id: classId, p_user_id: user.id })
+        .then(({ error: rpcError }) => {
+          if (rpcError) {
+            // Deliberately not surfaced. The hourly sync still covers this student, so a failure here
+            // costs them time rather than correctness, and an error banner on a panel whose whole
+            // message is "this is being handled" would be worse than the delay.
+            // eslint-disable-next-line no-console
+            console.warn("Discord role provisioning request failed:", rpcError);
+          }
+        });
+    };
+
+    request();
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") request();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    // `focus` as well as visibilitychange: returning from a new tab fires visibilitychange, but
+    // returning from another WINDOW (a desktop Discord client taking focus, say) only fires focus.
+    window.addEventListener("focus", request);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", request);
+    };
+  }, [invitesOutstanding, showAll, user, classId]);
 
   // Only the first fetch, not the 30-second background refresh. `loading` goes true on every poll,
   // so reacting to it unconditionally tore the whole panel down and rebuilt it twice a minute --
