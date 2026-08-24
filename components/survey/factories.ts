@@ -42,6 +42,7 @@ export function cloneChoice(c: Choice): Choice {
   const out: Choice = { value: c.value };
   if (c.text !== undefined) out.text = c.text;
   if (c.raw !== undefined) out.raw = { ...c.raw };
+  if (c.scalar) out.scalar = true;
   return out;
 }
 

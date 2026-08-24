@@ -1662,7 +1662,9 @@ export class CourseController {
     // Calculate lab-based due date
     const mostRecentLabMeeting = relevantMeetings[0];
     const labMeetingDate = new TZDate(
-      mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
+      // Same default as calculate_effective_due_date and the assignment form preview: a lab
+      // section with no end time is treated as ending at the end of its meeting day.
+      mostRecentLabMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
       this.course.time_zone ?? "America/New_York"
     );
 

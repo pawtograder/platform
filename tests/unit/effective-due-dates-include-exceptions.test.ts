@@ -19,7 +19,7 @@
  *
  * Leaves the created classes and related rows in the database (use db reset or manual cleanup).
  */
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import {
   createAuthenticatedClient,
   createClass,
@@ -280,7 +280,16 @@ describeIntegration("effective due dates include due-date exceptions", () => {
       }
     }
 
-    const plainDue = new Date(Date.now() + 24 * HOUR_MS);
+    // Pin the deadline to the Tuesday after the next Monday meeting, at noon course-local.
+    // A floating now+24h is not safe: run on a Sunday afternoon it lands between the timed
+    // section's 11:00 meeting end and the NULL section's defaulted 23:59:59, so the two
+    // sections resolve to DIFFERENT Mondays and the comparison below stops meaning anything.
+    const cursor = new Date(`${formatInTimeZone(new Date(), COURSE_TIME_ZONE, "yyyy-MM-dd")}T00:00:00Z`);
+    do {
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    } while (cursor.getUTCDay() !== 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const plainDue = fromZonedTime(`${cursor.toISOString().slice(0, 10)}T12:00:00`, COURSE_TIME_ZONE);
     const assignment = await insertAssignment({
       due_date: plainDue.toISOString(),
       class_id: course.id,

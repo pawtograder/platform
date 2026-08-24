@@ -10,6 +10,7 @@
  * to add SurveyJS defaults such as an explicit `isRequired: false`.
  */
 import { fromJSON, toJSON } from "@/components/survey/serde";
+import { makeElement } from "@/components/survey/factories";
 import { SURVEYJS_TEMPLATES } from "@/scripts/DatabaseSeedingUtils";
 import { TEAM_COLLABORATION_SURVEY } from "@/tests/fixtures/teamCollaborationSurvey";
 
@@ -146,6 +147,21 @@ describe("survey builder round trip", () => {
       ]
     };
     expectNoLoss(source, roundTrip(source));
+  });
+
+  it("writes choices created in the builder in object form", () => {
+    // surveys.test.tsx reads the saved JSON directly and maps choices to `c.value`, so a
+    // choice the builder created must not be written as a bare string. Only choices that
+    // ARRIVED as bare scalars keep that shape.
+    const built = fromJSON({ pages: [{ name: "page1", elements: [] }] });
+    built.pages[0].elements.push(makeElement("radiogroup", "q_colors"));
+    const saved = JSON.parse(JSON.stringify(toJSON(built)));
+    const choices = saved.pages[0].elements[0].choices;
+    expect(choices.length).toBeGreaterThan(0);
+    for (const c of choices) {
+      expect(typeof c).toBe("object");
+      expect(typeof c.value).toBe("string");
+    }
   });
 
   it("is idempotent: saving twice changes nothing the first save did not", () => {

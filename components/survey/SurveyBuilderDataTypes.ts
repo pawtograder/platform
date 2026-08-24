@@ -46,6 +46,13 @@ export type Choice = {
   value: string | number | boolean;
   text?: string;
   raw?: Record<string, unknown>;
+  /**
+   * Set only when the source JSON wrote this choice as a bare scalar (`"Yes"`, `3`) rather
+   * than as `{ value: ... }`. Both forms are valid SurveyJS and mean the same thing, so this
+   * exists purely so that re-saving an untouched survey reproduces the shape it arrived in.
+   * Choices created in the builder have no source shape and are written as objects.
+   */
+  scalar?: true;
 };
 
 export interface ElementBase {

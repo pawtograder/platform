@@ -24,13 +24,16 @@ function latestDefinitionOf(functionName: string): string {
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
     .sort();
-  const needle = `CREATE OR REPLACE FUNCTION public.${functionName}(`;
-  const match = files.filter((f) => readFileSync(join(MIGRATIONS_DIR, f), "utf8").includes(needle)).pop();
+  // Deliberately loose: a later migration may use DROP + plain CREATE FUNCTION, omit the
+  // public. prefix, or wrap before the paren. If this pattern missed such a migration the
+  // guard would read an older file, pass, and report green while the bug was reinstalled.
+  const needle = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${functionName}\\s*\\(`, "i");
+  const match = files.filter((f) => needle.test(readFileSync(join(MIGRATIONS_DIR, f), "utf8"))).pop();
   if (!match) {
     throw new Error(`No migration defines public.${functionName}`);
   }
   const sql = readFileSync(join(MIGRATIONS_DIR, match), "utf8");
-  const body = sql.slice(sql.lastIndexOf(needle));
+  const body = sql.slice([...sql.matchAll(new RegExp(needle, "gi"))].pop()!.index);
   const end = body.indexOf("$$;");
   return stripSqlComments(end === -1 ? body : body.slice(0, end));
 }

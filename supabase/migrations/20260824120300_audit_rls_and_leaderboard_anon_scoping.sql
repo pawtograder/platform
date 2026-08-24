@@ -90,11 +90,9 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.audit FROM anon, authenticated
 -- from the parent, and Supabase's default privileges hand each new table full rights on anon and
 -- authenticated. Revoke on the ones that exist now.
 --
--- This decays: partitions created later by audit_maintain_partitions() will again be granted
--- INSERT/UPDATE/DELETE/TRUNCATE. Their DML is still default-denied by RLS (no policy), so the
--- residual is TRUNCATE on partitions younger than this migration. Closing that durably means
--- adding the same REVOKE to audit_maintain_partitions(); that is a behaviour change to a
--- cron-driven SECURITY DEFINER function and is left as follow-up rather than bundled here.
+-- Partitions created later are handled by audit_maintain_partitions() below, which is replaced
+-- in this migration to revoke on each partition it creates. Without that, the protection would
+-- decay within a day: tomorrow's partition would be created with TRUNCATE granted again.
 DO $$
 DECLARE
     partition_name text;
@@ -110,6 +108,70 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+
+-- audit_maintain_partitions() runs daily and creates partitions for the next 7 days. Because
+-- CREATE TABLE ... PARTITION OF takes Supabase's default privileges rather than the parent's,
+-- every partition it made would arrive with INSERT/UPDATE/DELETE/TRUNCATE granted to anon and
+-- authenticated -- reopening, one day at a time, exactly what the REVOKE above closes. RLS
+-- covers the DML; TRUNCATE is not subject to RLS, so it needs the grant removed.
+--
+-- Body is otherwise unchanged from 20251228143943_partitioned_audit_system.sql. search_path is
+-- pinned while we are here: the function is SECURITY DEFINER and had no search_path set.
+CREATE OR REPLACE FUNCTION public.audit_maintain_partitions()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+    partition_date date;
+    partition_name text;
+    start_date timestamptz;
+    end_date timestamptz;
+    old_partition_name text;
+BEGIN
+    -- Create partitions for next 7 days (if they don't exist)
+    FOR i IN 0..7 LOOP
+        partition_date := CURRENT_DATE + i;
+        partition_name := 'audit_' || to_char(partition_date, 'YYYYMMDD');
+        start_date := partition_date;
+        end_date := partition_date + 1;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class
+            WHERE relname = partition_name
+            AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+        ) THEN
+            EXECUTE format(
+                'CREATE TABLE public.%I PARTITION OF public.audit
+                 FOR VALUES FROM (%L) TO (%L)',
+                partition_name, start_date, end_date
+            );
+            -- Enable RLS on newly created partition
+            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', partition_name);
+            -- Client roles never write the audit trail: it is written by audit_statement_trigger(),
+            -- which is SECURITY DEFINER and owned by postgres. TRUNCATE especially must not be
+            -- granted, since no policy can restrain it.
+            EXECUTE format(
+                'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.%I FROM anon, authenticated',
+                partition_name
+            );
+        END IF;
+    END LOOP;
+
+    -- Drop partitions older than 90 days (3 months)
+    FOR old_partition_name IN
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public'
+        AND tablename LIKE 'audit_%'
+        AND tablename ~ '^audit_[0-9]{8}$'
+        AND to_date(substring(tablename from 7 for 8), 'YYYYMMDD') < CURRENT_DATE - 90
+    LOOP
+        EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', old_partition_name);
+    END LOOP;
+END;
+$function$;
 
 
 -- ============================================================================

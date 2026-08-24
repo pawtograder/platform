@@ -660,7 +660,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                           </Text>
                                           <Input
                                             size="sm"
-                                            value={el.labelTrue}
+                                            value={el.labelTrue ?? ""}
                                             onChange={(e) => updateElementFields(el.id, { labelTrue: e.target.value })}
                                           />
                                         </Box>
@@ -670,7 +670,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                           </Text>
                                           <Input
                                             size="sm"
-                                            value={el.labelFalse}
+                                            value={el.labelFalse ?? ""}
                                             onChange={(e) => updateElementFields(el.id, { labelFalse: e.target.value })}
                                           />
                                         </Box>

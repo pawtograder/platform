@@ -31,7 +31,7 @@ const RATING_KEYS = [
  */
 function toChoiceObject(c: unknown): Choice {
   if (c == null) return { value: "" };
-  if (typeof c === "string" || typeof c === "number" || typeof c === "boolean") return { value: c };
+  if (typeof c === "string" || typeof c === "number" || typeof c === "boolean") return { value: c, scalar: true };
   if (typeof c === "object" && "value" in (c as Record<string, unknown>)) {
     const obj = c as Record<string, unknown>;
     const rawValue = obj.value as unknown;
@@ -59,13 +59,13 @@ function toChoiceObject(c: unknown): Choice {
  * label goes back out as a bare scalar, so round-tripping a survey is a no-op.
  */
 function fromChoiceObject(c: Choice): unknown {
-  if (c.raw !== undefined) {
-    const out: Record<string, unknown> = { ...c.raw, value: c.value };
-    if (c.text !== undefined) out.text = c.text;
-    return out;
-  }
-  if (c.text !== undefined) return { value: c.value, text: c.text };
-  return c.value;
+  // Only a choice that ARRIVED as a bare scalar goes back out as one. Choices created in the
+  // builder have no source shape and are written in object form, which is what the templates
+  // and the rest of the repo use -- and what consumers reading the saved JSON expect.
+  if (c.scalar && c.text === undefined) return c.value;
+  const out: Record<string, unknown> = { ...(c.raw ?? {}), value: c.value };
+  if (c.text !== undefined) out.text = c.text;
+  return out;
 }
 
 /** Drop keys whose value is `undefined` so exporting never invents a key. */
