@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { Alert } from "../ui/alert";
 import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import SyncRolesButton from "./sync-roles-button";
 
 type DiscordInvite = {
   id: number;
@@ -202,15 +201,16 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
             <Text fontSize="xs" color="fg.muted">
               <strong>After joining the Discord server:</strong>
             </Text>
+            {/* No timing promise and no self-service sync control. Roles are assigned off the same
+                queued job that mints the invite, which runs within about a minute of the join, so
+                "within an hour" described a worst case the student almost never sees and invited
+                them to sit and wait for it. The sync button was the escape hatch from that wait; the
+                only cases it did not fix are ones the student cannot fix either -- the bot missing
+                Manage Roles, or its role sitting below the course roles -- and those need an
+                instructor. */}
             <Text fontSize="xs" color="fg.muted">
-              Your roles will be synced automatically within an hour. For immediate sync, use the button below or type{" "}
-              <code>/sync-roles</code> in the Discord server.
+              Your course roles will be assigned shortly. If they don&apos;t appear, contact your instructors.
             </Text>
-            {!showAll && (
-              <HStack>
-                <SyncRolesButton classId={classId} variant="outline" size="sm" />
-              </HStack>
-            )}
           </VStack>
         </Box>
       </VStack>
