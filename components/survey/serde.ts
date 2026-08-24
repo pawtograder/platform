@@ -1,18 +1,80 @@
-import type { BuilderSurvey, BuilderPage, BuilderElement, Choice, SurveyMeta } from "./SurveyBuilderDataTypes";
-import { makeEmptySurvey, makePage, makeElement, cloneChoice } from "./factories";
+import type {
+  BuilderSurvey,
+  BuilderPage,
+  BuilderElement,
+  Choice,
+  SurveyMeta,
+  PassthroughElement,
+  RatingElement
+} from "./SurveyBuilderDataTypes";
+import { PASSTHROUGH_TYPE } from "./SurveyBuilderDataTypes";
+import { makeEmptySurvey, makePage, makeElement, makePassthroughElement, cloneChoice } from "./factories";
 
+/** Keys every element carries; excluded from an element's `config` passthrough bag. */
+const BASE_KEYS = ["id", "type", "name", "title", "description", "isRequired", "validators"];
+
+const RATING_KEYS = [
+  "rateMin",
+  "rateMax",
+  "rateStep",
+  "rateCount",
+  "rateValues",
+  "minRateDescription",
+  "maxRateDescription"
+];
+
+/**
+ * Read a SurveyJS choice. A choice may be a bare scalar ("Yes", 3, true) or an object
+ * `{ value, text, ... }`, and `value` may be a number — Likert scales use numeric values,
+ * so coercing them to strings both breaks the scale and orphans already-submitted responses.
+ * Anything beyond value/text is kept in `raw` so it survives the round trip.
+ */
 function toChoiceObject(c: unknown): Choice {
   if (c == null) return { value: "" };
-  if (typeof c === "string") return { value: c };
-  if (typeof c === "object" && "value" in c && typeof (c as Record<string, unknown>).value === "string") {
+  if (typeof c === "string" || typeof c === "number" || typeof c === "boolean") return { value: c };
+  if (typeof c === "object" && "value" in (c as Record<string, unknown>)) {
     const obj = c as Record<string, unknown>;
-    return obj.text ? { value: obj.value as string, text: obj.text as string } : { value: obj.value as string };
+    const rawValue = obj.value as unknown;
+    const value: Choice["value"] =
+      typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean"
+        ? rawValue
+        : String(rawValue);
+    // `raw` holds only the properties beyond value/text. Keeping it disjoint makes this
+    // conversion idempotent -- normalizeForEditor re-runs it on already-imported choices,
+    // and storing the whole object here would nest a `raw` key inside `raw` each pass and
+    // then emit it as a bogus property on save.
+    const extras: Record<string, unknown> = {};
+    for (const k of Object.keys(obj)) {
+      if (k !== "value" && k !== "text" && k !== "raw") extras[k] = obj[k];
+    }
+    const out: Choice = { value, raw: extras };
+    if (obj.text != null) out.text = String(obj.text);
+    return out;
   }
   return { value: String(c) };
 }
 
-function fromChoiceObject(c: Choice): { value: string; text?: string } {
-  return c.text ? { value: c.value, text: c.text } : { value: c.value };
+/**
+ * Write a choice back out. A choice that came in as a bare scalar and was never given a
+ * label goes back out as a bare scalar, so round-tripping a survey is a no-op.
+ */
+function fromChoiceObject(c: Choice): unknown {
+  if (c.raw !== undefined) {
+    const out: Record<string, unknown> = { ...c.raw, value: c.value };
+    if (c.text !== undefined) out.text = c.text;
+    return out;
+  }
+  if (c.text !== undefined) return { value: c.value, text: c.text };
+  return c.value;
+}
+
+/** Drop keys whose value is `undefined` so exporting never invents a key. */
+function compact(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return out;
 }
 
 export function toJSON(survey: BuilderSurvey): Record<string, unknown> {
@@ -41,7 +103,7 @@ export function toJSONString(survey: BuilderSurvey, space = 2): string {
 function exportElement(el: BuilderElement): Record<string, unknown> {
   switch (el.type) {
     case "text":
-      return {
+      return compact({
         type: "text",
         name: el.name,
         title: el.title,
@@ -50,9 +112,9 @@ function exportElement(el: BuilderElement): Record<string, unknown> {
         inputType: el.inputType ?? "text",
         validators: el.validators,
         ...(el.config || {})
-      };
+      });
     case "comment":
-      return {
+      return compact({
         type: "comment",
         name: el.name,
         title: el.title,
@@ -60,21 +122,11 @@ function exportElement(el: BuilderElement): Record<string, unknown> {
         isRequired: el.isRequired,
         validators: el.validators,
         ...(el.config || {})
-      };
+      });
     case "radiogroup":
-      return {
-        type: "radiogroup",
-        name: el.name,
-        title: el.title,
-        description: el.description,
-        isRequired: el.isRequired,
-        validators: el.validators,
-        choices: (el.choices ?? []).map(fromChoiceObject),
-        ...(el.config || {})
-      };
     case "checkbox":
-      return {
-        type: "checkbox",
+      return compact({
+        type: el.type,
         name: el.name,
         title: el.title,
         description: el.description,
@@ -82,9 +134,9 @@ function exportElement(el: BuilderElement): Record<string, unknown> {
         validators: el.validators,
         choices: (el.choices ?? []).map(fromChoiceObject),
         ...(el.config || {})
-      };
+      });
     case "boolean":
-      return {
+      return compact({
         type: "boolean",
         name: el.name,
         title: el.title,
@@ -94,14 +146,32 @@ function exportElement(el: BuilderElement): Record<string, unknown> {
         labelTrue: el.labelTrue,
         labelFalse: el.labelFalse,
         ...(el.config || {})
-      };
-    // unreachable
-    default:
-      return {
-        type: (el as Record<string, unknown>).type,
-        name: (el as Record<string, unknown>).name,
-        ...(el as Record<string, unknown>)
-      };
+      });
+    case "rating":
+      return compact({
+        type: "rating",
+        name: el.name,
+        title: el.title,
+        description: el.description,
+        isRequired: el.isRequired,
+        validators: el.validators,
+        rateMin: el.rateMin,
+        rateMax: el.rateMax,
+        rateStep: el.rateStep,
+        rateCount: el.rateCount,
+        rateValues: el.rateValues ? el.rateValues.map(fromChoiceObject) : undefined,
+        minRateDescription: el.minRateDescription,
+        maxRateDescription: el.maxRateDescription,
+        ...(el.config || {})
+      });
+    case PASSTHROUGH_TYPE:
+      // Write the source JSON back byte-for-byte. The builder renders these read-only, so
+      // there is nothing to merge in and saving an untouched survey is a true no-op.
+      return { ...el.raw };
+    default: {
+      const _exhaustive: never = el;
+      return { ...(_exhaustive as Record<string, unknown>) };
+    }
   }
 }
 
@@ -147,15 +217,22 @@ export function fromJSONString(json: string): BuilderSurvey {
   }
 }
 
+/**
+ * Deep-copies choice lists so editing one cannot mutate shared state. Runs on the output of
+ * `importElement`, so choices are already `Choice` objects — it must NOT re-run
+ * `toChoiceObject`, which cannot distinguish an imported bare-scalar choice (`{ value: "Yes" }`,
+ * no `raw`) from a source object choice that happened to have no extra properties, and would
+ * therefore rewrite every bare `"Yes"` in a template as `{ "value": "Yes" }` on save.
+ */
 export function normalizeForEditor(survey: BuilderSurvey): BuilderSurvey {
   const pages = (survey.pages ?? []).map((p) => ({
     ...p,
     elements: (p.elements ?? []).map((el) => {
       if (el.type === "radiogroup" || el.type === "checkbox") {
-        const normalizedChoices = safeArray(el.choices).map((c) =>
-          cloneChoice ? cloneChoice(toChoiceObject(c)) : toChoiceObject(c)
-        );
-        return { ...el, choices: normalizedChoices };
+        return { ...el, choices: safeArray<Choice>(el.choices).map(cloneChoice) };
+      }
+      if (el.type === "rating" && el.rateValues) {
+        return { ...el, rateValues: safeArray<Choice>(el.rateValues).map(cloneChoice) };
       }
       return el;
     })
@@ -185,16 +262,7 @@ function importElement(src: unknown): BuilderElement {
         inputType: isNonEmptyString(elem?.inputType)
           ? (elem.inputType as "text" | "number" | "email" | "tel" | "url")
           : "text",
-        config: restWithoutKeys(elem, [
-          "type",
-          "id",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-          "inputType"
-        ])
+        config: restWithoutKeys(elem, [...BASE_KEYS, "inputType"])
       };
     case "comment":
       return {
@@ -205,50 +273,23 @@ function importElement(src: unknown): BuilderElement {
         description: elem?.description as string | undefined,
         isRequired: !!elem?.isRequired,
         validators: safeArray(elem?.validators),
-        config: restWithoutKeys(elem, ["id", "type", "name", "title", "description", "isRequired", "validators"])
+        config: restWithoutKeys(elem, BASE_KEYS)
       };
     case "radiogroup":
+    case "checkbox": {
+      const type = t as "radiogroup" | "checkbox";
       return {
-        ...makeElement("radiogroup", elem?.name as string | undefined),
-        type: "radiogroup",
-        name: fallbackName(elem?.name, "radiogroup"),
+        ...makeElement(type, elem?.name as string | undefined),
+        type,
+        name: fallbackName(elem?.name, type),
         title: elem?.title as string | undefined,
         description: elem?.description as string | undefined,
         isRequired: !!elem?.isRequired,
         validators: safeArray(elem?.validators),
         choices: safeArray(elem?.choices).map(toChoiceObject),
-        config: restWithoutKeys(elem, [
-          "id",
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-          "choices"
-        ])
+        config: restWithoutKeys(elem, [...BASE_KEYS, "choices"])
       };
-    case "checkbox":
-      return {
-        ...makeElement("checkbox", elem?.name as string | undefined),
-        type: "checkbox",
-        name: fallbackName(elem?.name, "checkbox"),
-        title: elem?.title as string | undefined,
-        description: elem?.description as string | undefined,
-        isRequired: !!elem?.isRequired,
-        validators: safeArray(elem?.validators),
-        choices: safeArray(elem?.choices).map(toChoiceObject),
-        config: restWithoutKeys(elem, [
-          "id",
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-          "choices"
-        ])
-      };
+    }
     case "boolean":
       return {
         ...makeElement("boolean", elem?.name as string | undefined),
@@ -260,43 +301,47 @@ function importElement(src: unknown): BuilderElement {
         validators: safeArray(elem?.validators),
         labelTrue: elem?.labelTrue as string | undefined,
         labelFalse: elem?.labelFalse as string | undefined,
-        config: restWithoutKeys(elem, [
-          "id",
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-          "labelTrue",
-          "labelFalse"
-        ])
+        config: restWithoutKeys(elem, [...BASE_KEYS, "labelTrue", "labelFalse"])
       };
-    default: {
-      const base = makeElement("text", elem?.name as string | undefined);
-      return {
+    case "rating": {
+      const base = makeElement("rating", elem?.name as string | undefined);
+      const rating: RatingElement = {
         ...base,
-        name: isNonEmptyString(elem?.name) ? elem.name : base.name,
-        title: (elem?.title as string | undefined) ?? base.title,
-        description: (elem?.description as string | undefined) ?? base.description,
-        isRequired: (elem?.isRequired as boolean | undefined) ?? base.isRequired,
-        validators: Array.isArray(elem?.validators)
-          ? (elem.validators as Array<Record<string, unknown>>)
-          : (base.validators ?? []),
-        inputType: "text",
-        config: restWithoutKeys(elem, [
-          "id",
-          "type",
-          "name",
-          "title",
-          "description",
-          "isRequired",
-          "validators",
-          "inputType"
-        ])
+        type: "rating",
+        name: fallbackName(elem?.name, "rating"),
+        title: elem?.title as string | undefined,
+        description: elem?.description as string | undefined,
+        isRequired: !!elem?.isRequired,
+        validators: safeArray(elem?.validators),
+        rateMin: numberOrUndefined(elem?.rateMin),
+        rateMax: numberOrUndefined(elem?.rateMax),
+        rateStep: numberOrUndefined(elem?.rateStep),
+        rateCount: numberOrUndefined(elem?.rateCount),
+        rateValues: Array.isArray(elem?.rateValues) ? safeArray(elem.rateValues).map(toChoiceObject) : undefined,
+        minRateDescription: elem?.minRateDescription as string | undefined,
+        maxRateDescription: elem?.maxRateDescription as string | undefined,
+        config: restWithoutKeys(elem, [...BASE_KEYS, ...RATING_KEYS])
       };
+      // A rating with no explicit scale keeps SurveyJS's own defaults rather than
+      // inheriting the builder's 1-5, so exporting cannot invent a scale.
+      if (rating.rateMin === undefined) delete rating.rateMin;
+      if (rating.rateMax === undefined) delete rating.rateMax;
+      return rating;
+    }
+    default: {
+      // No editor for this type. Keep the source JSON verbatim so saving is a no-op;
+      // previously this fell through to a short-text question and the type was lost.
+      const raw = (elem ?? {}) as Record<string, unknown>;
+      const el: PassthroughElement = makePassthroughElement(raw, fallbackName(elem?.name, t || "question"));
+      return el;
     }
   }
+}
+
+function numberOrUndefined(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return undefined;
 }
 
 function isNonEmptyString(s: unknown): s is string {

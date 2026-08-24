@@ -137,6 +137,13 @@ export default async function StudentDashboard({
   // fetchStudentDashboardBundle). Deriving them from the generated view type means a future
   // column rename/removal surfaces as a compile error rather than silently dropping a value
   // through the `as` cast below.
+  //
+  // `due_date` here is the FINAL per-student deadline -- the view selects
+  // calculate_final_due_date, so lab-section offsets AND due-date exceptions (extensions / late
+  // tokens) are already applied. It is what both the upcoming filter in
+  // fetchStudentDashboardBundle and the "Due" value rendered below run on, so this list now
+  // agrees with the assignment detail page and with submission enforcement. No client-side
+  // extension arithmetic belongs here.
   type StudentUpcomingAssignmentRow = Pick<
     Database["public"]["Views"]["assignments_with_effective_due_dates"]["Row"],
     "id" | "title" | "due_date" | "suggested_due_date"

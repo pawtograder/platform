@@ -296,7 +296,7 @@ const GENERAL_DISCUSSION_TOPICS = [
 ];
 
 // SurveyJS survey templates for realistic data
-const SURVEYJS_TEMPLATES = {
+export const SURVEYJS_TEMPLATES = {
   courseExperience: {
     title: "Course Experience Survey",
     description: "Help us improve the course by sharing your overall experience.",

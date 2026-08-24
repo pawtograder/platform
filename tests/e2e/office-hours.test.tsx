@@ -3,9 +3,13 @@ import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
+  createAuthenticatedClient,
   createClass,
   createUsersInClass,
   insertAssignment,
+  insertHelpQueueAssignment,
+  insertHelpRequest,
+  insertOfficeHoursQueue,
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
@@ -19,7 +23,6 @@ let course: Course;
 let student: TestingUser | undefined;
 let student2: TestingUser | undefined;
 let instructor: TestingUser | undefined;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
 
@@ -275,5 +278,197 @@ test.describe("Office Hours", () => {
     // await expect(page.getByRole("button", { name: "Join Video Call" })).not.toBeVisible();
     // await expect(page.getByRole("button", { name: "End Call" })).not.toBeVisible();
     // await expect(page.getByRole("button", { name: "Start Video Call" })).toBeVisible();
+  });
+});
+
+// Regressions from the 2026-08 office-hours audit.
+//
+// 1. Saving the "Referenced Code" panel used to recompute
+//    `is_private = (has file refs OR has submission ref)` and write it back, so a save
+//    that left no references published a request the student had chosen to keep private.
+//    That exposed the whole thread, not just the row: RLS on help_request_messages goes
+//    through can_access_help_request(), which branches on this flag.
+// 2. The "Follow-Up to Previous Request" field was collected by the form (and pre-filled
+//    from ?followup_to=, which the queue list's Follow-Up button links to) and then
+//    dropped: create_help_request_with_participants had no p_followup_to parameter and
+//    its INSERT never listed the column, so followup_to was always null.
+const PRIVACY_REGRESSION_REQUEST = "Private request with code references - must stay private 🔒";
+const FOLLOWUP_ORIGINAL_REQUEST = "Original request to be followed up on";
+const FOLLOWUP_NEW_REQUEST = "Follow-up: still stuck after our last session";
+
+test.describe("Office Hours audit regressions", () => {
+  test.describe.configure({ mode: "serial" });
+
+  // A dedicated staffed queue. The suite above leaves the student holding an open public
+  // AND an open private request in the class's default "office-hours" queue, and
+  // create_help_request_with_participants allows only one open solo request per
+  // (queue, creator, privacy) — so creating here from a clean queue keeps these tests
+  // independent of what ran before them.
+  let queueId: number;
+  test.beforeAll(async () => {
+    const queue = await insertOfficeHoursQueue({ class_id: course.id, name: "Audit Regression Queue" });
+    queueId = queue.id;
+    await insertHelpQueueAssignment({
+      class_id: course.id,
+      help_queue_id: queueId,
+      ta_profile_id: instructor!.private_profile_id
+    });
+  });
+
+  test("Dropping the last code reference does not publish a private help request", async ({ page }) => {
+    // Three magic-link verifications (two API clients plus the browser login) on top of a
+    // full page load; the default budget is tight under CI parallelism.
+    test.slow();
+
+    const { id: requestId } = await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student!.private_profile_id,
+      request: PRIVACY_REGRESSION_REQUEST,
+      help_queue_id: queueId
+    });
+    // insertHelpRequest seeds public requests; this one is the student's private one.
+    const { error: privacyError } = await supabase
+      .from("help_requests")
+      .update({ is_private: true })
+      .eq("id", requestId);
+    expect(privacyError).toBeNull();
+
+    // Attach a code reference: the state whose removal used to trigger the flip.
+    const { data: submissionFile, error: fileError } = await supabase
+      .from("submission_files")
+      .select("id")
+      .eq("submission_id", submission_id!)
+      .limit(1)
+      .single();
+    expect(fileError).toBeNull();
+    const { error: refError } = await supabase.from("help_request_file_references").insert({
+      class_id: course.id,
+      help_request_id: requestId,
+      assignment_id: assignment!.id,
+      submission_id: submission_id!,
+      submission_file_id: submissionFile!.id,
+      line_number: 1
+    });
+    expect(refError).toBeNull();
+
+    // Baseline: the other student cannot see the private request at all.
+    const student2Client = await createAuthenticatedClient(student2!);
+    const { data: visibleBefore } = await student2Client.from("help_requests").select("id").eq("id", requestId);
+    expect(visibleBefore ?? []).toHaveLength(0);
+
+    // Part 1 — the removal write itself, issued with the owner's own credentials. This is
+    // byte-for-byte the update the client sent when the last code reference was removed.
+    // It is asserted here rather than through the editing UI because that UI only renders
+    // the per-file remove button while a submission is still selected, so reaching a
+    // zero-reference save through it needs a chakra-react-select clear interaction, which
+    // is flaky across browser projects (see instructor-group-management.spec.ts).
+    const studentClient = await createAuthenticatedClient(student!);
+    const { error: deleteRefError } = await studentClient
+      .from("help_request_file_references")
+      .delete()
+      .eq("help_request_id", requestId);
+    expect(deleteRefError).toBeNull();
+
+    const { error: downgradeError } = await studentClient
+      .from("help_requests")
+      .update({ referenced_submission_id: null, is_private: false })
+      .eq("id", requestId);
+    // forbid_help_request_privacy_downgrade: only staff may publish a private request.
+    expect(downgradeError).not.toBeNull();
+    expect(downgradeError?.code).toBe("42501");
+
+    // Part 2 — the path a student can actually reach in the UI. With no references left,
+    // the panel offers "Add code references"; entering and saving it used to write
+    // is_private=false as a side effect of an edit that changed nothing else.
+    await loginAsUser(page, student!, course);
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
+
+    // The code-reference panel sits inside the collapsed "N students" details accordion, so
+    // the Add button is not in the DOM until that is expanded.
+    const addButton = page.getByRole("button", { name: "Add code references" });
+    await expect(async () => {
+      if (!(await addButton.isVisible())) {
+        await page.getByRole("button", { name: /^\d+ students?$/ }).click();
+      }
+      await expect(addButton).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 60_000 });
+
+    // handleEditClick bails until the (now empty) file-reference list has loaded, so the
+    // first click can be a no-op. Retry until the editor is actually open.
+    await expect(async () => {
+      await addButton.click();
+      await expect(page.getByRole("button", { name: "Save Changes" })).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 60_000 });
+    // Assert on the save request itself rather than on a success toast. On this path the
+    // toast is a false negative: with no submission referenced, the post-save
+    // refetchSubmission() issues submissions?id=eq.null, which 400s
+    // ("invalid input syntax for type bigint") and sends handleSaveChanges into its catch,
+    // so the user sees "Failed to update code references" even though every write landed.
+    // That is a pre-existing defect on the refetch path, unrelated to privacy, and it
+    // predates this change -- the old is_private-clearing code hit it too. Waiting on the
+    // PATCH keeps this test non-vacuous: it proves the save really was issued and accepted,
+    // which is what makes the is_private assertions below meaningful.
+    const savePatch = page.waitForResponse(
+      (r) => r.url().includes("/rest/v1/help_requests") && r.request().method() === "PATCH"
+    );
+    await page.getByRole("button", { name: "Save Changes" }).click();
+    const saveResponse = await savePatch;
+    expect(saveResponse.status()).toBeLessThan(300);
+
+    // The request is still private...
+    const { data: afterRow, error: afterError } = await supabase
+      .from("help_requests")
+      .select("is_private")
+      .eq("id", requestId)
+      .single();
+    expect(afterError).toBeNull();
+    expect(afterRow?.is_private).toBe(true);
+
+    // ...and the other student still cannot see it, which is the disclosure that the
+    // flip caused: help_request_messages RLS reads the same flag.
+    const { data: visibleAfter } = await student2Client.from("help_requests").select("id").eq("id", requestId);
+    expect(visibleAfter ?? []).toHaveLength(0);
+  });
+
+  test("A follow-up request records the request it follows up on", async ({ page }) => {
+    test.slow();
+
+    // Only resolved/closed requests are offered as follow-up targets.
+    const { id: originalId } = await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student!.private_profile_id,
+      request: FOLLOWUP_ORIGINAL_REQUEST,
+      help_queue_id: queueId,
+      status: "resolved"
+    });
+    const { error: resolveError } = await supabase
+      .from("help_requests")
+      .update({ resolved_at: new Date().toISOString(), resolved_by: instructor!.private_profile_id })
+      .eq("id", originalId);
+    expect(resolveError).toBeNull();
+
+    await loginAsUser(page, student!, course);
+    // The queue list's Follow-Up button links to exactly this URL.
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/new?followup_to=${originalId}`);
+    await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
+    // The pre-fill has to land, or the round-trip assertion below would pass vacuously
+    // for the wrong reason (nothing selected, nothing to drop).
+    await expect(page.getByText(FOLLOWUP_ORIGINAL_REQUEST).first()).toBeVisible();
+
+    await page.getByRole("textbox", { name: "Help Request Description" }).fill(FOLLOWUP_NEW_REQUEST);
+    await page.getByRole("button", { name: "Submit Request" }).click();
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
+
+    const createdId = Number(page.url().split("/").pop());
+    expect(Number.isFinite(createdId)).toBe(true);
+    const { data: created, error: createdError } = await supabase
+      .from("help_requests")
+      .select("id, request, followup_to")
+      .eq("id", createdId)
+      .single();
+    expect(createdError).toBeNull();
+    expect(created?.request).toBe(FOLLOWUP_NEW_REQUEST);
+    // The whole point: the form's follow-up selection reaches the column.
+    expect(created?.followup_to).toBe(originalId);
   });
 });

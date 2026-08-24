@@ -2070,7 +2070,11 @@ export function useAssignmentDueDate(
           if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
             // Calculate lab-based due date
             const mostRecentLabMeeting = relevantMeetings[0];
-            const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time);
+            // `end_time` is nullable, and concatenating a null produced "2026-08-24Tnull" ->
+            // Invalid Date, which propagated through TZDate/addMinutes and rendered as an em-dash
+            // instead of a deadline. Default to the end of the meeting day, matching
+            // calculate_effective_due_date and the assignment form's lab preview.
+            const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"));
 
             const labMeetingDate = new TZDate(
               nonTZDate.getFullYear(),

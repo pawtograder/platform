@@ -14,18 +14,43 @@ export interface BuilderPage {
   elements: BuilderElement[];
 }
 
-export type BuilderElement = TextElement | CommentElement | RadioGroupElement | ChoiceMultiElement | BooleanElement;
+export type BuilderElement =
+  | TextElement
+  | CommentElement
+  | RadioGroupElement
+  | ChoiceMultiElement
+  | BooleanElement
+  | RatingElement
+  | PassthroughElement;
 
-export type ElementType = "text" | "comment" | "checkbox" | "radiogroup" | "boolean";
+/** Question types the builder can create and edit. */
+export type ElementType = "text" | "comment" | "checkbox" | "radiogroup" | "boolean" | "rating";
 
+/**
+ * Marker type for a SurveyJS question the builder has no editor for (matrix, ranking,
+ * dropdown, ...). The original JSON is kept verbatim in `raw` and written back out
+ * unchanged, so opening the builder on a survey that uses one no longer rewrites it into
+ * something else. Instructors edit these in the JSON editor.
+ */
+export const PASSTHROUGH_TYPE = "__passthrough__";
+
+/** `ElementType` plus the non-editable passthrough marker. */
+export type BuilderElementType = ElementType | typeof PASSTHROUGH_TYPE;
+
+/**
+ * A SurveyJS choice. `value` is what gets stored in the response, and SurveyJS allows it
+ * to be a number or boolean as well as a string — Likert scales use numbers. `raw` carries
+ * any other properties on the choice (imageLink, enableIf, ...) so they survive a round trip.
+ */
 export type Choice = {
-  value: string;
+  value: string | number | boolean;
   text?: string;
+  raw?: Record<string, unknown>;
 };
 
 export interface ElementBase {
   id: string;
-  type: ElementType;
+  type: BuilderElementType;
   name: string;
   title?: string;
   description?: string;
@@ -58,3 +83,27 @@ export type BooleanElement = ElementBase & {
   labelTrue?: string;
   labelFalse?: string;
 };
+
+export type RatingElement = ElementBase & {
+  type: "rating";
+  rateMin?: number;
+  rateMax?: number;
+  rateStep?: number;
+  rateCount?: number;
+  /** Explicit scale points. When present, SurveyJS ignores rateMin/rateMax/rateCount. */
+  rateValues?: Choice[];
+  minRateDescription?: string;
+  maxRateDescription?: string;
+};
+
+export type PassthroughElement = ElementBase & {
+  type: typeof PASSTHROUGH_TYPE;
+  /** The untouched source JSON, including its real `type`. */
+  raw: Record<string, unknown>;
+};
+
+/** The `type` string the passthrough element stands in for, for display purposes. */
+export function passthroughSourceType(el: PassthroughElement): string {
+  const t = el.raw?.type;
+  return typeof t === "string" && t.trim().length > 0 ? t : "unknown";
+}

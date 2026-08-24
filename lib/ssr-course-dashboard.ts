@@ -204,6 +204,9 @@ export async function fetchStudentDashboardBundle(
       .eq("class_id", courseId)
       .eq("submissions.is_active", true)
       .eq("student_profile_id", privateProfileId)
+      // The view's `due_date` is the final per-student deadline (lab offsets + due-date
+      // exceptions), so a student holding an extension keeps the assignment in this list until
+      // their extended deadline passes. Filtering the pre-extension date used to hide it.
       .gte("due_date", new Date().toISOString())
       .order("due_date", { ascending: true })
       .limit(5),
