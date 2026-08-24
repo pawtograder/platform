@@ -34,10 +34,14 @@ function toDateTimeLocal(date: Date): string {
 }
 
 /**
- * The mobile and desktop navs are both in the DOM, so match on the visible one.
+ * Selects by href rather than accessible name, for two reasons: the mobile and desktop navs are
+ * both in the DOM so the name is ambiguous, and the desktop nav's links currently compute an
+ * *empty* accessible name — `dynamicCourseNav.tsx` wraps their content in `role="group"`, which
+ * does not support name-from-content. That is a real a11y bug, but it is not this test's subject,
+ * and pinning the selector to it would make this test fail for the wrong reason once it is fixed.
  */
-function visibleNavLink(page: Page, name: string) {
-  return page.locator("nav:visible").getByRole("link", { name, exact: true }).first();
+function courseNavLink(page: Page, href: string) {
+  return page.locator(`nav[aria-label="Course navigation"]:visible a[href="${href}"]`).first();
 }
 
 test.describe("Manage Assignments list freshness", () => {
@@ -87,7 +91,7 @@ test.describe("Manage Assignments list freshness", () => {
     await expect(page).toHaveURL(/\/manage\/assignments\/\d+\/autograder/, { timeout: 60_000 });
 
     // 4. Back to the list the way the bug report does it — the nav link, not a reload.
-    await visibleNavLink(page, "Manage Assignments").click();
+    await courseNavLink(page, `/course/${course.id}/manage/assignments`).click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/assignments$`));
 
     // The timeout here is load-bearing and must stay well under `staleTimes.dynamic` (30s):
