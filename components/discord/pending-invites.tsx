@@ -115,53 +115,79 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   // predicate then rejects the request made on return. Asking eagerly would disable the handler below.
   //
   // Returning to this tab is the only observable "the student has joined" signal available, so it is
-  // the only thing that triggers a request.
+  // the only thing that triggers a request -- but only after they have actually opened an invite.
+  //
+  // Arming on the join click is what keeps this off the student's retry budget. Listening to every
+  // focus event meant an ordinary return to the dashboard -- another tab, lunch, a different window --
+  // enqueued a pre-join check and, since the same RPC now carries a five-a-day cap, spent one of the
+  // five. Five idle tab switches and the return that followed the real join was refused, and so was
+  // the manual button: the automatic path would have eaten the recourse it was meant to supplement.
+  //
+  // So the handler is armed by opening an invite and disarmed by firing. One join click buys one
+  // automatic check, which is proportionate -- it is the student's own deliberate action, and it is
+  // the action whose completion this is watching for.
   //
   // The cost of that restraint: a student who joined earlier, was never provisioned, and loads this
-  // page without ever leaving and returning to it gets no request, and waits for the hourly batch.
-  // That is the behaviour before this change, so it is a gap this does not close rather than a
-  // regression it introduces.
+  // page without ever leaving and returning to it gets no automatic request. That is what the button
+  // below is for, and failing that the hourly batch, which is the behaviour before any of this.
   //
   // request_discord_reinvite enqueues exactly the work the hourly batch would, and is already the
   // student-facing half of that RPC: it permits a caller to retry their OWN membership, verifies the
   // enrollment, throttles to one retry per user per five minutes in SQL, and takes a class-scoped
-  // advisory lock. So this needs no new state and cannot be used to enqueue work for anyone else.
+  // advisory lock. So this cannot be used to enqueue work for anyone else.
   const invitesOutstanding = invites.length > 0;
-  const lastProvisionAt = useRef(0);
+  // A ref, not state: opening the invite must not re-render the panel mid-click, and the listeners
+  // below read it when they fire rather than closing over a stale value.
+  const joinOpened = useRef(false);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (showAll || !user || !classId || !invitesOutstanding) return;
 
-    const request = () => {
-      // Client-side floor so tab-flipping cannot spray requests. The real guard is the RPC's own
-      // five-minute SQL throttle; this only keeps us from paying for calls it will reject anyway.
-      // Starts at 0 so the first return trip is never delayed by it.
-      const now = Date.now();
-      if (now - lastProvisionAt.current < 60_000) return;
-      lastProvisionAt.current = now;
-
+    const fire = () => {
+      joinOpened.current = false;
       createClient()
         .rpc("request_discord_reinvite", { p_class_id: classId, p_user_id: user.id })
-        .then(({ error: rpcError }) => {
+        .then(({ data, error: rpcError }) => {
           if (rpcError) {
-            // Deliberately not surfaced. The hourly sync still covers this student, so a failure here
-            // costs them time rather than correctness, and an error banner on a panel whose whole
-            // message is "this is being handled" would be worse than the delay.
+            // Deliberately not surfaced. The hourly sync and the button below both still cover this
+            // student, so a failure here costs them time rather than correctness, and an error banner
+            // on a panel whose whole message is "this is being handled" would be worse than the delay.
             // eslint-disable-next-line no-console
             console.warn("Discord role provisioning request failed:", rpcError);
+            return;
+          }
+          // Queued nothing, which here almost always means the five-minute throttle: the student
+          // pressed the button below shortly before joining, so the check that actually matters is
+          // the one being refused. Retry once the window has passed rather than handing them to the
+          // hourly batch -- the join has already happened, so this is not a speculative request.
+          //
+          // On a timer that calls `fire` directly rather than re-arming, because re-arming would wait
+          // for another focus event and a student who joins and then stays on this page never
+          // produces one.
+          if ((data?.[0]?.queued ?? 0) === 0) {
+            if (retryTimer.current) clearTimeout(retryTimer.current);
+            retryTimer.current = setTimeout(fire, 5 * 60 * 1000 + 15_000);
           }
         });
     };
 
+    const onReturn = () => {
+      if (joinOpened.current) fire();
+    };
     const onVisible = () => {
-      if (document.visibilityState === "visible") request();
+      if (document.visibilityState === "visible") onReturn();
     };
     document.addEventListener("visibilitychange", onVisible);
     // `focus` as well as visibilitychange: returning from a new tab fires visibilitychange, but
     // returning from another WINDOW (a desktop Discord client taking focus, say) only fires focus.
-    window.addEventListener("focus", request);
+    window.addEventListener("focus", onReturn);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", request);
+      window.removeEventListener("focus", onReturn);
+      // The panel unmounts as soon as the invite is marked used, which is the success case, so a
+      // pending retry has to be dropped rather than left to fire into a dead component.
+      if (retryTimer.current) clearTimeout(retryTimer.current);
     };
   }, [invitesOutstanding, showAll, user, classId]);
 
@@ -250,7 +276,15 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
                   </HStack>
                   <HStack gap={2}>
                     <Button asChild colorPalette="blue" size="sm">
-                      <a href={invite.invite_url} target="_blank" rel="noopener noreferrer">
+                      {/* Opening the invite is what arms the return handler above. Without this the
+                          handler would fire on any return to the dashboard and spend the student's
+                          daily retry budget on checks made while they were never in Discord. */}
+                      <a
+                        href={invite.invite_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => (joinOpened.current = true)}
+                      >
                         <Icon as={BsDiscord} />
                         <Text>Join Discord Server</Text>
                       </a>
