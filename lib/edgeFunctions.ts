@@ -539,6 +539,98 @@ export async function checkAppInstallation(
   });
 }
 
+export type CheckBotInstallationResponse = {
+  installed: boolean;
+  guild_id: string | null;
+  guild_name: string | null;
+  /**
+   * Human-readable labels of the required permissions the bot does not hold **at the server level**.
+   *
+   * Server-level only. Discord layers per-channel and per-category overwrites on top, and those are
+   * reported in `channel_permission_problems` and `can_create_invites` -- an empty list here does not
+   * mean every channel works, and the two have different fixes.
+   */
+  missing_permissions: string[];
+  /**
+   * Whether a role assignment would actually succeed. False either because the bot lacks Manage
+   * Roles or because its own role sits at or below a class role -- Discord reports both as the same
+   * error, so the two positions below are what tells them apart.
+   */
+  can_manage_class_roles: boolean;
+  bot_role_position: number | null;
+  highest_class_role_position: number | null;
+  /**
+   * Roles still tracked in `discord_roles` that no longer exist in the guild.
+   *
+   * Separate from `can_manage_class_roles` because it is a different failure with a different fix:
+   * somebody deleted the role in Discord, so every later assignment of that snowflake 404s, and the
+   * surviving tracking row is what stops the ordinary create-role path from making a replacement.
+   */
+  stale_class_role_ids: string[];
+  /**
+   * Tracked channels whose own permission overwrites block something the bot needs.
+   *
+   * `missing` holds the same labels as `missing_permissions`, so the panel renders both the same way.
+   * The remediation is different, though: edit that channel's permissions for the Pawtograder role.
+   * Re-authorizing the bot cannot clear a channel overwrite.
+   */
+  channel_permission_problems: {
+    channel_id: string;
+    /** From the live guild channel list; null when Discord returned the channel without a name. */
+    channel_name: string | null;
+    missing: string[];
+  }[];
+  /**
+   * Tracked channels the guild's channel list does not return at all.
+   *
+   * Covers two states Discord's API cannot distinguish: the channel was deleted, or an overwrite
+   * denies the bot View Channel so the listing omits it. Separate from `channel_permission_problems`,
+   * which claims an overwrite blocks an operation -- unreadable overwrites support no such claim.
+   * Empty when the channel list could not be read at all.
+   */
+  missing_tracked_channel_ids: string[];
+  /**
+   * False when no visible text channel permits Create Invite, so no student can be invited.
+   *
+   * The most severe of the channel-level answers, because it stops enrollment outright. False also on
+   * a class with no server connected and on a guild whose channels the bot cannot see, so read it
+   * alongside `installed` rather than on its own.
+   */
+  /**
+   * Role types Pawtograder never managed to create in this guild -- a `create_role` that failed and was
+   * never retried, as distinct from `stale_class_role_ids`, which names rows whose role was deleted in
+   * Discord. Both mean students cannot be given that role.
+   */
+  missing_class_role_types: string[];
+  /**
+   * Null when the channel listing could not be read: "we never got a list", as distinct from false's
+   * "we looked and nowhere allows it". Keep in step with the edge function's own type.
+   */
+  can_create_invites: boolean | null;
+  /**
+   * The configured Discord channel category when it is not a live category in the guild.
+   *
+   * The one Discord id still writable as instructor free text. `enqueue_discord_channel_creation()`
+   * passes it verbatim as `parent_id`, so a deleted category — or one copied from another server —
+   * makes every later assignment, lab and help-queue channel creation fail with a terminal 50035.
+   */
+  invalid_channel_category_id: string | null;
+};
+
+/**
+ * Checks whether the Pawtograder Discord bot is in the class's server and can work there. Used by
+ * the course Discord settings page: a bot can be installed and still fail every operation, so this
+ * reports the permission gaps and the role-hierarchy problem alongside the boolean.
+ */
+export async function checkDiscordBotInstallation(
+  params: { class_id: number },
+  supabase: SupabaseClient<Database>
+): Promise<CheckBotInstallationResponse> {
+  return await invokeEdgeFunction<CheckBotInstallationResponse>(supabase, "discord-check-bot-installation", {
+    body: params
+  });
+}
+
 export type PrLinkConfirmResponse = { submission_id: number | null };
 
 /**
@@ -736,6 +828,15 @@ export async function unlinkInstructorGitHubAccount(
 }
 export async function listGitHubOrgs(supabase: SupabaseClient<Database>) {
   return await invokeEdgeFunction<FunctionTypes.ListGitHubOrgsResponse>(supabase, "list-github-orgs", { body: {} });
+}
+/**
+ * Lists the Discord servers the bot is in. Admin-only: the bot is one shared account, so the list
+ * spans every course on the deployment.
+ */
+export async function listDiscordGuilds(supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.ListDiscordGuildsResponse>(supabase, "discord-list-guilds", {
+    body: {}
+  });
 }
 export class EdgeFunctionError extends Error {
   details: string;

@@ -5,6 +5,13 @@ import DiscordReinviteButton from "@/components/discord/reinvite-button";
 import { useDiscordMembershipStatus, type DiscordMembershipRow } from "@/hooks/useDiscordMembershipStatus";
 import { Box, List, Stack, Text } from "@chakra-ui/react";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+// The two invite-failure markers, imported rather than retyped so a change to the wrapper's wording
+// breaks the build here instead of silently dropping these rows into the generic branch below. The
+// module is deliberately Deno-free for this, the way CodeSymbolParser is.
+import {
+  ALL_CHANNELS_REFUSED_INVITE,
+  NO_TEXT_CHANNEL_MESSAGE
+} from "@/supabase/functions/_shared/DiscordInviteChannels";
 import { useCourse } from "@/hooks/useCourseController";
 import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 
@@ -40,8 +47,15 @@ function remediationFor(row: DiscordMembershipRow): string {
   // wrapper after a *successful* channel listing, so there is no HTTP status or JSON code to record
   // and the row lands with a null code -- but the bot's permissions are already correct, and telling
   // an admin to grant channel access would send them to fix something that is not broken.
-  if (row.detail?.includes("No text channels found in guild")) {
+  if (row.detail?.includes(NO_TEXT_CHANNEL_MESSAGE)) {
     return "The bot can read this server but it has no text channel to create an invite in. Add a text channel to the Discord server.";
+  }
+  // Also checked ahead of the permission branch, and for the opposite reason. This row carries a real
+  // 50013, so the generic advice below would match it and be wrong in a way an admin cannot act on:
+  // the bot can already see the server's channels, and it was refused Create Invite in each of the
+  // ones it tried. The fix is a permission on one channel, not server-wide access.
+  if (row.detail?.includes(ALL_CHANNELS_REFUSED_INVITE)) {
+    return "The bot can see this server's channels but every channel it tried refused to create an invite, which is a per-channel permission rather than a server-wide one. Ask a Discord server admin to grant the bot Create Invite in the channel students should land in. The error above names the channels it tried.";
   }
   if (code === null || code === undefined || PERMISSION_ERROR_CODES.has(code)) {
     return "The bot needs permission to view the server's channels before it can create invites, so these students cannot join until a Discord server admin grants it.";
@@ -109,6 +123,21 @@ function StudentList({ rows }: { rows: DiscordMembershipRow[] }) {
  *
  * Renders nothing when there is nothing to act on.
  */
+/** How many distinct error details one alert spells out before summarising the rest. */
+const MAX_DETAILS_SHOWN = 3;
+
+/** The distinct `detail` strings in a group, in first-seen order, capped for readability. */
+function distinctDetails(rows: DiscordMembershipRow[]): string[] {
+  const seen = [...new Set(rows.map((row) => row.detail ?? "an error"))];
+  return seen.slice(0, MAX_DETAILS_SHOWN);
+}
+
+/** How many distinct details were left out of the list above. */
+function extraDetailCount(rows: DiscordMembershipRow[]): number {
+  const total = new Set(rows.map((row) => row.detail ?? "an error")).size;
+  return Math.max(0, total - MAX_DETAILS_SHOWN);
+}
+
 export default function DiscordMembershipStatusAlerts({
   classId,
   /**
@@ -181,11 +210,25 @@ export default function DiscordMembershipStatusAlerts({
           title={`The Discord bot cannot invite ${rows.length} ${rows.length === 1 ? "student" : "students"}`}
         >
           <Text>
-            Discord refused the invite with{" "}
-            <Text as="span" fontFamily="mono">
-              {rows[0].detail ?? "an error"}
-            </Text>
-            . {remediationFor(rows[0])} Until then their Pawtograder roles will not appear in Discord.
+            {/* Every distinct detail in the group, not the first row's. groupByCause keys on the
+                REMEDIATION, and remediationFor collapses a null code, 50001 and 50013 into one
+                sentence -- so a group legitimately holds students whose Discord errors differ. The
+                wrapper's own message even varies per student ("tried N of M visible channels (...)"),
+                so attributing rows[0]'s text to everyone named below is the same conflation the
+                grouping comment above says it exists to prevent, fixed for the advice but not for the
+                evidence. Capped at three: past that the list stops being readable and the remediation
+                is the same for all of them anyway. */}
+            Discord refused the {rows.length === 1 ? "invite" : "invites"} with{" "}
+            {distinctDetails(rows).map((detail, index, all) => (
+              <span key={detail}>
+                <Text as="span" fontFamily="mono">
+                  {detail}
+                </Text>
+                {index < all.length - 1 ? ", " : ""}
+              </span>
+            ))}
+            {extraDetailCount(rows) > 0 ? ` and ${extraDetailCount(rows)} more` : ""}. {remediationFor(rows[0])} Until
+            then their Pawtograder roles will not appear in Discord.
           </Text>
           <StudentList rows={rows} />
         </Alert>

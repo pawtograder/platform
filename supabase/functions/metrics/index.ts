@@ -29,6 +29,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 /** Shape returned by `vacuum_health_check` (not yet on generated `Database` types). */
 type VacuumHealthRow = { check_name: string; severity: string; relname: string };
 
+/**
+ * Shape returned by `get_discord_circuit_breaker_statuses` (not yet on generated `Database` types).
+ *
+ * Exported as its own metric rather than folded into pawtograder_circuit_breaker_open: that gauge is
+ * the GitHub breaker's, the existing alert rules match on its label set, and the two breakers have
+ * completely different remediations — a GitHub App installation versus a Discord server admin.
+ */
+type DiscordCircuitRow = { scope: string; key: string; is_open: boolean; state: string; trip_count: number };
+
 /** Shape returned by `database_ram_metrics` rows. */
 type RamMetricRow = {
   metric_name: string;
@@ -67,6 +76,28 @@ async function generatePrometheusMetrics(): Promise<Response> {
     if (circuitBreakerError) {
       console.error("Error fetching circuit breaker statuses:", circuitBreakerError);
       throw circuitBreakerError;
+    }
+
+    // The Discord breaker is read separately and non-fatally. A scrape must keep reporting queue
+    // depth and the GitHub breakers even if this RPC is missing — which it is on any deployment that
+    // has not yet applied the Discord breaker migration.
+    let discordCircuitBreakers: DiscordCircuitRow[] | null = null;
+    try {
+      // Bounded like vacuum_health_check and database_ram_metrics below. This handler answers a
+      // Prometheus scrape, so an RPC that hangs does not just lose one gauge -- it stalls the whole
+      // response until the scrape times out and every metric in it is lost.
+      const d = await withTimeout(
+        rpcUntyped<DiscordCircuitRow[]>(supabase, "get_discord_circuit_breaker_statuses"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "get_discord_circuit_breaker_statuses"
+      );
+      if (d.error) {
+        console.error("Error fetching Discord circuit breaker statuses:", d.error);
+      } else {
+        discordCircuitBreakers = d.data;
+      }
+    } catch (e) {
+      console.error("Error fetching Discord circuit breaker statuses:", e);
     }
 
     let bottleneckSnapshots: BottleneckLimiterSnapshot[] = [];
@@ -209,6 +240,21 @@ ${queueOldestSeconds
         const isOpen = cb.is_open ? 1 : 0;
         const labels = `scope="${escapeLabel(cb.scope)}",key="${escapeLabel(cb.key)}",state="${escapeLabel(cb.state)}"`;
         output += `pawtograder_circuit_breaker_open{${labels}} ${isOpen} ${timestamp}\n`;
+      }
+    }
+
+    // Discord breaker, as its own gauge. An open one means a guild's work is being deferred, and
+    // because one bot token serves every course, it is also the signal that one misconfigured server
+    // was about to consume the platform's whole Discord rate limit.
+    output += `
+# HELP pawtograder_discord_circuit_breaker_open Whether a Discord per-guild circuit breaker is currently open (1 = open, 0 = closed)
+# TYPE pawtograder_discord_circuit_breaker_open gauge
+`;
+    if (discordCircuitBreakers && discordCircuitBreakers.length > 0) {
+      for (const cb of discordCircuitBreakers) {
+        const isOpen = cb.is_open ? 1 : 0;
+        const labels = `scope="${escapeLabel(cb.scope)}",key="${escapeLabel(cb.key)}",state="${escapeLabel(cb.state)}"`;
+        output += `pawtograder_discord_circuit_breaker_open{${labels}} ${isOpen} ${timestamp}\n`;
       }
     }
 

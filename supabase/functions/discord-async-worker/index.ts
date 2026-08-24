@@ -15,7 +15,7 @@ import type {
   DeleteRoleArgs,
   AddMemberRoleArgs,
   RemoveMemberRoleArgs,
-  AddGuildMemberArgs
+  DeleteInviteArgs
 } from "../_shared/DiscordAsyncTypes.ts";
 import * as discord from "../_shared/DiscordWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
@@ -24,8 +24,10 @@ import {
   isBotPermissionProblem,
   isRateLimitError,
   isResourceGone,
+  parseDiscordApiError,
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
+import { discordApiBase, isDiscordApiMocked } from "../_shared/DiscordApiBase.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
@@ -174,22 +176,48 @@ async function requeueWithDelay(
   console.log(
     `[requeueWithDelay] Requeuing envelope with method=${envelope.method}, retry_count=${newRetryCount}, delay=${delaySeconds}s`
   );
-  const newEnvelope: DiscordAsyncEnvelope = {
-    ...envelope,
-    retry_count: newRetryCount
-  };
+  return await sendReplacement(adminSupabase, { ...envelope, retry_count: newRetryCount }, delaySeconds, scope);
+}
+
+/**
+ * Put a replacement message on the queue WITHOUT charging it a retry.
+ *
+ * For the circuit breaker's deferrals, which are not attempts: no Discord call was made and nothing
+ * about this envelope failed. Spending `retry_count` on them was what dead-lettered work the breaker
+ * was successfully deferring. Deferrals are bounded by their own counter instead -- see
+ * MAX_CIRCUIT_DEFERRALS -- so this is not an unbounded requeue.
+ */
+async function requeueWithoutRetry(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: DiscordAsyncEnvelope,
+  delaySeconds: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
+  console.log(
+    `[requeueWithoutRetry] Requeuing envelope with method=${envelope.method}, retry_count=${envelope.retry_count ?? 0} (unchanged), delay=${delaySeconds}s`
+  );
+  return await sendReplacement(adminSupabase, envelope, delaySeconds, scope);
+}
+
+/** The pgmq write both requeue paths share. Returns whether the replacement is actually on the queue. */
+async function sendReplacement(
+  adminSupabase: SupabaseClient<Database>,
+  newEnvelope: DiscordAsyncEnvelope,
+  delaySeconds: number,
+  scope: Sentry.Scope
+): Promise<boolean> {
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: "discord_async_calls",
     message: newEnvelope as unknown as Json,
     sleep_seconds: delaySeconds
   });
   if (result.error) {
-    console.error(`[requeueWithDelay] Failed to requeue:`, result.error);
+    console.error(`[sendReplacement] Failed to requeue:`, result.error);
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
     return false;
   }
-  console.log(`[requeueWithDelay] Successfully requeued envelope`);
+  console.log(`[sendReplacement] Successfully requeued envelope`);
   return true;
 }
 
@@ -459,17 +487,44 @@ async function recordMembershipStatus(
   }
 }
 
-/** Resolve a Discord snowflake to a Pawtograder user id, which is what the status table keys on. */
+/**
+ * Resolve a Discord snowflake to a Pawtograder user id, which is what the status table keys on.
+ *
+ * Tolerant of duplicates on purpose. `users.discord_id` carries no unique index, and a stale row --
+ * `public.users` has no foreign key to `auth.users` and nothing clears `discord_id` when an identity
+ * is unlinked or an auth user is deleted -- lets one Discord account appear twice. With `.single()`
+ * that returned PGRST116 and this function answered null, which is far worse than it looks: every
+ * `discord_membership_status` write on every add_member_role path is gated on the id, so the student
+ * got no status row at all. They were then invisible on the instructor's roster *and* permanently
+ * re-selected by the reconciler, whose `last_reconciled_at` throttle cannot stamp a row that does not
+ * exist -- one add_member_role every fifteen minutes, forever, per affected student.
+ *
+ * Picking the oldest row is arbitrary but consistent, and it is reported rather than hidden: an
+ * ambiguous mapping is a data-integrity problem for a human, not something the worker can resolve.
+ */
 async function lookupUserIdByDiscordId(
   adminSupabase: SupabaseClient<Database>,
   discordId: string
 ): Promise<string | null> {
-  const { data, error } = await adminSupabase.from("users").select("user_id").eq("discord_id", discordId).single();
-  if (error || !data) {
-    console.warn(`[lookupUserIdByDiscordId] No user found for discord_id=${discordId}`, error);
+  const { data, error } = await adminSupabase
+    .from("users")
+    .select("user_id")
+    .eq("discord_id", discordId)
+    .order("user_id", { ascending: true })
+    .limit(2);
+  if (error) {
+    console.warn(`[lookupUserIdByDiscordId] Lookup failed for discord_id=${discordId}`, error);
     return null;
   }
-  return data.user_id;
+  if (!data || data.length === 0) {
+    console.warn(`[lookupUserIdByDiscordId] No user found for discord_id=${discordId}`);
+    return null;
+  }
+  if (data.length > 1) {
+    console.warn(`[lookupUserIdByDiscordId] discord_id=${discordId} maps to more than one user; using the first`);
+    Sentry.captureMessage(`Discord id ${discordId} is linked to more than one Pawtograder user`, { level: "warning" });
+  }
+  return data[0].user_id;
 }
 
 /**
@@ -540,10 +595,537 @@ function reportTerminalFailure(
 }
 
 // ============================================================================
+// Per-guild circuit breaker
+// ============================================================================
+
+/*
+ * Why the breaker is keyed on the guild, and why it matters more here than the org breaker does in
+ * github-async-worker.
+ *
+ * The GitHub worker authenticates as a per-org installation, so an org with a broken installation
+ * exhausts its own rate limit and nobody else's. Discord is the opposite: ONE bot token serves every
+ * course on the platform, and Discord's 50-requests-per-second primary limit is charged against that
+ * token, not against the guild. A single misconfigured guild -- bot removed, channel-view permission
+ * revoked, stale discord_server_id -- therefore turns every enrolled student into a 403/50001 and
+ * spends the whole platform's Discord budget rediscovering the same fact. 557 of the 594 dead-letter
+ * rows on 2026-08-11 were exactly that: one guild's 403, once per enrolled student.
+ *
+ * So a storm of permission errors from one guild parks that guild, and every other course keeps its
+ * share of the shared token.
+ */
+
+/** The only breaker scope in use. Matches the `scope` column written by open_discord_circuit. */
+const DISCORD_CIRCUIT_SCOPE_GUILD = "guild";
+
+/**
+ * The methods the breaker governs, both for gating and for accounting.
+ *
+ * The breaker exists to stop PER-ENROLLMENT fan-out against a bot token every course shares: one
+ * misconfigured guild turning into one failed request per enrolled student. Only role and channel
+ * work has that shape, and it is the only work parking a guild actually protects.
+ *
+ * `send_message` and `update_message` are deliberately absent, and this is not a detail. They are
+ * per-EVENT -- one help request, one regrade, one discussion reply -- so they are never the stampede.
+ * Governing them meant two separate wrong outcomes:
+ *
+ *   - Gating. A role-hierarchy 50013, which is the failure the whole install-check panel exists to
+ *     diagnose, tripped the guild breaker and then parked every notification for that class behind
+ *     it. After MAX_CIRCUIT_DEFERRALS windows those envelopes DEAD-LETTER, so a student's help
+ *     request silently never reaches Discord because of an unrelated role-position problem in the
+ *     server settings. Nothing in the product reports that.
+ *   - Accounting. A single channel-level overwrite denying Send Messages in one channel produced
+ *     50013s that counted toward the guild's threshold, so one locked-down channel could park the
+ *     class's role and invite work -- blaming a guild for a channel's configuration.
+ *
+ * `delete_invite` is absent too, and for a third reason: it is the only method whose whole purpose is
+ * a guild the class has LEFT. The breaker is keyed on the guild with no class, so the guild an
+ * outstanding invite points into is very often the one whose misconfiguration got the class
+ * disconnected in the first place -- exactly the breaker that would be open. Gating would then park
+ * the revocation for up to MAX_CIRCUIT_DEFERRALS six-hour windows, which is longer than the invite's
+ * own seven-day life, and the invite stays live in a server another course can already have claimed.
+ * The breaker protects a shared token from per-enrollment fan-out; a revocation is bounded by the
+ * number of invites that were outstanding at teardown, it is issued once, and there is no repeat
+ * enqueue behind it. Accounting is skipped for the same reason and for the one resolveGuildId spells
+ * out: a 403 from a guild this class no longer owns says nothing about the course that owns it now,
+ * and counting it would park that course's work for a predecessor's failure.
+ *
+ * This is the same separation github-async-worker gets from its `org_method` breaker scope, kept as
+ * one scope here because one method set is the whole of the fan-out; see the note on
+ * noteGuildPermissionFailure.
+ */
+const CIRCUIT_GATED_METHODS: ReadonlySet<string> = new Set([
+  "create_role",
+  "delete_role",
+  "add_member_role",
+  "remove_member_role",
+  "create_channel",
+  "delete_channel"
+]);
+
+/** Floor delay applied to an envelope deferred by an open breaker, matching the GitHub worker. */
+const CIRCUIT_OPEN_REQUEUE_SECONDS = 180;
+
+/**
+ * Ceiling on a single circuit deferral, matching the six-hour cap open_discord_circuit escalates to.
+ * A deferral is meant to end when the breaker's window ends, so anything longer than the longest
+ * window the breaker can set would be a stale `open_until` rather than a real wait.
+ */
+const CIRCUIT_MAX_REQUEUE_SECONDS = 21600;
+
+/**
+ * How many times an envelope may be deferred by an open breaker before it is dead-lettered.
+ *
+ * Counted separately from `retry_count` on purpose. A deferral is not a failed attempt -- no Discord
+ * call was made and nothing went wrong with this message -- and sharing the ordinary retry budget
+ * meant a guild parked for the breaker's own 30-minute window burned all five retries in 15 minutes
+ * and dead-lettered work the breaker was successfully protecting. Ten breaker windows is days of
+ * patience at the six-hour cap, and still a bound: a guild nobody ever fixes ends up as DLQ evidence
+ * rather than an envelope circulating forever.
+ */
+const MAX_CIRCUIT_DEFERRALS = 10;
+
+/**
+ * An envelope carrying the circuit-deferral counter.
+ *
+ * Declared here rather than on DiscordAsyncEnvelope because only this worker writes or reads it: it
+ * is set when the worker requeues its own message and is absent from every enqueue the rest of the
+ * platform performs.
+ */
+type CircuitDeferrableEnvelope = DiscordAsyncEnvelope & { circuit_deferrals?: number };
+
+/**
+ * Spread over which deferred envelopes are woken, in seconds.
+ *
+ * Every envelope parked on one guild computes its wake time from the SAME `open_until`, so without a
+ * spread a class's whole roster becomes due in the same second -- hundreds of envelopes hitting the
+ * 50-requests-per-second token every course shares, at the exact moment the guild is least likely to
+ * be fixed. That is the stampede the breaker was built to prevent, moved from the failure to the
+ * recovery. Sixty seconds is wide enough to flatten a 300-student roster below the primary limit and
+ * short enough to stay inside one breaker window.
+ */
+const CIRCUIT_DEFERRAL_JITTER_SECONDS = 60;
+
+/** How long to park an envelope whose guild is open, given the breaker's own deadline. */
+function circuitDeferralSeconds(openUntil: string | null | undefined): number {
+  // Jitter is applied to the floor as well as to the deadline: an envelope with no `open_until` to
+  // aim at is one of a set that all fall back to the same floor, which is the same collision.
+  const jitter = Math.floor(Math.random() * CIRCUIT_DEFERRAL_JITTER_SECONDS);
+  if (!openUntil) return CIRCUIT_OPEN_REQUEUE_SECONDS + jitter;
+  const remainingMs = new Date(openUntil).getTime() - Date.now();
+  if (!Number.isFinite(remainingMs)) return CIRCUIT_OPEN_REQUEUE_SECONDS + jitter;
+  // A few seconds past the deadline, so the envelope does not come back to a breaker that is still
+  // open by a rounding error and spend a deferral on it.
+  const untilOpenEnds = Math.ceil(remainingMs / 1000) + 5 + jitter;
+  return Math.min(CIRCUIT_MAX_REQUEUE_SECONDS, Math.max(CIRCUIT_OPEN_REQUEUE_SECONDS, untilOpenEnds));
+}
+
+/** Window and count that define "a storm" rather than one misconfigured channel. */
+const PERMISSION_ERROR_WINDOW_MINUTES = 5;
+const PERMISSION_ERROR_TRIP_THRESHOLD = 10;
+
+/** How long a tripped guild is parked. Escalated further by open_discord_circuit on repeat trips. */
+const CIRCUIT_OPEN_SECONDS = 1800;
+
+type UntypedRpcResult<T> = { data: T | null; error: { message: string } | null };
+
+/**
+ * Call an RPC that is not in the generated `Database` type yet.
+ *
+ * The circuit-breaker RPCs arrive in the same change as this code, and SupabaseTypes.d.ts is
+ * regenerated from the database rather than from the migration, so it does not know them until a
+ * `npm run client-local` after this migration is applied. Same escape hatch the metrics function
+ * uses for vacuum_health_check, kept in one place instead of an `as never` per call site.
+ */
+function untypedRpc<T>(
+  adminSupabase: SupabaseClient<Database>,
+  fn: string,
+  args: Record<string, unknown>
+): Promise<UntypedRpcResult<T>> {
+  const client = adminSupabase.schema("public") as unknown as {
+    rpc: (name: string, params: Record<string, unknown>) => Promise<UntypedRpcResult<T>>;
+  };
+  return client.rpc(fn, args);
+}
+
+/**
+ * Cache of class -> guild, for the methods whose args do not name a guild.
+ *
+ * send_message and update_message carry only a channel_id, so the guild has to come from the class.
+ * Without a cache that is one extra round trip per message envelope on the hot path -- every help
+ * request, every regrade, every discussion notification -- purely to consult a breaker that is
+ * closed 99.9% of the time. One minute of staleness only affects which key a breaker is read under,
+ * and a class that changes its Discord server has its queued work dropped by the per-handler
+ * guild checks anyway.
+ */
+const GUILD_BY_CLASS_TTL_MS = 60_000;
+const guildByClass = new Map<number, { guildId: string | null; cachedAt: number }>();
+
+/**
+ * Whether the class is still on `guildId`.
+ *
+ * The precondition every mutating handler needs and three of them had already grown their own copy
+ * of. A queued envelope names the guild it was built for, and a move, a disconnect or an archive can
+ * commit between the enqueue and the call -- after which applying it writes into a server this class
+ * no longer controls, and which the uniqueness index has already freed for another course to claim.
+ *
+ * Throws on a read failure rather than answering false: "we could not tell" must not be turned into
+ * "drop this work", which would silently discard a student's notification on a database blip. The
+ * callers are inside processEnvelope's try, so a throw takes the ordinary retry path.
+ */
+async function classStillOnGuild(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  guildId: string
+): Promise<{ current: boolean; actual: string | null }> {
+  const { data, error } = await adminSupabase
+    .from("classes")
+    .select("discord_server_id")
+    .eq("id", classId)
+    .maybeSingle();
+  if (error) {
+    throw error;
+  }
+  const actual = data?.discord_server_id ?? null;
+  return { current: actual === guildId, actual };
+}
+
+/**
+ * Whether `channelId` is still one of the channels this class tracks.
+ *
+ * Narrow on purpose: it answers only for channels the WORKER created and recorded. It is used to
+ * decide which guild an envelope should be attributed to for breaker accounting, where a wrong answer
+ * blames one guild for another's failures, so "I do not know" has to be distinguishable.
+ *
+ * Returns null when the answer could not be read.
+ */
+async function channelStillTrackedForClass(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  channelId: string
+): Promise<boolean | null> {
+  const { data, error } = await adminSupabase
+    .from("discord_channels")
+    .select("id")
+    .eq("class_id", classId)
+    .eq("discord_channel_id", channelId)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[channelStillTrackedForClass] Could not verify channel ${channelId}:`, error);
+    return null;
+  }
+  return data !== null;
+}
+
+/**
+ * Whether a channel-scoped message envelope is still safe to deliver.
+ *
+ * send_message and update_message carry no guild, only a channel id, and that id comes from one of TWO
+ * places -- which is why this cannot simply be "is it in discord_channels":
+ *
+ *   - `discord_channels`, for the channels the worker created (office hours, regrades, scheduling,
+ *     operations). clear_discord_tracking_for_class deletes these on a move, disconnect or archive.
+ *   - `discussion_topics.discord_channel_id`, which an instructor TYPES IN on the discussion-topics
+ *     settings page. Nothing tracks or clears it, so a discussion notification's channel is routinely
+ *     absent from discord_channels. Dropping on tracked-ness alone would silently stop every
+ *     discussion notification on the platform.
+ *
+ * So the guard is the class's CURRENT SERVER first. That is the condition that actually matters: a
+ * disconnect or an archive nulls discord_server_id and the guild becomes claimable by another course
+ * immediately, so delivering afterwards can post a student's help request or discussion reply into a
+ * server this course does not control. The window is not a few seconds -- an envelope parked by the
+ * circuit breaker can wake up to six hours later.
+ *
+ * A channel referenced by neither table is dropped as well: it belongs to a guild the class has left.
+ * A move is only partly covered, because an instructor-typed discussion channel id survives one --
+ * that is the same unvalidated-free-text problem the guild claim flow replaced for discord_server_id,
+ * and it needs its own fix rather than a silent drop here.
+ *
+ * `null` means the answer could not be read, and callers proceed: swallowing a notification on a
+ * database blip would be the worse error.
+ */
+async function messageEnvelopeStillDeliverable(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  channelId: string
+): Promise<boolean | null> {
+  const { data: classRow, error: classError } = await adminSupabase
+    .from("classes")
+    .select("discord_server_id")
+    .eq("id", classId)
+    .maybeSingle();
+  if (classError) {
+    console.warn(`[messageEnvelopeStillDeliverable] Could not read class ${classId}:`, classError);
+    return null;
+  }
+  // No server at all: disconnected or archived, and the guild is already claimable by somebody else.
+  if (!classRow?.discord_server_id) return false;
+
+  const tracked = await channelStillTrackedForClass(adminSupabase, classId, channelId);
+  if (tracked === null) return null;
+  if (tracked) return true;
+
+  // Not a worker-created channel, so it may be an instructor-configured discussion topic channel.
+  const { data: topic, error: topicError } = await adminSupabase
+    .from("discussion_topics")
+    .select("id")
+    .eq("class_id", classId)
+    .eq("discord_channel_id", channelId)
+    .maybeSingle();
+  if (topicError) {
+    console.warn(
+      `[messageEnvelopeStillDeliverable] Could not read discussion topics for class ${classId}:`,
+      topicError
+    );
+    return null;
+  }
+  return topic !== null;
+}
+
+/** The guild an envelope's work lands in, or undefined when it is not guild-scoped. */
+async function resolveGuildId(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: DiscordAsyncEnvelope
+): Promise<string | undefined> {
+  // register_commands is application-global and batch_role_sync spans every guild, so neither is
+  // gated: parking them on one guild's behalf would stop the sweep that serves all the others.
+  if (envelope.method === "register_commands" || envelope.method === "batch_role_sync") return undefined;
+
+  const args = envelope.args as { guild_id?: string; channel_id?: string };
+  if (typeof args?.guild_id === "string" && args.guild_id !== "") return args.guild_id;
+
+  if (!envelope.class_id) return undefined;
+
+  // A channel-scoped envelope with no guild_id of its own cannot be attributed to the class's
+  // *current* guild without checking that the channel still belongs to it.
+  //
+  // The case that matters: a class moves from guild A to guild B while send_message /
+  // update_message envelopes for A's channels are still queued. Those envelopes carry only a
+  // channel_id, so resolving through class_id would hand them B's guild id -- and then ten stale
+  // 403s from A would open B's breaker and park the fresh role and channel work for the server the
+  // course just moved to. Blaming a guild for another guild's failures is worse than not gating
+  // these envelopes at all.
+  //
+  // clear_discord_roles_on_server_change deletes discord_channels on a move, so a channel that is
+  // still tracked for this class is one in the class's present guild, and a stale one has no row.
+  if (typeof args?.channel_id === "string" && args.channel_id !== "") {
+    const tracked = await channelStillTrackedForClass(adminSupabase, envelope.class_id, args.channel_id);
+    if (tracked !== true) {
+      console.log(
+        `[resolveGuildId] Channel ${args.channel_id} is not tracked for class ${envelope.class_id} (or could not be read); not attributing this envelope to the class's current guild`
+      );
+      return undefined;
+    }
+  }
+
+  const cached = guildByClass.get(envelope.class_id);
+  if (cached && Date.now() - cached.cachedAt < GUILD_BY_CLASS_TTL_MS) {
+    return cached.guildId ?? undefined;
+  }
+
+  const { data, error } = await adminSupabase
+    .from("classes")
+    .select("discord_server_id")
+    .eq("id", envelope.class_id)
+    .maybeSingle();
+  if (error) {
+    // Not fatal, and deliberately not cached: an unreadable class means the breaker cannot be
+    // consulted for this envelope, which is strictly better than failing the operation over it.
+    console.warn(`[resolveGuildId] Could not resolve guild for class ${envelope.class_id}:`, error);
+    return undefined;
+  }
+
+  const guildId = data?.discord_server_id ?? null;
+  guildByClass.set(envelope.class_id, { guildId, cachedAt: Date.now() });
+  return guildId ?? undefined;
+}
+
+/** Whether this guild is currently parked. */
+async function isGuildCircuitOpen(
+  adminSupabase: SupabaseClient<Database>,
+  guildId: string,
+  scope: Sentry.Scope
+): Promise<{ open: boolean; reason?: string; openUntil?: string | null }> {
+  const { data, error } = await untypedRpc<Array<{ state?: string; open_until?: string | null }>>(
+    adminSupabase,
+    "get_discord_circuit",
+    { p_scope: DISCORD_CIRCUIT_SCOPE_GUILD, p_key: guildId }
+  );
+  if (error) {
+    // Fail open. A breaker that cannot be read must not become a breaker that blocks everything.
+    console.warn(`[isGuildCircuitOpen] Could not read circuit for guild ${guildId}: ${error.message}`);
+    Sentry.addBreadcrumb({ message: `Discord circuit read failed for guild ${guildId}`, level: "warning" });
+    return { open: false };
+  }
+  const row = Array.isArray(data) && data.length > 0 ? data[0] : undefined;
+  if (!row || row.state !== "open") return { open: false };
+  if (row.open_until && new Date(row.open_until) <= new Date()) return { open: false };
+  scope.setTag("circuit_open_until", row.open_until ?? "indefinite");
+  return {
+    open: true,
+    reason: row.open_until ? `open until ${row.open_until}` : "open",
+    openUntil: row.open_until ?? null
+  };
+}
+
+/**
+ * Whether a failure says the bot cannot act in this guild at all, which is what the breaker is for.
+ *
+ * Wider than isBotPermissionProblem() by exactly one case: 10004 Unknown Guild. Discord returns it
+ * as a 404, so the classifier -- which keys on 50001, 50013, the empty-guild message and HTTP 403 --
+ * excludes it, while TERMINAL_DISCORD_ERROR_CODES includes it. The combination was the worst of
+ * both: every envelope for a guild the bot has been removed from (or that has been deleted, or whose
+ * discord_server_id was always wrong) dead-lettered immediately and counted toward nothing, so a
+ * role sync for a 200-student course spent 200 requests of the shared bot token and wrote 200
+ * dead-letter rows without ever tripping the breaker built to stop exactly that.
+ *
+ * Deliberately local rather than a change to isBotPermissionProblem(). That predicate has callers
+ * that word the *reason shown to an instructor* -- the cannot_invite detail below, and the
+ * remediation text -- where "the bot lacks a permission in your server" and "Discord has no server
+ * with this ID" are different sentences pointing at different fixes, and widening it would collapse
+ * them. "The bot cannot act in this guild" is a superset of "the bot lacks a permission", so the
+ * superset lives here, at the one call site that wants it.
+ *
+ * On whether the guild breaker is the right lever for a guild that no longer exists: the breaker's
+ * job is to stop the per-enrollment stampede against a token every course shares, not to wait for a
+ * permission to be restored. A guild that is gone never gets fixed, so it re-trips and escalates to
+ * open_discord_circuit's six-hour cap -- which is the correct end state, not a wasted wait: it turns
+ * 200 doomed requests per sync into ten per six hours, and the cannot_invite rows and the
+ * PawtograderDiscordCircuitBreakerOpen alert are what actually route a human at it. Unlinking the
+ * class from the dead guild is a destructive action that belongs to the instructor-facing disconnect
+ * flow, not to an error path in a queue worker.
+ */
+function isGuildUnusableFailure(error: unknown): boolean {
+  if (isBotPermissionProblem(error)) return true;
+  const { code } = parseDiscordApiError(error);
+  if (code === DISCORD_UNKNOWN_GUILD) return true;
+  // 10011 Unknown Role and 10003 Unknown Channel, which reach here only from the gated methods and
+  // only when the tracked snowflake no longer exists in the guild. They are not permission problems,
+  // but they have the shape the breaker is for and nothing else was bounding them: a class whose
+  // Student role was deleted in Discord produces one 10011 per enrolled student per hourly sync, each
+  // dead-lettered on arrival, for as long as the stale discord_roles row survives -- and that row
+  // survives until somebody re-syncs, because its existence is what stops a replacement being made.
+  // Counting them turns a 300-request sweep into ten per window. `stale_class_role_ids` and
+  // `missing_tracked_channel_ids` from discord-check-bot-installation are what actually name the fix.
+  return code === 10011 || code === 10003;
+}
+
+/**
+ * Count one bot-permission failure against a guild, and park the guild if they are a storm.
+ *
+ * Only permission and configuration failures are counted, via the shared classifier: a 429 is
+ * handled by the existing backoff and a 404 on one member says nothing about the guild. Counting
+ * everything would park a healthy guild for one student's deleted account.
+ *
+ * Cannot throw, for the same reason isGuildCircuitOpen fails open. Both call sites are error paths:
+ * one is the outer catch of processEnvelope, where a rejection here would escape the catch entirely
+ * and leave the message unarchived with no requeue and no dead-letter row, and the other is the
+ * cannot_invite branch, where it would replace a recorded terminal failure with a bookkeeping error
+ * that then gets classified retriable. Losing a breaker sample is the cheaper failure.
+ */
+async function noteGuildPermissionFailure(
+  adminSupabase: SupabaseClient<Database>,
+  guildId: string,
+  method: string,
+  error: unknown,
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    await recordGuildPermissionFailure(adminSupabase, guildId, method, error, scope);
+  } catch (bookkeepingError) {
+    // Breadcrumb rather than an event: this is attached to whatever the original failure captures,
+    // and on its own it is not worth an issue of its own.
+    console.warn(`[noteGuildPermissionFailure] Breaker accounting failed for guild ${guildId}:`, bookkeepingError);
+    Sentry.addBreadcrumb({
+      message: `Discord breaker accounting failed for guild ${guildId}: ${
+        bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError)
+      }`,
+      level: "warning"
+    });
+  }
+}
+
+async function recordGuildPermissionFailure(
+  adminSupabase: SupabaseClient<Database>,
+  guildId: string,
+  method: string,
+  error: unknown,
+  scope: Sentry.Scope
+): Promise<void> {
+  const classification = classifyDiscordError(error);
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  const recorded = await untypedRpc<null>(adminSupabase, "record_discord_async_error", {
+    p_guild_id: guildId,
+    p_method: method,
+    p_error_data: {
+      method,
+      error_message: errorMessage,
+      error_type: error instanceof Error ? error.constructor.name : "Unknown",
+      http_status: classification.httpStatus ?? null,
+      discord_error_code: classification.code ?? null
+    }
+  });
+  if (recorded.error) {
+    // Reported and swallowed: losing a breaker sample must not change the outcome of the operation
+    // that produced it.
+    console.warn(`[noteGuildPermissionFailure] Could not record error for guild ${guildId}: ${recorded.error.message}`);
+    return;
+  }
+
+  const counted = await untypedRpc<number>(adminSupabase, "check_discord_error_threshold", {
+    p_guild_id: guildId,
+    p_window_minutes: PERMISSION_ERROR_WINDOW_MINUTES
+  });
+  if (counted.error) {
+    console.warn(`[noteGuildPermissionFailure] Could not count errors for guild ${guildId}: ${counted.error.message}`);
+    return;
+  }
+
+  const errorCount = typeof counted.data === "number" ? counted.data : 0;
+  if (errorCount < PERMISSION_ERROR_TRIP_THRESHOLD) return;
+
+  const opened = await untypedRpc<number>(adminSupabase, "open_discord_circuit", {
+    p_scope: DISCORD_CIRCUIT_SCOPE_GUILD,
+    p_key: guildId,
+    p_event: "permission_storm",
+    p_retry_after_seconds: CIRCUIT_OPEN_SECONDS,
+    p_reason:
+      `${errorCount} Discord permission errors in ${PERMISSION_ERROR_WINDOW_MINUTES} minutes ` +
+      `(latest: ${method} -> ${classification.reason ?? errorMessage})`
+  });
+  if (opened.error) {
+    console.error(`[noteGuildPermissionFailure] Could not open circuit for guild ${guildId}: ${opened.error.message}`);
+    Sentry.captureMessage(`Failed to open Discord circuit for guild ${guildId}`, { level: "error" });
+    return;
+  }
+
+  const tripCount = typeof opened.data === "number" ? opened.data : 0;
+  const tripScope = scope.clone();
+  tripScope.setTag("circuit_breaker_reason", "permission_storm");
+  tripScope.setTag("guild_id", guildId);
+  tripScope.setContext("discord_circuit_trip", {
+    guild_id: guildId,
+    method,
+    error_count: errorCount,
+    window_minutes: PERMISSION_ERROR_WINDOW_MINUTES,
+    open_seconds: CIRCUIT_OPEN_SECONDS,
+    trip_count: tripCount,
+    latest_error: errorMessage
+  });
+  // One issue per guild, however many envelopes hit the threshold at once.
+  tripScope.setFingerprint(["discord-circuit-open", guildId]);
+  tripScope.setLevel("error");
+  Sentry.captureMessage(
+    `Discord circuit breaker open for guild ${guildId}: ${errorCount} permission errors in ` +
+      `${PERMISSION_ERROR_WINDOW_MINUTES} minutes. A Discord server admin needs to restore the bot's access.`,
+    tripScope
+  );
+}
+
+// ============================================================================
 // Slash Command Registration
 // ============================================================================
 
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 /** Deadline for the raw membership-check fetch, matching DiscordWrapper's own fetch timeout. */
 const MEMBERSHIP_CHECK_TIMEOUT_MS = 10000;
 
@@ -603,7 +1185,7 @@ async function registerSlashCommands(scope: Sentry.Scope): Promise<CommandResult
 
   for (const command of SLASH_COMMANDS) {
     try {
-      const response = await fetch(`${DISCORD_API_BASE}/applications/${applicationId}/commands`, {
+      const response = await fetch(`${discordApiBase()}/applications/${applicationId}/commands`, {
         method: "POST",
         headers: {
           Authorization: `Bot ${botToken}`,
@@ -689,7 +1271,7 @@ async function checkGuildMembership(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MEMBERSHIP_CHECK_TIMEOUT_MS);
   try {
-    const response = await fetch(`${DISCORD_API_BASE}/guilds/${guildId}/members/${discordUserId}`, {
+    const response = await fetch(`${discordApiBase()}/guilds/${guildId}/members/${discordUserId}`, {
       method: "GET",
       headers: { Authorization: `Bot ${botToken}` },
       signal: controller.signal
@@ -953,6 +1535,7 @@ async function processBatchRoleSync(
     not_in_guild: 0,
     invite_created: 0,
     cannot_invite: 0,
+    circuit_deferred: 0,
     errors: 0
   };
 
@@ -969,11 +1552,41 @@ async function processBatchRoleSync(
   // Guilds whose invite creation has already failed this run, so the failure costs one call, not one
   // call per enrolled student.
   const guildInviteFailures = new Map<string, { code?: number; reason: string }>();
+  // Guilds the circuit breaker has parked, read once per guild per run.
+  //
+  // Without this the breaker only ever deferred work it had ALREADY been handed, and nothing stopped
+  // more from arriving: this sweep runs hourly and enqueues one add_member_role per unsynced student,
+  // so a parked guild accumulated a fresh roster every hour. Each new envelope starts at
+  // circuit_deferrals = 0, so they pile up rather than being rejected, every one of them wakes at the
+  // window boundary, and the oldest eventually exhaust MAX_CIRCUIT_DEFERRALS and dead-letter -- which
+  // is the per-enrollment dead-letter flood the breaker was built to prevent, arriving a day late.
+  // Skipping the enqueue is what makes the deferral actually stem the work.
+  const openCircuitGuilds = new Map<string, boolean>();
   // Consecutive membership checks that told us nothing. Distinguishes one bad request from an
   // outage; see the `unknown` branch below.
   let consecutiveUnknown = 0;
 
   for (const record of records) {
+    // The breaker is consulted here as well as in processEnvelope, because the two answer different
+    // questions: there it decides what to do with an envelope that already exists, here it decides
+    // whether to create one. A parked guild gets neither a membership lookup nor an enqueue -- the
+    // whole point of parking it is that no request should be spent on it -- and the students are
+    // picked up by the next sweep after the window closes, or by the reconciler, which already
+    // filters on the same breaker.
+    if (!openCircuitGuilds.has(record.discord_server_id)) {
+      const circuit = await isGuildCircuitOpen(adminSupabase, record.discord_server_id, scope);
+      openCircuitGuilds.set(record.discord_server_id, circuit.open);
+      if (circuit.open) {
+        console.log(
+          `[processBatchRoleSync] Circuit open for guild ${record.discord_server_id}; skipping its records this run (${circuit.reason ?? "open"})`
+        );
+      }
+    }
+    if (openCircuitGuilds.get(record.discord_server_id)) {
+      summary.circuit_deferred++;
+      continue;
+    }
+
     const cacheKey = `${record.discord_server_id}:${record.discord_id}`;
     const knownForbidden = forbiddenGuilds.get(record.discord_server_id);
     const knownUnknownGuild = unknownGuilds.has(record.discord_server_id);
@@ -1227,6 +1840,80 @@ export async function processEnvelope(
   if (envelope.class_id) scope.setTag("class_id", String(envelope.class_id));
   if (envelope.debug_id) scope.setTag("debug_id", envelope.debug_id);
 
+  // Which guild this envelope's work lands in, resolved once and reused by the breaker check here
+  // and by the failure accounting in the catch below. Guarded because it runs BEFORE the main
+  // try/catch: a database blip resolving the guild must not escape processEnvelope, which would skip
+  // the requeue/dead-letter machinery entirely and leave the message to reappear on every visibility
+  // timeout with nothing recorded.
+  let guildId: string | undefined;
+  try {
+    guildId = await resolveGuildId(adminSupabase, envelope);
+  } catch (e) {
+    console.warn(`[processEnvelope] Could not resolve guild for msg ${meta.msg_id}:`, e);
+  }
+  if (guildId) scope.setTag("guild_id", guildId);
+
+  // Circuit breaker. A parked guild's role and channel work is deferred before any Discord call is
+  // made, which is the whole point: the shared bot token's rate limit is what a permission storm
+  // actually consumes.
+  //
+  // Restricted to CIRCUIT_GATED_METHODS. Notifications are per-event rather than per-enrollment, so
+  // they are never the fan-out this protects against -- and parking them meant an unrelated
+  // role-hierarchy 50013 dead-lettered a student's help request after MAX_CIRCUIT_DEFERRALS windows.
+  if (guildId && CIRCUIT_GATED_METHODS.has(envelope.method)) {
+    try {
+      const circuit = await isGuildCircuitOpen(adminSupabase, guildId, scope);
+      if (circuit.open) {
+        scope.setTag("circuit_state", "open");
+        scope.setTag("circuit_scope", DISCORD_CIRCUIT_SCOPE_GUILD);
+        const deferrals = (envelope as CircuitDeferrableEnvelope).circuit_deferrals ?? 0;
+        scope.setTag("circuit_deferrals", String(deferrals));
+
+        // Deferrals have their own budget, not `retry_count`'s. The breaker parks a guild for 30
+        // minutes and escalates to six hours, while five requeues at the 180s floor is fifteen
+        // minutes -- so charging deferrals to the retry budget dead-lettered work while the breaker
+        // was doing exactly what it was built to do. What ends an envelope now is the breaker still
+        // being open after MAX_CIRCUIT_DEFERRALS full windows, which means nobody is coming to fix
+        // the server and the DLQ row is the honest outcome.
+        if (deferrals >= MAX_CIRCUIT_DEFERRALS) {
+          const error = new Error(
+            `Discord circuit breaker open for guild ${guildId} after ${deferrals} deferrals (${circuit.reason ?? "open"})`
+          );
+          console.log(`[processEnvelope] ${error.message}; dead-lettering msg ${meta.msg_id}`);
+          if (await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope)) {
+            if (!(await archiveMessage(adminSupabase, meta.msg_id, scope))) {
+              await deleteMessage(adminSupabase, meta.msg_id, scope);
+            }
+          } else {
+            console.error(`[processEnvelope] Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
+            scope.setContext("dlq_archive_skipped", { msg_id: meta.msg_id, reason: "DLQ send failed" });
+            Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, { level: "error" });
+          }
+          return false;
+        }
+
+        // Parked until the breaker's own deadline rather than a fixed 180s: waking earlier only
+        // reads a still-open breaker and spends another deferral, and the floor still applies when
+        // `open_until` is missing or nearly past.
+        const delaySeconds = circuitDeferralSeconds(circuit.openUntil);
+        console.log(
+          `[processEnvelope] Circuit open for guild ${guildId}; requeuing msg ${meta.msg_id} in ${delaySeconds}s (deferral ${deferrals + 1}/${MAX_CIRCUIT_DEFERRALS})`
+        );
+        // retry_count is deliberately carried through unchanged; only the deferral count moves.
+        const deferred: CircuitDeferrableEnvelope = { ...envelope, circuit_deferrals: deferrals + 1 };
+        // Archived only once the replacement is stored, as everywhere else in this worker.
+        if (await requeueWithoutRetry(adminSupabase, deferred, delaySeconds, scope)) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope);
+        }
+        return false;
+      }
+    } catch (e) {
+      // A breaker that cannot be consulted must not stop work: continue as though it were closed.
+      console.warn(`[processEnvelope] Circuit breaker check failed for guild ${guildId}:`, e);
+      Sentry.captureException(e, scope);
+    }
+  }
+
   try {
     switch (envelope.method) {
       case "send_message": {
@@ -1234,6 +1921,23 @@ export async function processEnvelope(
         console.log(`[processEnvelope] Processing send_message to channel ${args.channel_id}`);
         console.log(`[processEnvelope] Message content:`, args.content?.substring(0, 100));
         Sentry.addBreadcrumb({ message: `Sending Discord message to channel ${args.channel_id}`, level: "info" });
+
+        // Superseded envelopes are dropped before any Discord call, as create_channel, create_role and
+        // add_member_role already do. This method carries no guild, only a channel, so the check is
+        // "does the class still use the server this channel belongs to" -- see
+        // messageEnvelopeStillDeliverable, which has to consider both channel sources.
+        //
+        // Only dropped on a definite `false`. `null` means the lookup itself failed, and swallowing a
+        // notification on a database blip would be the worse error.
+        if (envelope.class_id && args.channel_id) {
+          const deliverable = await messageEnvelopeStillDeliverable(adminSupabase, envelope.class_id, args.channel_id);
+          if (deliverable === false) {
+            console.log(
+              `[processEnvelope] Dropping send_message for channel ${args.channel_id}; class ${envelope.class_id} no longer uses the server it belongs to`
+            );
+            return true;
+          }
+        }
 
         // Check if a message already exists for this resource (handles race conditions)
         // If so, convert to an update operation instead of creating a duplicate
@@ -1550,6 +2254,23 @@ export async function processEnvelope(
           level: "info"
         });
 
+        // Superseded envelopes are dropped before any Discord call, as create_channel, create_role and
+        // add_member_role already do. This method carries no guild, only a channel, so the check is
+        // "does the class still use the server this channel belongs to" -- see
+        // messageEnvelopeStillDeliverable, which has to consider both channel sources.
+        //
+        // Only dropped on a definite `false`. `null` means the lookup itself failed, and swallowing a
+        // notification on a database blip would be the worse error.
+        if (envelope.class_id && args.channel_id) {
+          const deliverable = await messageEnvelopeStillDeliverable(adminSupabase, envelope.class_id, args.channel_id);
+          if (deliverable === false) {
+            console.log(
+              `[processEnvelope] Dropping update_message for channel ${args.channel_id}; class ${envelope.class_id} no longer uses the server it belongs to`
+            );
+            return true;
+          }
+        }
+
         // Look up resource info from discord_messages table if not in envelope
         let resourceType = envelope.resource_type;
         let resourceId = envelope.resource_id;
@@ -1654,6 +2375,28 @@ export async function processEnvelope(
           level: "info"
         });
 
+        // Superseded envelopes are dropped before any Discord call, the same check create_role and
+        // add_member_role already make. trigger_discord_create_roles_on_server_connect enqueues the
+        // #scheduling and #operations channels the moment a server is connected, so a class that is
+        // moved -- or disconnected, or archived, both of which null discord_server_id -- while those
+        // envelopes are queued had them create channels in the guild it left. That guild may already
+        // belong to another course: the uniqueness index only covers unarchived classes, so archiving
+        // releases the server immediately and a channel named after this course could appear in
+        // somebody else's server. Nothing local would even record it -- the tracking insert below
+        // would write a discord_channels row for a channel in a guild the class no longer has.
+        //
+        // Returning true, not throwing: a superseded envelope is stale work, not a failure, so it is
+        // archived without a retry and without a dead-letter row.
+        if (envelope.class_id) {
+          const onGuild = await classStillOnGuild(adminSupabase, envelope.class_id, args.guild_id);
+          if (!onGuild.current) {
+            console.log(
+              `[processEnvelope] Dropping create_channel ${args.name} for guild ${args.guild_id}; class ${envelope.class_id} now uses ${onGuild.actual ?? "no server"}`
+            );
+            return true;
+          }
+        }
+
         const result = await discord.createChannel(args, scope);
         console.log(`[processEnvelope] Successfully created channel, id=${result.id}`);
 
@@ -1678,13 +2421,56 @@ export async function processEnvelope(
               `[processEnvelope] Storing channel tracking: class_id=${envelope.class_id}, channel_type=${envelope.channel_type}, resource_id=${envelope.resource_id ?? "null"}`
             );
             try {
-              await adminSupabase.from("discord_channels").insert({
-                class_id: envelope.class_id,
-                discord_channel_id: result.id,
-                channel_type: envelope.channel_type,
-                resource_id: envelope.resource_id ?? null
+              // Conditional on the class still being on this guild, not a bare insert. The preflight
+              // above closes the queued-envelope window; this closes the window across the
+              // createChannel() call itself. Without it, a move/disconnect/archive committing while
+              // the call was in flight had its teardown undone here -- and the resurrected row is
+              // durable, not transient: the message enqueuers select channels by class and type, so it
+              // keeps posting into the server the class left, and for a resource-scoped channel it can
+              // win the uniqueness race and stop the new guild's channel being tracked at all.
+              //
+              // The channel counterpart of store_discord_role_if_current, and superseded is not a
+              // failure: the channel exists in Discord, it just belongs to a server this class no
+              // longer uses, so it is left orphaned exactly as a move leaves the others.
+              const { data: stored, error: storeError } = await untypedRpc<
+                Array<{ stored: boolean; superseded: boolean }>
+              >(adminSupabase, "store_discord_channel_if_current", {
+                p_class_id: envelope.class_id,
+                p_channel_type: envelope.channel_type,
+                p_discord_channel_id: result.id,
+                p_guild_id: args.guild_id,
+                p_resource_id: envelope.resource_id ?? null
               });
-              console.log(`[processEnvelope] Successfully stored channel tracking`);
+              if (storeError) throw storeError;
+              const row = Array.isArray(stored) ? stored[0] : undefined;
+              if (row?.superseded) {
+                console.log(
+                  `[processEnvelope] Channel ${result.id} was created in ${args.guild_id}, which class ${envelope.class_id} no longer uses; not tracking it`
+                );
+              } else if (row?.stored === false) {
+                // Not stored and not superseded means the ON CONFLICT fired: another envelope already
+                // tracks a channel of this type, so the one just created in Discord is an orphan
+                // nobody will ever post to or clean up. Reported rather than logged as success --
+                // create_role already reports its equivalent, and before this RPC the bare insert at
+                // least threw, so the signal existed. Not a failure of the envelope: the duplicate is
+                // in Discord and retrying would make a third.
+                console.warn(
+                  `[processEnvelope] Channel ${result.id} was created in ${args.guild_id} but class ${envelope.class_id} already tracks a ${envelope.channel_type} channel; the new one is orphaned in Discord`
+                );
+                scope.setContext("orphaned_discord_channel", {
+                  class_id: envelope.class_id,
+                  channel_type: envelope.channel_type,
+                  resource_id: envelope.resource_id ?? null,
+                  discord_channel_id: result.id,
+                  guild_id: args.guild_id
+                });
+                Sentry.captureMessage(
+                  `Duplicate Discord channel created for class ${envelope.class_id}; ${result.id} is untracked and orphaned`,
+                  { level: "warning" }
+                );
+              } else {
+                console.log(`[processEnvelope] Successfully stored channel tracking`);
+              }
             } catch (e) {
               console.error(`[processEnvelope] Failed to store channel tracking:`, e);
               // Log but don't fail - channel was created successfully
@@ -1764,17 +2550,10 @@ export async function processEnvelope(
         // because the replacement stores with ON CONFLICT DO NOTHING the stale row can win, leaving
         // the class pairing guild B with a role from A and B's role deleted as surplus.
         if (envelope.class_id) {
-          const { data: classRow, error: classLookupError } = await adminSupabase
-            .from("classes")
-            .select("discord_server_id")
-            .eq("id", envelope.class_id)
-            .maybeSingle();
-          if (classLookupError) {
-            throw classLookupError;
-          }
-          if (classRow?.discord_server_id !== args.guild_id) {
+          const onGuild = await classStillOnGuild(adminSupabase, envelope.class_id, args.guild_id);
+          if (!onGuild.current) {
             console.log(
-              `[processEnvelope] Dropping create_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${classRow?.discord_server_id ?? "no server"}`
+              `[processEnvelope] Dropping create_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${onGuild.actual ?? "no server"}`
             );
             return true;
           }
@@ -1978,17 +2757,10 @@ export async function processEnvelope(
         // role in the server the class left, and if the user is absent it mints a live invitation
         // into that server which the current-guild filters then hide from everyone.
         if (envelope.class_id) {
-          const { data: currentClass, error: currentClassError } = await adminSupabase
-            .from("classes")
-            .select("discord_server_id")
-            .eq("id", envelope.class_id)
-            .maybeSingle();
-          if (currentClassError) {
-            throw currentClassError;
-          }
-          if (currentClass?.discord_server_id !== args.guild_id) {
+          const onGuild = await classStillOnGuild(adminSupabase, envelope.class_id, args.guild_id);
+          if (!onGuild.current) {
             console.log(
-              `[processEnvelope] Dropping add_member_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${currentClass?.discord_server_id ?? "no server"}`
+              `[processEnvelope] Dropping add_member_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${onGuild.actual ?? "no server"}`
             );
             return true;
           }
@@ -2175,6 +2947,17 @@ export async function processEnvelope(
                   scope
                 );
               }
+              // Counted toward the guild's breaker here rather than in the outer catch, because this
+              // branch never reaches it: the failure is recorded against the student and the
+              // envelope returns success. That makes this the single largest source of the storm the
+              // breaker exists for -- a guild the bot cannot read produces one of these per enrolled
+              // student, each having already cost a getGuildMember plus a channel listing. A guild
+              // Discord does not have arrives here too: getGuildMember reads its 404 as "not in
+              // guild", so every enrolled student reaches the invite call that then fails 10004.
+              if (isGuildUnusableFailure(inviteError)) {
+                await noteGuildPermissionFailure(adminSupabase, args.guild_id, envelope.method, inviteError, scope);
+              }
+
               // "recorded", not dead-lettered: the cannot_invite row written just above puts this in
               // front of the instructor who can fix it, and these arrive once per unjoined student
               // per run — the exact volume that made the dead letter queue unreadable.
@@ -2253,6 +3036,20 @@ export async function processEnvelope(
           level: "info"
         });
 
+        // Superseded envelopes are dropped, for the same reason add_member_role drops them. The role
+        // named here belongs to the guild the envelope was built for, and after a move, disconnect or
+        // archive that guild is claimable by another course -- so applying the removal is a write into
+        // a server this class no longer controls, against a role id that means nothing there.
+        if (envelope.class_id) {
+          const onGuild = await classStillOnGuild(adminSupabase, envelope.class_id, args.guild_id);
+          if (!onGuild.current) {
+            console.log(
+              `[processEnvelope] Dropping remove_member_role for guild ${args.guild_id}; class ${envelope.class_id} now uses ${onGuild.actual ?? "no server"}`
+            );
+            return true;
+          }
+        }
+
         try {
           await discord.removeMemberRole(args, scope);
           console.log(`[processEnvelope] remove_member_role completed successfully`);
@@ -2270,21 +3067,48 @@ export async function processEnvelope(
         return true;
       }
 
-      case "add_guild_member": {
-        const args = envelope.args as AddGuildMemberArgs;
+      case "delete_invite": {
+        const args = envelope.args as DeleteInviteArgs;
         console.log(
-          `[processEnvelope] Processing add_guild_member: user_id=${args.user_id}, guild_id=${args.guild_id}`
+          `[processEnvelope] Processing delete_invite: invite_code=${args.invite_code}, guild_id=${args.guild_id ?? "(unrecorded)"}`
         );
         Sentry.addBreadcrumb({
-          message: `Adding user ${args.user_id} to guild ${args.guild_id}`,
+          message: `Revoking Discord invite ${args.invite_code} in guild ${args.guild_id ?? "(unrecorded)"}`,
           level: "info"
         });
 
-        const result = await discord.addGuildMember(args, scope);
-        console.log(`[processEnvelope] Successfully added user to guild: ${result.user.username}`);
+        // No "is this still current?" guard, unlike create_role / create_channel / add_member_role.
+        // Those drop an envelope naming a guild the class has left; this one exists BECAUSE the class
+        // has left it. The envelope is minted by clear_discord_tracking_for_class in the same
+        // transaction that deletes the discord_invites row, so by now the invite is in no table and
+        // no UI -- there is nothing a later state of the world could make this the wrong thing to do.
+        try {
+          await revokeInvite(args.invite_code, scope);
+          console.log(`[processEnvelope] Invite ${args.invite_code} is no longer live`);
+        } catch (error) {
+          // revokeInvite() classifies every non-404 as non-retriable, which is right for its other
+          // two call sites: both are compensating for an invite they have JUST created, so a retry
+          // re-runs createGuildInvite and mints another one -- the choice there is one dead-letter
+          // row or a growing pile of live invites. This call site has no such coupling. The invite
+          // already exists, `DELETE /invites/{code}` is idempotent, and the reason to revoke -- a
+          // guild another course may already have claimed -- does not expire. So a rate limit, a
+          // timeout or a 5xx is handed back to the ordinary retry path instead of being dead-lettered
+          // on the first attempt, and only a genuinely terminal failure (a 403 saying the bot no
+          // longer holds Manage Channels in a guild it has been thrown out of) becomes a DLQ row.
+          const cause = error instanceof NonRetriableWorkerError && error.cause !== undefined ? error.cause : error;
+          if (!classifyDiscordError(cause).terminal) {
+            throw cause;
+          }
+          throw error;
+        }
+
+        // No local bookkeeping to reconcile, unlike delete_channel and delete_role. Those two own
+        // their tracking row and have to drop it here; the discord_invites row is deleted by the
+        // teardown that enqueued this, in one transaction with the send, so there is nothing left to
+        // point at.
+        console.log(`[processEnvelope] delete_invite completed successfully`);
         return true;
       }
-
       case "register_commands": {
         console.log(`[processEnvelope] Processing register_commands`);
         Sentry.addBreadcrumb({ message: "Registering Discord slash commands", level: "info" });
@@ -2310,12 +3134,34 @@ export async function processEnvelope(
       default: {
         const unknownMethod = (envelope as DiscordAsyncEnvelope).method;
         console.error(`[processEnvelope] Unknown async method: ${unknownMethod}`);
-        throw new Error(`Unknown async method: ${unknownMethod}`);
+        // Dead-lettered on the first pass, not retried. A plain Error here is classified retriable
+        // (there is no Discord status or code to read), so the envelope took the 120s requeue path
+        // and burned five more doomed cycles before reaching the same dead-letter row. Nothing about
+        // an unknown method can change between attempts: the deploy that understood it is gone. This
+        // is the path an in-flight envelope from an older deploy takes -- `add_guild_member` was
+        // removed in this branch -- so it has to end with a legible reason rather than a mystery
+        // retry loop. NonRetriableWorkerError is what the catch below branches on to dead-letter
+        // once via sendToDeadLetterQueue.
+        throw new NonRetriableWorkerError(
+          `Unknown Discord async method "${unknownMethod}"; this worker deploy cannot handle it, so the envelope is dead-lettered instead of retried`
+        );
       }
     }
   } catch (error) {
     console.error(`[processEnvelope] Error processing envelope:`, error);
     console.trace(error);
+
+    // Count failures that mean the bot cannot act in this guild before deciding what to do with the
+    // message. These arrive once per enrolled student and are individually terminal, so without the
+    // breaker each one costs its own Discord round trip on the token every other course shares.
+    // Counted before the terminal branch below on purpose: a terminal failure is dead-lettered here
+    // and never comes back, so this is the only chance to observe it at guild scope.
+    // Gated on the same method set as the deferral above, and for the symmetric reason: a channel-level
+    // overwrite denying Send Messages in one channel produces 50013s that say nothing about the guild,
+    // and counting them here let one locked-down channel park the class's role and invite work.
+    if (guildId && CIRCUIT_GATED_METHODS.has(envelope.method) && isGuildUnusableFailure(error)) {
+      await noteGuildPermissionFailure(adminSupabase, guildId, envelope.method, error, scope);
+    }
 
     // A failure that cannot succeed on a later attempt is dead-lettered once, not retried. Requeueing
     // it buys five more identical failures before the same dead-letter row, and the hourly enqueue
@@ -2472,6 +3318,15 @@ export async function runBatchHandler() {
       `[runBatchHandler] Missing environment variables: SUPABASE_URL=${!!supabaseUrl}, SUPABASE_SERVICE_ROLE_KEY=${!!supabaseKey}`
     );
     throw new Error("Missing required environment variables");
+  }
+
+  // Loud on purpose. Every Discord mutation this loop makes -- roles created, invites minted,
+  // messages posted -- goes to whatever DISCORD_API_BASE_URL names, so a run that is silently
+  // pointed at a mock looks exactly like a run that succeeded against Discord. Logging it once per
+  // run is what lets a local or CI run prove which one it was.
+  if (isDiscordApiMocked()) {
+    console.warn(`[runBatchHandler] Discord API is MOCKED: all requests go to ${discordApiBase()}`);
+    scope.setTag("discord_api_mocked", "true");
   }
 
   console.log(`[runBatchHandler] Creating Supabase client with URL: ${supabaseUrl.substring(0, 30)}...`);

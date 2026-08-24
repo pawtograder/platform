@@ -222,7 +222,14 @@ secrets:
     # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
     # edgeFunctionsBundles explicitly in new overlays.
     bundles: []
-    webBundles: []                # usually: web
+    webBundles: []                # usually: web, llm, discord
+                                  #   `discord` belongs here as well as in
+                                  #   edgeFunctionsBundles: DISCORD_APPLICATION_ID
+                                  #   and DISCORD_BOT_TOKEN are read by the Next.js
+                                  #   bot-install routes (app/api/discord/install
+                                  #   and .../install/callback), not only by the
+                                  #   worker. Omitting it makes the install button
+                                  #   answer 500.
     edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
                                   #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
@@ -1590,6 +1597,14 @@ monitoring:
     # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
     # stored score is stale with nothing left to recompute it.
     gradebookRecalcDlqGrowthPerHour: 5
+    # How long a Discord per-guild circuit breaker may stay open before
+    # PawtograderDiscordCircuitBreakerOpen fires. Must stay comfortably BELOW the breaker's shortest
+    # window, which is the 30-minute permission_storm base in open_discord_circuit(): the gauge is
+    # is_open, which goes false as soon as open_until passes, so any value at or above 30m cannot be
+    # satisfied by a first trip and the alert is silent for the whole of the first incident. This was
+    # 45m and never fired on one. Ten minutes is ten or more consecutive scrapes (so a scrape gap
+    # cannot flap it) with 20 minutes of margin left inside the shortest window.
+    discordCircuitOpenFor: 10m
     # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.

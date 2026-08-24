@@ -212,6 +212,26 @@ jobs:
           DEPLOY_RUN_ID=${GITHUB_RUN_ID}
           DEPLOY_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}
           GIT_COMMIT_SHA=${GITHUB_SHA}
+          # Discord. Every REST call is redirected at the mock started below, so
+          # nothing in this job can reach discord.com. `discord-mock` is a
+          # container on the Supabase Docker network, so this hostname resolves
+          # via Docker DNS from inside the Edge Functions runtime -- which is the
+          # only consumer that has to resolve it. Host-side test code uses the
+          # published port via DISCORD_MOCK_URL instead.
+          #
+          # The bot token and application id only have to be non-empty: the mock
+          # does not check them, but the functions refuse to start a Discord call
+          # without them, and a missing DISCORD_APPLICATION_ID makes
+          # discord-check-bot-installation 500 rather than skip.
+          DISCORD_API_BASE_URL=http://discord-mock:8788/api/v10
+          DISCORD_MOCK_URL=http://127.0.0.1:8788
+          DISCORD_BOT_TOKEN=mock-bot-token
+          DISCORD_APPLICATION_ID=100000000000000001
+          # The install callback redeems the OAuth authorization code to learn which
+          # guild was actually authorized. The mock does not verify the secret, but
+          # both values must be present or the exchange is skipped as unconfigured.
+          DISCORD_OAUTH_CLIENT_ID=100000000000000001
+          DISCORD_OAUTH_CLIENT_SECRET=mock-client-secret
           EOF
           # Throwaway App key, generated per run and never leaving the runner.
           # @octokit/auth-app parses it lazily, so it only has to be a
@@ -434,9 +454,29 @@ jobs:
             exit 1
           fi
 
+      # Must come after `supabase start`: the mock joins the Supabase Docker
+      # network so the Edge Functions runtime can resolve `discord-mock`, and
+      # that network does not exist until the stack is up.
+      #
+      # Without this step the Discord specs skip rather than fail -- they check
+      # that the mock is reachable and that DISCORD_API_BASE_URL points at it, so
+      # that a developer who has not started it gets a skip instead of a run
+      # against real Discord. That is the right default locally and the wrong one
+      # here, where a silent skip would report coverage this job never executed.
+      - name: Start the mocked Discord API
+        run: |
+          set -euo pipefail
+          ./scripts/start-discord-mock.sh
+          # Prove it before the suite runs, so a failure here is attributed to
+          # the mock rather than surfacing as 136 skipped tests.
+          curl -sf http://127.0.0.1:8788/__mock/health
+
       - name: Run Playwright tests
         env:
           BASE_URL: http://localhost:3001
+          # A skipped Discord spec here would report coverage that never ran, which is exactly how
+          # `e2e-local` went green with 136 of them silently skipped. With this set they fail instead.
+          DISCORD_MOCK_REQUIRED: "1"
           SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
@@ -468,6 +508,7 @@ jobs:
         run: |
           echo '--- edge-functions.log ---'; tail -n 500 $RUN_TMP/edge-functions.log || true
           echo '--- next-server.log ---';    tail -n 500 $RUN_TMP/next-server.log || true
+          echo '--- discord-mock ---';       docker logs discord-mock 2>&1 | tail -n 200 || true
 
       - name: Stop background services
         if: always()
@@ -479,6 +520,11 @@ jobs:
           for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
             docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
           done
+          docker logs discord-mock > server-logs/discord-mock.log 2>&1 || true
+          # This runner is self-hosted and /tmp persists, so a leaked container
+          # would hold port 8788 and stay joined to a Supabase network that the
+          # `supabase stop` below is about to delete.
+          ./scripts/start-discord-mock.sh --stop || true
           cp -f $RUN_TMP/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
           cp -f $RUN_TMP/next-server.log    server-logs/next-server.log    2>/dev/null || true
           npx supabase stop --no-backup || true
