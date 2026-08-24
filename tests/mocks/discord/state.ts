@@ -182,8 +182,15 @@ export type MockState = {
  * regression stays covered by every test that touches the mock.
  */
 export const DEFAULT_GUILD_ID = "1142900000000000000";
+/**
+ * Deliberately the same snowflake, because Discord gives a bot application's user account the
+ * application's own id. Modelling them as two different values let the mock accept a bot id that
+ * real Discord would never issue, which is the same class of divergence that let a `members/@me`
+ * GET pass CI. Both names are kept: they are separate slots in the payloads below, and code that
+ * reads one should not have to know it can substitute the other.
+ */
 export const DEFAULT_BOT_USER_ID = "1300000000000000001";
-export const DEFAULT_APPLICATION_ID = "1300000000000000002";
+export const DEFAULT_APPLICATION_ID = DEFAULT_BOT_USER_ID;
 export const BOT_ROLE_ID = "1200000000000000001";
 export const STUDENT_ROLE_ID = "1200000000000000002";
 export const GRADER_ROLE_ID = "1200000000000000003";

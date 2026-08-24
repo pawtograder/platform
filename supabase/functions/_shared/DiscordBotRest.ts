@@ -105,6 +105,45 @@ export async function discordBotGet(path: string, scope?: Sentry.Scope): Promise
 }
 
 /**
+ * The bot's own user id, which `GET /guilds/{guild.id}/members/{user.id}` needs spelled out.
+ *
+ * `@me` is not usable there. Discord accepts it only on the PATCH (Modify Current Member); the GET
+ * parses the last segment as a snowflake and answers 400 / 50035 `Value "@me" is not snowflake.`
+ * for anything else. There is a documented "Get Current User Guild Member"
+ * (`GET /users/@me/guilds/{guild.id}/member`), but it is an OAuth2 route requiring the
+ * `guilds.members.read` scope and is not available to a bot token, so the id has to be resolved.
+ *
+ * Read from `/users/@me` rather than assumed from `DISCORD_APPLICATION_ID`. The two are equal for a
+ * bot application, but that is an invariant about Discord rather than about this deployment's
+ * configuration, and a wrong or absent env var would resurface as the same opaque "could not report
+ * the bot's guild membership" this function exists to prevent. Asking Discord cannot be misconfigured.
+ *
+ * Memoized for the isolate: a deployment's bot identity does not change, so this costs one extra
+ * request per warm isolate rather than one per check.
+ *
+ * Failures come back as the raw result instead of throwing, so callers classify a bad answer here
+ * with exactly the same rules they apply to every other Discord answer.
+ */
+let cachedBotUserId: string | null = null;
+
+export async function getBotUserId(
+  scope?: Sentry.Scope
+): Promise<{ ok: true; id: string } | { ok: false; result: DiscordBotGetResult }> {
+  if (cachedBotUserId) return { ok: true, id: cachedBotUserId };
+  const result = await discordBotGet("/users/@me", scope);
+  if (!result.ok) return { ok: false, result };
+  const id = (result.data as { id?: string } | null)?.id;
+  if (!id) {
+    // A 2xx that does not carry an id is not something the caller can act on, and is not transient.
+    // Reported as a 502-shaped result so it lands in the caller's terminal branch rather than
+    // becoming a "try again" that never succeeds.
+    return { ok: false, result: { ...result, ok: false, status: 502, detail: "GET /users/@me returned no id" } };
+  }
+  cachedBotUserId = id;
+  return { ok: true, id };
+}
+
+/**
  * True when a failed response says nothing about the guild's configuration, only that Discord is
  * unwell or rate-limiting us -- a 5xx or a 429.
  *

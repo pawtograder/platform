@@ -29,7 +29,12 @@
  * those are mutations and live in separate routes.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { discordBotGet, isDiscordCredentialFailure, isTransientDiscordStatus } from "../_shared/DiscordBotRest.ts";
+import {
+  discordBotGet,
+  getBotUserId,
+  isDiscordCredentialFailure,
+  isTransientDiscordStatus
+} from "../_shared/DiscordBotRest.ts";
 import { DISCORD_UNKNOWN_GUILD, DISCORD_MISSING_ACCESS } from "../_shared/DiscordErrorClassification.ts";
 import { MAX_INVITE_CHANNEL_ATTEMPTS, inviteCandidateChannels } from "../_shared/DiscordInviteChannels.ts";
 import {
@@ -152,7 +157,7 @@ export type ChannelPermissionProblem = {
 /** Shape of the bits of `GET /guilds/{id}` we read. */
 type GuildResponse = { id?: string; name?: string };
 
-/** Shape of the bits of `GET /guilds/{id}/members/@me` we read. */
+/** Shape of the bits of `GET /guilds/{id}/members/{bot user id}` we read. */
 type GuildMemberResponse = { roles?: string[]; user?: { id?: string } };
 
 /** Shape of the bits of `GET /guilds/{id}/channels` we read. Overwrites arrive inline. */
@@ -429,13 +434,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
 
   const guild = (guildResult.data ?? {}) as GuildResponse;
 
+  // Reading the bot's own member object means naming the bot by snowflake -- see getBotUserId for why
+  // `@me` is not an option on that route. Memoized, so this is one extra request per warm isolate
+  // rather than one per check, and it is resolved before the batch below because the batch needs it.
+  const botUser = await getBotUserId(scope);
+  if (!botUser.ok) {
+    if (isDiscordCredentialFailure(botUser.result.status)) {
+      throwCredentialFailure("the bot's own identity", scope);
+    }
+    scope?.setContext("discord_error", {
+      what: "the bot's own identity",
+      status: botUser.result.status,
+      discord_code: botUser.result.code,
+      detail: botUser.result.detail
+    });
+    throw new UserVisibleError(
+      `Discord could not report the bot's own identity (HTTP ${botUser.result.status})`,
+      isTransientDiscordStatus(botUser.result.status) ? 503 : 502
+    );
+  }
+
   // The bot's own member object, the guild's role list, and the guild's channels. Discord does not
   // report a member's permissions on the member object -- only its role IDs -- so the first two are
   // both needed to compute anything. The third is what makes the per-channel answer possible, and it
   // is one request for the whole guild: `GET /guilds/{id}/channels` carries every channel's
   // `permission_overwrites` inline, so nothing here is per-channel fan-out. All three are independent.
   const [memberResult, rolesResult, channelsResult] = await Promise.all([
-    discordBotGet(`/guilds/${guildId}/members/@me`, scope),
+    discordBotGet(`/guilds/${guildId}/members/${botUser.id}`, scope),
     discordBotGet(`/guilds/${guildId}/roles`, scope),
     discordBotGet(`/guilds/${guildId}/channels`, scope)
   ]);
@@ -451,6 +476,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckBo
       if (isDiscordCredentialFailure(result.status)) {
         throwCredentialFailure(label, scope);
       }
+      // Discord's own error code and body are the only thing that distinguishes one 4xx here from
+      // another, and the instructor-facing message deliberately does not carry them. Without this
+      // they were read off the result and then dropped, so a deployment hitting an unexpected
+      // rejection saw "(HTTP 400)" in its logs and nothing about which field Discord objected to.
+      scope?.setContext("discord_error", {
+        what: label,
+        status: result.status,
+        discord_code: result.code,
+        detail: result.detail
+      });
       const status = isTransientDiscordStatus(result.status) ? 503 : 502;
       throw new UserVisibleError(`Discord could not report ${label} (HTTP ${result.status})`, status);
     }
