@@ -227,6 +227,17 @@ $reset_storage$;
 -- create uses `IF NOT EXISTS` and is safe to leave in place.
 DROP EXTENSION IF EXISTS pg_cron CASCADE;
 
+-- pg_net, unlike pg_cron, is NOT created by any migration: the chart installs it
+-- once at initdb (postgres-config.yaml), and `CREATE EXTENSION pg_net` registers
+-- the extension in `public` even though its functions live in schema `net`. So
+-- the DROP SCHEMA above cascades it away ("drop cascades to extension pg_net")
+-- and nothing brings it back — every later `net.http_post` call fails with
+-- `schema "net" does not exist`. That bites immediately: phase 4 re-seeds the
+-- vercel_host / cache_invalidation_secret vault entries, which is exactly what
+-- makes call_cache_invalidate stop short-circuiting, so the first class INSERT
+-- of the re-seed dies on the cache-invalidation trigger and the seed job fails.
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
 -- Our migrations seed vault.secrets (e.g. supabase_project_url,
 -- edge-function-secret, vercel_host, cache_invalidation_secret) via
 -- vault.create_secret, which is unique on name and errors on replay. A fresh
