@@ -2,6 +2,7 @@ import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
+import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import type {
@@ -111,7 +112,13 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
   return client;
 }
 export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
-  const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
+  // The per-user tag is kept for targeted invalidation, but nothing emits it: the `user_roles`
+  // trigger emits the class+role form. Without those two the 60s TTL was the only thing that
+  // ever refreshed a role change.
+  const client = await createClientWithCaching({
+    revalidate: 60,
+    tags: [`user_roles:${course_id}:${user_id}`, ...classScopedTableTags("user_roles", course_id)]
+  });
 
   const { data: userRoles } = await client
     .from("user_roles")
@@ -199,7 +206,7 @@ export async function getEffectiveCourseIdentity(
 
   const client = await createClientWithCaching({
     revalidate: 60,
-    tags: [`user_roles:${course_id}:view_as`]
+    tags: [`user_roles:${course_id}:view_as`, ...classScopedTableTags("user_roles", course_id)]
   });
   const { data: targetRole } = await client
     .from("user_roles")
@@ -226,7 +233,7 @@ export async function getEffectiveCourseIdentity(
 }
 
 export async function getCourse(course_id: number) {
-  const client = await createClientWithCaching({ tags: [`course:${course_id}`] });
+  const client = await createClientWithCaching({ tags: [courseTag(course_id)] });
   const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
 }

@@ -2,9 +2,9 @@
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentDelete, EdgeFunctionError } from "@/lib/edgeFunctions";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Dialog, HStack, Icon, Portal, Text, VStack } from "@chakra-ui/react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { FaTrash } from "react-icons/fa";
 
@@ -16,7 +16,7 @@ interface DeleteAssignmentButtonProps {
 export default function DeleteAssignmentButton({ assignmentId, courseId }: DeleteAssignmentButtonProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const router = useRouter();
+  const revalidateServerCaches = useRevalidateServerCaches(courseId);
 
   const handleDeleteAssignment = async () => {
     try {
@@ -37,8 +37,13 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
         duration: 10000
       });
 
-      // Redirect to assignments list
-      router.push(`/course/${courseId}/manage/assignments`);
+      // Navigate through the hook so the browser's copy of the assignments list is dropped.
+      // Without it the deleted assignment stays listed for up to `staleTimes.dynamic` (30s),
+      // and clicking it bounces the user straight back out (#937).
+      await revalidateServerCaches({
+        tables: ["assignments"],
+        navigateTo: `/course/${courseId}/manage/assignments`
+      });
     } catch (error) {
       console.error("Error deleting assignment:", error);
 
