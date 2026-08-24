@@ -20,7 +20,8 @@
  * Behavior is preserved exactly from the autograder path:
  *   - identical path sanitization (getSafeRelativePath / normalizeFilenameWhitespace
  *     / sanitizeSegmentForSupabaseStorage / sanitizePathForSupabaseStorageObjectKey),
- *   - identical BINARY_EXTENSIONS / MIME_TYPES sets,
+ *   - identical BINARY_EXTENSIONS / MIME_TYPES sets, plus a content check
+ *     (`hasNulByte`) for files the extension set cannot classify,
  *   - identical per-file 50 MB cap and the two pre-unzip guards
  *     (MAX_SUBMISSION_ZIP_* / MAX_SUBMISSION_UNZIPPED_*),
  *   - identical binary storage-key shape and de-dup suffixing,
@@ -145,6 +146,35 @@ function getFileExtension(name: string): string {
 
 function isBinaryFile(name: string): boolean {
   return BINARY_EXTENSIONS.has(getFileExtension(name));
+}
+
+/**
+ * A NUL byte anywhere in the file means the contents cannot be stored inline.
+ * PostgREST sends `submission_files.contents` as a JSON string, and Postgres
+ * refuses to convert a NUL escape in that JSON to `text` ("unsupported Unicode
+ * escape sequence", SQLSTATE 22P05) — which fails the insert and, via the
+ * rollback below, the entire submission.
+ *
+ * It is also the standard content heuristic for "not source code" (git uses the
+ * same signal), and it is the only classification we have for a file whose name
+ * carries no extension: a compiled `a.out` committed next to its `.c` is the
+ * case that motivated this. Such files now route to storage like any other
+ * binary instead of crashing ingestion.
+ *
+ * Scanning the whole buffer rather than git's 8000-byte prefix window costs one
+ * memchr and leaves no tail past which a NUL could still reach the insert.
+ */
+function hasNulByte(contents: Buffer): boolean {
+  return contents.indexOf(0) !== -1;
+}
+
+/**
+ * Full binary classification: known-binary extension, or NUL-bearing content.
+ * Callers that must decide before reading a file still use `isBinaryFile` alone
+ * (name-only), then apply this once the buffer is in hand.
+ */
+function isBinaryContent(name: string, contents: Buffer): boolean {
+  return isBinaryFile(name) || hasNulByte(contents);
 }
 
 function sha256Hex(buf: Uint8Array): string {
@@ -349,6 +379,13 @@ export function collectTextFilesFromZipBuffer(zipBuffer: Buffer): Promise<Record
       if (contents.length > MAX_FILE_SIZE) {
         throw new SubmissionFileTooLargeError(name, contents.length);
       }
+      // Extensionless binaries survive the name-only filter above, so re-check
+      // once the bytes are in hand. Two reasons to drop them here: `files` is
+      // written to the jsonb `pr_base_tree_cache.files`, which rejects a NUL for
+      // the same reason `submission_files.contents` does; and the head side of
+      // the diff now sends these to storage, so keeping one as pseudo-text would
+      // render the pair as a whole-file deletion.
+      if (hasNulByte(contents)) continue;
       out[name] = contents.toString("utf-8");
     }
     return out;
@@ -425,7 +462,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
 
       file_hashes[name] = sha256Hex(contents);
 
-      if (isBinaryFile(name)) {
+      if (isBinaryContent(name, contents)) {
         const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
         let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
         if (usedBinaryStorageRelPaths.has(storageRelPath)) {
