@@ -36,7 +36,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 
 function SurveyDashboardCta({
   href,
@@ -107,6 +107,16 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
+
+  // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
+  // first paint instead of flipping once the client course controller hydrates.
+  //
+  // Which assignments count as "upcoming" deliberately stays keyed to the hard deadline in
+  // fetchStudentDashboardBundle (`gte("due_date", now)`), even for emphasized courses: work past
+  // its suggested date is still submittable and still gradeable until the deadline, so dropping it
+  // from this list would hide the resubmission window the flag exists to highlight. The card shows
+  // both dates, so a passed suggested date is still legible.
+  const showSuggestedDueDate = courseFeatureEnabled(course?.features, COURSE_FEATURES.SUGGESTED_DUE_DATE);
 
   const nowMs = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
@@ -338,6 +348,7 @@ export default async function StudentDashboard({
                         {assignment.due_date ? (
                           <DueDateDisplay
                             suggestedDueDate={assignment.suggested_due_date}
+                            showSuggested={showSuggestedDueDate}
                             dueDate={assignment.due_date}
                             dateFormat="Pp"
                           />

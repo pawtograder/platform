@@ -2,12 +2,20 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  deleteFileFromRepo,
+  getDefaultBranchHeadSha,
+  GRADE_WORKFLOW_PATH,
+  syncRepoPermissions,
+  updateAutograderWorkflowHash
+} from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -23,13 +31,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
+  // `*` rather than an explicit column list: the long list this used to carry
+  // overflowed postgrest-js's select-string type parser, collapsing `assignment`
+  // to GenericStringError so every field access below was an unchecked type
+  // error. One extra row's worth of columns is a fine trade for real types.
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select(
-      "id, slug, class_id, repo_mode, submission_mode, source_assignment_id, template_repo, latest_template_sha, " +
-        "protect_block_force_push, protect_require_pull_request, protect_required_reviewers, " +
-        "classes(slug,github_org)"
-    )
+    .select("*, classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -50,11 +58,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
     const { data: src } = await adminSupabase
       .from("assignments")
-      .select("id, class_id, template_repo, latest_template_sha")
+      .select("id, class_id, title, has_autograder, template_repo, latest_template_sha")
       .eq("id", assignment.source_assignment_id)
       .maybeSingle();
     if (src) {
       sourceAssignment = src as HandoutSourceAssignment;
+      // This mode adopts the SOURCE assignment's handout repo verbatim, and
+      // student repos fork each student's source-assignment repo. So the two
+      // assignments share one handout, and the autograder setting is a property
+      // of that shared handout — it cannot differ between them. Allowing it
+      // would leave a state that assignment-sync-autograder-workflow later
+      // refuses (so every subsequent save fails), and the student forks would
+      // inherit the source's grade.yml regardless of this assignment's flag.
+      if ((src.has_autograder !== false) !== (assignment.has_autograder !== false)) {
+        throw new UserVisibleError(
+          `This assignment forks from "${src.title}" (#${src.id}), so both share that assignment's handout ` +
+            `repository and must have the same autograder setting. ` +
+            `"${src.title}" has the autograder ${src.has_autograder === false ? "disabled" : "enabled"}, ` +
+            `so this assignment must too. Change the autograder setting to match, or pick a different ` +
+            `repository configuration so this assignment gets its own handout.`,
+          400
+        );
+      }
     }
   }
 
@@ -101,7 +126,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // "workflow sha mismatch" error. updateAutograderWorkflowHash bulk-updates
     // all assignments sharing this template_repo, so the source assignment is
     // unaffected (it already has the same value).
-    if (sourceAssignment!.template_repo) {
+    //
+    // Skipped when this assignment has no autograder: there is no submission
+    // path that checks workflow_sha, and the inherited handout may legitimately
+    // have no grade.yml at all (updateAutograderWorkflowHash throws in that
+    // case). Note we deliberately do NOT delete grade.yml from the inherited
+    // handout — it belongs to the source assignment, which may well have an
+    // autograder of its own.
+    if (sourceAssignment!.template_repo && assignment.has_autograder !== false) {
       await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
     }
     return {
@@ -176,7 +208,60 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
   // Branch protection is applied inside createRepo (both the fresh-create and
   // the pre-existing-repo branches), so we no longer need a redundant call here.
-  await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+  //
+  // Repo-only assignments (has_autograder=false) get a handout with NO grading
+  // workflow: the stock handout template ships .github/workflows/grade.yml, which
+  // would otherwise run in every student repo generated from this handout and
+  // fail (there is no autograder to report to), showing students a red X. Strip
+  // it here, after the repo exists — GitHub's create-from-template API copies the
+  // whole tree, so there is no way to exclude it up front.
+  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
+  let strippedHandoutSha: string | undefined;
+  if (assignment.has_autograder === false) {
+    const { deleted, commit_sha } = await deleteFileFromRepo(
+      handoutFullName,
+      GRADE_WORKFLOW_PATH,
+      "Remove autograder workflow: this assignment has no autograder",
+      scope
+    );
+    // Keep this sha: it is the FINAL handout commit, and it is created before
+    // template_repo exists in the DB below. So the template-repo push webhook for it
+    // finds no assignment to attribute it to and records nothing — leaving
+    // latest_template_sha null, which gives student syncs no target revision. We
+    // persist it ourselves rather than relying on that delivery.
+    strippedHandoutSha = commit_sha;
+    // `deleted: false` means grade.yml was already gone — the shape a RETRY takes when
+    // the delete succeeded but the pointer update below then failed. Without this the
+    // retry would save template_repo with no latest_template_sha at all, and the
+    // original deletion webhook may already have been acknowledged while no assignment
+    // referenced the repo, so nothing would ever record it. Resolve the current head
+    // instead of relying on a commit we cannot re-create.
+    if (!deleted) {
+      strippedHandoutSha = await getDefaultBranchHeadSha(handoutFullName, scope);
+      scope.setTag("recovered_stripped_handout_sha", String(!!strippedHandoutSha));
+    }
+  } else {
+    // An AUTOGRADED handout needs the pointer just as much, and nothing else was setting it.
+    //
+    // The reasoning above applies whether or not grade.yml is stripped: every commit in this repo
+    // predates the `template_repo` write below, so the template-repo push webhook has no
+    // assignment to attribute it to and `latest_template_sha` stayed NULL for the whole life of a
+    // freshly created autograded assignment. That silently disabled the handout-hash seeding this
+    // flow now depends on — the call at the end of this function, the one in
+    // assignment-create-solution-repo, and the one in github-repo-configure-webhook all key off
+    // `latest_template_sha` and returned `no_commit_sha` — so empty-submission detection had
+    // nothing to compare against until an instructor happened to push to the handout.
+    //
+    // Best-effort: creation must not fail because a head lookup did, and the pointer is
+    // re-derivable from the next handout push.
+    try {
+      strippedHandoutSha = await getDefaultBranchHeadSha(handoutFullName, scope);
+      scope.setTag("resolved_handout_head_sha", String(!!strippedHandoutSha));
+    } catch (headErr) {
+      scope.setTag("resolve_handout_head_failed", "true");
+      Sentry.captureException(headErr, scope);
+    }
+  }
 
   // Only persist the template_repo pointer after GitHub creation + permission
   // sync succeed, so a partial failure does not leave the assignment pointing
@@ -184,14 +269,67 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // (students fork it and PR back to it), so point upstream_repo at the same
   // repo here — the github-repo-webhook PR ingestion matches upstream_repo
   // against the repo a PR targets, and handout == upstream must never drift.
-  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
-  await adminSupabase
+  //
+  // This has to happen BEFORE updateAutograderWorkflowHash below: that helper picks
+  // the autograder rows to write via `.eq("template_repo", repoName)`, so calling it
+  // first matched zero rows and silently left autograder.workflow_sha NULL — which
+  // autograder-create-submission then rejects as a "workflow sha mismatch" on the
+  // first real student run, and which the has_autograder backfill reads as "the
+  // autograder was never wired up".
+  const { error: pointerError } = await adminSupabase
     .from("assignments")
     .update({
       template_repo: handoutFullName,
+      ...(strippedHandoutSha ? { latest_template_sha: strippedHandoutSha } : {}),
       ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
+  if (pointerError) {
+    // Reporting success here would leave the handout repo created but unreferenced:
+    // nothing points at it, and a retry cannot recover latest_template_sha because
+    // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
+    Sentry.captureException(pointerError, scope);
+    throw pointerError;
+  }
+
+  // updateAutograderWorkflowHash is skipped for a repo-only assignment: it reads
+  // grade.yml and throws "File not found" when absent, which would fail the whole
+  // creation. Leaving autograder.workflow_sha NULL is correct there, since the sha
+  // check only runs on the Actions-driven submission path, which no longer exists.
+  if (assignment.has_autograder !== false) {
+    // Pinned to the same revision `latest_template_sha` now advertises, so the hash and the tree
+    // students receive describe one commit. An unqualified read would hash whatever the default
+    // branch holds at this instant, which a concurrent instructor push can already have moved.
+    await updateAutograderWorkflowHash(handoutFullName, strippedHandoutSha);
+  }
+
+  // Seed the handout's file hashes for the revision just pinned.
+  //
+  // Those rows are what let an ingested submission be recognised as "the student pushed
+  // nothing of their own", and only the template-repo push webhook used to write them — which
+  // never fires for a handout created here, because our commits land BEFORE template_repo
+  // exists, so the webhook has no assignment to attribute them to. Without them the ingestion
+  // path compares against nothing and treats an untouched starter repo as real work: on a
+  // repo-only assignment, where every push is a submission, the student's first unchanged push
+  // becomes their active submission even with empty submissions prohibited.
+  //
+  // Best-effort BY CONSTRUCTION, unlike most steps in this PR: the rows are re-derivable from
+  // GitHub, the next handout push recomputes them, and a failure is visible in Sentry — so
+  // failing handout creation over them would be the worse trade. It is also a no-op for a
+  // brand-new assignment whose autograder config has not been read yet (no submissionFiles to
+  // hash), which is why github-repo-configure-webhook seeds again once that config lands.
+  const seedResult = await seedHandoutFileHashes({
+    adminSupabase,
+    assignmentId: assignment_id,
+    classId: assignment.class_id,
+    templateRepo: handoutFullName,
+    commitSha: strippedHandoutSha,
+    scope
+  });
+  scope.setTag("handout_hashes_seeded", String(seedResult.seeded));
+  if (!seedResult.seeded) {
+    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${seedResult.reason}`);
+  }
 
   return {
     repo_name: handoutRepoName,

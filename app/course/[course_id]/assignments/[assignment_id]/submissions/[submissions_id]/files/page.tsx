@@ -1945,7 +1945,12 @@ export default function FilesView() {
       display="flex"
       flexDirection="column"
       minH={0}
+      // `outline="none"` plus `tabIndex={0}` is a tab stop with no visible focus
+      // indicator (WCAG 2.4.7). Naming it as a region makes it a destination, so
+      // restore the ring for keyboard focus only — `:focus-visible` keeps the
+      // mouse-click case unchanged.
       outline="none"
+      _focusVisible={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "-2px" }}
       data-file-navigator=""
     >
       <Box flex="1" minH={0} display="flex">

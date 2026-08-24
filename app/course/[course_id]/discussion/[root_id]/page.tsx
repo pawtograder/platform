@@ -553,8 +553,15 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
     }
   })();
   useEffect(() => {
-    if (!courseName || !thread?.subject) return;
-    document.title = `${thread.subject} · Discussion · ${courseName} · ${branding.name}`;
+    // Always write something. `app/course/[course_id]/discussion/layout.tsx`
+    // exports a static `metadata.title`, so navigating from thread A to thread B
+    // reconciles to the same <title> element and React never touches the DOM —
+    // an early return would leave thread A's subject in the tab (and in the AT
+    // page title) for the whole of thread B's load, or forever if the teaser
+    // never arrives.
+    const scope = [courseName, branding.name].filter(Boolean).join(" · ");
+    const base = scope ? `Discussion · ${scope}` : "Discussion";
+    document.title = thread?.subject ? `${thread.subject} · ${base}` : base;
   }, [courseName, thread?.subject, branding.name]);
 
   return (

@@ -25,7 +25,8 @@ jobs:
   # moves into the same k8s cluster as this runner.
   e2e-local:
     runs-on: pawtograder-e2e
-    timeout-minutes: 75
+    # 75 + headroom for the ~11 min a11y coverage sweep added below.
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -90,6 +91,13 @@ jobs:
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Sentry identity for this run. Without these, edge-function events in the Bugsink "Dev"
+          # project carry no release, no branch and no PR — the CI run was only recoverable by reading
+          # the compose project name out of the `URL` tag, and only on events from functions that set
+          # it. Consumed by _shared/SentryContext.ts. Quoted through env: rather than interpolated into
+          # the heredoc so a branch name cannot inject shell.
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEPLOY_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           cat > .env.local <<EOF
@@ -113,6 +121,12 @@ jobs:
           UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
           UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
           SENTRY_DSN=${SENTRY_DSN}
+          DEPLOY_KIND=e2e-local
+          DEPLOY_BRANCH=${DEPLOY_BRANCH}
+          DEPLOY_PR=${DEPLOY_PR}
+          DEPLOY_RUN_ID=${GITHUB_RUN_ID}
+          DEPLOY_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}
+          GIT_COMMIT_SHA=${GITHUB_SHA}
           EOF
           # Single-line escaped PEM — supabase functions serve --env-file does
           # not support multi-line quoted values; .env.local.staging uses the
@@ -342,6 +356,50 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx playwright test
 
+      # The student a11y coverage sweep, against the same stack. It is gated on
+      # A11Y_COVERAGE so `npx playwright test` above skips it, and it needs a
+      # prod build with real data — which is exactly what this job already has,
+      # so it runs here rather than in a workflow that would rebuild all of it.
+      #
+      # This lane exists because tests/e2e/a11y/baseline.json is a ledger whose
+      # contract is that deleting a row asserts a defect is fixed. Only findings
+      # ABSENT from it fail, so until now that assertion was checked only when
+      # someone ran the sweep by hand, and deleting rows without running it was
+      # indistinguishable from fixing the bugs.
+      #
+      # Blocking on purpose. A non-blocking lane would restore the same problem
+      # with extra steps.
+      #
+      # !cancelled() rather than the default: an a11y regression and a suite
+      # failure are independent, and finding out about them one run at a time
+      # doubles the round trips.
+      - name: Run a11y coverage sweep
+        if: ${{ !cancelled() }}
+        env:
+          BASE_URL: http://localhost:3001
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A11Y_BASELINE_UPDATE is deliberately absent: with it set, every new
+          # finding would be recorded as expected instead of failing, and CI
+          # would rubber-stamp regressions. The guard below enforces that.
+        run: npm run a11y:coverage
+
+      # A tripwire, not a formality. Update mode rewrites the ledger from the
+      # run's own findings, so a stray A11Y_BASELINE_UPDATE in the environment
+      # would turn this lane green while erasing what it is meant to protect.
+      - name: Verify the sweep did not rewrite the baseline
+        if: ${{ !cancelled() }}
+        run: |
+          if ! git diff --quiet -- tests/e2e/a11y/baseline.json; then
+            echo "::error::The a11y sweep modified baseline.json. CI runs in check mode;"
+            echo "::error::re-record locally with 'npm run a11y:coverage:update' and commit the result."
+            git diff -- tests/e2e/a11y/baseline.json
+            exit 1
+          fi
+
       - name: Tail server logs on failure
         if: failure()
         run: |
@@ -378,3 +436,12 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-a11y
+          path: playwright-report-a11y/
+          retention-days: 30
+          # Absent when the sweep was skipped or never started.
+          if-no-files-found: ignore

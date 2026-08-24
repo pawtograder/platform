@@ -34,15 +34,27 @@ export function AccessibleMultiValueRemove<
   IsMulti extends boolean = boolean,
   Group extends GroupBase<Option> = GroupBase<Option>
 >(props: MultiValueRemoveProps<Option, IsMulti, Group>) {
-  const { children, innerProps, isFocused, endElementCss, css } = props;
+  const { children, innerProps, isFocused, endElementCss, css, selectProps } = props;
   // react-select types `innerProps` for the div it expects to be spread onto.
   // What it actually carries — aria-label, onClick, onTouchEnd, onMouseDown,
   // className — is valid on a button, so the cast is a typing detail rather
   // than a behavioral one.
   const buttonProps = innerProps as ComponentPropsWithoutRef<"button">;
+  // A real <button> is focusable and Enter-operable, which the stock span was
+  // not — so on a disabled select it would become a live control the keyboard
+  // can still reach. chakra-react-select only guards the Control with
+  // `pointerEvents: none` (mouse-only) and react-select builds `removeProps`
+  // unconditionally, so the disabled state has to be carried here.
+  const isDisabled = Boolean(selectProps?.isDisabled);
   return (
     <Span css={endElementCss}>
-      <chakra.button type="button" css={css} data-focus-visible={isFocused ? true : undefined} {...buttonProps}>
+      <chakra.button
+        type="button"
+        css={css}
+        disabled={isDisabled}
+        data-focus-visible={isFocused ? true : undefined}
+        {...buttonProps}
+      >
         {children ?? <CloseIcon />}
       </chakra.button>
     </Span>
@@ -74,5 +86,7 @@ export function accessibleSelectComponents<
   IsMulti extends boolean = boolean,
   Group extends GroupBase<Option> = GroupBase<Option>
 >(components?: SelectComponentsConfig<Option, IsMulti, Group>): SelectComponentsConfig<Option, IsMulti, Group> {
-  return { ...components, MultiValueRemove: AccessibleMultiValueRemove };
+  // Override first, caller last: spreading `components` second is what makes the
+  // doc comment true — a call site that supplies its own MultiValueRemove keeps it.
+  return { MultiValueRemove: AccessibleMultiValueRemove, ...components };
 }

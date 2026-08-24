@@ -303,12 +303,6 @@ export async function assertStudentPageAccessible(
 }
 
 /**
- * Asserts the page exposes the standard landmark structure the app ships:
- * one `<main>` (or role="main"), at least one `<nav>` (or role="navigation")
- * with an accessible name, and a non-empty `<title>`. These are WCAG 1.3.1
- * / 2.4.1 / 2.4.2 smoke checks that complement the full axe scan.
- */
-/**
  * WCAG 2.4.2 — the page is titled, and the title carries the product name.
  *
  * Split out of `assertPageHasLandmarks` so the coverage sweep can baseline it
@@ -367,7 +361,11 @@ export async function assertNavLandmarks(page: Page, contextLabel?: string): Pro
 }
 
 /**
- * Composite kept for the existing per-feature call sites, whose behaviour is
+ * Asserts the page exposes the standard landmark structure the app ships: one
+ * `<main>` (or role="main"), at least one `<nav>` (or role="navigation") with an
+ * accessible name, and a non-empty `<title>` (WCAG 1.3.1 / 2.4.1 / 2.4.2).
+ *
+ * Composite kept for the existing per-feature call sites, whose behavior is
  * unchanged: same assertions, same order, same messages.
  */
 export async function assertPageHasLandmarks(page: Page, contextLabel?: string): Promise<void> {

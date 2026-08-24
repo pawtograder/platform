@@ -22,10 +22,18 @@
  * `inherit: true` means these are the bundled themes with the listed rules
  * replaced; nothing else about them changes.
  *
- * Adopting this in another editor is one line in its `beforeMount`:
- * `registerAccessibleMonacoThemes(monaco)`, then use `accessibleMonacoTheme()`
- * for the `theme` prop. Registration is global to the Monaco singleton but must
- * still run before any editor asks for the theme by name.
+ * Every Monaco mount in the app uses these themes, and any new one has to as
+ * well. Both halves are required: call `registerAccessibleMonacoThemes(monaco)`
+ * in `beforeMount` AND pass `accessibleMonacoTheme(colorMode)` as `theme`.
+ *
+ * Doing only the second half is worse than doing neither, because Monaco falls
+ * back to the light `vs` for a theme name it does not know, so a dark page gets
+ * a light editor. Doing only the first is a no-op.
+ *
+ * Leaving one editor on the bundled `vs`/`vs-dark` breaks the others: the
+ * `theme` prop routes to `monaco.editor.setTheme`, which is global to the
+ * Monaco singleton rather than scoped to an instance, so whichever editor
+ * mounts or re-renders last decides the token colors for all of them.
  */
 import type { Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
@@ -61,7 +69,7 @@ export function lineHighlightRail(colorMode: string | undefined): string {
 
 /**
  * Token rules from `vs-dark` that fail AA on its #1E1E1E background, with the
- * measured before → after ratio.
+ * measured before -> after ratio.
  */
 const DARK_RULES: editor.ITokenThemeRule[] = [
   { token: "variable.predefined", foreground: "758CC5" }, // #4864AA 2.92 -> 5.01
@@ -86,11 +94,20 @@ const LIGHT_RULES: editor.ITokenThemeRule[] = [
   { token: "operator.sql", foreground: "617181" } // #778899 3.64 -> 5.01
 ];
 
+/** Registration is global to the Monaco singleton, so it only has to happen once. */
+let registered = false;
+
 /**
- * Define both themes on the Monaco singleton. Safe to call repeatedly —
- * `defineTheme` replaces a definition of the same name.
+ * Define both themes on the Monaco singleton. Safe to call repeatedly, and now
+ * cheap to: `defineTheme` ends with `if (this._theme.themeName === themeName)
+ * this.setTheme(themeName)`, so redefining the theme an editor is already using
+ * re-resolves it and re-broadcasts a color-theme change to every mounted editor.
+ * The rules are static constants, so a second call can never produce a different
+ * result — skip it.
  */
 export function registerAccessibleMonacoThemes(monaco: Monaco): void {
+  if (registered) return;
+  registered = true;
   monaco.editor.defineTheme(ACCESSIBLE_MONACO_LIGHT, { base: "vs", inherit: true, rules: LIGHT_RULES, colors: {} });
   monaco.editor.defineTheme(ACCESSIBLE_MONACO_DARK, { base: "vs-dark", inherit: true, rules: DARK_RULES, colors: {} });
 }

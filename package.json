@@ -42,6 +42,8 @@
     "cli:repos": "npm run cli -- repos",
     "cli:build": "npm --prefix packages/cli ci && npm --prefix packages/cli run build && npm --prefix packages/cli run smoke-test",
     "a11y:collect": "cross-env A11Y_EVIDENCE=1 playwright test tests/e2e/a11y-evidence.spec.ts --project=chromium",
+    "a11y:coverage": "cross-env A11Y_COVERAGE=1 playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium",
+    "a11y:coverage:update": "cross-env A11Y_COVERAGE=1 A11Y_BASELINE_UPDATE=1 playwright test tests/e2e/a11y-coverage.test.tsx --project=chromium",
     "a11y:judge": "npx tsx tools/a11y-judge/judge/run.ts --evidence a11y-evidence/latest --samples 3",
     "a11y:judge:batch": "npx tsx tools/a11y-judge/judge/run.ts --evidence a11y-evidence/latest --samples 3 --batch",
     "a11y:report": "npx tsx tools/a11y-judge/report/render.ts --verdicts a11y-verdicts/latest",
