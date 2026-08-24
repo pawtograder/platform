@@ -559,12 +559,20 @@ test.describe("discord-check-bot-installation edge function", () => {
     return channel.id;
   }
 
-  /** Track a channel for class A the way discord-async-worker does after creating one. */
-  async function trackChannel(channelId: string) {
+  /**
+   * Track a channel for class A the way discord-async-worker does after creating one.
+   *
+   * `channelType` is a parameter because `discord_channels` is unique on
+   * (class_id, channel_type, resource_id) with NULLS NOT DISTINCT, so two class-level rows -- both
+   * with a null resource_id -- collide unless their types differ. A test that needs to track two
+   * channels at once has to name a second type. The check function reads every row for the class
+   * regardless of type, so which one is used does not affect what it reports.
+   */
+  async function trackChannel(channelId: string, channelType: "general" | "operations" = "general") {
     const { error } = await untypedTable(supabase, "discord_channels").insert({
       class_id: classAId,
       discord_channel_id: channelId,
-      channel_type: "general"
+      channel_type: channelType
     });
     expect(error, `failed to track channel ${channelId}`).toBeNull();
   }
@@ -716,8 +724,12 @@ test.describe("discord-check-bot-installation edge function", () => {
     const state = await applyScenarioForGuilds("healthy", [GUILD_ID]);
     const generalId = channelIdByName(state, "general");
     const deletedId = "1409999999999999999";
+    // Two tracked channels, so the assertion below distinguishes the missing one from the healthy
+    // one. They must differ in channel_type: the uniqueness on
+    // (class_id, channel_type, resource_id) is NULLS NOT DISTINCT, so a second class-level 'general'
+    // row for the same class is a duplicate key rather than a second tracked channel.
     await trackChannel(generalId);
-    await trackChannel(deletedId);
+    await trackChannel(deletedId, "operations");
     await clearCalls();
 
     try {
