@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert } from "../ui/alert";
 import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
+import RequestRoleSyncButton from "./request-role-sync-button";
 
 type DiscordInvite = {
   id: number;
@@ -99,7 +100,9 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
   // `discord-batch-role-sync-hourly` is `0 * * * *`, and discord-reconciler only repairs a sync that
   // has stopped running, treating `not_joined` as normal -- so a student who joins a minute after
   // their invite is minted would otherwise wait for the next hour boundary. That is the wait the
-  // panel's old "within an hour" copy and its sync button described; this replaces both.
+  // panel's old "within an hour" copy described, and the wait its sync button existed to escape.
+  // This removes the need to press anything for the common case; the button below remains for the
+  // case no event can announce.
   //
   // Nothing is requested on mount, and that omission is load-bearing twice over.
   //
@@ -272,19 +275,22 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
             <Text fontSize="xs" color="fg.muted">
               <strong>After joining the Discord server:</strong>
             </Text>
-            {/* No timing promise and no self-service sync control, because the effect above now does
-                what the button did: landing here with an invite outstanding enqueues the role sync
-                directly, and the worker drains that queue every minute. The student no longer has to
-                find and press anything for the common case, so "shortly" is a claim the page keeps
-                rather than one that depended on them noticing a control.
+            {/* No timing promise, because the effect above makes the common case genuinely prompt:
+                returning to this page with an invite outstanding enqueues the role sync, and the
+                worker drains that queue every minute. The old copy's "within an hour" described the
+                batch fallback, which is now the exception rather than the path everyone takes.
 
-                The cases the button could not fix are unchanged and still need an instructor -- the
-                bot missing Manage Roles, or its role sitting below the course roles -- which is what
-                the second sentence is for. A student who joins and never returns to this page falls
-                back to the hourly batch sync, as before. */}
+                The button stays for the case the automatic path cannot observe -- a student who
+                joined and then never left and re-entered this page, so no visibility or focus event
+                ever fires. Unlike the control it replaces it is rationed: five presses a day, out of
+                request_discord_reinvite rather than out of the unthrottled
+                trigger_discord_role_sync_for_user, because Discord's rate limits are per-bot and one
+                student holding a button spends them for every class. */}
             <Text fontSize="xs" color="fg.muted">
-              Your course roles will be assigned shortly. If they don&apos;t appear, contact your instructors.
+              Your course roles will be assigned shortly. If they don&apos;t appear, use the button below, then contact
+              your instructors if they still don&apos;t.
             </Text>
+            {!showAll && classId && user && <RequestRoleSyncButton classId={classId} userId={user.id} />}
           </VStack>
         </Box>
       </VStack>
