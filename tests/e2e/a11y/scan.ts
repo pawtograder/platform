@@ -82,6 +82,15 @@ export const SCOPED_SUPPRESSIONS: ScopedSuppression[] = [
   // whenever the styles do, so keying on them would silently stop matching —
   // the class hooks referenced below exist for this and are commented as such
   // at their definitions.
+  //
+  // One node is deliberately NOT here: the RadioCard ItemText on
+  // discussion-new ("Use your pseudonym", `elmPartiallyObscuring`, 19.9:1).
+  // axe identifies it by its React-generated id alone
+  // (`#radio-group:«rl»:radio:label:true`), which changes between renders, and
+  // adding a class does not displace an id in axe's selector. Since
+  // `unsuppressedNodes` matches per node, there is no stable fragment to key on
+  // — so it stays a one-node row in baseline.json, where the recorded count
+  // still fails the sweep if it ever grows.
   {
     rule: "color-contrast",
     selector: ".chakra-radio-card__itemDescription",

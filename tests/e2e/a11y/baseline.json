@@ -2,6 +2,24 @@
   "recordedAt": "2026-08-08T00:11:17.820Z",
   "note": "Pre-existing findings on student-facing routes at the time the coverage sweep was introduced. Entries are debt, not policy — deleting a line is the proof a defect was fixed.",
   "entries": {
+    "discussion-new|dark|color-contrast|incomplete": {
+      "route": "discussion-new",
+      "scheme": "dark",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "#radio-group\\:«rl»\\:radio\\:label\\:true"
+    },
+    "discussion-new|light|color-contrast|incomplete": {
+      "route": "discussion-new",
+      "scheme": "light",
+      "rule": "color-contrast",
+      "kind": "incomplete",
+      "nodes": 1,
+      "impact": "serious",
+      "sample": "#radio-group\\:«rl»\\:radio\\:label\\:true"
+    },
     "flashcards|dark|heading-order|violation": {
       "route": "flashcards",
       "scheme": "dark",
