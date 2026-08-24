@@ -27,6 +27,9 @@ export const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 /** Best-practice rules enforced on top of the WCAG tag set (see axeStudentA11y.ts). */
 export const EXTRA_RULES = ["heading-order"];
 
+/** Run in its own pass so it can measure inside scroll containers — see collectFindings. */
+export const CONTRAST_RULE = "color-contrast";
+
 export type ColorScheme = "light" | "dark";
 
 export type Finding = {
@@ -57,10 +60,60 @@ export type ScopedSuppression = {
 };
 
 export const SCOPED_SUPPRESSIONS: ScopedSuppression[] = [
-  // Intentionally empty for the first coverage sweep. Everything the sweep
-  // finds is recorded in the baseline instead, so the true state of the
-  // student surface — including the previously-excluded widgets — is visible
-  // in one place before we decide what to suppress vs. fix.
+  // #910: text axe declines to judge, measured by hand instead.
+  //
+  // The sweep's `color-contrast` needs-review bucket held 134 nodes. Every one
+  // was an occlusion message (`elmPartiallyObscured`, `bgOverlap`,
+  // `elmPartiallyObscuring`) — none was a gradient, background image or alpha
+  // blend — and every one measured 19.9:1 in light mode and 19.06:1 in dark
+  // against its real opaque backdrop, with no background image anywhere in the
+  // ancestor chain. They are the app's default text on the app's default
+  // surface, i.e. nowhere near the 4.5:1 floor.
+  //
+  // 110 of those nodes were the grading sidebar's clipped content and are now
+  // genuinely measured — see expandScrollContainers. What stays here is the
+  // remainder, where axe orders the element below its own positioned ancestors
+  // and gives up. Giving those elements an opaque background, or removing the
+  // positioning, does not change the verdict: they cannot be made decidable
+  // from the app side.
+  //
+  // Each selector is a deliberately stable fragment. axe's own samples are
+  // emotion hashes (`.css-16b6szo`) and React ids (`#field::«rp»`) that change
+  // whenever the styles do, so keying on them would silently stop matching —
+  // the class hooks referenced below exist for this and are commented as such
+  // at their definitions.
+  {
+    rule: "color-contrast",
+    selector: ".chakra-radio-card__itemDescription",
+    reason:
+      "#910: new-discussion topic/type/visibility/anonymity cards. 22 nodes, all 19.9:1 light / 19.06:1 dark; " +
+      "axe stacks the description below its positioned card ancestors and reports bgOverlap.",
+    owner: "j.bell"
+  },
+  {
+    rule: "color-contrast",
+    selector: ".help-queue-select__single-value",
+    reason:
+      "#910: the selected queue name in the new-help-request form. 2 nodes, 19.9:1 light / 19.06:1 dark; " +
+      "axe reports bgOverlap through the react-select value container.",
+    owner: "j.bell"
+  },
+  {
+    rule: "color-contrast",
+    selector: ".grading-summary-item",
+    reason:
+      "#910: the grading-summary breakdown on the submission routes. Newly reachable once the sidebar is " +
+      "unclipped for the contrast pass; 19.9:1, and axe still reports bgOverlap.",
+    owner: "j.bell"
+  },
+  {
+    rule: "color-contrast",
+    selector: ".regrade-request-meta",
+    reason:
+      "#910: the initial/final and created/updated lines on a regrade request. Same unclipping, 7.73:1 " +
+      "(fg.muted on the panel surface) against a 4.5:1 requirement.",
+    owner: "j.bell"
+  }
 ];
 
 function suppressed(rule: string, target: string): boolean {
@@ -70,6 +123,9 @@ function suppressed(rule: string, target: string): boolean {
 const FREEZE_STYLE_ID = "a11y-coverage-animation-freeze";
 
 const VISUAL_TEST_ATTR = "data-visual-tests";
+
+/** Marks a container this scan expanded, and stores its original inline style. */
+const EXPANDED_ATTR = "data-a11y-scan-expanded";
 
 /**
  * Turn off the screenshot-masking mode for the duration of a scan.
@@ -97,6 +153,74 @@ async function disableVisualTestMasking(page: Page): Promise<boolean> {
 async function restoreVisualTestMasking(page: Page, wasEnabled: boolean): Promise<void> {
   if (!wasEnabled) return;
   await page.evaluate((attr) => document.documentElement.setAttribute(attr, ""), VISUAL_TEST_ATTR).catch(() => {});
+}
+
+/**
+ * Expand every internal scroll container so the text inside one can be measured.
+ *
+ * `color-contrast` needs to resolve the backdrop behind a text node, which it
+ * does by walking ancestors. When the text sits inside a scroll container but
+ * below that container's visible box, it is outside the box of the ancestor
+ * supplying the background, and axe gives up with `elmPartiallyObscured` — the
+ * finding is "not measured", not "passes". The submission routes' grading
+ * sidebar (`aside[data-grading-summary-aside]`: sticky, 100vh, overflow-y auto,
+ * 1301px of content in a 720px box) put 110 nodes across five routes in exactly
+ * that state, so five sixths of this sweep's contrast coverage on those routes
+ * was never actually taken. Expanding the container first makes those nodes
+ * measurable; the colours themselves do not change, so nothing about the verdict
+ * is softened.
+ *
+ * This is NOT a return to the screenshot masking that `disableVisualTestMasking`
+ * turns off. Masking repainted content — synthetic placeholder text, transparent
+ * and display:none subtrees — and so changed what axe read. This only removes a
+ * clip, and only for the contrast pass.
+ *
+ * The trade-off worth knowing: if content were genuinely obscured by an overlay
+ * whose position depends on the clipped layout, expanding could hide that. Real
+ * overlays here are position:fixed and unaffected, and the sweep's other rules
+ * still run against the unexpanded page.
+ *
+ * Returns how many containers were expanded.
+ */
+async function expandScrollContainers(page: Page, attr: string): Promise<number> {
+  return await page
+    .evaluate((expandedAttr) => {
+      let expanded = 0;
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+        const style = getComputedStyle(el);
+        const scrollsY = /auto|scroll/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 4;
+        const scrollsX = /auto|scroll/.test(style.overflowX) && el.scrollWidth > el.clientWidth + 4;
+        if (!scrollsY && !scrollsX) continue;
+        // Remember the inline style verbatim so the restore is exact — these
+        // elements often carry inline styles from resizable panels.
+        el.setAttribute(expandedAttr, el.getAttribute("style") ?? "");
+        el.style.overflow = "visible";
+        if (scrollsY) {
+          el.style.height = "auto";
+          el.style.maxHeight = "none";
+        }
+        if (scrollsX) {
+          el.style.width = "auto";
+          el.style.maxWidth = "none";
+        }
+        expanded++;
+      }
+      return expanded;
+    }, attr)
+    .catch(() => 0);
+}
+
+async function restoreScrollContainers(page: Page, attr: string): Promise<void> {
+  await page
+    .evaluate((expandedAttr) => {
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>(`[${expandedAttr}]`))) {
+        const original = el.getAttribute(expandedAttr) ?? "";
+        if (original) el.setAttribute("style", original);
+        else el.removeAttribute("style");
+        el.removeAttribute(expandedAttr);
+      }
+    }, attr)
+    .catch(() => {});
 }
 
 /**
@@ -267,19 +391,38 @@ export async function collectFindings(page: Page, colorScheme: ColorScheme): Pro
   await freezeAnimations(page);
   const maskingWasOn = await disableVisualTestMasking(page);
   try {
+    // color-contrast is deliberately held out of the tag pass and run on its own
+    // below, against a page whose internal scroll containers are expanded — see
+    // expandScrollContainers for why the clipped page cannot measure them.
     const tagged = await decideUndecidedPopupControls(
       page,
-      await new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(WCAG_TAGS).analyze()
+      await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
+        .withTags(WCAG_TAGS)
+        .disableRules([CONTRAST_RULE])
+        .analyze()
     );
     // withRules REPLACES the tag filter, so best-practice rules need their own pass.
     const extra = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
       .withRules(EXTRA_RULES)
       .analyze();
+
+    await expandScrollContainers(page, EXPANDED_ATTR);
+    let contrast: AxeResults;
+    try {
+      contrast = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
+        .withRules([CONTRAST_RULE])
+        .analyze();
+    } finally {
+      await restoreScrollContainers(page, EXPANDED_ATTR);
+    }
+
     return [
       ...toFindings(tagged, "violation"),
       ...toFindings(tagged, "incomplete"),
       ...toFindings(extra, "violation"),
-      ...toFindings(extra, "incomplete")
+      ...toFindings(extra, "incomplete"),
+      ...toFindings(contrast, "violation"),
+      ...toFindings(contrast, "incomplete")
     ];
   } finally {
     await restoreVisualTestMasking(page, maskingWasOn);

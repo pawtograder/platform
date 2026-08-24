@@ -1875,16 +1875,19 @@ function UnGradedGradingSummary() {
       <Text color="text.muted" fontSize="sm">
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
+      {/* `grading-summary-item` is a stable hook, not a style: axe's selector for
+          this text is otherwise all emotion hashes, which churn on any style
+          change and cannot be referenced from SCOPED_SUPPRESSIONS (see #910). */}
       <List.Root as="ul" fontSize="sm" color="text.muted">
         {assignment.autograder_points !== null && assignment.total_points !== null && (
-          <List.Item>
+          <List.Item className="grading-summary-item">
             <Text as="span" fontWeight="bold">
               Hand Grading:
             </Text>{" "}
             {assignment.total_points - assignment.autograder_points} points. This has not been graded yet.
           </List.Item>
         )}
-        <List.Item>
+        <List.Item className="grading-summary-item">
           <Text as="span" fontWeight="bold">
             Automated Checks:
           </Text>{" "}
@@ -1902,7 +1905,7 @@ function UnGradedGradingSummary() {
           graderResultsMaxScore !== undefined &&
           totalMaxScore !== null &&
           graderResultsMaxScore > totalMaxScore && (
-            <List.Item>
+            <List.Item className="grading-summary-item">
               <Text as="span" fontWeight="bold">
                 Hidden Automated Checks:
               </Text>{" "}
@@ -1911,7 +1914,7 @@ function UnGradedGradingSummary() {
             </List.Item>
           )}
         {isCapped && (
-          <List.Item>
+          <List.Item className="grading-summary-item">
             <Text as="span" fontWeight="bold">
               Score Capping:
             </Text>{" "}

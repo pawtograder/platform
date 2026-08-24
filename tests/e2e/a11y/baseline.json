@@ -74,15 +74,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "discussion-new|dark|color-contrast|incomplete": {
-      "route": "discussion-new",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
-    },
     "discussion-new|dark|label|violation": {
       "route": "discussion-new",
       "scheme": "dark",
@@ -109,15 +100,6 @@
       "nodes": 9,
       "impact": "serious",
       "sample": "svg[viewBox=\"0 0 384 512\"][role=\"img\"][width=\"12\"]"
-    },
-    "discussion-new|light|color-contrast|incomplete": {
-      "route": "discussion-new",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": "#radio-group\\:«ri»\\:radio\\:53 > .css-u8p219[data-state=\"unchecked\"] > .chakra-radio-card__itemDescription.css-duo29q"
     },
     "discussion-new|light|label|violation": {
       "route": "discussion-new",
@@ -272,24 +254,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "office-hours-queue-new|dark|color-contrast|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
-    },
-    "office-hours-queue-new|light|color-contrast|incomplete": {
-      "route": "office-hours-queue-new",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 1,
-      "impact": "serious",
-      "sample": "#field\\:\\:«rp» > .css-1nyjn91 > .css-1y0xgsc > .css-1ch6166 > .css-16b6szo"
-    },
     "polls|dark|nested-interactive|violation": {
       "route": "polls",
       "scheme": "dark",
@@ -326,15 +290,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-checks|dark|color-contrast|incomplete": {
-      "route": "submission-checks",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
     "submission-checks|dark|nested-interactive|violation": {
       "route": "submission-checks",
       "scheme": "dark",
@@ -343,15 +298,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-checks|light|color-contrast|incomplete": {
-      "route": "submission-checks",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
     "submission-checks|light|nested-interactive|violation": {
       "route": "submission-checks",
@@ -362,15 +308,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-deployments|dark|color-contrast|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
     "submission-deployments|dark|nested-interactive|violation": {
       "route": "submission-deployments",
       "scheme": "dark",
@@ -379,15 +316,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-deployments|light|color-contrast|incomplete": {
-      "route": "submission-deployments",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
     "submission-deployments|light|nested-interactive|violation": {
       "route": "submission-deployments",
@@ -434,15 +362,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-repo-analytics|dark|color-contrast|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
     "submission-repo-analytics|dark|nested-interactive|violation": {
       "route": "submission-repo-analytics",
       "scheme": "dark",
@@ -451,15 +370,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-repo-analytics|light|color-contrast|incomplete": {
-      "route": "submission-repo-analytics",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
     "submission-repo-analytics|light|nested-interactive|violation": {
       "route": "submission-repo-analytics",
@@ -470,15 +380,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-results|dark|color-contrast|incomplete": {
-      "route": "submission-results",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
     "submission-results|dark|nested-interactive|violation": {
       "route": "submission-results",
       "scheme": "dark",
@@ -487,15 +388,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-results|light|color-contrast|incomplete": {
-      "route": "submission-results",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
     "submission-results|light|nested-interactive|violation": {
       "route": "submission-results",
@@ -506,15 +398,6 @@
       "impact": "serious",
       "sample": ".css-lnfksf"
     },
-    "submission-root|dark|color-contrast|incomplete": {
-      "route": "submission-root",
-      "scheme": "dark",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
-    },
     "submission-root|dark|nested-interactive|violation": {
       "route": "submission-root",
       "scheme": "dark",
@@ -523,15 +406,6 @@
       "nodes": 1,
       "impact": "serious",
       "sample": ".css-lnfksf"
-    },
-    "submission-root|light|color-contrast|incomplete": {
-      "route": "submission-root",
-      "scheme": "light",
-      "rule": "color-contrast",
-      "kind": "incomplete",
-      "nodes": 11,
-      "impact": "serious",
-      "sample": ".css-8atqhb[role=\"region\"]:nth-child(4) > .css-12sq6rj"
     },
     "submission-root|light|nested-interactive|violation": {
       "route": "submission-root",

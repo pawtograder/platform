@@ -753,6 +753,11 @@ export default function HelpRequestForm({
                 render={({ field }) => (
                   <Select
                     isMulti={false}
+                    // Stable hook, not a style: react-select's own class prefix.
+                    // Without it every element inside this control is an emotion
+                    // hash, so axe's selector for the selected queue name cannot
+                    // be referenced from SCOPED_SUPPRESSIONS (see #910).
+                    classNamePrefix="help-queue-select"
                     placeholder="Select a help queue"
                     options={
                       helpQueues?.map(
