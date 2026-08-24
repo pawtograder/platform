@@ -3,7 +3,7 @@
 import { Box, Button, Heading, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsDiscord, BsExclamationCircle } from "react-icons/bs";
 import { createClient } from "@/utils/supabase/client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert } from "../ui/alert";
 import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
@@ -90,6 +90,42 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     const interval = setInterval(fetchInvites, 30000);
     return () => clearInterval(interval);
   }, [user, classId, showAll]);
+
+  // Landing here with an invite still outstanding asks for the roles to be provisioned.
+  //
+  // An unused invite row IS the "not provisioned yet" signal: `mark_discord_invite_used` runs in the
+  // same worker step that adds the roles, so a row still at `used = false` means the worker has not
+  // yet seen this student in the guild. Nothing re-checks that promptly on its own --
+  // `discord-batch-role-sync-hourly` is `0 * * * *`, and discord-reconciler only repairs a sync that
+  // has stopped running, treating `not_joined` as normal -- so a student who joins a minute after
+  // their invite is minted would otherwise wait for the next hour boundary. That is the wait the
+  // panel's old "within an hour" copy and its sync button described; this replaces both.
+  //
+  // request_discord_reinvite enqueues exactly the work the hourly batch would, and is already the
+  // student-facing half of that RPC: it permits a caller to retry their OWN membership, verifies the
+  // enrollment, throttles to one retry per user per five minutes in SQL, and takes a class-scoped
+  // advisory lock. So this needs no new state and cannot be used to enqueue work for anyone else.
+  //
+  // Fired once per mount rather than on every 30s poll: the SQL throttle makes repeats harmless but
+  // not free, and one request per visit is all it takes to close the gap.
+  const provisionRequested = useRef(false);
+  useEffect(() => {
+    if (showAll || !user || !classId) return;
+    if (invites.length === 0 || provisionRequested.current) return;
+    provisionRequested.current = true;
+
+    createClient()
+      .rpc("request_discord_reinvite", { p_class_id: classId, p_user_id: user.id })
+      .then(({ error: rpcError }) => {
+        if (rpcError) {
+          // Deliberately not surfaced. The hourly sync still covers this student, so a failure here
+          // costs them time rather than correctness, and an error banner on a panel whose whole
+          // message is "this is being handled" would be worse than the delay.
+          // eslint-disable-next-line no-console
+          console.warn("Discord role provisioning request failed:", rpcError);
+        }
+      });
+  }, [invites.length, showAll, user, classId]);
 
   // Only the first fetch, not the 30-second background refresh. `loading` goes true on every poll,
   // so reacting to it unconditionally tore the whole panel down and rebuilt it twice a minute --
@@ -201,13 +237,16 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
             <Text fontSize="xs" color="fg.muted">
               <strong>After joining the Discord server:</strong>
             </Text>
-            {/* No timing promise and no self-service sync control. Roles are assigned off the same
-                queued job that mints the invite, which runs within about a minute of the join, so
-                "within an hour" described a worst case the student almost never sees and invited
-                them to sit and wait for it. The sync button was the escape hatch from that wait; the
-                only cases it did not fix are ones the student cannot fix either -- the bot missing
-                Manage Roles, or its role sitting below the course roles -- and those need an
-                instructor. */}
+            {/* No timing promise and no self-service sync control, because the effect above now does
+                what the button did: landing here with an invite outstanding enqueues the role sync
+                directly, and the worker drains that queue every minute. The student no longer has to
+                find and press anything for the common case, so "shortly" is a claim the page keeps
+                rather than one that depended on them noticing a control.
+
+                The cases the button could not fix are unchanged and still need an instructor -- the
+                bot missing Manage Roles, or its role sitting below the course roles -- which is what
+                the second sentence is for. A student who joins and never returns to this page falls
+                back to the hourly batch sync, as before. */}
             <Text fontSize="xs" color="fg.muted">
               Your course roles will be assigned shortly. If they don&apos;t appear, contact your instructors.
             </Text>
