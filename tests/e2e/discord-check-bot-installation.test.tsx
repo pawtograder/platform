@@ -785,7 +785,12 @@ test.describe("discord-check-bot-installation edge function", () => {
       const body = data as CheckResponse;
       expect(body.installed).toBe(true);
       expect(body.missing_permissions).toContain("View Channels");
-      expect(body.can_create_invites).toBe(false);
+      // Null, not false. `false` is a claim -- "this server cannot enrol anybody" -- and it is the one
+      // claim a 403 on the listing cannot support, which is why the field is `boolean | null` and the
+      // function answers null whenever `channelsReadable` is false. Asserting false here contradicted
+      // the two assertions below it, which exist precisely to say that nothing about the channel layer
+      // is claimed when it could not be read.
+      expect(body.can_create_invites).toBeNull();
       // Nothing is claimed about individual channels: their overwrites were never readable.
       expect(body.channel_permission_problems).toEqual([]);
       // And nothing is claimed to be MISSING either. With no listing at all every tracked channel is
