@@ -9,7 +9,9 @@
  *     expected submission-scoped key, and its submission_files row references it,
  *   - the combined empty-hash matches an independent recomputation,
  *   - the fileFilter restricts ingestion,
- *   - empty detection flips isEmpty when the handout-hash table matches.
+ *   - empty detection flips isEmpty when the handout-hash table matches,
+ *   - a file whose name carries no extension is classified by its bytes: a
+ *     compiled executable goes to storage, a Makefile stays inline.
  *
  * Run from supabase/functions:  deno test _shared/SubmissionIngestion.test.ts
  * (it pulls npm:jszip + npm:unzipper from the global deno cache; no DB needed).
@@ -38,7 +40,7 @@ async function generateDummyPkcs8Pem(): Promise<string> {
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", await generateDummyPkcs8Pem());
 Deno.env.set("GITHUB_APP_ID", "1");
 
-const { ingestSubmissionFilesFromZip } = await import("./SubmissionIngestion.ts");
+const { ingestSubmissionFilesFromZip, collectTextFilesFromZipBuffer } = await import("./SubmissionIngestion.ts");
 
 // ---- helpers -------------------------------------------------------------
 
@@ -429,4 +431,135 @@ Deno.test("ingestSubmissionFilesFromZip: an emptyHashFilter that matches nothing
 
   assertEquals(insertedFiles.length, 2);
   assertEquals(result.isEmpty, false);
+});
+
+// Regression (prod): a student compiled `mystery.c` and committed the resulting
+// executable next to it. `mystery` has no extension, so extension-only detection
+// called it text and the ingester sent NUL-laden bytes to
+// `submission_files.contents`; Postgres rejected the JSON escape ("unsupported
+// Unicode escape sequence"), the rollback tore the submission down, and every
+// later push to that repo failed identically.
+const ELF_BYTES = new Uint8Array([
+  0x7f,
+  0x45,
+  0x4c,
+  0x46, // \x7fELF
+  0x02,
+  0x01,
+  0x01,
+  0x00, // 64-bit, little-endian, ELF v1, System V ABI
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00, // padding — the NUL run that breaks the text insert
+  0x02,
+  0x00,
+  0x3e,
+  0x00 // ET_EXEC, EM_X86_64
+]);
+
+Deno.test("ingestSubmissionFilesFromZip: an extensionless binary goes to storage, not contents", async () => {
+  const zipBuffer = await buildZip({
+    "module-01/mystery.c": "int main(void) { return 0; }\n",
+    "module-01/mystery": ELF_BYTES
+  });
+  const { client, insertedFiles, storageUploads } = makeFakeSupabase();
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 42,
+    classId: 7,
+    profileId: "profile-abc",
+    groupId: null
+  });
+
+  assertEquals(insertedFiles.length, 2);
+
+  const binRow = insertedFiles.find((r) => r.name === "module-01/mystery");
+  assert(binRow, "the executable should still be ingested, as a binary");
+  assertEquals(binRow!.is_binary, true);
+  assertEquals(binRow!.contents, null);
+  // No extension to map, so the generic type.
+  assertEquals(binRow!.mime_type, "application/octet-stream");
+  assertEquals(binRow!.storage_key, "classes/7/profiles/profile-abc/submissions/42/files/module-01/mystery");
+  assertEquals(binRow!.file_size, ELF_BYTES.length);
+
+  assertEquals(storageUploads.length, 1);
+  assertEquals(storageUploads[0].key, "classes/7/profiles/profile-abc/submissions/42/files/module-01/mystery");
+  assertEquals(storageUploads[0].size, ELF_BYTES.length);
+
+  // The source next to it is unaffected.
+  const srcRow = insertedFiles.find((r) => r.name === "module-01/mystery.c");
+  assertEquals(srcRow!.is_binary, false);
+  assertEquals(srcRow!.contents, "int main(void) { return 0; }\n");
+
+  // The actual failure condition: nothing carrying a NUL reaches `contents`.
+  // PostgREST would serialize it as a NUL escape, which Postgres refuses to
+  // convert to text.
+  for (const row of insertedFiles) {
+    assert(!row.contents?.includes("\0"), `row ${row.name} must not carry a NUL in contents`);
+  }
+
+  // Hashing is over raw bytes and so is unchanged by the classification.
+  assertEquals(
+    result.combinedHash,
+    combinedHash({
+      "module-01/mystery.c": sha256Hex(Buffer.from("int main(void) { return 0; }\n", "utf-8")),
+      "module-01/mystery": sha256Hex(Buffer.from(ELF_BYTES))
+    })
+  );
+});
+
+// The other half of the contract: plenty of legitimate source files carry no
+// extension, and misrouting them to storage would drop them out of the code
+// viewer entirely. Only the bytes decide.
+Deno.test("ingestSubmissionFilesFromZip: extensionless TEXT files stay inline", async () => {
+  const makefile = "all:\n\tgcc -o mystery mystery.c\n";
+  const zipBuffer = await buildZip({ Makefile: makefile, LICENSE: "MIT\n" });
+  const { client, insertedFiles, storageUploads } = makeFakeSupabase();
+
+  await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null
+  });
+
+  assertEquals(storageUploads.length, 0);
+  assertEquals(insertedFiles.length, 2);
+  for (const row of insertedFiles) {
+    assertEquals(row.is_binary, false);
+    assertEquals(row.storage_key, undefined);
+  }
+  assertEquals(insertedFiles.find((r) => r.name === "Makefile")!.contents, makefile);
+});
+
+// The PR base-tree side of the same classification. Its output is written to the
+// jsonb `pr_base_tree_cache.files`, which rejects a NUL exactly as
+// `submission_files.contents` does — and the head side now routes these to
+// storage, so keeping one here as pseudo-text would render as a whole-file
+// deletion in the diff.
+Deno.test("collectTextFilesFromZipBuffer: skips extensionless binaries, keeps extensionless text", async () => {
+  const zipBuffer = await buildZip({
+    "module-01/mystery.c": "int main(void) { return 0; }\n",
+    "module-01/mystery": ELF_BYTES,
+    Makefile: "all:\n",
+    "assets/logo.png": PNG_BYTES
+  });
+
+  const files = await collectTextFilesFromZipBuffer(zipBuffer);
+
+  assertEquals(Object.keys(files).sort(), ["Makefile", "module-01/mystery.c"]);
+  for (const [name, contents] of Object.entries(files)) {
+    assert(!contents.includes("\0"), `${name} must not carry a NUL`);
+  }
 });
