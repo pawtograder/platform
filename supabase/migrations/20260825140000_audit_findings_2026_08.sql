@@ -1786,6 +1786,30 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Take the row locks for the whole thread tree BEFORE the first UPDATE below, whose
+  -- AFTER trigger (transfer_discussion_karma_on_author_change) locks rows in `profiles`.
+  --
+  -- Without this, the two UPDATEs invert the lock order that every other karma path
+  -- follows (thread row, then profile row): the root UPDATE's transfer trigger leaves
+  -- this transaction holding both profile rows, and the descendant UPDATE then goes back
+  -- for more thread rows. A like arriving on a descendant in that window holds the
+  -- descendant's thread row (update_thread_likes bumps likes_count) and waits on the old
+  -- author's profile row, so the two deadlock and Postgres usually aborts this RPC:
+  --
+  --   ERROR:  deadlock detected
+  --   CONTEXT:  while locking tuple (0,69) in relation "discussion_threads"
+  --             SQL statement "UPDATE public.discussion_threads SET author = ... WHERE root = ..."
+  --
+  -- Claiming every thread row up front restores thread-then-profiles ordering for this
+  -- path too. ORDER BY id makes the acquisition order deterministic, so two staff
+  -- toggling overlapping trees cannot cycle against each other either.
+  PERFORM 1
+  FROM public.discussion_threads
+  WHERE id = p_thread_id
+     OR root = p_thread_id
+  ORDER BY id
+  FOR UPDATE;
+
   -- Update the root thread
   UPDATE public.discussion_threads
   SET author = v_target_author_id

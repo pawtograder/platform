@@ -118,6 +118,23 @@ describe("karma trigger concurrency invariants", () => {
     expect(definition.match(/FOR UPDATE/g)).toHaveLength(2); // INSERT and DELETE paths
   });
 
+  test("the anonymity RPC claims the whole thread tree before any transfer trigger runs", () => {
+    const definition = latestDefinitionOf("toggle_discussion_thread_author_anonymity");
+    // The RPC updates the root and then the descendants in two statements. The first
+    // fires the transfer trigger, so without an up-front claim on every thread row this
+    // transaction ends up holding profile locks and then asking for more thread rows —
+    // the reverse of the order a concurrent like takes them in, which deadlocks (242
+    // deadlocks per 600 toggles against concurrent descendant likes, before the fix).
+    const lockPos = definition.search(
+      /FROM public\.discussion_threads\s+WHERE id = p_thread_id\s+OR root = p_thread_id\s+ORDER BY id\s+FOR UPDATE/
+    );
+    expect(lockPos).toBeGreaterThan(-1);
+    // ...and it has to come before the first UPDATE, or it buys nothing.
+    const firstUpdate = definition.search(/UPDATE public\.discussion_threads/);
+    expect(firstUpdate).toBeGreaterThan(-1);
+    expect(lockPos).toBeLessThan(firstUpdate);
+  });
+
   test("the transfer path debits and credits in a deterministic profile order", () => {
     const definition = latestDefinitionOf("transfer_discussion_karma_on_author_change");
     // A single UPDATE ... FROM (VALUES (OLD.author, ...), (NEW.author, ...)) locks in

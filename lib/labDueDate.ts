@@ -27,6 +27,11 @@ import { addMinutes } from "date-fns";
  *     zone, landing on 19:59:59 EDT. Only the numeric-component form,
  *     `new TZDate(year, monthIndex, day, hours, minutes, seconds, timeZone)`, means what it
  *     looks like. Do not "simplify" this back to the string form.
+ *
+ *  3. A wall clock inside a DST fall-back is ambiguous, and TZDate and Postgres pick different
+ *     instants: measured for `2026-11-01 01:30` in America/New_York, TZDate returns 05:30Z (the
+ *     first, daylight occurrence) and `timestamp AT TIME ZONE` returns 06:30Z (the second,
+ *     standard one). `labMeetingEndTimestamp` corrects for this; see the note there.
  */
 
 /**
@@ -42,9 +47,44 @@ export type LabMeetingLike = {
   cancelled?: boolean | null;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Milliseconds east of UTC in `timeZone` at `instant`. */
+function zoneOffsetMs(instant: number, timeZone: string): number {
+  // getTimezoneOffset() follows the JS convention (minutes WEST of UTC), so negate it.
+  return -new TZDate(instant, timeZone).getTimezoneOffset() * 60_000;
+}
+
+/** The local wall clock at `instant`, as a comparable key. */
+function wallClockKey(instant: number, timeZone: string): string {
+  const d = new TZDate(instant, timeZone);
+  return [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()].join(":");
+}
+
 /**
  * The instant a lab meeting ends, as a wall-clock time in the course's time zone.
  * `endTime` is a Postgres `time` ("HH:MM:SS") or an `<input type="time">` value ("HH:MM").
+ *
+ * Resolves DST edges the way `timestamp AT TIME ZONE` does, which is not the way TZDate does:
+ *
+ *   - Ambiguous wall clock (fall-back, the hour that repeats): Postgres takes the LATER,
+ *     standard-time instant. Measured: `2026-11-01 01:30` in America/New_York is 06:30Z in
+ *     Postgres but 05:30Z from TZDate; `2026-04-04 23:59:59` in America/Santiago is 03:59:59Z in
+ *     Postgres but 02:59:59Z from TZDate.
+ *   - Nonexistent wall clock (spring-forward, the hour that is skipped): Postgres uses the
+ *     pre-transition offset, which shifts the result forward past the gap. TZDate already agrees
+ *     here -- `2026-03-08 02:30` in America/New_York is 07:30Z on both sides -- so this branch
+ *     changes nothing, but it is derived rather than assumed.
+ *
+ * How reachable is the ambiguous case? For America/New_York -- the only time zone in the database
+ * and the app's hardcoded fallback -- the repeated hour is 01:00-01:59:59, so the 23:59:59 default
+ * never lands in it and you would need a lab whose explicit `end_time` falls between 01:00 and
+ * 02:00 on the one fall-back Sunday a year. That is effectively unreachable. It is a real case for
+ * zones that fall back at midnight, though: `classes.time_zone` is free text, and in
+ * America/Santiago local 23:00-23:59:59 repeats, which is exactly where the 23:59:59 default sits.
+ * The fix is here because this module's whole contract is parity with the database -- a silent
+ * one-hour disagreement between the deadline a student is shown and the one enforcement applies is
+ * the class of bug this file exists to prevent -- not because the scenario is common.
  */
 export function labMeetingEndTimestamp(
   meetingDate: string,
@@ -53,10 +93,24 @@ export function labMeetingEndTimestamp(
 ): Date {
   const [year, month, day] = meetingDate.split("-").map(Number);
   const [hours = 0, minutes = 0, seconds = 0] = (endTime || DEFAULT_LAB_END_TIME).split(":").map(Number);
-  // Numeric components, not a string -- see trap 2 above. Seconds are passed explicitly because
-  // the default end time is 23:59:59 and the five-argument form would silently truncate to
-  // 23:59:00.
-  return new TZDate(year, month - 1, day, hours, minutes, Math.trunc(seconds), timeZone);
+
+  // Treat the wall clock as if it were UTC, then subtract the offset actually in force. Both
+  // candidate offsets are sampled (a day either side, which brackets any single transition
+  // without ever spanning two), because on a transition day the offset before and after differ
+  // and only one of them -- or, in the fall-back case, both -- reproduces the requested wall
+  // clock. Deliberately not `new TZDate(y, m, d, ...)`: that constructor resolves the fall-back
+  // ambiguity to the first occurrence, and Postgres resolves it to the second. See trap 3.
+  const naive = Date.UTC(year, month - 1, day, hours, minutes, Math.trunc(seconds));
+  const requested = [year, month - 1, day, hours, minutes, Math.trunc(seconds)].join(":");
+  const candidates = Array.from(
+    new Set([naive - zoneOffsetMs(naive - DAY_MS, timeZone), naive - zoneOffsetMs(naive + DAY_MS, timeZone)])
+  );
+
+  // Candidates that round-trip to the wall clock we asked for. There are two during a fall-back
+  // (take the later, as Postgres does), one normally, and none inside a spring-forward gap --
+  // where the later candidate is the pre-transition reading, again matching Postgres.
+  const exact = candidates.filter((instant) => wallClockKey(instant, timeZone) === requested);
+  return new TZDate(Math.max(...(exact.length > 0 ? exact : candidates)), timeZone);
 }
 
 /**
