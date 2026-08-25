@@ -1,12 +1,12 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
-import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useCallback } from "react";
 import type { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
@@ -32,7 +32,7 @@ export default function NewAssignmentPage() {
       protect_required_reviewers: 0
     }
   });
-  const router = useRouter();
+  const revalidateServerCaches = useRevalidateServerCaches(Number.parseInt(course_id as string, 10));
   const { getValues } = form;
 
   const { mutateAsync } = useCreate();
@@ -279,8 +279,13 @@ export default function NewAssignmentPage() {
               type: "success"
             });
 
-            void revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
-            router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
+            // Awaited, and the navigation goes through the hook: this also drops the browser's
+            // Router Cache, which still holds the pre-insert render of the assignments list the
+            // user came from (#937). `revalidateTag` alone never reached that copy.
+            await revalidateServerCaches({
+              tables: ["assignments"],
+              navigateTo: `/course/${course_id}/manage/assignments/${data.id}/autograder`
+            });
           }
         } catch (error) {
           // Clear the timer and dismiss the loading toast
@@ -294,7 +299,7 @@ export default function NewAssignmentPage() {
       }
       await create();
     },
-    [course_id, getValues, router, mutateAsync]
+    [course_id, getValues, mutateAsync, revalidateServerCaches]
   );
   return (
     <Box p={4}>

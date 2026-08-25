@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Card, Flex, Heading, Input, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
 import Link from "next/link";
@@ -36,6 +37,7 @@ export default function GitHubOrgDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const revalidateServerCaches = useRevalidateServerCaches();
   const [handout, setHandout] = useState("");
   const [solution, setSolution] = useState("");
   // The persisted org defaults (distinct from the live inputs above). The file editor is gated
@@ -86,12 +88,15 @@ export default function GitHubOrgDetailPage() {
       if (error) throw error;
       toaster.success({ title: "Org defaults saved" });
       await load();
+      // /admin/github-orgs lists these defaults from a server component; drop the browser's
+      // cached render of it so returning via the back link does not show the old values.
+      await revalidateServerCaches();
     } catch (err) {
       toaster.error({ title: "Failed to save org defaults", description: (err as Error).message });
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, load]);
+  }, [orgName, handout, solution, load, revalidateServerCaches]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
