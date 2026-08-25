@@ -401,10 +401,23 @@ function handleMemberRoutes(method: string, segments: string[], body: unknown, g
 
   if (segments.length === 4) {
     if (userId === "@me") {
+      // Discord accepts `@me` here only on the PATCH (Modify Current Member). The GET parses this
+      // segment as a snowflake and rejects `@me` with 400 / 50035, so answering it with the bot's
+      // member object -- which this mock used to do, GET-only -- inverted the real API exactly.
+      // discord-check-bot-installation shipped a `GET .../members/@me` that passed every E2E run
+      // against this mock and 400'd against discord.com on the first real install.
+      //
+      // The PATCH stays unimplemented -- nothing here calls it -- so it keeps the 405 the other
+      // unhandled methods get rather than gaining a fake success.
       if (method !== "GET") return methodNotAllowed();
-      return { status: 200, body: botMember(guild) };
+      return errorReply(400, 50035, "Invalid Form Body", {
+        errors: { user_id: { _errors: [{ code: "NUMBER_TYPE_COERCE", message: 'Value "@me" is not snowflake.' }] } }
+      });
     }
     if (method === "GET") {
+      // The bot is a member like any other and Discord returns it by its own snowflake, which is how
+      // the check function reads its roles now that `@me` is not an option.
+      if (userId === state.bot.id) return { status: 200, body: botMember(guild) };
       const member = guild.members[userId];
       if (!member) return errorReply(404, 10007);
       return { status: 200, body: member };

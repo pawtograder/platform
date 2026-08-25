@@ -357,11 +357,17 @@ test.describe("discord-check-bot-installation edge function", () => {
     expect(body.highest_class_role_position).toBe(5);
 
     // Traffic really reached the mock: the guild, the bot's own member object, and the role list.
+    //
+    // The member fetch names the bot by its snowflake. `@me` is not a GET route on Discord -- it is
+    // accepted only on the PATCH, and the GET answers 400 / 50035 "is not snowflake" -- so the id is
+    // read out of the mock's state rather than spelled here. The preceding `GET /users/@me` that
+    // resolves it is not asserted: it carries no guild id, so callsForThisClass filters it out.
+    const botUserId = (await getState()).bot.id;
     const calls = await callsForThisClass();
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(
       expect.arrayContaining([
         `GET /guilds/${GUILD_ID}`,
-        `GET /guilds/${GUILD_ID}/members/@me`,
+        `GET /guilds/${GUILD_ID}/members/${botUserId}`,
         `GET /guilds/${GUILD_ID}/roles`,
         // One request for the whole channel audit: GET /guilds/{id}/channels carries every channel's
         // permission_overwrites inline, so the per-channel answer costs no per-channel fan-out.
@@ -553,12 +559,20 @@ test.describe("discord-check-bot-installation edge function", () => {
     return channel.id;
   }
 
-  /** Track a channel for class A the way discord-async-worker does after creating one. */
-  async function trackChannel(channelId: string) {
+  /**
+   * Track a channel for class A the way discord-async-worker does after creating one.
+   *
+   * `channelType` is a parameter because `discord_channels` is unique on
+   * (class_id, channel_type, resource_id) with NULLS NOT DISTINCT, so two class-level rows -- both
+   * with a null resource_id -- collide unless their types differ. A test that needs to track two
+   * channels at once has to name a second type. The check function reads every row for the class
+   * regardless of type, so which one is used does not affect what it reports.
+   */
+  async function trackChannel(channelId: string, channelType: "general" | "operations" = "general") {
     const { error } = await untypedTable(supabase, "discord_channels").insert({
       class_id: classAId,
       discord_channel_id: channelId,
-      channel_type: "general"
+      channel_type: channelType
     });
     expect(error, `failed to track channel ${channelId}`).toBeNull();
   }
@@ -710,8 +724,12 @@ test.describe("discord-check-bot-installation edge function", () => {
     const state = await applyScenarioForGuilds("healthy", [GUILD_ID]);
     const generalId = channelIdByName(state, "general");
     const deletedId = "1409999999999999999";
+    // Two tracked channels, so the assertion below distinguishes the missing one from the healthy
+    // one. They must differ in channel_type: the uniqueness on
+    // (class_id, channel_type, resource_id) is NULLS NOT DISTINCT, so a second class-level 'general'
+    // row for the same class is a duplicate key rather than a second tracked channel.
     await trackChannel(generalId);
-    await trackChannel(deletedId);
+    await trackChannel(deletedId, "operations");
     await clearCalls();
 
     try {
@@ -767,7 +785,12 @@ test.describe("discord-check-bot-installation edge function", () => {
       const body = data as CheckResponse;
       expect(body.installed).toBe(true);
       expect(body.missing_permissions).toContain("View Channels");
-      expect(body.can_create_invites).toBe(false);
+      // Null, not false. `false` is a claim -- "this server cannot enrol anybody" -- and it is the one
+      // claim a 403 on the listing cannot support, which is why the field is `boolean | null` and the
+      // function answers null whenever `channelsReadable` is false. Asserting false here contradicted
+      // the two assertions below it, which exist precisely to say that nothing about the channel layer
+      // is claimed when it could not be read.
+      expect(body.can_create_invites).toBeNull();
       // Nothing is claimed about individual channels: their overwrites were never readable.
       expect(body.channel_permission_problems).toEqual([]);
       // And nothing is claimed to be MISSING either. With no listing at all every tracked channel is

@@ -3,11 +3,11 @@
 import { Box, Button, Heading, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import { BsDiscord, BsExclamationCircle } from "react-icons/bs";
 import { createClient } from "@/utils/supabase/client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert } from "../ui/alert";
 import { Tooltip } from "../ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import SyncRolesButton from "./sync-roles-button";
+import RequestRoleSyncButton from "./request-role-sync-button";
 
 type DiscordInvite = {
   id: number;
@@ -91,6 +91,105 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
     const interval = setInterval(fetchInvites, 30000);
     return () => clearInterval(interval);
   }, [user, classId, showAll]);
+
+  // Coming BACK to this page with an invite still outstanding asks for the roles to be provisioned.
+  //
+  // An unused invite row is the "not provisioned yet" signal: `mark_discord_invite_used` runs in the
+  // same worker step that adds the roles, so a row still at `used = false` means the worker has not
+  // yet seen this student in the guild. Nothing re-checks that promptly on its own --
+  // `discord-batch-role-sync-hourly` is `0 * * * *`, and discord-reconciler only repairs a sync that
+  // has stopped running, treating `not_joined` as normal -- so a student who joins a minute after
+  // their invite is minted would otherwise wait for the next hour boundary. That is the wait the
+  // panel's old "within an hour" copy described, and the wait its sync button existed to escape.
+  // This removes the need to press anything for the common case; the button below remains for the
+  // case no event can announce.
+  //
+  // Nothing is requested on mount, and that omission is load-bearing twice over.
+  //
+  // The join opens discord.gg in a NEW TAB, so this dashboard stays mounted throughout: a mount
+  // request goes out while the student is still absent, the worker takes its "no role to add" exit,
+  // and the moment that would actually succeed -- their return -- has already been spent. Worse, it
+  // poisons the retry. By the time an invite can render here the worker has already written the
+  // student's `not_joined` row (recordMembershipStatus runs immediately after storing the invite), so
+  // a mount request always finds a row to stamp last_retry_requested_at on, and the RPC's five-minute
+  // predicate then rejects the request made on return. Asking eagerly would disable the handler below.
+  //
+  // Returning to this tab is the only observable "the student has joined" signal available, so it is
+  // the only thing that triggers a request -- but only after they have actually opened an invite.
+  //
+  // Arming on the join click is what keeps this off the student's retry budget. Listening to every
+  // focus event meant an ordinary return to the dashboard -- another tab, lunch, a different window --
+  // enqueued a pre-join check and, since the same RPC now carries a five-a-day cap, spent one of the
+  // five. Five idle tab switches and the return that followed the real join was refused, and so was
+  // the manual button: the automatic path would have eaten the recourse it was meant to supplement.
+  //
+  // So the handler is armed by opening an invite and disarmed by firing. One join click buys one
+  // automatic check, which is proportionate -- it is the student's own deliberate action, and it is
+  // the action whose completion this is watching for.
+  //
+  // The cost of that restraint: a student who joined earlier, was never provisioned, and loads this
+  // page without ever leaving and returning to it gets no automatic request. That is what the button
+  // below is for, and failing that the hourly batch, which is the behaviour before any of this.
+  //
+  // request_discord_reinvite enqueues exactly the work the hourly batch would, and is already the
+  // student-facing half of that RPC: it permits a caller to retry their OWN membership, verifies the
+  // enrollment, throttles to one retry per user per five minutes in SQL, and takes a class-scoped
+  // advisory lock. So this cannot be used to enqueue work for anyone else.
+  const invitesOutstanding = invites.length > 0;
+  // A ref, not state: opening the invite must not re-render the panel mid-click, and the listeners
+  // below read it when they fire rather than closing over a stale value.
+  const joinOpened = useRef(false);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (showAll || !user || !classId || !invitesOutstanding) return;
+
+    const fire = () => {
+      joinOpened.current = false;
+      createClient()
+        .rpc("request_discord_reinvite", { p_class_id: classId, p_user_id: user.id })
+        .then(({ data, error: rpcError }) => {
+          if (rpcError) {
+            // Deliberately not surfaced. The hourly sync and the button below both still cover this
+            // student, so a failure here costs them time rather than correctness, and an error banner
+            // on a panel whose whole message is "this is being handled" would be worse than the delay.
+            // eslint-disable-next-line no-console
+            console.warn("Discord role provisioning request failed:", rpcError);
+            return;
+          }
+          // Queued nothing, which here almost always means the five-minute throttle: the student
+          // pressed the button below shortly before joining, so the check that actually matters is
+          // the one being refused. Retry once the window has passed rather than handing them to the
+          // hourly batch -- the join has already happened, so this is not a speculative request.
+          //
+          // On a timer that calls `fire` directly rather than re-arming, because re-arming would wait
+          // for another focus event and a student who joins and then stays on this page never
+          // produces one.
+          if ((data?.[0]?.queued ?? 0) === 0) {
+            if (retryTimer.current) clearTimeout(retryTimer.current);
+            retryTimer.current = setTimeout(fire, 5 * 60 * 1000 + 15_000);
+          }
+        });
+    };
+
+    const onReturn = () => {
+      if (joinOpened.current) fire();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onReturn();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    // `focus` as well as visibilitychange: returning from a new tab fires visibilitychange, but
+    // returning from another WINDOW (a desktop Discord client taking focus, say) only fires focus.
+    window.addEventListener("focus", onReturn);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onReturn);
+      // The panel unmounts as soon as the invite is marked used, which is the success case, so a
+      // pending retry has to be dropped rather than left to fire into a dead component.
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    };
+  }, [invitesOutstanding, showAll, user, classId]);
 
   // Only the first fetch, not the 30-second background refresh. `loading` goes true on every poll,
   // so reacting to it unconditionally tore the whole panel down and rebuilt it twice a minute --
@@ -177,7 +276,15 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
                   </HStack>
                   <HStack gap={2}>
                     <Button asChild colorPalette="blue" size="sm">
-                      <a href={invite.invite_url} target="_blank" rel="noopener noreferrer">
+                      {/* Opening the invite is what arms the return handler above. Without this the
+                          handler would fire on any return to the dashboard and spend the student's
+                          daily retry budget on checks made while they were never in Discord. */}
+                      <a
+                        href={invite.invite_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => (joinOpened.current = true)}
+                      >
                         <Icon as={BsDiscord} />
                         <Text>Join Discord Server</Text>
                       </a>
@@ -202,15 +309,22 @@ export default function PendingInvites({ classId, showAll = false }: PendingInvi
             <Text fontSize="xs" color="fg.muted">
               <strong>After joining the Discord server:</strong>
             </Text>
+            {/* No timing promise, because the effect above makes the common case genuinely prompt:
+                returning to this page with an invite outstanding enqueues the role sync, and the
+                worker drains that queue every minute. The old copy's "within an hour" described the
+                batch fallback, which is now the exception rather than the path everyone takes.
+
+                The button stays for the case the automatic path cannot observe -- a student who
+                joined and then never left and re-entered this page, so no visibility or focus event
+                ever fires. Unlike the control it replaces it is rationed: five presses a day, out of
+                request_discord_reinvite rather than out of the unthrottled
+                trigger_discord_role_sync_for_user, because Discord's rate limits are per-bot and one
+                student holding a button spends them for every class. */}
             <Text fontSize="xs" color="fg.muted">
-              Your roles will be synced automatically within an hour. For immediate sync, use the button below or type{" "}
-              <code>/sync-roles</code> in the Discord server.
+              Your course roles will be assigned shortly. If they don&apos;t appear, use the button below, then contact
+              your instructors if they still don&apos;t.
             </Text>
-            {!showAll && (
-              <HStack>
-                <SyncRolesButton classId={classId} variant="outline" size="sm" />
-              </HStack>
-            )}
+            {!showAll && classId && user && <RequestRoleSyncButton classId={classId} userId={user.id} />}
           </VStack>
         </Box>
       </VStack>

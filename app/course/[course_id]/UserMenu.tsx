@@ -723,6 +723,10 @@ function UserSettingsMenu() {
   const searchParams = useSearchParams();
   const { role: enrollment, isViewingAsStudent } = useClassProfiles();
   const gitHubUsername = enrollment.users.github_username;
+  // Shown for the same reason as the GitHub handle: the Discord link is invisible once made, and a
+  // student with no roles in the course server has no way to tell whether they linked the account at
+  // all. Not a link -- Discord has no public profile URL to point a username at.
+  const discordUsername = enrollment.users.discord_username;
   const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
@@ -768,6 +772,11 @@ function UserSettingsMenu() {
                           <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
                             {gitHubUsername}
                           </Link>
+                        </Text>
+                      )}
+                      {discordUsername && (
+                        <Text fontSize="sm" wordBreak="break-word">
+                          Discord: {discordUsername}
                         </Text>
                       )}
                     </VStack>
