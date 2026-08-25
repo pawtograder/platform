@@ -31,7 +31,9 @@ const RATING_KEYS = [
  */
 function toChoiceObject(c: unknown): Choice {
   if (c == null) return { value: "" };
-  if (typeof c === "string" || typeof c === "number" || typeof c === "boolean") return { value: c, scalar: true };
+  if (typeof c === "string") return { value: c, scalar: true };
+  if (typeof c === "number") return { value: c, scalar: true, valueType: "number" };
+  if (typeof c === "boolean") return { value: c, scalar: true, valueType: "boolean" };
   if (typeof c === "object" && "value" in (c as Record<string, unknown>)) {
     const obj = c as Record<string, unknown>;
     const rawValue = obj.value as unknown;
@@ -48,6 +50,8 @@ function toChoiceObject(c: unknown): Choice {
       if (k !== "value" && k !== "text" && k !== "raw") extras[k] = obj[k];
     }
     const out: Choice = { value, raw: extras };
+    if (typeof value === "number") out.valueType = "number";
+    else if (typeof value === "boolean") out.valueType = "boolean";
     if (obj.text != null) out.text = String(obj.text);
     return out;
   }

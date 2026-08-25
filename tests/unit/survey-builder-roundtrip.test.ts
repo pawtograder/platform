@@ -10,8 +10,9 @@
  * to add SurveyJS defaults such as an explicit `isRequired: false`.
  */
 import { fromJSON, toJSON } from "@/components/survey/serde";
-import { makeElement } from "@/components/survey/factories";
-import { SURVEYJS_TEMPLATES } from "@/scripts/DatabaseSeedingUtils";
+import { cloneChoice, makeElement, nextChoiceValue } from "@/components/survey/factories";
+import type { Choice } from "@/components/survey/SurveyBuilderDataTypes";
+import { SURVEYJS_TEMPLATES } from "@/scripts/surveyTemplates";
 import { TEAM_COLLABORATION_SURVEY } from "@/tests/fixtures/teamCollaborationSurvey";
 
 /** A save is what the builder emits: JSON, so `undefined`-valued keys are already gone. */
@@ -162,6 +163,57 @@ describe("survey builder round trip", () => {
       expect(typeof c).toBe("object");
       expect(typeof c.value).toBe("string");
     }
+  });
+
+  describe("editing a choice value", () => {
+    /** The choice a Likert template yields after import: numeric value, remembered type. */
+    const numeric = (): Choice => ({ value: 3, text: "Neutral", raw: {}, valueType: "number" });
+
+    it("keeps a numeric value numeric when retyped", () => {
+      expect(nextChoiceValue(numeric(), "4")).toBe(4);
+    });
+
+    it("keeps the type across a transient empty input", () => {
+      // What the instructor actually does: select-all, delete, then type. The intermediate
+      // empty value must not erase the fact that this choice holds a number.
+      const cleared = { ...numeric(), value: nextChoiceValue(numeric(), "") };
+      expect(cleared.value).toBe("");
+      expect(nextChoiceValue(cleared, "4")).toBe(4);
+    });
+
+    it("keeps boolean choices boolean", () => {
+      const bool: Choice = { value: true, valueType: "boolean" };
+      const cleared = { ...bool, value: nextChoiceValue(bool, "") };
+      expect(nextChoiceValue(cleared, "false")).toBe(false);
+    });
+
+    it("leaves string choices as strings, including numeric-looking ones", () => {
+      const str: Choice = { value: "Item 1" };
+      expect(nextChoiceValue(str, "3")).toBe("3");
+    });
+
+    it("falls back to the typed text when it is not a number", () => {
+      expect(nextChoiceValue(numeric(), "n/a")).toBe("n/a");
+    });
+
+    it("carries the remembered type through cloneChoice", () => {
+      expect(cloneChoice(numeric()).valueType).toBe("number");
+    });
+  });
+
+  it("never writes the internal valueType hint into saved JSON", () => {
+    const source = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "radiogroup", name: "q", choices: [{ value: 1, text: "Low" }, 2, { value: true, text: "Yes" }] }
+          ]
+        }
+      ]
+    };
+    expect(JSON.stringify(roundTrip(source))).not.toContain("valueType");
+    expect(JSON.stringify(roundTrip(source))).not.toContain("scalar");
   });
 
   it("is idempotent: saving twice changes nothing the first save did not", () => {

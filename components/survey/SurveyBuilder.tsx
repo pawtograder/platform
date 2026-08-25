@@ -21,9 +21,9 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
 
-import type { BuilderSurvey, BuilderElement, Choice, ElementType } from "./SurveyBuilderDataTypes";
+import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
 import { PASSTHROUGH_TYPE, passthroughSourceType } from "./SurveyBuilderDataTypes";
-import { makeEmptySurvey } from "./factories";
+import { makeEmptySurvey, nextChoiceValue } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
 
 import {
@@ -260,16 +260,6 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
    */
   const elementLabel = (el: BuilderElement) =>
     el.type === PASSTHROUGH_TYPE ? passthroughSourceType(el) : typeLabel(el.type);
-
-  /**
-   * Keep a choice value's JSON type when the instructor edits it. Likert scales use numeric
-   * values, and silently turning 3 into "3" would orphan every response already submitted
-   * against that choice.
-   */
-  const nextChoiceValue = (prev: Choice["value"], raw: string): Choice["value"] => {
-    if (typeof prev === "number" && raw.trim() !== "" && Number.isFinite(Number(raw))) return Number(raw);
-    return raw;
-  };
 
   return (
     <Flex height="100vh">
@@ -564,7 +554,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                                 const curr = list[i] ?? { value: "" };
                                                 list[i] = {
                                                   ...curr,
-                                                  value: nextChoiceValue(curr.value, e.target.value)
+                                                  value: nextChoiceValue(curr, e.target.value)
                                                 };
                                                 updateElementFields(el.id, { choices: list });
                                               }}

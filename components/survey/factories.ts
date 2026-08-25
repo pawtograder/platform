@@ -43,11 +43,27 @@ export function cloneChoice(c: Choice): Choice {
   if (c.text !== undefined) out.text = c.text;
   if (c.raw !== undefined) out.raw = { ...c.raw };
   if (c.scalar) out.scalar = true;
+  if (c.valueType) out.valueType = c.valueType;
   return out;
 }
 
 export function makeChoice(value?: Choice["value"], text?: string): Choice {
   return text ? { value: value ?? "", text } : { value: value ?? "" };
+}
+
+/**
+ * The value to store when an instructor edits a choice in the builder.
+ *
+ * Reads the JSON type off the choice rather than off its current value: while the instructor
+ * retypes, the value is transiently "", and inferring the type from that would turn a Likert
+ * `3` into `"3"` on the next keystroke and orphan every response already submitted against it.
+ */
+export function nextChoiceValue(choice: Choice, raw: string): Choice["value"] {
+  const type = choice.valueType ?? typeof choice.value;
+  if (raw.trim() === "") return raw;
+  if (type === "number" && Number.isFinite(Number(raw))) return Number(raw);
+  if (type === "boolean" && (raw === "true" || raw === "false")) return raw === "true";
+  return raw;
 }
 
 export function makePassthroughElement(raw: Record<string, unknown>, name: string): PassthroughElement {

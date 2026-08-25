@@ -208,4 +208,65 @@ test.describe("discussion karma credit + office-hours karma notes", () => {
     expect(deniedError).not.toBeNull();
     expect(deniedError!.message).toContain("Access denied");
   });
+
+  // Per-identity karma must FOLLOW a post when staff move it between a student's two
+  // identities, or the count is stranded on the old profile while the byline reads the
+  // new one — and a later unlike decrements the wrong row, leaving the old counter
+  // permanently inflated. Covered by the AFTER UPDATE OF author trigger
+  // transfer_discussion_karma_on_author_change_trigger.
+  //
+  // These drive discussion_threads.author directly rather than through
+  // toggle_discussion_thread_author_anonymity, for two reasons: the trigger's invariant
+  // is meant to hold for ANY writer of `author`, and that RPC currently cannot run at
+  // all — it declares v_current_author_id/v_target_author_id as `text` and compares them
+  // to uuid columns, so it raises `operator does not exist: uuid = text` before it
+  // updates anything. That is a separate pre-existing defect, tracked outside this file.
+  async function setAuthor(threadId: number, profileId: string): Promise<void> {
+    const { error } = await supabase.from("discussion_threads").update({ author: profileId }).eq("id", threadId);
+    expect(error).toBeNull();
+  }
+
+  test("moving a post between identities carries its karma to the profile the byline now reads", async () => {
+    const publicBefore = await karmaOf(author.public_profile_id);
+    const privateBefore = await karmaOf(author.private_profile_id);
+
+    const threadId = await insertThread(author.private_profile_id, "Named post later made anonymous");
+    await like(threadId, liker.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+
+    // Staff makes the post anonymous: the byline now renders the public profile.
+    await setAuthor(threadId, author.public_profile_id);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore + 1);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore);
+
+    // The unlike must debit the profile now holding the credit, leaving no stale counter.
+    const { error: unlikeError } = await supabase
+      .from("discussion_thread_likes")
+      .delete()
+      .eq("discussion_thread", threadId);
+    expect(unlikeError).toBeNull();
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore);
+  });
+
+  test("an author change with no likes, and a no-op author write, move nothing", async () => {
+    const publicBefore = await karmaOf(author.public_profile_id);
+    const privateBefore = await karmaOf(author.private_profile_id);
+
+    // No likes yet: nothing to transfer.
+    const threadId = await insertThread(author.public_profile_id, "Unliked post moved between identities");
+    await setAuthor(threadId, author.private_profile_id);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore);
+
+    // Now liked; rewriting `author` to its current value puts the column in the
+    // statement's SET list, which fires AFTER UPDATE OF author. The trigger's WHEN
+    // clause — not the column list — is what stops this double-counting.
+    await like(threadId, liker.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+    await setAuthor(threadId, author.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+  });
 });

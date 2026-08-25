@@ -2,7 +2,10 @@
 --
 -- PART A (public.update_discussion_karma): discussion karma was credited to the
 --   author's PRIVATE profile but rendered from whichever profile authored the
---   post, so karma earned on pseudonymous posts was invisible.
+--   post, so karma earned on pseudonymous posts was invisible. Making the counter
+--   per-identity also means it must follow a post when staff move it between a
+--   student's two identities, so this adds a transfer trigger on
+--   discussion_threads.author (see the note above that trigger).
 -- PART B (public.broadcast_help_request_staff_data_change): the office-hours
 --   karma-note branch read NEW/OLD.help_request_id, a column that does not
 --   exist on public.student_karma_notes, so every insert/update/delete on that
@@ -210,8 +213,76 @@ COMMENT ON FUNCTION public.update_discussion_karma() IS
 COMMENT ON COLUMN public.profiles.discussion_karma IS
 'Likes received on discussion posts authored BY THIS PROFILE. Per-identity by design: a student''s pseudonym and real profile each carry their own count, and they must not be summed on any student-visible surface. get_discussion_engagement sums them for staff.';
 
+-- Per-identity karma only stays correct if the counter follows the post when its
+-- author changes. Staff can move a thread between a student's two identities via
+-- toggle_discussion_thread_author_anonymity (20260115201143), which rewrites
+-- discussion_threads.author on the root and its descendants. Likes already cast
+-- would otherwise stay credited to the old identity while the byline reads the new
+-- one, and a later unlike would decrement the NEW identity -- bottoming out at the
+-- GREATEST(0, ...) floor -- and leave the old counter permanently inflated.
+--
+-- The previous normalized implementation was immune to this: it credited the
+-- private profile whichever identity the thread pointed at, so a toggle changed
+-- nothing. This transfer is the cost of the per-identity split, and it is paid here.
+--
+-- Implemented as a trigger on discussion_threads rather than inside that RPC:
+-- the invariant is "profiles.discussion_karma equals the number of likes on threads
+-- this profile authored", and a trigger keeps it true for ANY writer of `author`.
+-- The RPC is currently the only one, but it is not privileged in enforcing this,
+-- and a data migration or admin fixup would silently reintroduce the drift.
+--
+-- `UPDATE OF author` fires on the statement's SET column list even when the value
+-- is unchanged, so the WHEN clause -- not the column list -- is what makes this exact.
+CREATE OR REPLACE FUNCTION public.transfer_discussion_karma_on_author_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+DECLARE
+    v_likes bigint;
+BEGIN
+    SELECT COUNT(*) INTO v_likes
+    FROM public.discussion_thread_likes dtl
+    WHERE dtl.discussion_thread = NEW.id;
+
+    -- Most threads have no likes, and the anonymity toggle rewrites every
+    -- descendant of a root, so skip the write entirely in the common case.
+    IF v_likes = 0 THEN
+        RETURN NEW;
+    END IF;
+
+    -- One statement, so the two rows cannot be interleaved with another statement
+    -- of this transaction. GREATEST(0, ...) matches the unlike path's floor.
+    UPDATE public.profiles p
+    SET discussion_karma = GREATEST(0, p.discussion_karma + d.delta)
+    FROM (VALUES (OLD.author, -v_likes), (NEW.author, v_likes)) AS d(profile_id, delta)
+    WHERE p.id = d.profile_id;
+
+    RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.transfer_discussion_karma_on_author_change() IS
+'Moves a thread''s accumulated likes between profiles when discussion_threads.author changes (e.g. staff toggling anonymity), keeping per-identity discussion_karma consistent with the profile the byline renders.';
+
+DROP TRIGGER IF EXISTS transfer_discussion_karma_on_author_change_trigger ON public.discussion_threads;
+CREATE TRIGGER transfer_discussion_karma_on_author_change_trigger
+    AFTER UPDATE OF author
+    ON public.discussion_threads
+    FOR EACH ROW
+    WHEN (OLD.author IS DISTINCT FROM NEW.author)
+    EXECUTE FUNCTION public.transfer_discussion_karma_on_author_change();
+
+COMMENT ON TRIGGER transfer_discussion_karma_on_author_change_trigger ON public.discussion_threads IS
+'Keeps per-identity discussion_karma correct when a post is moved between a student''s public and private profiles.';
+
 -- Recompute karma under the new per-identity semantics. Runs after the trigger
 -- replacement above so the final state is consistent with the installed trigger.
+--
+-- It recomputes from each thread's CURRENT author, so threads that staff already
+-- moved between identities land on the profile the byline reads today; no separate
+-- repair pass is needed for historical toggles.
 --
 -- Scoped to rows that actually change rather than a blanket UPDATE of every
 -- profile (which is what 20260118214344 did). At prod scale `profiles` holds one

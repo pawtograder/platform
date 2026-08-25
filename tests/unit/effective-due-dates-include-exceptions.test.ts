@@ -20,14 +20,11 @@
  * Leaves the created classes and related rows in the database (use db reset or manual cleanup).
  */
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import {
-  createAuthenticatedClient,
-  createClass,
-  createDueDateException,
-  createUsersInClass,
-  insertAssignment,
-  supabase
-} from "@/tests/e2e/TestingUtils";
+// Loaded lazily on purpose. TestingUtils builds a Supabase admin client at module evaluation
+// and throws "SUPABASE_URL ... is required" when the environment is not configured, so a
+// static import would make this gated file FAIL under a plain `npx jest` instead of skipping.
+type TestingUtils = typeof import("@/tests/e2e/TestingUtils");
+let tu: TestingUtils;
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -47,7 +44,7 @@ const HOUR_MS = 60 * 60 * 1000;
 
 /** The exact query the course dashboard's "Upcoming Assignments" list runs (lib/ssr-course-dashboard.ts). */
 async function readUpcomingForStudent(classId: number, studentProfileId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await tu.supabase
     .from("assignments_with_effective_due_dates")
     .select("id, due_date")
     .eq("class_id", classId)
@@ -61,7 +58,7 @@ async function readUpcomingForStudent(classId: number, studentProfileId: string)
 }
 
 async function readViewDueDate(assignmentId: number, studentProfileId: string): Promise<string> {
-  const { data, error } = await supabase
+  const { data, error } = await tu.supabase
     .from("assignments_with_effective_due_dates")
     .select("due_date")
     .eq("id", assignmentId)
@@ -77,11 +74,16 @@ async function readViewDueDate(assignmentId: number, studentProfileId: string): 
 }
 
 describeIntegration("effective due dates include due-date exceptions", () => {
+  beforeAll(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    tu = require("@/tests/e2e/TestingUtils");
+  });
+
   jest.setTimeout(180_000);
 
   test("an individual extension keeps the assignment in the upcoming list and moves the shown deadline", async () => {
-    const course = await createClass({ name: `Due date exceptions ${Date.now()}` });
-    const [extended, control] = await createUsersInClass([
+    const course = await tu.createClass({ name: `Due date exceptions ${Date.now()}` });
+    const [extended, control] = await tu.createUsersInClass([
       {
         name: "Extension Student",
         email: `duedate-ext-${Date.now()}@pawtograder.net`,
@@ -101,13 +103,13 @@ describeIntegration("effective due dates include due-date exceptions", () => {
     // Hard deadline an hour in the past: without the extension applied, the dashboard's
     // `.gte("due_date", now)` filter drops the row entirely.
     const originalDue = new Date(Date.now() - HOUR_MS);
-    const assignment = await insertAssignment({
+    const assignment = await tu.insertAssignment({
       due_date: originalDue.toISOString(),
       class_id: course.id,
       name: "Extension regression assignment"
     });
 
-    await createDueDateException(assignment.id, extended.private_profile_id, course.id, 48);
+    await tu.createDueDateException(assignment.id, extended.private_profile_id, course.id, 48);
 
     const extendedDue = await readViewDueDate(assignment.id, extended.private_profile_id);
     const controlDue = await readViewDueDate(assignment.id, control.private_profile_id);
@@ -119,7 +121,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
 
     // The view must agree with calculate_final_due_date, which is what submission enforcement
     // and the assignment detail page are held to.
-    const { data: canonical, error: canonicalError } = await supabase.rpc("calculate_final_due_date", {
+    const { data: canonical, error: canonicalError } = await tu.supabase.rpc("calculate_final_due_date", {
       assignment_id_param: assignment.id,
       student_profile_id_param: extended.private_profile_id
     });
@@ -137,7 +139,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
 
     // Same fix on the Assignments tab, which reads the RPC rather than the view. The RPC is
     // SECURITY DEFINER with an auth gate, so it has to be called as the student.
-    const extendedClient = await createAuthenticatedClient(extended);
+    const extendedClient = await tu.createAuthenticatedClient(extended);
     const { data: rpcRows, error: rpcError } = await extendedClient.rpc("get_assignments_for_student_dashboard", {
       p_class_id: course.id,
       p_student_profile_id: extended.private_profile_id
@@ -154,8 +156,8 @@ describeIntegration("effective due dates include due-date exceptions", () => {
   });
 
   test("a group extension reaches the view through the group lateral", async () => {
-    const course = await createClass({ name: `Group due date exceptions ${Date.now()}` });
-    const [member] = await createUsersInClass([
+    const course = await tu.createClass({ name: `Group due date exceptions ${Date.now()}` });
+    const [member] = await tu.createUsersInClass([
       {
         name: "Group Member",
         email: `duedate-grp-${Date.now()}@pawtograder.net`,
@@ -166,7 +168,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
     ]);
 
     const originalDue = new Date(Date.now() - HOUR_MS);
-    const assignment = await insertAssignment({
+    const assignment = await tu.insertAssignment({
       due_date: originalDue.toISOString(),
       class_id: course.id,
       name: "Group extension regression assignment",
@@ -175,7 +177,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
       max_group_size: 4
     });
 
-    const { data: group, error: groupError } = await supabase
+    const { data: group, error: groupError } = await tu.supabase
       .from("assignment_groups")
       .insert({ name: `Group ${Date.now()}`, class_id: course.id, assignment_id: assignment.id })
       .select("id")
@@ -184,7 +186,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
       throw new Error(`failed to create assignment group: ${groupError.message}`);
     }
 
-    const { error: memberError } = await supabase.from("assignment_groups_members").insert({
+    const { error: memberError } = await tu.supabase.from("assignment_groups_members").insert({
       assignment_group_id: group.id,
       assignment_id: assignment.id,
       class_id: course.id,
@@ -197,7 +199,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
 
     // Group extensions carry assignment_group_id and a NULL student_id, so the view has to
     // resolve the student's group to find them.
-    const { error: exceptionError } = await supabase.from("assignment_due_date_exceptions").insert({
+    const { error: exceptionError } = await tu.supabase.from("assignment_due_date_exceptions").insert({
       class_id: course.id,
       assignment_id: assignment.id,
       student_id: null,
@@ -219,8 +221,8 @@ describeIntegration("effective due dates include due-date exceptions", () => {
   });
 
   test("a lab section with no end time uses the end of the meeting day instead of dropping the lab offset", async () => {
-    const course = await createClass({ name: `Null lab end time ${Date.now()}` });
-    const [withEndTime, withoutEndTime] = await createUsersInClass([
+    const course = await tu.createClass({ name: `Null lab end time ${Date.now()}` });
+    const [withEndTime, withoutEndTime] = await tu.createUsersInClass([
       {
         name: "Lab End Time Student",
         email: `duedate-lab-end-${Date.now()}@pawtograder.net`,
@@ -240,7 +242,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
     // Inserting lab_sections directly rather than via createLabSectionWithStudents: that helper
     // defaults end_time to "11:00" and cannot express the NULL this test is about. The insert
     // trigger (sync_lab_section_meetings) generates the meetings from the class start/end dates.
-    const { data: sections, error: sectionsError } = await supabase
+    const { data: sections, error: sectionsError } = await tu.supabase
       .from("lab_sections")
       .insert([
         {
@@ -270,7 +272,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
       [withEndTime, sectionWithEnd],
       [withoutEndTime, sectionWithoutEnd]
     ] as const) {
-      const { error } = await supabase
+      const { error } = await tu.supabase
         .from("user_roles")
         .update({ lab_section_id: section.id })
         .eq("private_profile_id", student.private_profile_id)
@@ -290,7 +292,7 @@ describeIntegration("effective due dates include due-date exceptions", () => {
     } while (cursor.getUTCDay() !== 1);
     cursor.setUTCDate(cursor.getUTCDate() + 1);
     const plainDue = fromZonedTime(`${cursor.toISOString().slice(0, 10)}T12:00:00`, COURSE_TIME_ZONE);
-    const assignment = await insertAssignment({
+    const assignment = await tu.insertAssignment({
       due_date: plainDue.toISOString(),
       class_id: course.id,
       name: "Lab offset regression assignment",

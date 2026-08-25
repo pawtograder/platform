@@ -53,6 +53,13 @@ export type Choice = {
    * Choices created in the builder have no source shape and are written as objects.
    */
   scalar?: true;
+  /**
+   * The JSON type the value arrived with, remembered separately from `value` itself. Editing
+   * a choice in the builder clears the input momentarily, and inferring the type from the
+   * current (empty) value would silently turn a Likert `3` into `"3"` on the next keystroke,
+   * orphaning every response already submitted against it.
+   */
+  valueType?: "number" | "boolean";
 };
 
 export interface ElementBase {

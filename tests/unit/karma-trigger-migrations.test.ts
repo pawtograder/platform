@@ -77,6 +77,30 @@ describe("update_discussion_karma — credits the authoring profile", () => {
   });
 });
 
+describe("transfer_discussion_karma_on_author_change — karma follows the post", () => {
+  test("a trigger moves the count when discussion_threads.author changes", () => {
+    const files = readdirSync(MIGRATIONS_DIR)
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+    const sql = files
+      .map((f) => readFileSync(join(MIGRATIONS_DIR, f), "utf8"))
+      .filter((body) => body.includes("transfer_discussion_karma_on_author_change_trigger"))
+      .pop();
+    expect(sql).toBeDefined();
+    const trigger = stripSqlComments(sql!).slice(
+      stripSqlComments(sql!).indexOf("CREATE TRIGGER transfer_discussion_karma_on_author_change_trigger")
+    );
+
+    // Per-identity karma is only correct if it follows a post moved between a
+    // student's two identities (e.g. staff toggling anonymity).
+    expect(trigger).toMatch(/AFTER UPDATE OF author\s+ON public\.discussion_threads/);
+    // `UPDATE OF author` fires whenever the column is in the statement's SET list,
+    // even when the value is unchanged. The WHEN clause is what prevents double
+    // counting on a no-op write, so it is not optional.
+    expect(trigger).toMatch(/WHEN \(OLD\.author IS DISTINCT FROM NEW\.author\)/);
+  });
+});
+
 describe("get_discussion_engagement — staff-only cross-identity roll-up", () => {
   test("sums both profiles' karma and keeps the authorization guard", () => {
     const definition = latestDefinitionOf("get_discussion_engagement");
