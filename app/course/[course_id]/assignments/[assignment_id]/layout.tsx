@@ -1,5 +1,6 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { createClientWithCaching, fetchAssignmentControllerData, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
+import { classScopedTableTags } from "@/lib/next-cache-tags";
 import { TZDate } from "@date-fns/tz";
 import { isAfter } from "date-fns";
 import { headers } from "next/headers";
@@ -35,7 +36,14 @@ export default async function AssignmentLayout({
     // Send staff masquerading as an enrolled student back to the course rather than the
     // all-courses dashboard, so the view-as banner (and its exit button) stays in reach.
     const blockedDestination = role.isViewingAs ? `/course/${course_id}` : "/";
-    const client = await createClientWithCaching({ tags: ["assignment-release-date"] });
+    // Tag with the class-scoped strings the `assignments` invalidation trigger actually emits.
+    // The former literal `"assignment-release-date"` was emitted by nothing, so this gate —
+    // which decides whether an enrolled student may open the assignment at all — held a stale
+    // release_date for the full 1-hour TTL: publishing kept students redirected out, and
+    // un-publishing kept it reachable.
+    const client = await createClientWithCaching({
+      tags: classScopedTableTags("assignments", Number(course_id))
+    });
     const { data: assignment } = await client
       .from("assignments")
       .select("release_date, classes(time_zone)")

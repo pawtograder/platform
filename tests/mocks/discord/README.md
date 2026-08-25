@@ -42,27 +42,27 @@ point at the bare origin if that is ever more convenient.
 
 ## Routes
 
-| Method           | Path                                          | Notes                                                              |
-| ---------------- | --------------------------------------------- | ------------------------------------------------------------------ |
-| GET              | `/guilds/{guild}`                             | 404 / 10004 when absent or when the bot is not a member            |
-| GET              | `/guilds/{guild}/members/@me`                 | The bot's own member object, with its role ids                     |
-| GET              | `/guilds/{guild}/roles`                       | `permissions` is a decimal string, `position` a number             |
-| GET              | `/guilds/{guild}/members`                     | Full member list                                                   |
-| GET              | `/guilds/{guild}/members/{user}`              | 404 / 10007 when the user has not joined                           |
-| PUT              | `/guilds/{guild}/members/{user}`              | Add Guild Member. 204 empty when already a member, 201 when added  |
-| PUT / DELETE     | `/guilds/{guild}/members/{user}/roles/{role}` | Manage Roles plus the hierarchy rule, both 403 / 50013             |
-| POST             | `/guilds/{guild}/roles`                       | Created at position 1, as Discord does                             |
-| DELETE           | `/guilds/{guild}/roles/{role}`                | Hierarchy applies; the role is pulled from every member            |
-| GET              | `/guilds/{guild}/channels`                    | Needs View Channel, else 403 / 50001                               |
-| POST             | `/guilds/{guild}/channels`                    | Needs Manage Channels; 400 / 50035 without a name                  |
-| GET / DELETE     | `/channels/{channel}`                         | DELETE returns the deleted channel                                 |
-| POST             | `/channels/{channel}/messages`                | 400 / 50006 with neither content nor embeds                        |
-| GET / PATCH      | `/channels/{channel}/messages/{message}`      | 404 / 10008 when unknown, 403 / 50005 for another author's message |
-| POST             | `/channels/{channel}/invites`                 | Needs Create Invite; codes are deterministic (`mock0001`, ...)     |
-| GET / DELETE     | `/invites/{code}`                             | 404 / 10006 when already gone                                      |
-| GET              | `/users/@me`                                  | The bot user                                                       |
-| GET              | `/users/@me/guilds`                           | Cursor-paginated on `limit` and `after`, `bot_in_guild` only       |
-| GET / POST / PUT | `/applications/{application}/commands`        | POST creates or updates one, PUT overwrites the whole set          |
+| Method           | Path                                          | Notes                                                                                |
+| ---------------- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| GET              | `/guilds/{guild}`                             | 404 / 10004 when absent or when the bot is not a member                              |
+| GET              | `/guilds/{guild}/members/@me`                 | 400 / 50035 `is not snowflake`, as Discord answers it                                |
+| GET              | `/guilds/{guild}/roles`                       | `permissions` is a decimal string, `position` a number                               |
+| GET              | `/guilds/{guild}/members`                     | Full member list                                                                     |
+| GET              | `/guilds/{guild}/members/{user}`              | 404 / 10007 when the user has not joined; the bot's own id returns its member object |
+| PUT              | `/guilds/{guild}/members/{user}`              | Add Guild Member. 204 empty when already a member, 201 when added                    |
+| PUT / DELETE     | `/guilds/{guild}/members/{user}/roles/{role}` | Manage Roles plus the hierarchy rule, both 403 / 50013                               |
+| POST             | `/guilds/{guild}/roles`                       | Created at position 1, as Discord does                                               |
+| DELETE           | `/guilds/{guild}/roles/{role}`                | Hierarchy applies; the role is pulled from every member                              |
+| GET              | `/guilds/{guild}/channels`                    | Needs View Channel, else 403 / 50001                                                 |
+| POST             | `/guilds/{guild}/channels`                    | Needs Manage Channels; 400 / 50035 without a name                                    |
+| GET / DELETE     | `/channels/{channel}`                         | DELETE returns the deleted channel                                                   |
+| POST             | `/channels/{channel}/messages`                | 400 / 50006 with neither content nor embeds                                          |
+| GET / PATCH      | `/channels/{channel}/messages/{message}`      | 404 / 10008 when unknown, 403 / 50005 for another author's message                   |
+| POST             | `/channels/{channel}/invites`                 | Needs Create Invite; codes are deterministic (`mock0001`, ...)                       |
+| GET / DELETE     | `/invites/{code}`                             | 404 / 10006 when already gone                                                        |
+| GET              | `/users/@me`                                  | The bot user                                                                         |
+| GET              | `/users/@me/guilds`                           | Cursor-paginated on `limit` and `after`, `bot_in_guild` only                         |
+| GET / POST / PUT | `/applications/{application}/commands`        | POST creates or updates one, PUT overwrites the whole set                            |
 
 Anything else answers `404 {"message":"404: Not Found","code":0}`, and a known path with the wrong
 method answers 405, both the way Discord does. Every request, including those two, lands in the call

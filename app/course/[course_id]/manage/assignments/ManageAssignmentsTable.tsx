@@ -11,9 +11,10 @@ import { Alert, Table, Text } from "@chakra-ui/react";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
   const supabase = await createClient();
-  // Read features on the request-scoped client rather than through the cached `getCourse` loader:
-  // that loader caches for an hour under a `course:<id>` tag that nothing in the codebase emits, so
-  // a flag toggle would not reach this table.
+  // Read features on the request-scoped client rather than through the cached `getCourse` loader.
+  // `course:<id>` is now emitted by the `classes` invalidation trigger (it was emitted by nothing
+  // at all before #937), but that delivery is best-effort pg_net with no retry, and a flag toggle
+  // showing up an hour late here is not worth the saved query.
   const [{ data: assignmentRows, error: overviewError }, { data: courseRow, error: courseError }] = await Promise.all([
     fetchManageAssignmentsOverview(supabase, courseId),
     supabase.from("classes").select("features").eq("id", courseId).single()

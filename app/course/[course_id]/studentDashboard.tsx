@@ -214,8 +214,7 @@ export default async function StudentDashboard({
        *
        * Also hidden when an instructor is viewing as a student. PendingInvites scopes itself with
        * useAuthState(), not with the profile being viewed, so it would show the instructor their own
-       * invite under the student's dashboard and hand them a SyncRolesButton that mutates their own
-       * Discord roles -- neither of which is what "view as" is meant to show.
+       * invite under the student's dashboard -- which is not what "view as" is meant to show.
        */}
       {/*
        * The link control comes first, because it is the step that unblocks everything below it. A
