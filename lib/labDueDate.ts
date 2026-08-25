@@ -5,7 +5,7 @@ import { addMinutes } from "date-fns";
  * The single client-side implementation of the lab-based due date rule.
  *
  * This mirrors `public.calculate_effective_due_date` (see
- * `supabase/migrations/20260825130000_effective_due_dates_include_exceptions_and_null_lab_end_time.sql`):
+ * `supabase/migrations/20260825140000_audit_findings_2026_08.sql`):
  * take the most recent non-cancelled meeting of the student's lab section whose END has already
  * passed by the assignment's original deadline, and add `minutes_due_after_lab` to that end.
  *

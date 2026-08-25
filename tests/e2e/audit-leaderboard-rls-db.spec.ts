@@ -6,7 +6,7 @@
  *    logged a failure. 20251228143943_partitioned_audit_system.sql renamed the old audit table to
  *    audit_legacy and the `instructors read` policy followed it through the rename; the new
  *    partitioned table never got one back until
- *    20260824120300_audit_rls_and_leaderboard_anon_scoping.sql.
+ *    20260825140000_audit_findings_2026_08.sql.
  *
  *    The positive assertion is the point here. A test that only checked "students cannot read the
  *    audit log" passed throughout the outage. This pins that an instructor CAN read their class.

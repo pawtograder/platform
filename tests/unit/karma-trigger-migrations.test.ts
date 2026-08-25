@@ -2,7 +2,7 @@
  * @jest-environment node
  *
  * Static drift guards for the two karma trigger defects fixed in
- * 20260824120100_karma_credits_authoring_profile_and_karma_notes_broadcast.sql.
+ * 20260825140000_audit_findings_2026_08.sql.
  *
  * The behavioural coverage lives in tests/e2e/karma-credit-and-notes-db.spec.ts, but
  * that lane is heavy. These assertions are cheap and run on every PR, and they read the

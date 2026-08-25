@@ -3,7 +3,7 @@ import { createAuthenticatedClient, createClass, createUserInClass, supabase } f
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // Regression coverage for the two karma defects fixed in
-// supabase/migrations/20260824120100_karma_credits_authoring_profile_and_karma_notes_broadcast.sql.
+// supabase/migrations/20260825140000_audit_findings_2026_08.sql.
 // Both shipped with ZERO tests, which is how one of them stayed 100% broken for
 // eleven months. These are pure DB-integration tests: no browser, so they pin the
 // trigger/RPC contracts the UI depends on.
@@ -44,6 +44,28 @@ test.describe("discussion karma credit + office-hours karma notes", () => {
         class_id: classId,
         draft: false,
         root_class_id: classId
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!.id;
+  }
+
+  async function insertReply(authorProfileId: string, subject: string, rootId: number): Promise<number> {
+    const { data, error } = await supabase
+      .from("discussion_threads")
+      .insert({
+        subject,
+        body: "Karma regression fixture reply.",
+        topic_id: topicId,
+        is_question: false,
+        instructors_only: false,
+        author: authorProfileId,
+        class_id: classId,
+        draft: false,
+        root_class_id: classId,
+        parent: rootId,
+        root: rootId
       })
       .select("id")
       .single();
@@ -215,12 +237,11 @@ test.describe("discussion karma credit + office-hours karma notes", () => {
   // permanently inflated. Covered by the AFTER UPDATE OF author trigger
   // transfer_discussion_karma_on_author_change_trigger.
   //
-  // These drive discussion_threads.author directly rather than through
-  // toggle_discussion_thread_author_anonymity, for two reasons: the trigger's invariant
-  // is meant to hold for ANY writer of `author`, and that RPC currently cannot run at
-  // all — it declares v_current_author_id/v_target_author_id as `text` and compares them
-  // to uuid columns, so it raises `operator does not exist: uuid = text` before it
-  // updates anything. That is a separate pre-existing defect, tracked outside this file.
+  // These two drive discussion_threads.author directly, because the trigger's invariant
+  // is meant to hold for ANY writer of that column. The tests after them go through the
+  // real staff RPC, which is the only writer in the product today. Keep both: the direct
+  // ones would catch a regression reachable from a data migration or admin fixup that
+  // never touches the RPC.
   async function setAuthor(threadId: number, profileId: string): Promise<void> {
     const { error } = await supabase.from("discussion_threads").update({ author: profileId }).eq("id", threadId);
     expect(error).toBeNull();
@@ -268,5 +289,90 @@ test.describe("discussion karma credit + office-hours karma notes", () => {
     await setAuthor(threadId, author.private_profile_id);
     expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
     expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+  });
+
+  // The staff-facing path, end to end through the real RPC. Until
+  // 20260825140000_audit_findings_2026_08.sql this RPC raised
+  // `operator does not exist: uuid = text` on every call and had never once executed, so
+  // the transfer trigger above had no live caller. These tests are what make it live.
+  async function toggleAnonymity(
+    client: Awaited<ReturnType<typeof createAuthenticatedClient>>,
+    threadId: number,
+    makeAnonymous: boolean
+  ): Promise<void> {
+    const { error } = await client.rpc("toggle_discussion_thread_author_anonymity", {
+      p_thread_id: threadId,
+      p_make_anonymous: makeAnonymous
+    });
+    expect(error).toBeNull();
+  }
+
+  async function authorOf(threadId: number): Promise<string> {
+    const { data, error } = await supabase.from("discussion_threads").select("author").eq("id", threadId).single();
+    expect(error).toBeNull();
+    return data!.author;
+  }
+
+  test("the staff anonymity RPC carries karma between identities and back", async () => {
+    const publicBefore = await karmaOf(author.public_profile_id);
+    const privateBefore = await karmaOf(author.private_profile_id);
+    const instructorClient = await createAuthenticatedClient(instructor);
+
+    const threadId = await insertThread(author.private_profile_id, "Named post toggled via the staff RPC");
+    const { error: rootErr } = await supabase.from("discussion_threads").update({ root: threadId }).eq("id", threadId);
+    expect(rootErr).toBeNull();
+    await like(threadId, liker.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+
+    // Staff hides the author: the byline now renders the pseudonym, so the karma must be
+    // on the pseudonym.
+    await toggleAnonymity(instructorClient, threadId, true);
+    expect(await authorOf(threadId)).toBe(author.public_profile_id);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore + 1);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore);
+
+    // Staff reveals the author again: it must come back, not double-count.
+    await toggleAnonymity(instructorClient, threadId, false);
+    expect(await authorOf(threadId)).toBe(author.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+
+    // Re-asserting the current state is a no-op in the RPC, so nothing may shift.
+    await toggleAnonymity(instructorClient, threadId, false);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 1);
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore);
+  });
+
+  test("the RPC moves a whole thread tree's karma, leaving other authors' replies alone", async () => {
+    const publicBefore = await karmaOf(author.public_profile_id);
+    const privateBefore = await karmaOf(author.private_profile_id);
+    const likerPrivateBefore = await karmaOf(liker.private_profile_id);
+    const instructorClient = await createAuthenticatedClient(instructor);
+
+    const rootId = await insertThread(author.private_profile_id, "Root with replies, toggled via RPC");
+    const { error: rootErr } = await supabase.from("discussion_threads").update({ root: rootId }).eq("id", rootId);
+    expect(rootErr).toBeNull();
+
+    // A reply by the same student (must move) and one by someone else (must not).
+    const ownReply = await insertReply(author.private_profile_id, "Re: same author", rootId);
+    const otherReply = await insertReply(liker.private_profile_id, "Re: different author", rootId);
+
+    // Likes on the root, on the same-author reply, and on the other student's reply.
+    await like(rootId, liker.private_profile_id);
+    await like(ownReply, liker.private_profile_id);
+    await like(otherReply, author.private_profile_id);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore + 2);
+    expect(await karmaOf(liker.private_profile_id)).toBe(likerPrivateBefore + 1);
+
+    // The trigger fires once per updated row, so both of the author's posts transfer.
+    await toggleAnonymity(instructorClient, rootId, true);
+    expect(await authorOf(rootId)).toBe(author.public_profile_id);
+    expect(await authorOf(ownReply)).toBe(author.public_profile_id);
+    expect(await authorOf(otherReply)).toBe(liker.private_profile_id);
+
+    expect(await karmaOf(author.public_profile_id)).toBe(publicBefore + 2);
+    expect(await karmaOf(author.private_profile_id)).toBe(privateBefore);
+    // The other student's reply never moved, so their karma is untouched.
+    expect(await karmaOf(liker.private_profile_id)).toBe(likerPrivateBefore + 1);
   });
 });

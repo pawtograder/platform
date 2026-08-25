@@ -1,6 +1,6 @@
 /**
  * Regression tests for two due-date bugs fixed in
- * 20260825130000_effective_due_dates_include_exceptions_and_null_lab_end_time.sql:
+ * 20260825140000_audit_findings_2026_08.sql:
  *
  *   1. assignments_with_effective_due_dates.due_date and
  *      get_assignments_for_student_dashboard.due_date used to be the LAB-aware date only, with no
