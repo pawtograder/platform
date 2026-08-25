@@ -101,6 +101,33 @@ describe("transfer_discussion_karma_on_author_change — karma follows the post"
   });
 });
 
+describe("karma trigger concurrency invariants", () => {
+  // A deterministic test for a race is not writable here without sleeps that pass by
+  // luck, so these assert the two properties that were verified manually instead.
+  // Manual reproduction of the deadlock (before the ordering fix): two psql workers
+  // running 600 alternating `UPDATE discussion_threads SET author = ...` statements
+  // each, on two threads owned by the same student in opposite directions, with
+  // `SET enable_seqscan=off` to force the production plan. That produced 5 deadlocks
+  // per 1200 transfers; with the ordering below it produces 0.
+  test("the like path locks the thread row before reading its author", () => {
+    const definition = latestDefinitionOf("update_discussion_karma");
+    // Serializes a like against a concurrent author change. Today update_thread_likes
+    // already write-locks this row, but the karma invariant must not depend on an
+    // unrelated denormalized counter staying where it is.
+    expect(definition).toMatch(/SELECT\s+dt\.author\s+INTO\s+thread_author_id[\s\S]*?FOR UPDATE/);
+    expect(definition.match(/FOR UPDATE/g)).toHaveLength(2); // INSERT and DELETE paths
+  });
+
+  test("the transfer path debits and credits in a deterministic profile order", () => {
+    const definition = latestDefinitionOf("transfer_discussion_karma_on_author_change");
+    // A single UPDATE ... FROM (VALUES (OLD.author, ...), (NEW.author, ...)) locks in
+    // OLD-then-NEW order under the production plan, so two transfers moving posts in
+    // opposite directions between the same two profiles deadlock.
+    expect(definition).not.toMatch(/FROM \(VALUES \(OLD\.author/);
+    expect(definition).toMatch(/IF OLD\.author < NEW\.author THEN/);
+  });
+});
+
 describe("get_discussion_engagement — staff-only cross-identity roll-up", () => {
   test("sums both profiles' karma and keeps the authorization guard", () => {
     const definition = latestDefinitionOf("get_discussion_engagement");

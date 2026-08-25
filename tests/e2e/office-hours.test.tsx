@@ -1,4 +1,5 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
@@ -295,6 +296,7 @@ test.describe("Office Hours", () => {
 const PRIVACY_REGRESSION_REQUEST = "Private request with code references - must stay private 🔒";
 const FOLLOWUP_ORIGINAL_REQUEST = "Original request to be followed up on";
 const FOLLOWUP_NEW_REQUEST = "Follow-up: still stuck after our last session";
+const ACTIVE_REQUEST_FOR_DRAWER_TEST = "Active request so the floating widget hides its drawer branch";
 
 test.describe("Office Hours audit regressions", () => {
   test.describe.configure({ mode: "serial" });
@@ -428,6 +430,56 @@ test.describe("Office Hours audit regressions", () => {
     // flip caused: help_request_messages RLS reads the same flag.
     const { data: visibleAfter } = await student2Client.from("help_requests").select("id").eq("id", requestId);
     expect(visibleAfter ?? []).toHaveLength(0);
+  });
+
+  // The submission page's "Ask For Help" button opens the shared help drawer. Its onClick
+  // used to be an empty body; wiring it to openDrawer() was still not enough, because the
+  // drawer was only ever mounted by FloatingHelpRequestWidget (which returns null for
+  // staff and mounts the drawer only in its "no active request" branch) and by
+  // OfficeHoursStatusCard (student dashboard only). HelpDrawerProvider now owns the mount.
+  // These two cases are the ones that were still dead after the first fix.
+  const expectDrawerOpensOnSubmissionPage = async (page: Page) => {
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
+    const drawer = page.getByRole("dialog").filter({ hasText: "Get Help" });
+    // Guard against a vacuous pass: the drawer must not already be on the page.
+    await expect(drawer).toHaveCount(0);
+    const button = page.getByRole("button", { name: "Ask For Help" });
+    await expect(button).toBeVisible();
+    await button.click();
+    await expect(drawer).toBeVisible();
+  };
+
+  test("Ask For Help on a submission page opens the drawer for staff", async ({ page }) => {
+    test.slow();
+    // FloatingHelpRequestWidget returns null for every non-student, so before the drawer
+    // moved into the provider this click had no consumer at all.
+    await loginAsUser(page, instructor!, course);
+    await expectDrawerOpensOnSubmissionPage(page);
+  });
+
+  test("Ask For Help on a submission page opens the drawer for a student with an active request", async ({ page }) => {
+    test.slow();
+    // Give the student an active request of their own rather than leaning on the tests
+    // above, so this still holds when the file is run with -g or sharded. Seeded into the
+    // class's default queue, not this describe's queue, so it cannot collide with the
+    // follow-up test's solo-request uniqueness check.
+    await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student!.private_profile_id,
+      request: ACTIVE_REQUEST_FOR_DRAWER_TEST
+    });
+    // Precondition: an active request is exactly the state in which the widget renders its
+    // status bubble instead of the branch that mounted the drawer.
+    const { data: activeRequests } = await supabase
+      .from("help_requests")
+      .select("id, status")
+      .eq("class_id", course.id)
+      .eq("created_by", student!.private_profile_id)
+      .in("status", ["open", "in_progress"]);
+    expect((activeRequests ?? []).length).toBeGreaterThan(0);
+
+    await loginAsUser(page, student!, course);
+    await expectDrawerOpensOnSubmissionPage(page);
   });
 
   test("A follow-up request records the request it follows up on", async ({ page }) => {

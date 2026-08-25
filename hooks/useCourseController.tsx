@@ -3,6 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { isDiscussionTeaserVisibleToStudent } from "@/lib/viewAsStudentDataMask";
+import { calculateLabBasedDueDate } from "@/lib/labDueDate";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import TableController, {
   useFindTableControllerValue,
@@ -1628,7 +1629,10 @@ export class CourseController {
     if (!studentPrivateProfileId && !labSectionIdOverride) {
       throw new Error("No student private profile ID or lab section ID override provided");
     }
-    if (!assignment.minutes_due_after_lab) {
+    // `== null`, not a falsy check: `minutes_due_after_lab = 0` means "due exactly at the end of
+    // lab", and calculate_effective_due_date only falls back when the column is NULL. A falsy
+    // check sent zero-offset assignments to the plain due date, a whole meeting cycle later.
+    if (assignment.minutes_due_after_lab == null) {
       return new Date(assignment.due_date);
     }
 
@@ -1643,32 +1647,23 @@ export class CourseController {
       throw new Error("Lab section not found");
     }
 
-    // Find the most recent lab section meeting before the assignment's original due date
+    // Find the most recent lab section meeting that has ENDED by the assignment's original due
+    // date. Delegated to lib/labDueDate so this agrees with calculate_effective_due_date, with
+    // useAssignmentDueDate below, and with the assignment form's preview -- the date-only string
+    // comparison this used to do dropped a meeting that ended before a late-in-the-day deadline.
     const assignmentDueDate = new Date(assignment.due_date);
-    // Convert assignment due date to YYYY-MM-DD string for date-only comparison
-    const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
     const labMeetingResult = this.labSectionMeetings.list();
-    const relevantMeetings = labMeetingResult.data
-      .filter(
-        (meeting) =>
-          meeting.lab_section_id === labSectionId && !meeting.cancelled && meeting.meeting_date < assignmentDueDateStr
-      )
-      .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
+    const effectiveDueDate = calculateLabBasedDueDate({
+      meetings: labMeetingResult.data.filter((meeting) => meeting.lab_section_id === labSectionId),
+      endTime: labSection.end_time,
+      timeZone: this.course.time_zone ?? "America/New_York",
+      assignmentDueDate,
+      minutesDueAfterLab: assignment.minutes_due_after_lab
+    });
 
-    if (relevantMeetings.length === 0) {
+    if (!effectiveDueDate) {
       return new Date(assignment.due_date);
     }
-
-    // Calculate lab-based due date
-    const mostRecentLabMeeting = relevantMeetings[0];
-    const labMeetingDate = new TZDate(
-      // Same default as calculate_effective_due_date and the assignment form preview: a lab
-      // section with no end time is treated as ending at the end of its meeting day.
-      mostRecentLabMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
-      this.course.time_zone ?? "America/New_York"
-    );
-
-    const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
 
     return effectiveDueDate;
   }
@@ -2057,38 +2052,22 @@ export function useAssignmentDueDate(
 
       if (labSectionId) {
         const labSection = labSections.find((section) => section.id === labSectionId);
-        if (labSection) {
-          // Find the most recent lab section meeting before the assignment's original due date
+        if (labSection && assignment.minutes_due_after_lab !== null) {
+          // Find the most recent lab section meeting that has ENDED by the assignment's original
+          // due date. Delegated to lib/labDueDate so this agrees with
+          // calculate_effective_due_date: filtering on the meeting's calendar date instead of its
+          // end timestamp used to select a lab that had not finished yet, showing a deadline a
+          // whole meeting cycle later than the one submission enforcement applies.
           const assignmentDueDate = new Date(assignment.due_date);
-          const relevantMeetings = labSectionMeetings
-            .filter(
-              (meeting) =>
-                meeting.lab_section_id === labSectionId &&
-                !meeting.cancelled &&
-                new Date(meeting.meeting_date) < assignmentDueDate
-            )
-            .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
-
-          if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
-            // Calculate lab-based due date
-            const mostRecentLabMeeting = relevantMeetings[0];
-            // `end_time` is nullable, and concatenating a null produced "2026-08-24Tnull" ->
-            // Invalid Date, which propagated through TZDate/addMinutes and rendered as an em-dash
-            // instead of a deadline. Default to the end of the meeting day, matching
-            // calculate_effective_due_date and the assignment form's lab preview.
-            const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"));
-
-            const labMeetingDate = new TZDate(
-              nonTZDate.getFullYear(),
-              nonTZDate.getMonth(),
-              nonTZDate.getDate(),
-              nonTZDate.getHours(),
-              nonTZDate.getMinutes(),
-              time_zone
-            );
-
-            // Add the minutes offset to the lab meeting date
-            effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
+          const labBasedDueDate = calculateLabBasedDueDate({
+            meetings: labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSectionId),
+            endTime: labSection.end_time,
+            timeZone: time_zone,
+            assignmentDueDate,
+            minutesDueAfterLab: assignment.minutes_due_after_lab
+          });
+          if (labBasedDueDate) {
+            effectiveDueDate = new TZDate(labBasedDueDate, time_zone);
           }
         }
       }

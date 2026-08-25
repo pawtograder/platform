@@ -177,10 +177,23 @@ DECLARE
 BEGIN
     -- Credit the profile that authored the post, with no public->private
     -- normalization: karma is per-identity. See the migration header for why.
+    --
+    -- FOR UPDATE serializes this read against a concurrent author change. Without
+    -- it, a like committing while an anonymity toggle is in flight could read the
+    -- pre-toggle author and credit the old identity, while that toggle's transfer
+    -- (below) counts likes without seeing this uncommitted one -- stranding the
+    -- credit. In practice the BEFORE trigger update_thread_likes already write-locks
+    -- this row to bump likes_count, so the hazard is currently unreachable and this
+    -- lock is free (the transaction already holds it). It is taken explicitly so the
+    -- karma invariant does not silently depend on an unrelated denormalized counter.
+    --
+    -- Lock order is thread row -> profiles row here and in
+    -- transfer_discussion_karma_on_author_change; keep it that way.
     IF TG_OP = 'INSERT' THEN
         SELECT dt.author INTO thread_author_id
         FROM public.discussion_threads dt
-        WHERE dt.id = NEW.discussion_thread;
+        WHERE dt.id = NEW.discussion_thread
+        FOR UPDATE;
 
         IF thread_author_id IS NOT NULL THEN
             UPDATE public.profiles
@@ -192,7 +205,8 @@ BEGIN
     ELSIF TG_OP = 'DELETE' THEN
         SELECT dt.author INTO thread_author_id
         FROM public.discussion_threads dt
-        WHERE dt.id = OLD.discussion_thread;
+        WHERE dt.id = OLD.discussion_thread
+        FOR UPDATE;
 
         IF thread_author_id IS NOT NULL THEN
             UPDATE public.profiles
@@ -252,12 +266,28 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- One statement, so the two rows cannot be interleaved with another statement
-    -- of this transaction. GREATEST(0, ...) matches the unlike path's floor.
-    UPDATE public.profiles p
-    SET discussion_karma = GREATEST(0, p.discussion_karma + d.delta)
-    FROM (VALUES (OLD.author, -v_likes), (NEW.author, v_likes)) AS d(profile_id, delta)
-    WHERE p.id = d.profile_id;
+    -- Debit the old identity and credit the new one, ALWAYS in ascending profile id
+    -- order. This previously ran as a single UPDATE ... FROM (VALUES (OLD), (NEW)),
+    -- which locks rows in whatever order the plan produces: on a small table the
+    -- planner seq-scans profiles (a consistent order, so it looks fine locally), but
+    -- at production size it switches to a nested loop over the VALUES list and locks
+    -- in OLD-then-NEW order. Two concurrent transfers moving posts in opposite
+    -- directions between the same pair of profiles then grab the two rows in
+    -- opposite orders and deadlock -- reproduced at 5 deadlocks per 1200 transfers
+    -- with enable_seqscan=off. Ordering by id removes the cycle by construction, and
+    -- plpgsql statement order guarantees it regardless of the plan.
+    -- GREATEST(0, ...) matches the unlike path's floor.
+    IF OLD.author < NEW.author THEN
+        UPDATE public.profiles SET discussion_karma = GREATEST(0, discussion_karma - v_likes)
+        WHERE id = OLD.author;
+        UPDATE public.profiles SET discussion_karma = discussion_karma + v_likes
+        WHERE id = NEW.author;
+    ELSE
+        UPDATE public.profiles SET discussion_karma = discussion_karma + v_likes
+        WHERE id = NEW.author;
+        UPDATE public.profiles SET discussion_karma = GREATEST(0, discussion_karma - v_likes)
+        WHERE id = OLD.author;
+    END IF;
 
     RETURN NEW;
 END;

@@ -201,6 +201,32 @@ describe("survey builder round trip", () => {
     });
   });
 
+  it("preserves localized choice labels instead of stringifying them", () => {
+    // SurveyJS allows `text` to be a per-locale object. Coercing it with String() yields
+    // "[object Object]" and destroys every translation -- the same corruption this PR fixes
+    // for choice values.
+    const source = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "radiogroup",
+              name: "q",
+              choices: [
+                { value: "yes", text: { default: "Yes", fr: "Oui" } },
+                { value: "no", text: "No" }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const result = roundTrip(source);
+    expectNoLoss(source, result);
+    expect(JSON.stringify(result)).not.toContain("[object Object]");
+  });
+
   it("never writes the internal valueType hint into saved JSON", () => {
     const source = {
       pages: [

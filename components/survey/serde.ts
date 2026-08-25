@@ -47,12 +47,18 @@ function toChoiceObject(c: unknown): Choice {
     // then emit it as a bogus property on save.
     const extras: Record<string, unknown> = {};
     for (const k of Object.keys(obj)) {
-      if (k !== "value" && k !== "text" && k !== "raw") extras[k] = obj[k];
+      if (k === "value" || k === "raw") continue;
+      // A plain string label is lifted onto the Choice so the builder can edit it. A
+      // localized label is a per-locale object ({ default: "Yes", fr: "Oui" }); it stays in
+      // the passthrough bag and is written back untouched, because stringifying it would
+      // produce "[object Object]" and destroy every translation.
+      if (k === "text" && typeof obj.text === "string") continue;
+      extras[k] = obj[k];
     }
     const out: Choice = { value, raw: extras };
     if (typeof value === "number") out.valueType = "number";
     else if (typeof value === "boolean") out.valueType = "boolean";
-    if (obj.text != null) out.text = String(obj.text);
+    if (typeof obj.text === "string") out.text = obj.text;
     return out;
   }
   return { value: String(c) };

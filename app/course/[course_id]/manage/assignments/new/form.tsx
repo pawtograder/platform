@@ -22,6 +22,7 @@ import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
+import { calculateLabBasedDueDate } from "@/lib/labDueDate";
 import { appendTimezoneOffset, parseZonedFormDate, toDateTimeLocalValue } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -80,7 +81,12 @@ function Field({ orientation, ...props }: FieldProps) {
   );
 }
 
-// Helper function to calculate effective due date for a lab section
+// Helper function to calculate effective due date for a lab section.
+// Delegates to lib/labDueDate, the single implementation shared with useAssignmentDueDate,
+// CourseController.calculateEffectiveDueDate and calculate_effective_due_date -- so the deadline
+// this preview promises the instructor is the one students are actually held to. The previous
+// local copy built its timestamps with `new TZDate("<date>T<time>", tz)`, which parses a
+// timezone-less string as UTC and therefore previewed the wrong wall-clock time.
 function calculateLabSectionDueDate(
   labSection: LabSection,
   labSectionMeetings: LabSectionMeeting[],
@@ -88,35 +94,13 @@ function calculateLabSectionDueDate(
   minutesDueAfterLab: number,
   timezone: string
 ): Date | null {
-  // Find the most recent lab section meeting before the assignment's original due date
-  const relevantMeetings = labSectionMeetings
-    .filter((meeting) => {
-      if (meeting.lab_section_id !== labSection.id || meeting.cancelled) {
-        return false;
-      }
-
-      // Combine meeting date with lab section end time
-      const meetingEndTime = new TZDate(meeting.meeting_date + "T" + (labSection.end_time || "23:59:59"), timezone);
-
-      return meetingEndTime <= originalDueDate;
-    })
-    .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
-
-  if (relevantMeetings.length === 0) {
-    return null; // No lab meeting found before due date
-  }
-
-  // Get the most recent lab meeting
-  const mostRecentMeeting = relevantMeetings[0];
-
-  // Combine meeting date with lab section end time
-  const labMeetingEndTime = new TZDate(
-    mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
-    timezone
-  );
-
-  // Add the minutes offset
-  return addMinutes(labMeetingEndTime, minutesDueAfterLab);
+  return calculateLabBasedDueDate({
+    meetings: labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSection.id),
+    endTime: labSection.end_time,
+    timeZone: timezone,
+    assignmentDueDate: originalDueDate,
+    minutesDueAfterLab
+  });
 }
 
 function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {

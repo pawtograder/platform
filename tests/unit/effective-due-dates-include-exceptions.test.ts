@@ -20,6 +20,7 @@
  * Leaves the created classes and related rows in the database (use db reset or manual cleanup).
  */
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { calculateLabBasedDueDate } from "@/lib/labDueDate";
 // Loaded lazily on purpose. TestingUtils builds a Supabase admin client at module evaluation
 // and throws "SUPABASE_URL ... is required" when the environment is not configured, so a
 // static import would make this gated file FAIL under a plain `npx jest` instead of skipping.
@@ -312,5 +313,30 @@ describeIntegration("effective due dates include due-date exceptions", () => {
     expect(formatInTimeZone(new Date(withoutEndDue), COURSE_TIME_ZONE, "HH:mm:ss")).toBe("01:59:59");
     // Both students meet on the same day, so the defaulted section is strictly the later deadline.
     expect(new Date(withoutEndDue).getTime()).toBeGreaterThan(new Date(withEndDue).getTime());
+
+    // Client/DB parity: lib/labDueDate is the client-side implementation of this same rule, and
+    // the three earlier hand-rolled copies of it each disagreed with the database. Run it over
+    // the real generated meetings and require an exact match, so a future edit to either side
+    // that reintroduces a date-only comparison or a UTC-parsed timestamp fails here.
+    for (const [section, expectedDue] of [
+      [sectionWithEnd, withEndDue],
+      [sectionWithoutEnd, withoutEndDue]
+    ] as const) {
+      const { data: meetings, error: meetingsError } = await tu.supabase
+        .from("lab_section_meetings")
+        .select("meeting_date, cancelled")
+        .eq("lab_section_id", section.id);
+      if (meetingsError) {
+        throw new Error(`failed to read lab section meetings: ${meetingsError.message}`);
+      }
+      const clientDue = calculateLabBasedDueDate({
+        meetings: meetings ?? [],
+        endTime: section.end_time,
+        timeZone: COURSE_TIME_ZONE,
+        assignmentDueDate: plainDue,
+        minutesDueAfterLab: 120
+      });
+      expect(clientDue?.getTime()).toBe(new Date(expectedDue).getTime());
+    }
   });
 });

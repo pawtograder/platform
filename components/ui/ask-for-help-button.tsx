@@ -8,8 +8,10 @@ export default function AskForHelpButton() {
   const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
   // Opens the same drawer as the floating help widget and the office-hours status card.
   // HelpDrawerProvider wraps every course page (app/course/[course_id]/layout.tsx), which
-  // is the only place this button renders, so the hook always finds its context. Called
-  // before the feature-flag early return to keep hook order stable across renders.
+  // is the only place this button renders, so the hook always finds its context — and the
+  // provider owns the drawer's mount, so this works for staff and for students who
+  // already have an active request (the widget renders for neither). Called before the
+  // feature-flag early return to keep hook order stable across renders.
   const { openDrawer } = useHelpDrawer();
   if (!featureEnabled) {
     return null;

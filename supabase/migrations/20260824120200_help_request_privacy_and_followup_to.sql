@@ -19,6 +19,14 @@
 --    public" control, it needs its own SECURITY DEFINER RPC that re-checks the caller and
 --    what is attached to the request -- not a direct column write from a form save.
 --
+--    The check authorizes against OLD.class_id and the trigger also forbids changing
+--    class_id at all. Authorizing against NEW.class_id was bypassable: a participant who
+--    is staff in a different class could set class_id to that class and is_private=false
+--    in one PATCH -- the UPDATE policy admits them via user_is_in_help_request(id) for
+--    both rows -- and the request was published into the substituted class. Reproduced
+--    end to end through PostgREST (HTTP 200, row left at class_id=<other>,
+--    is_private=false) before this was tightened.
+--
 -- 2. create_help_request_with_participants gains p_followup_to
 --    The new-request form collects "Follow-Up to Previous Request" (and pre-fills it from
 --    ?followup_to=<id>, which the queue list's Follow-Up button links to), but the RPC had
@@ -43,11 +51,30 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
-    -- Attached to `BEFORE UPDATE OF is_private`, which fires on the statement's column
-    -- list rather than on an actual value change, so the OLD/NEW comparison here is what
-    -- does the work: a no-op write of the same value is allowed through.
+    -- Attached to `BEFORE UPDATE OF is_private, class_id`, which fires on the statement's
+    -- column list rather than on an actual value change, so the OLD/NEW comparisons here
+    -- are what do the work: a no-op write of the same value is allowed through.
+
+    -- A help request never changes class. Nothing in the product moves one -- the class
+    -- is derived from the queue at creation and no code path writes this column -- and
+    -- allowing it defeats the privacy check below. The UPDATE policy admits a participant
+    -- through user_is_in_help_request(id), which is class-independent and passes for both
+    -- the old and the new row, so a participant who happens to be staff in some OTHER
+    -- class could re-home the request into that class and authorize their own downgrade:
+    -- in a single statement if we authorized against NEW, or in two statements (move,
+    -- then downgrade) even if we authorize against OLD. Blocking the move is what closes
+    -- both. It is also the only thing keeping the row consistent with its help_queue,
+    -- which belongs to the original class.
+    IF NEW.class_id IS DISTINCT FROM OLD.class_id THEN
+        RAISE EXCEPTION 'help request % cannot be moved between classes', OLD.id
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- Authorize against OLD.class_id. NEW.class_id is caller-controlled in the same
+    -- statement, so authorizing against it would let the caller pick the class that
+    -- grants them staff privileges.
     IF OLD.is_private = true AND NEW.is_private = false
-       AND NOT public.authorizeforclassgrader(NEW.class_id) THEN
+       AND NOT public.authorizeforclassgrader(OLD.class_id) THEN
         RAISE EXCEPTION 'only course staff may make a private help request public'
             USING ERRCODE = '42501';
     END IF;
@@ -58,11 +85,11 @@ $$;
 ALTER FUNCTION public.forbid_help_request_privacy_downgrade() OWNER TO postgres;
 
 COMMENT ON FUNCTION public.forbid_help_request_privacy_downgrade() IS
-'Rejects true -> false transitions of help_requests.is_private unless the caller is an instructor or grader in the class. RLS lets any participant update their own help request row with no column restriction, and a client-side edit path used to publish private requests as a side effect of removing their last code reference, exposing the whole message thread (help_request_messages RLS reads this flag via can_access_help_request).';
+'Guards the help-request privacy boundary. Rejects true -> false transitions of help_requests.is_private unless the caller is an instructor or grader in the request''s OWN class (OLD.class_id), and rejects any change to class_id. RLS lets any participant update their own help request row with no column restriction, and a client-side edit path used to publish private requests as a side effect of removing their last code reference, exposing the whole message thread (help_request_messages RLS reads this flag via can_access_help_request). Authorizing against NEW.class_id would be caller-controlled: a participant who is staff in another class could move the request there and approve their own downgrade.';
 
 DROP TRIGGER IF EXISTS forbid_help_request_privacy_downgrade_tr ON public.help_requests;
 CREATE TRIGGER forbid_help_request_privacy_downgrade_tr
-    BEFORE UPDATE OF is_private ON public.help_requests
+    BEFORE UPDATE OF is_private, class_id ON public.help_requests
     FOR EACH ROW EXECUTE FUNCTION public.forbid_help_request_privacy_downgrade();
 
 -- 2. followup_to: foreign key ----------------------------------------------------------

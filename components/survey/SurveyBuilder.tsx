@@ -563,7 +563,15 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                               size="sm"
                                               flex="1"
                                               value={c.text ?? ""}
-                                              placeholder={`Label ${i + 1} (optional)`}
+                                              // A localized label is a per-locale object. It round-trips
+                                              // untouched, but there is no sensible single-line edit for
+                                              // it, and typing here would drop every other translation.
+                                              disabled={c.raw?.text !== undefined && typeof c.raw.text !== "string"}
+                                              placeholder={
+                                                c.raw?.text !== undefined && typeof c.raw.text !== "string"
+                                                  ? "Localized - edit in the JSON editor"
+                                                  : `Label ${i + 1} (optional)`
+                                              }
                                               aria-label={`Choice ${i + 1} label`}
                                               onChange={(e) => {
                                                 const list = [...(el.choices ?? [])];
