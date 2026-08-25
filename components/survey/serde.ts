@@ -47,7 +47,10 @@ function toChoiceObject(c: unknown): Choice {
     // then emit it as a bogus property on save.
     const extras: Record<string, unknown> = {};
     for (const k of Object.keys(obj)) {
-      if (k === "value" || k === "raw") continue;
+      // `raw` is not special-cased on the way in: a source choice that genuinely carries a
+      // property named `raw` keeps it, since `extras` is written back verbatim. (Skipping it
+      // here would silently drop it, which is the passthrough contract this exists to honor.)
+      if (k === "value") continue;
       // A plain string label is lifted onto the Choice so the builder can edit it. A
       // localized label is a per-locale object ({ default: "Yes", fr: "Oui" }); it stays in
       // the passthrough bag and is written back untouched, because stringifying it would

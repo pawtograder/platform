@@ -201,6 +201,24 @@ describe("survey builder round trip", () => {
     });
   });
 
+  it("preserves a source choice property that happens to be named raw", () => {
+    const source = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "radiogroup",
+              name: "q",
+              choices: [{ value: "yes", raw: { source: "legacy" }, imageLink: "x.png" }]
+            }
+          ]
+        }
+      ]
+    };
+    expectNoLoss(source, roundTrip(source));
+  });
+
   it("preserves localized choice labels instead of stringifying them", () => {
     // SurveyJS allows `text` to be a per-locale object. Coercing it with String() yields
     // "[object Object]" and destroys every translation -- the same corruption this PR fixes
