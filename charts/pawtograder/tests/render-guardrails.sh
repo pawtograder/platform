@@ -245,6 +245,68 @@ assert_renders "prometheus rules with ruleSelector label renders" \
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
 
+# assert_exporter_metric "<block>" "<column>" [<label>...]
+# postgres_exporter names every custom metric `<block key>_<column name>`, so the
+# queries.yaml block key and the column name TOGETHER are the metric name that
+# Grafana panels and alert rules query — a block rename that looks like tidying
+# silently blanks a dashboard.
+#
+# The four metrics pinned below moved off the `metrics` edge function, which
+# Prometheus scraped once per functions pod (32 replicas in prod, ~1.07
+# scrapes/sec, 77.7% of all database execution time). Their block/column splits
+# were chosen to land on the pre-existing names, not for elegance — hence e.g.
+# block `pawtograder_db_dead` + column `tuples`. Label names are pinned too:
+# panels legend on them and alert rules can match on them.
+assert_exporter_metric() {
+  local block="$1" column="$2"; shift 2
+  local label="exporter metric ${block}_${column}"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # Slice this block's stanza out of the embedded queries.yaml: queries.yaml is a
+  # YAML literal inside the ConfigMap, so blocks sit at exactly 4 spaces and the
+  # next 4-space key ends the stanza. Anchoring on the exact key keeps
+  # `pawtograder_db_buffer_cache` from matching `pawtograder_db_buffer_cache_total`.
+  local stanza
+  stanza="$(awk -v b="    $block:" '
+    $0 == b { inb = 1; next }
+    inb && /^    [^ ]/ { exit }
+    inb { print }
+  ' "$OUTFILE")"
+  if [ -z "$stanza" ]; then
+    echo "FAIL [$label]: queries.yaml has no block named '$block'"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if ! printf '%s\n' "$stanza" | grep -qE "^        - $column:$"; then
+    echo "FAIL [$label]: block '$block' declares no column '$column'"
+    bad=1
+  fi
+  local lbl
+  for lbl in "$@"; do
+    # The column key, then the two lines under it (usage, description). A LABEL
+    # column must render usage: "LABEL" so the exporter turns it into a label
+    # rather than a second metric.
+    if ! printf '%s\n' "$stanza" | grep -A2 -E "^        - $lbl:$" | grep -qF 'usage: "LABEL"'; then
+      echo "FAIL [$label]: block '$block' does not expose '$lbl' as a LABEL"
+      bad=1
+    fi
+  done
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+echo "== postgres_exporter metric names moved off the edge function are pinned =="
+assert_exporter_metric pawtograder_db_buffer_cache bytes relname
+assert_exporter_metric pawtograder_db_buffer_cache_total used_bytes
+assert_exporter_metric pawtograder_db_dead tuples relname
+assert_exporter_metric pawtograder_vacuum alert check severity table_name
+
 echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
 assert_rendered_contains "internal redis pod runs non-root with a securityContext" \
   templates/redis.yaml "runAsNonRoot: true" \

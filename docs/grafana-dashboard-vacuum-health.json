@@ -293,8 +293,8 @@
       ]
     },
     {
-      "title": "Connections by State",
-      "description": "Database connections grouped by state (active, idle, idle in transaction)",
+      "title": "Connections vs Budget",
+      "description": "Client backends against max_connections. This was a per-state breakdown (pawtograder_db_connections{state}) from the metrics edge function; that series is gone, because it was queried once per functions pod (32x in prod). The postgres_exporter equivalent counts backend_type='client backend' and has no state breakdown - it is the connection count max_connections actually governs.",
       "type": "timeseries",
       "id": 22,
       "gridPos": { "h": 6, "w": 9, "x": 6, "y": 25 },
@@ -306,7 +306,7 @@
             "drawStyle": "line",
             "lineWidth": 2,
             "fillOpacity": 30,
-            "stacking": { "mode": "normal" },
+            "stacking": { "mode": "none" },
             "showPoints": "never"
           },
           "unit": "short"
@@ -319,9 +319,14 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_db_connections",
-          "legendFormat": "{{state}}",
+          "expr": "pawtograder_db_connections_used",
+          "legendFormat": "client backends",
           "refId": "A"
+        },
+        {
+          "expr": "pawtograder_db_connections_max",
+          "legendFormat": "max_connections",
+          "refId": "B"
         }
       ]
     },
@@ -391,8 +396,8 @@
       ]
     },
     {
-      "title": "Table Sizes (> 100 MB)",
-      "description": "Total table sizes including indexes and TOAST, tracking growth over time",
+      "title": "Table Sizes (> 10 MB, Top 30)",
+      "description": "Total table sizes including indexes and TOAST, tracking growth over time. Was pawtograder_db_table_total_bytes{relname} from the metrics edge function; now the postgres_exporter's pawtograder_table_sizes_total_bytes{relation}, which was already exporting the same data (schema-qualified relation label, >10 MiB, top 30) once instead of once per functions pod.",
       "type": "timeseries",
       "id": 25,
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 39 },
@@ -416,8 +421,8 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_db_table_total_bytes",
-          "legendFormat": "{{relname}}",
+          "expr": "topk(30, pawtograder_table_sizes_total_bytes)",
+          "legendFormat": "{{relation}}",
           "refId": "A"
         }
       ]

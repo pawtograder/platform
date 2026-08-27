@@ -126,6 +126,20 @@ Each alert's expression depends on an exporter being present in the cluster:
 - replication alerts → the chart's own `postgres_exporter` custom query
   (`pawtograder_replication_*`, defined in `templates/monitoring.yaml`; read from
   the **primary's** `pg_stat_replication`, not `pg_replication_slots`).
+- vacuum health and RAM/buffer-cache dashboards
+  (`docs/grafana-dashboard-vacuum-health.json`) → the chart's own
+  `postgres_exporter` custom queries `pawtograder_vacuum_alert`,
+  `pawtograder_db_buffer_cache_bytes`,
+  `pawtograder_db_buffer_cache_total_used_bytes` and
+  `pawtograder_db_dead_tuples` (all in `templates/monitoring.yaml`). These used
+  to come from the `metrics` edge function, which meant Prometheus called
+  `database_ram_metrics()` and `vacuum_health_check()` once per functions pod —
+  32 replicas in prod, ~1.07 calls/sec, and **77.7% of all database execution
+  time**, almost all of it `pg_buffercache` scans (524,288 buffer descriptors
+  per call at `shared_buffers = 4GB`). They are global database state, so the
+  exporter — scraped once — is the right home. Metric and label names did not
+  change. The buffer-cache queries carry `cache_seconds: 300`, so the scan runs
+  at most once per 5 minutes even from that one target.
 - ESO alert → the External Secrets Operator's `/metrics`
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`

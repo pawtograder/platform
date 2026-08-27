@@ -7,8 +7,34 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 
-/** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
-const VACUUM_RAM_RPC_TIMEOUT_MS = 3000;
+/**
+ * SCOPE: this handler serves only metrics that are cheap AND either per-pod or
+ * freshness-sensitive. Global database state does NOT belong here.
+ *
+ * Prometheus scrapes every pod endpoint behind the functions Service, and prod pins the functions
+ * HPA at 32 replicas, so a 30s ServiceMonitor interval means ~1.07 scrapes/sec of this handler.
+ * Anything global gets queried 32× and emitted as 32 identical copies of the same series. Over a
+ * 42-day pg_stat_statements window that made this function 77.7% of ALL production database
+ * execution time:
+ *
+ *   database_ram_metrics()  3,036,749 calls  360.6 ms mean  77.7% of DB exec time
+ *   vacuum_health_check()   3,036,995 calls   32.8 ms mean   7.1%
+ *
+ * database_ram_metrics() was that expensive because it scans pg_buffercache — 524,288 buffer
+ * descriptors at shared_buffers = 4GB, per call, per pod.
+ *
+ * Both now live in the postgres_exporter's queries.yaml
+ * (charts/pawtograder/templates/monitoring.yaml), which is scraped once, from one pod. The metric
+ * and label names are unchanged, so dashboards and alerts kept working across the cutover.
+ *
+ * What stays here, and why: the queue sizes and circuit breaker states below are ~0.3% of DB exec
+ * time combined and drive paging alerts where scrape-interval freshness matters, and the
+ * Bottleneck/Upstash snapshots read Redis rather than Postgres. Moving them is a possible follow-up,
+ * not a cost problem.
+ */
+
+/** Best-effort cap for untyped RPCs so a slow DB cannot stall the scrape. */
+const RPC_TIMEOUT_MS = 3000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -26,9 +52,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-/** Shape returned by `vacuum_health_check` (not yet on generated `Database` types). */
-type VacuumHealthRow = { check_name: string; severity: string; relname: string };
-
 /**
  * Shape returned by `get_discord_circuit_breaker_statuses` (not yet on generated `Database` types).
  *
@@ -37,13 +60,6 @@ type VacuumHealthRow = { check_name: string; severity: string; relname: string }
  * completely different remediations — a GitHub App installation versus a Discord server admin.
  */
 type DiscordCircuitRow = { scope: string; key: string; is_open: boolean; state: string; trip_count: number };
-
-/** Shape returned by `database_ram_metrics` rows. */
-type RamMetricRow = {
-  metric_name: string;
-  metric_value: number;
-  metric_labels?: Record<string, unknown> | null;
-};
 
 type RpcRowResult<T> = { data: T | null; error: { message: string } | null };
 
@@ -83,12 +99,12 @@ async function generatePrometheusMetrics(): Promise<Response> {
     // has not yet applied the Discord breaker migration.
     let discordCircuitBreakers: DiscordCircuitRow[] | null = null;
     try {
-      // Bounded like vacuum_health_check and database_ram_metrics below. This handler answers a
-      // Prometheus scrape, so an RPC that hangs does not just lose one gauge -- it stalls the whole
-      // response until the scrape times out and every metric in it is lost.
+      // Bounded: this handler answers a Prometheus scrape, so an RPC that hangs does not just lose
+      // one gauge -- it stalls the whole response until the scrape times out and every metric in it
+      // is lost.
       const d = await withTimeout(
         rpcUntyped<DiscordCircuitRow[]>(supabase, "get_discord_circuit_breaker_statuses"),
-        VACUUM_RAM_RPC_TIMEOUT_MS,
+        RPC_TIMEOUT_MS,
         "get_discord_circuit_breaker_statuses"
       );
       if (d.error) {
@@ -106,45 +122,6 @@ async function generatePrometheusMetrics(): Promise<Response> {
     } catch (redisMetricsError) {
       console.error("Error collecting Bottleneck/Upstash metrics:", redisMetricsError);
       Sentry.captureException(redisMetricsError);
-    }
-
-    let vacuumHealth: VacuumHealthRow[] | null = null;
-    let vacuumError: { message: string } | null = null;
-    try {
-      const v = await withTimeout(
-        rpcUntyped<VacuumHealthRow[]>(supabase, "vacuum_health_check"),
-        VACUUM_RAM_RPC_TIMEOUT_MS,
-        "vacuum_health_check"
-      );
-      vacuumHealth = v.data;
-      vacuumError = v.error;
-    } catch (e) {
-      vacuumError = e instanceof Error ? e : new Error(String(e));
-    }
-
-    let ramMetrics: RamMetricRow[] | null = null;
-    let ramError: { message: string } | null = null;
-    try {
-      const r = await withTimeout(
-        rpcUntyped<RamMetricRow[]>(supabase, "database_ram_metrics"),
-        VACUUM_RAM_RPC_TIMEOUT_MS,
-        "database_ram_metrics"
-      );
-      ramMetrics = r.data;
-      ramError = r.error;
-    } catch (e) {
-      ramError = e instanceof Error ? e : new Error(String(e));
-    }
-
-    if (vacuumError) {
-      const errMsg = vacuumError.message ?? String(vacuumError);
-      console.error("Error fetching vacuum health:", errMsg, vacuumError);
-      Sentry.captureException(vacuumError);
-    }
-
-    if (ramError) {
-      console.error("Error fetching RAM metrics:", ramError);
-      Sentry.captureException(ramError);
     }
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
@@ -277,55 +254,12 @@ ${queueOldestSeconds
       }
     }
 
-    // Vacuum health metrics
-    output += `
-# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name; on RPC failure also error_type (bounded code only, no raw message)
-# TYPE pawtograder_vacuum_alert gauge
-`;
-    if (vacuumError) {
-      const labels = `check="${escapeLabel("rpc_failed")}",severity="${escapeLabel("error")}",table_name="${escapeLabel("none")}",error_type="${escapeLabel("rpc_error")}"`;
-      output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
-    } else if (vacuumHealth && vacuumHealth.length > 0) {
-      for (const row of vacuumHealth) {
-        const labels = `check="${escapeLabel(row.check_name)}",severity="${escapeLabel(row.severity)}",table_name="${escapeLabel(row.relname)}"`;
-        output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
-      }
-    } else {
-      output += `pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}\n`;
-    }
-
-    // Database RAM metrics
-    if (ramMetrics && ramMetrics.length > 0) {
-      const metricDefs: Record<string, string> = {
-        buffer_cache_bytes: "Bytes of shared buffer cache used by a table/index",
-        buffer_cache_total_used_bytes: "Total bytes of shared buffer cache in use",
-        connections: "Number of database connections by state",
-        table_total_bytes: "Total size of a table including indexes and TOAST",
-        dead_tuples: "Number of dead tuples in a table"
-      };
-
-      // Group by metric name and emit HELP/TYPE once per metric
-      const grouped = new Map<string, typeof ramMetrics>();
-      for (const row of ramMetrics) {
-        const existing = grouped.get(row.metric_name) || [];
-        existing.push(row);
-        grouped.set(row.metric_name, existing);
-      }
-
-      for (const [metricName, rows] of grouped) {
-        const promName = `pawtograder_db_${metricName}`;
-        const help = metricDefs[metricName] || metricName;
-        output += `\n# HELP ${promName} ${help}\n# TYPE ${promName} gauge\n`;
-        for (const row of rows) {
-          const ml = row.metric_labels && typeof row.metric_labels === "object" ? row.metric_labels : {};
-          const labels = Object.entries(ml as Record<string, string>)
-            .map(([k, v]) => `${k}="${escapeLabel(String(v))}"`)
-            .join(",");
-          const labelStr = labels ? `{${labels}}` : "";
-          output += `${promName}${labelStr} ${row.metric_value} ${timestamp}\n`;
-        }
-      }
-    }
+    // Global database state (pawtograder_vacuum_alert, pawtograder_db_buffer_cache*,
+    // pawtograder_db_dead_tuples, pawtograder_db_connections, pawtograder_db_table_total_bytes) is
+    // deliberately NOT emitted here — see the scope note at the top of this file. It comes from the
+    // postgres_exporter's queries.yaml in charts/pawtograder/templates/monitoring.yaml, scraped once
+    // instead of once per functions pod. Connections and table sizes were already exported there as
+    // pawtograder_db_connections_{used,max,reserved} and pawtograder_table_sizes_{total,heap}_bytes.
 
     output += "\n";
 
