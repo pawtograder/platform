@@ -142,7 +142,7 @@ Each alert's expression depends on an exporter being present in the cluster:
   at most once per 5 minutes even from that one target.
 - exporter self-health alerts (`PawtograderPostgresExporterQueryFailing`,
   `PawtograderPostgresExporterDown`) → `pg_exporter_last_scrape_error`, which
-  postgres_exporter emits on every scrape. These exist because a failing custom
+  `postgres_exporter` emits on every scrape. These exist because a failing custom
   query is **silently dropped** from `/metrics` rather than failing the scrape,
   and the vacuum dashboard's `OR vector(0)` then renders the missing series as
   zero alerts — i.e. green. `absent()` is deliberately on this gauge and not on
