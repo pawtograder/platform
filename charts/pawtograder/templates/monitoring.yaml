@@ -128,7 +128,10 @@ data:
     # inflate the ratio and page for saturation that isn't there. Drives the
     # PawtograderPostgresConnections* alerts. master:true so auto-discovered
     # per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES) don't re-export
-    # the cluster-wide count under different `server` labels.
+    # the cluster-wide count. Note the re-exports would NOT be separable: the
+    # `server` label is parseFingerprint(dsn), host:port only, with no database
+    # name, so identical label sets collide and the exporter's registry returns
+    # HTTP 500 for the whole /metrics endpoint. See the AUTO-DISCOVERY note below.
     pawtograder_db_connections:
       query: |
         SELECT (SELECT COUNT(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::float AS used,

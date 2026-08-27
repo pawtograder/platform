@@ -140,6 +140,14 @@ Each alert's expression depends on an exporter being present in the cluster:
   exporter — scraped once — is the right home. Metric and label names did not
   change. The buffer-cache queries carry `cache_seconds: 300`, so the scan runs
   at most once per 5 minutes even from that one target.
+- exporter self-health alerts (`PawtograderPostgresExporterQueryFailing`,
+  `PawtograderPostgresExporterDown`) → `pg_exporter_last_scrape_error`, which
+  postgres_exporter emits on every scrape. These exist because a failing custom
+  query is **silently dropped** from `/metrics` rather than failing the scrape,
+  and the vacuum dashboard's `OR vector(0)` then renders the missing series as
+  zero alerts — i.e. green. `absent()` is deliberately on this gauge and not on
+  the `pawtograder_db_*` families, which are legitimately empty on a healthy
+  database (dead-tuple and buffer-cache queries have >100-tuple and >1 MiB floors).
 - ESO alert → the External Secrets Operator's `/metrics`
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`
