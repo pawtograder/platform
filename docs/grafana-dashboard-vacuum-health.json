@@ -56,7 +56,7 @@
       },
       "targets": [
         {
-          "expr": "count(pawtograder_vacuum_alert{severity!=\"ok\"} == 1) OR vector(0)",
+          "expr": "count(pawtograder_vacuum_alert{namespace=\"$namespace\", severity!=\"ok\"} == 1) OR vector(0)",
           "legendFormat": "Alerts",
           "refId": "A"
         }
@@ -91,7 +91,7 @@
       },
       "targets": [
         {
-          "expr": "count(pawtograder_vacuum_alert{severity=\"critical\"} == 1) OR vector(0)",
+          "expr": "count(pawtograder_vacuum_alert{namespace=\"$namespace\", severity=\"critical\"} == 1) OR vector(0)",
           "legendFormat": "Critical",
           "refId": "A"
         }
@@ -99,7 +99,7 @@
     },
     {
       "title": "Vacuum Collector Health",
-      "description": "1 = pawtograder_vacuum_alert is absent, i.e. the postgres_exporter's pawtograder_vacuum query is not reporting (function dropped or renamed, permission revoked, query error). Read this ALONGSIDE the two alert-count panels: those use `OR vector(0)`, so if the series vanishes entirely they render 0 and look green. Before this metric moved to the exporter, the metrics edge function emitted an explicit pawtograder_vacuum_alert{check=\"rpc_failed\",severity=\"error\"} 1 on RPC failure, which the count panels picked up. postgres_exporter has no equivalent: a failing custom query is dropped from the output and only sets pg_exporter_last_scrape_error, for which this chart defines no alert rule. This panel restores the fail-loud behaviour.",
+      "description": "1 = pawtograder_vacuum_alert is absent, i.e. the postgres_exporter's pawtograder_vacuum query is not reporting (function dropped or renamed, permission revoked, query error). Read this ALONGSIDE the two alert-count panels: those use `OR vector(0)`, so if the series vanishes entirely they render 0 and look green. Before this metric moved to the exporter, the metrics edge function emitted an explicit pawtograder_vacuum_alert{check=\"rpc_failed\",severity=\"error\"} 1 on RPC failure, which the count panels picked up. postgres_exporter has no equivalent: a failing custom query is dropped from the output and only sets pg_exporter_last_scrape_error, for which this chart defines no alert rule. This panel restores the fail-loud behaviour. The namespace matcher is REQUIRED, not cosmetic: absent() returns empty if ANY matching series exists, so unscoped (or with an All/regex $namespace) a healthy neighbouring release in the shared kube-prometheus-stack would render this deployment as Reporting while its own collector is dead - inverting the exact signal this panel exists to give. The $namespace variable is single-select for that reason.",
       "type": "stat",
       "id": 26,
       "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 },
@@ -134,7 +134,7 @@
       },
       "targets": [
         {
-          "expr": "absent(pawtograder_vacuum_alert) OR vector(0)",
+          "expr": "absent(pawtograder_vacuum_alert{namespace=\"$namespace\"}) OR vector(0)",
           "legendFormat": "collector absent",
           "refId": "A"
         }
@@ -174,7 +174,7 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_gradebook_row_recalculate_queue_size",
+          "expr": "pawtograder_gradebook_row_recalculate_queue_size{namespace=\"$namespace\"}",
           "legendFormat": "Queue Depth",
           "refId": "A"
         }
@@ -216,7 +216,7 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_vacuum_alert{severity!=\"ok\"} == 1",
+          "expr": "pawtograder_vacuum_alert{namespace=\"$namespace\", severity!=\"ok\"} == 1",
           "legendFormat": "{{check}} / {{table_name}} ({{severity}})",
           "refId": "A"
         }
@@ -285,7 +285,7 @@
       ],
       "targets": [
         {
-          "expr": "pawtograder_vacuum_alert{severity!=\"ok\"} == 1",
+          "expr": "pawtograder_vacuum_alert{namespace=\"$namespace\", severity!=\"ok\"} == 1",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -329,7 +329,7 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_db_buffer_cache_total_used_bytes",
+          "expr": "pawtograder_db_buffer_cache_total_used_bytes{namespace=\"$namespace\"}",
           "legendFormat": "Buffer Cache Used",
           "refId": "A"
         }
@@ -362,12 +362,12 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_db_connections_used",
+          "expr": "pawtograder_db_connections_used{namespace=\"$namespace\"}",
           "legendFormat": "client backends",
           "refId": "A"
         },
         {
-          "expr": "pawtograder_db_connections_max",
+          "expr": "pawtograder_db_connections_max{namespace=\"$namespace\"}",
           "legendFormat": "max_connections",
           "refId": "B"
         }
@@ -399,7 +399,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, pawtograder_db_dead_tuples)",
+          "expr": "topk(10, pawtograder_db_dead_tuples{namespace=\"$namespace\"})",
           "legendFormat": "{{relname}}",
           "refId": "A"
         }
@@ -432,7 +432,7 @@
       },
       "targets": [
         {
-          "expr": "topk(15, pawtograder_db_buffer_cache_bytes)",
+          "expr": "topk(15, pawtograder_db_buffer_cache_bytes{namespace=\"$namespace\"})",
           "legendFormat": "{{relname}}",
           "refId": "A"
         }
@@ -464,7 +464,7 @@
       },
       "targets": [
         {
-          "expr": "topk(30, pawtograder_table_sizes_total_bytes)",
+          "expr": "topk(30, pawtograder_table_sizes_total_bytes{namespace=\"$namespace\"})",
           "legendFormat": "{{relation}}",
           "refId": "A"
         }
@@ -505,27 +505,27 @@
       },
       "targets": [
         {
-          "expr": "pawtograder_async_queue_size",
+          "expr": "pawtograder_async_queue_size{namespace=\"$namespace\"}",
           "legendFormat": "Async (GitHub)",
           "refId": "A"
         },
         {
-          "expr": "pawtograder_async_dlq_size",
+          "expr": "pawtograder_async_dlq_size{namespace=\"$namespace\"}",
           "legendFormat": "Async DLQ",
           "refId": "B"
         },
         {
-          "expr": "pawtograder_gradebook_row_recalculate_queue_size",
+          "expr": "pawtograder_gradebook_row_recalculate_queue_size{namespace=\"$namespace\"}",
           "legendFormat": "Gradebook Recalc",
           "refId": "C"
         },
         {
-          "expr": "pawtograder_discord_queue_size",
+          "expr": "pawtograder_discord_queue_size{namespace=\"$namespace\"}",
           "legendFormat": "Discord",
           "refId": "D"
         },
         {
-          "expr": "pawtograder_discord_dlq_size",
+          "expr": "pawtograder_discord_dlq_size{namespace=\"$namespace\"}",
           "legendFormat": "Discord DLQ",
           "refId": "E"
         }
@@ -552,6 +552,22 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "description": "Single-select ON PURPOSE (includeAll false, multi false). The Vacuum Collector Health panel uses absent(), which returns empty if ANY matching series exists anywhere - so an All/regex selection would report a healthy neighbouring release or namespace as this deployment being fine, inverting exactly the signal that panel exists to give. Sourced from kube_pod_info rather than a pawtograder_* series so the variable stays populated when the exporter is the thing that is broken.",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(kube_pod_info, namespace)",
+        "regex": "pawtograder.*",
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "sort": 1,
+        "current": {},
+        "options": [],
+        "skipUrlSync": false
       }
     ]
   },
