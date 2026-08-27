@@ -1,0 +1,60 @@
+-- Drop public.database_ram_metrics(). It has no callers left.
+--
+-- WHY IT EXISTED: the `metrics` edge function (supabase/functions/metrics/index.ts)
+-- called it on every Prometheus scrape to publish buffer-cache usage, connection
+-- counts, table sizes and dead-tuple counts.
+--
+-- WHY IT IS GONE: Prometheus scrapes every pod endpoint behind the functions
+-- Service, and prod pins the functions HPA at 32 replicas, so a 30s interval
+-- meant ~1.07 calls/sec of a function whose mean execution time was 360.6 ms.
+-- Over a 42-day pg_stat_statements window that was 3,036,749 calls and 77.7% of
+-- ALL database execution time — for GLOBAL database state that is byte-identical
+-- from every pod, so 31 of every 32 calls were waste. The cost is the
+-- pg_buffercache scan: one row per buffer descriptor, and shared_buffers = 4GB
+-- means 524,288 descriptors per call.
+--
+-- Those metrics now come from the postgres-exporter's custom queries
+-- (charts/pawtograder/templates/monitoring.yaml, the queries.yaml ConfigMap),
+-- which is scraped ONCE — one postgres pod, one endpoint. Metric and label names
+-- were preserved exactly, so dashboards and alerts were unaffected.
+--
+-- =============================================================================
+-- DO NOT DROP THE pg_buffercache EXTENSION. IT IS STILL REQUIRED.
+-- =============================================================================
+-- Two earlier migrations justify pg_buffercache by naming this function:
+--
+--   20260722000000_enable_pg_buffercache.sql       ("Enable pg_buffercache so
+--     public.database_ram_metrics() can report buffer-cache metrics...")
+--   20260722120000_ensure_pg_buffercache_in_public.sql  (pins the extension to
+--     `public` because public.database_ram_metrics() runs with
+--     `SET search_path = pg_catalog, public` and referenced pg_buffercache
+--     unqualified)
+--
+-- Both of those comments are now STALE: the function they point at no longer
+-- exists. Do not read that as "pg_buffercache is unused" and drop it. The
+-- extension is still read on every postgres-exporter scrape by two blocks in
+-- queries.yaml:
+--
+--   pawtograder_db_buffer_cache        -> pawtograder_db_buffer_cache_bytes
+--   pawtograder_db_buffer_cache_total  -> pawtograder_db_buffer_cache_total_used_bytes
+--
+-- It must ALSO stay in the `public` schema, for the same reason as before,
+-- restated for the new caller: those queries reference `public.pg_buffercache`
+-- schema-qualified rather than trusting the exporter connection's search_path.
+-- Relocating the extension breaks them, and a broken custom query in
+-- postgres_exporter drops that namespace and sets
+-- pg_exporter_last_scrape_error — the buffer-cache panels go blank silently.
+--
+-- vacuum_health_check() is deliberately NOT dropped here: it is still run every
+-- 15 minutes by the `vacuum-health-monitor` pg_cron job (added alongside this
+-- function in 20260325000000_autovacuum_tuning.sql), and it is now also wrapped
+-- by the exporter's pawtograder_vacuum block.
+--
+-- NOTE ON GENERATED TYPES: database_ram_metrics IS present in the checked-in
+-- Supabase types (utils/supabase/SupabaseTypes.d.ts and the
+-- supabase/functions/_shared copy). Those are generated artifacts, refreshed
+-- wholesale by `npm run client`; this repo does not hand-prune them in the
+-- migration that drops a function. Nothing calls it, so nothing breaks — the
+-- stale entry just disappears at the next regeneration.
+
+DROP FUNCTION IF EXISTS public.database_ram_metrics();

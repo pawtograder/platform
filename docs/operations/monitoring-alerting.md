@@ -169,6 +169,32 @@ query_preview)` label sets whenever a statement ran under more than one
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
 
+> **Every custom query sets `master: true`.** The exporter sidecar runs with
+> `PG_EXPORTER_AUTO_DISCOVER_DATABASES=true`, so without that flag a block runs
+> once per discovered database. Every query in `templates/monitoring.yaml` is
+> either cluster-wide (`pg_stat_statements`, `pg_buffercache`, `pg_settings`,
+> `pg_stat_replication`) or specific to the application database
+> (`public.classes`, `public.submissions`, `public.help_requests`, the
+> `pawtograder_*` functions), so per-database execution is wrong in all of them.
+> Auto-discovery is **not** a no-op on this stack. Its query is
+> `SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname != current_database()`,
+> which on supabase/postgres returns `_supabase` and `storage_vectors` (verified
+> against 17.6). What kept it harmless so far is only that the queries fail or
+> return empty there — `pg_stat_statements`, `public.classes`,
+> `public.submissions` and `public.help_requests` all raise "relation does not
+> exist" (namespace skipped, nothing emitted), and `pawtograder_table_sizes`
+> matches no >10 MiB table in those schemas. Two consequences worth knowing:
+> the erroring blocks were setting `pg_exporter_last_scrape_error` on **every**
+> scrape, once per discovered database, which `master: true` clears; and the
+> `server` label is only `host:port` (`parseFingerprint(dsn)`, no database
+> name), so databases on one instance are indistinguishable by label — the first
+> time one of these queries does return a row from a second database, the result
+> is a genuinely **duplicate** label set and the same HTTP 500 failure mode as
+> the gotcha above, not merely a mis-ranked `topk`. A new block needs
+> `master: true` unless it truly means something different per database;
+> `charts/pawtograder/tests/render-guardrails.sh` asserts this and requires an
+> explicit `ALLOW_NO_MASTER` entry for any exception.
+
 ---
 
 ## Verifying alerts are live

@@ -307,6 +307,84 @@ assert_exporter_metric pawtograder_db_buffer_cache_total used_bytes
 assert_exporter_metric pawtograder_db_dead tuples relname
 assert_exporter_metric pawtograder_vacuum alert check severity table_name
 
+# assert_exporter_all_master
+# Every custom query block in the exporter's queries.yaml must set `master: true`.
+#
+# The sidecar runs PG_EXPORTER_AUTO_DISCOVER_DATABASES=true, so without it a
+# block runs once per discovered database. Every query in that file is either
+# cluster-wide (pg_stat_statements, pg_buffercache, pg_settings,
+# pg_stat_replication) or specific to the application database (public.classes,
+# public.submissions, public.help_requests, the pawtograder_* functions), so
+# per-database execution is wrong in all of them.
+#
+# Auto-discovery is not a no-op: on supabase/postgres it finds `_supabase` and
+# `storage_vectors`. It has stayed harmless only because these queries error or
+# return empty there — which still sets pg_exporter_last_scrape_error on every
+# scrape. And the `server` label is only host:port (parseFingerprint, no
+# database name), so databases on one instance are indistinguishable by label:
+# the first query that does return a row from a second database yields a
+# duplicate label set, and that makes the exporter return HTTP 500 for the WHOLE
+# /metrics endpoint, taking down all postgres metrics at once.
+#
+# Blanket assertion on purpose. A future block that genuinely means something
+# different per database is fine, but it has to be added to ALLOW_NO_MASTER here
+# with a reason, so the decision is deliberate and reviewable instead of a
+# forgotten default.
+assert_exporter_all_master() {
+  local label="every exporter query block sets master: true"
+  # Blocks legitimately exempt (per-database by design). Space-separated.
+  local ALLOW_NO_MASTER=""
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # Slice out just the queries.yaml literal: starts after `queries.yaml: |` and
+  # ends at the next document separator. Keeps the 4-space block scan below from
+  # straying into the Service/ServiceMonitor manifests further down the file.
+  local queries
+  queries="$(awk '
+    /^  queries\.yaml: \|$/ { inq = 1; next }
+    inq && /^---$/ { exit }
+    inq { print }
+  ' "$OUTFILE")"
+  if [ -z "$queries" ]; then
+    echo "FAIL [$label]: could not find the queries.yaml literal in the rendered ConfigMap"
+    FAILED=1
+    return
+  fi
+  # One line per block: "<name> <has_master>". A 4-space key with no value opens
+  # a block; `master: true` at 6 spaces belongs to the block currently open.
+  local report
+  report="$(printf '%s\n' "$queries" | awk '
+    /^    [a-z_]+:$/ { if (blk != "") print blk, has; blk = substr($1, 1, length($1) - 1); has = 0; next }
+    /^      master: true$/ { has = 1 }
+    END { if (blk != "") print blk, has }
+  ')"
+  local nblocks bad=0 name flag
+  nblocks="$(printf '%s\n' "$report" | grep -c . || true)"
+  if [ "$nblocks" -lt 10 ]; then
+    echo "FAIL [$label]: only parsed $nblocks query blocks — the scan looks broken, not the file"
+    FAILED=1
+    return
+  fi
+  while read -r name flag; do
+    [ -z "$name" ] && continue
+    if [ "$flag" != "1" ] && ! printf ' %s ' "$ALLOW_NO_MASTER" | grep -qF " $name "; then
+      echo "FAIL [$label]: block '$name' does not set master: true (and is not in ALLOW_NO_MASTER)"
+      bad=1
+    fi
+  done <<EOF
+$report
+EOF
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label] ($nblocks blocks)"; fi
+}
+
+assert_exporter_all_master
+
 echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
 assert_rendered_contains "internal redis pod runs non-root with a securityContext" \
   templates/redis.yaml "runAsNonRoot: true" \

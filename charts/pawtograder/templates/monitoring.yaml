@@ -359,6 +359,10 @@ data:
         GROUP BY queryid
         ORDER BY SUM(total_exec_time) DESC
         LIMIT 20
+      # pg_stat_statements is CLUSTER-wide — one shared hash table covering every
+      # database — so auto-discovery would re-export the same top-20 statements
+      # once per discovered database. See the auto-discovery note below.
+      master: true
       metrics:
         - queryid:
             usage: "LABEL"
@@ -379,12 +383,62 @@ data:
             usage: "COUNTER"
             description: "Total rows touched by the statement"
 
+    # =========================================================================
+    # AUTO-DISCOVERY: why every block in this file sets master: true.
+    #
+    # The sidecar runs with PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
+    # (postgres-statefulset.yaml), which makes the exporter enumerate databases
+    # and run the custom queries against EACH one. Without `master: true` a
+    # block runs once per discovered database.
+    #
+    # That is wrong for every query here: they are either cluster-wide
+    # (pg_stat_statements, pg_buffercache, pg_settings, pg_stat_replication) or
+    # specific to the APPLICATION database (public.classes, public.submissions,
+    # public.help_requests, and the pawtograder_* functions). Re-running them
+    # elsewhere either duplicates the same numbers or errors on a missing
+    # relation.
+    #
+    # Auto-discovery is NOT a no-op here. Its query is
+    #   SELECT datname FROM pg_database
+    #    WHERE datallowconn AND NOT datistemplate AND datname != current_database()
+    # and on a supabase/postgres instance that returns `_supabase` and
+    # `storage_vectors` — verified against supabase/postgres 17.6.
+    #
+    # What has kept it from corrupting the metrics so far is only that these
+    # queries happen to fail or come back empty on those databases:
+    # pg_stat_statements, public.classes, public.submissions and
+    # public.help_requests all raise "relation does not exist" there (the
+    # namespace is skipped and nothing is emitted), and pawtograder_table_sizes
+    # runs but matches no >10 MiB table in the public/auth/storage/realtime
+    # schemas, so it returns 0 rows.
+    #
+    # That is luck, not a design. Two reasons to fix it properly:
+    #
+    # 1. The four erroring blocks set pg_exporter_last_scrape_error on EVERY
+    #    scrape, once per discovered database, and log the failure each time.
+    #    master: true removes that standing error and the log noise.
+    # 2. The `server` label is only host:port — it comes from
+    #    parseFingerprint(dsn), which concatenates host and port and does NOT
+    #    include the database name. Databases discovered on one instance are
+    #    therefore indistinguishable by label. The moment one of these queries
+    #    DOES return a row from a second database (a colliding relation name,
+    #    another application database, a matching schema appearing in
+    #    `_supabase`), the result is not a mis-ranked topk — it is a genuinely
+    #    DUPLICATE label set, and that makes the exporter's registry return HTTP
+    #    500 for the ENTIRE /metrics endpoint (see pg_stat_statements_top
+    #    above), taking down all postgres metrics at once.
+    #
+    # Rule of thumb: a new block here needs master: true unless it genuinely
+    # means something different per database.
+    # =========================================================================
     pawtograder_classes:
       query: |
         SELECT COUNT(*) FILTER (WHERE NOT is_demo)::float AS real_classes,
                COUNT(*) FILTER (WHERE is_demo)::float AS demo_classes,
                COUNT(*)::float AS total_classes
         FROM public.classes
+      # public.classes only exists in the application database.
+      master: true
       metrics:
         - real_classes:
             usage: "GAUGE"
@@ -403,6 +457,8 @@ data:
         FROM public.submissions
         WHERE is_active = true
         GROUP BY class_id
+      # public.submissions only exists in the application database.
+      master: true
       metrics:
         - class_id:
             usage: "LABEL"
@@ -419,6 +475,8 @@ data:
         FROM public.help_requests
         WHERE created_at > NOW() - INTERVAL '24 hours'
         GROUP BY class_id
+      # public.help_requests only exists in the application database.
+      master: true
       metrics:
         - class_id:
             usage: "LABEL"
@@ -448,6 +506,12 @@ data:
           AND pg_total_relation_size(c.oid) > 10485760
         ORDER BY pg_total_relation_size(c.oid) DESC
         LIMIT 30
+      # pg_class is per-database, and the public/auth/storage/realtime schemas
+      # this filters on are the application database's. Without master:true the
+      # top-30 cut would be computed per discovered database, so the dashboard's
+      # unfiltered `topk(30, pawtograder_table_sizes_total_bytes)` could rank
+      # tables from different databases against each other.
+      master: true
       metrics:
         - relation:
             usage: "LABEL"
