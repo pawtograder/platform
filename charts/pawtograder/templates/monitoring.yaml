@@ -211,9 +211,10 @@ data:
     # no staleness gap.
     #
     # master: true — pg_buffercache is the CLUSTER's shared buffer pool. With
-    # PG_EXPORTER_AUTO_DISCOVER_DATABASES=true, without this the scan would be
-    # repeated once per discovered database (`_supabase`, ...) and re-exported
-    # under different `server` labels.
+    # PG_EXPORTER_AUTO_DISCOVER_DATABASES=true, without this the expensive scan
+    # would be repeated once per discovered database. See the AUTO-DISCOVERY note
+    # below: the `server` label does NOT distinguish them, so the re-exports
+    # collide rather than separate.
     pawtograder_db_buffer_cache:
       query: |
         SELECT c.relname,
@@ -398,35 +399,34 @@ data:
     # elsewhere either duplicates the same numbers or errors on a missing
     # relation.
     #
-    # Auto-discovery is NOT a no-op here. Its query is
+    # Whether that actually bites depends on the Postgres image. The discovery
+    # query is
     #   SELECT datname FROM pg_database
     #    WHERE datallowconn AND NOT datistemplate AND datname != current_database()
-    # and on a supabase/postgres instance that returns `_supabase` and
-    # `storage_vectors` — verified against supabase/postgres 17.6.
     #
-    # What has kept it from corrupting the metrics so far is only that these
-    # queries happen to fail or come back empty on those databases:
-    # pg_stat_statements, public.classes, public.submissions and
-    # public.help_requests all raise "relation does not exist" there (the
-    # namespace is skipped and nothing is emitted), and pawtograder_table_sizes
-    # runs but matches no >10 MiB table in the public/auth/storage/realtime
-    # schemas, so it returns 0 rows.
+    # On the CURRENTLY DEPLOYED supabase/postgres 17.4.x there is nothing for it
+    # to find: the only databases are `postgres`, `template0` and `template1`,
+    # and templates are excluded — so these blocks only ever run against the
+    # application database and are LATENT. Confirmed on the live prod exporter:
+    # pg_exporter_last_scrape_error is 0 and there is exactly one `server` label
+    # value (127.0.0.1:5432) across the whole scrape.
     #
-    # That is luck, not a design. Two reasons to fix it properly:
+    # On 17.6.x and later, Supabase adds `_supabase` and `storage_vectors`
+    # (verified against 17.6.1.132). At that point pg_stat_statements,
+    # public.classes, public.submissions and public.help_requests would raise
+    # "relation does not exist" once per discovered database on every scrape —
+    # standing pg_exporter_last_scrape_error plus log noise — and
+    # pawtograder_table_sizes would run against the wrong databases.
     #
-    # 1. The four erroring blocks set pg_exporter_last_scrape_error on EVERY
-    #    scrape, once per discovered database, and log the failure each time.
-    #    master: true removes that standing error and the log noise.
-    # 2. The `server` label is only host:port — it comes from
-    #    parseFingerprint(dsn), which concatenates host and port and does NOT
-    #    include the database name. Databases discovered on one instance are
-    #    therefore indistinguishable by label. The moment one of these queries
-    #    DOES return a row from a second database (a colliding relation name,
-    #    another application database, a matching schema appearing in
-    #    `_supabase`), the result is not a mis-ranked topk — it is a genuinely
-    #    DUPLICATE label set, and that makes the exporter's registry return HTTP
-    #    500 for the ENTIRE /metrics endpoint (see pg_stat_statements_top
-    #    above), taking down all postgres metrics at once.
+    # So master: true is a PREREQUISITE FOR THE NEXT POSTGRES IMAGE BUMP, not a
+    # fix for something failing today. The second reason is worse than noise:
+    # the `server` label is only host:port — parseFingerprint(dsn) concatenates
+    # host and port and does NOT include the database name — so databases
+    # discovered on one instance are indistinguishable by label. The first time
+    # one of these queries returns a row from a second database, the result is
+    # not a mis-ranked topk but a genuinely DUPLICATE label set, and that makes
+    # the exporter's registry return HTTP 500 for the ENTIRE /metrics endpoint
+    # (see pg_stat_statements_top above), taking down all postgres metrics.
     #
     # Rule of thumb: a new block here needs master: true unless it genuinely
     # means something different per database.

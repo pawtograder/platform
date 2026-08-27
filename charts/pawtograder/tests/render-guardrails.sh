@@ -317,14 +317,18 @@ assert_exporter_metric pawtograder_vacuum alert check severity table_name
 # public.submissions, public.help_requests, the pawtograder_* functions), so
 # per-database execution is wrong in all of them.
 #
-# Auto-discovery is not a no-op: on supabase/postgres it finds `_supabase` and
-# `storage_vectors`. It has stayed harmless only because these queries error or
-# return empty there — which still sets pg_exporter_last_scrape_error on every
-# scrape. And the `server` label is only host:port (parseFingerprint, no
-# database name), so databases on one instance are indistinguishable by label:
-# the first query that does return a row from a second database yields a
-# duplicate label set, and that makes the exporter return HTTP 500 for the WHOLE
-# /metrics endpoint, taking down all postgres metrics at once.
+# Latent on the currently deployed supabase/postgres 17.4.x: the discovery query
+# excludes templates, and prod has only `postgres`, `template0` and `template1`,
+# so nothing is discovered (prod pg_exporter_last_scrape_error is 0, one `server`
+# label value). On 17.6.x and later Supabase adds `_supabase` and
+# `storage_vectors`, and then four of these blocks error once per discovered
+# database on every scrape and pawtograder_table_sizes runs against the wrong
+# databases — so this is a prerequisite for the next Postgres image bump. It also
+# guards worse than noise: the `server` label is only host:port
+# (parseFingerprint, no database name), so databases on one instance are
+# indistinguishable by label, and the first query that returns a row from a
+# second database yields a duplicate label set — which makes the exporter return
+# HTTP 500 for the WHOLE /metrics endpoint, taking down all postgres metrics.
 #
 # Blanket assertion on purpose. A future block that genuinely means something
 # different per database is fine, but it has to be added to ALLOW_NO_MASTER here

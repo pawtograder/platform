@@ -176,24 +176,28 @@ query_preview)` label sets whenever a statement ran under more than one
 > `pg_stat_replication`) or specific to the application database
 > (`public.classes`, `public.submissions`, `public.help_requests`, the
 > `pawtograder_*` functions), so per-database execution is wrong in all of them.
-> Auto-discovery is **not** a no-op on this stack. Its query is
-> `SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname != current_database()`,
-> which on supabase/postgres returns `_supabase` and `storage_vectors` (verified
-> against 17.6). What kept it harmless so far is only that the queries fail or
-> return empty there — `pg_stat_statements`, `public.classes`,
-> `public.submissions` and `public.help_requests` all raise "relation does not
-> exist" (namespace skipped, nothing emitted), and `pawtograder_table_sizes`
-> matches no >10 MiB table in those schemas. Two consequences worth knowing:
-> the erroring blocks were setting `pg_exporter_last_scrape_error` on **every**
-> scrape, once per discovered database, which `master: true` clears; and the
-> `server` label is only `host:port` (`parseFingerprint(dsn)`, no database
-> name), so databases on one instance are indistinguishable by label — the first
-> time one of these queries does return a row from a second database, the result
-> is a genuinely **duplicate** label set and the same HTTP 500 failure mode as
-> the gotcha above, not merely a mis-ranked `topk`. A new block needs
-> `master: true` unless it truly means something different per database;
-> `charts/pawtograder/tests/render-guardrails.sh` asserts this and requires an
-> explicit `ALLOW_NO_MASTER` entry for any exception.
+> Whether auto-discovery bites depends on the Postgres image. Its query is
+> `SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname != current_database()`.
+> On the **currently deployed** supabase/postgres 17.4.x there is nothing to
+> find — the only databases are `postgres`, `template0` and `template1`, and
+> templates are excluded — so these blocks only ever run against the application
+> database and are **latent**. Confirmed on the live prod exporter:
+> `pg_exporter_last_scrape_error` is 0 and there is exactly one `server` label
+> value (`127.0.0.1:5432`) across the whole scrape. On **17.6.x and later**
+> Supabase adds `_supabase` and `storage_vectors` (verified against 17.6.1.132),
+> and then `pg_stat_statements`, `public.classes`, `public.submissions` and
+> `public.help_requests` would raise "relation does not exist" once per
+> discovered database on every scrape, while `pawtograder_table_sizes` would run
+> against the wrong databases. So `master: true` is a **prerequisite for the next
+> Postgres image bump**, not a fix for a present failure. It also guards
+> something worse than log noise: the `server` label is only `host:port`
+> (`parseFingerprint(dsn)`, no database name), so databases on one instance are
+> indistinguishable by label — the first time one of these queries returns a row
+> from a second database, the result is a genuinely **duplicate** label set and
+> the same HTTP 500 failure mode as the gotcha above, not merely a mis-ranked
+> `topk`. A new block needs `master: true` unless it truly means something
+> different per database; `charts/pawtograder/tests/render-guardrails.sh` asserts
+> this and requires an explicit `ALLOW_NO_MASTER` entry for any exception.
 
 ---
 
