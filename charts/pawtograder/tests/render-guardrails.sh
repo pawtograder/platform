@@ -389,6 +389,60 @@ EOF
 
 assert_exporter_all_master
 
+# assert_no_liveness_probe "<label>" "<template>" <extra --set args...>
+# The postgres primary and its replica must render NO livenessProbe, and must
+# still render a readinessProbe.
+#
+# On 2026-08-27 the hardcoded liveness probes killed BOTH pods during a transient
+# NetApp NFS stall caused by network maintenance — the primary at 14:02:44 and
+# postgres-replica-0 at 17:18:18. Each template carried periodSeconds 10 /
+# timeoutSeconds 5 with failureThreshold unset, so both inherited the Kubernetes
+# default of 3 and had only ~30s of tolerance. The shutdown checkpoint one second
+# after the primary was killed flushed 1397 buffers in 0.122s (sync 0.002s), so
+# storage was already healthy: the probe's patience ran out about a second before
+# the problem cleared itself. Each misfire cost the 4GB warm buffer pool, every
+# connection, and a hard exit of all three realtime pods.
+#
+# Restarting a single-writer Postgres cannot fix external storage, so waiting is
+# strictly better. Loosening was rejected because pg_isready ALSO exits non-zero
+# during crash recovery ("rejecting connections"), and on this ~29 GB database WAL
+# replay can outlast any sane liveness window — the probe would then kill the pod
+# mid-recovery, each kill leaving more WAL to replay than the last.
+#
+# This assertion exists so that cannot be silently undone. Readiness is asserted
+# present in the same breath, because removing THAT would be the opposite mistake:
+# it is the non-destructive half of the signal. Rationale lives in
+# templates/postgres-statefulset.yaml.
+assert_no_liveness_probe() {
+  local label="$1" template="$2"; shift 2
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if grep -qE '^[[:space:]]*livenessProbe:' "$OUTFILE"; then
+    echo "FAIL [$label]: $template renders a livenessProbe — see the note above and in postgres-statefulset.yaml"
+    bad=1
+  fi
+  if ! grep -qE '^[[:space:]]*readinessProbe:' "$OUTFILE"; then
+    echo "FAIL [$label]: $template renders NO readinessProbe — that is the half we must keep"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+echo "== postgres liveness probes stay removed (2026-08-27 incident) =="
+assert_no_liveness_probe "postgres primary has no livenessProbe, keeps readinessProbe" \
+  templates/postgres-statefulset.yaml
+assert_no_liveness_probe "postgres replica has no livenessProbe, keeps readinessProbe" \
+  templates/postgres-replica.yaml \
+  --set postgres.replica.enabled=true \
+  --set postgres.replica.persistence.storageClass=lp \
+  --set postgres.walg.enabled=true \
+  --set postgres.walg.s3Prefix=s3://b/walg
+
 echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
 assert_rendered_contains "internal redis pod runs non-root with a securityContext" \
   templates/redis.yaml "runAsNonRoot: true" \
