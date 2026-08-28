@@ -1147,22 +1147,80 @@ edgeFunctions:
   # Byte budget for the eszip cache the main.ts demuxer keeps of the bundles it
   # has served. This is a real term in the container memory budget and it is the
   # one that is easy to forget: a pod holds one bundle per DISTINCT FUNCTION it
-  # has ever been asked for, bundles run 19-59MB, and the image ships 55 of them
-  # (~2.2GB total). Unbounded, that alone exceeded the container limit and
-  # OOM-killed pods after a few days' uptime (2026-08-19).
+  # has ever been asked for. Unbounded, that alone exceeded the container limit
+  # and OOM-killed pods after a few days' uptime (2026-08-19).
+  #
+  # Bundle inventory, measured 2026-08-28 from /home/deno/eszips in a running
+  # pod (the earlier "55 bundles, ~2.2GB, 19-59MB" here was stale — it came from
+  # the Dockerfile bundler's own log line, which main.ts still quotes):
+  #   58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  # Averaging these is how you get surprised, so size the cache off the MEDIAN:
+  # 512Mi holds ~16 of 58, 256Mi holds ~8.
   #
   # The container budget is four terms that must be reconciled together:
   #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
   #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
-  # At the defaults: 512Mi + 256Mi + (8 x 256Mi) + 90Mi = 2906Mi (~2.8Gi), which
-  # is why the edge tier wants a limit at or above 4Gi. Raise this only alongside
-  # that sum.
+  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 90Mi = 2650Mi (~2.6Gi),
+  # which is why the edge tier wants a limit at or above 4Gi. Raise this only
+  # alongside that sum.
   #
-  # 512Mi holds ~13 average bundles — comfortably more than the handful of
-  # functions a pod serves repeatedly — so the LRU only churns on rare ones.
+  # 2026-08-28: 512 -> 256, to make the memory metric mean something again.
+  #
+  # The edge HPA had been pinned at maxReplicas 32 with memory 106% against a
+  # 100% target while CPU sat at 5% of a 200% target — an autoscaler that can
+  # only ever say "already at max" is not autoscaling, and it left no burst
+  # headroom ahead of a ~2k WAU ramp. The cause is a per-pod memory FLOOR that
+  # is load-INDEPENDENT and dominated by this cache:
+  #   ~320Mi Deno host baseline (measured, see resources notes)
+  #    512Mi eszip cache at its cap
+  #   -------
+  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
+  #          and measured idle sat higher still (~98%) because a pod keeps
+  #          some isolates resident between requests.
+  #
+  # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
+  # were recreated, and the SAME fleet under the SAME load went from mean
+  # 1094Mi / 32 replicas pinned (pods aged 8h-2d5h) to mean 504Mi / 12 replicas
+  # (pods <1h). Nothing about traffic changed — only cache warmth. The floor
+  # climbs after every deploy until it crosses the target, then sticks there.
+  #
+  # Halving the cache takes ~256Mi off that floor, so utilization tracks isolate
+  # load rather than cache occupancy. The trade is explicit and cheap: a pod
+  # caches ~8 distinct functions instead of ~16, out of 58. A miss is a LOCAL
+  # read from the image layer at /home/deno/eszips plus an eszip parse — not a
+  # network fetch and not a transpile. main.ts falls back to raw servicePath
+  # (the slow, memory-heavy path) only when a bundle is MISSING from the image,
+  # which is not what eviction causes.
+  #
+  # Isolate sizing, corrected 2026-08-28: an earlier version of this note put the
+  # load-dependent term at 8 x ~20Mi = ~160Mi, reading the "~16-20MB marginal"
+  # figure out of main.ts. That figure describes the marginal cost of an ADDITIONAL
+  # isolate for the SAME function once its module graph is loaded; a real isolate
+  # under production load measures ~116Mi. So the load-dependent band is
+  # 8 x ~116Mi = ~900Mi, and with the cache at 256 a pod runs a ~576Mi floor
+  # (56% of prod's 1Gi request) up to a ~1500Mi loaded peak (146%).
+  #
+  # That makes memory a STRONG scaling signal here — ~900Mi of swing on a ~576Mi
+  # floor. An earlier version of this note concluded the opposite ("structurally
+  # weak signal at any request value") and pointed at pgmq queue depth as the real
+  # fix; that conclusion rested on the ~160Mi figure and is retracted. The problem
+  # was never signal strength. It was that the floor sat inside the HPA's default
+  # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
+  # below now addresses.
+  #
+  # NOT changed here: resources.requests.memory. Note the corrected numbers also
+  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
+  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
+  # would read ~98%, not 48%. The request is simply out of scope for this change:
+  # the target bump below is what was measured and confirmed live, and the request
+  # should be re-set from the idle-vs-loaded band observed on pods that have been
+  # up ~24h on these settings rather than from either version of this arithmetic.
+  # The two are coupled — the target is a percentage OF the request, so moving one
+  # without redoing the band calculation re-wedges the dead band.
+  #
   # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
   # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
-  eszipCacheMaxMb: 512
+  eszipCacheMaxMb: 256
   # Headroom for bundle bytes the cache accounting does NOT see: a bundle being
   # read on a cache miss, and one the LRU evicted (or refused as oversized) while
   # a worker creation still holds a reference to it. Those buffers are real and
@@ -1172,8 +1230,12 @@ edgeFunctions:
   # EdgeRuntime.userWorkers.create() rather than for the whole request, which is
   # what keeps this term small — but it is not zero, and a burst of cold requests
   # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
-  # roughly four of the largest bundle in the image (58.4MiB measured); after
-  # warmup the working set is resident and this is not touched at all.
+  # roughly four of the largest bundle in the image (58.4MiB when this was
+  # written; re-measured 43.2MiB on 2026-08-28, so the render-time floor of
+  # 64Mi is now conservative — left alone deliberately, it costs nothing).
+  # After warmup the working set is resident and this is not touched at all.
+  # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
+  # COLD reads, and halving the cache makes cold reads more frequent, not less.
   eszipColdLoadHeadroomMb: 256
   worker:
     memoryLimitMb: 256
@@ -1189,10 +1251,12 @@ edgeFunctions:
   # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
   #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
   # render time by pawtograder.edgeFunctions.assertMemoryBudget.
-  # 4Gi rather than 2Gi because the documented working configuration -- the 512Mi
-  # cache and 256Mi cold-load defaults with maxParallelism 8 -- comes to 2906Mi
-  # (~2.8Gi) and did not fit 2Gi, so the old default was a combination the
-  # guardrail now rejects outright.
+  # 4Gi rather than 2Gi because the documented working configuration does not fit
+  # 2Gi, so the old default was a combination the guardrail now rejects outright.
+  # That was 2906Mi (~2.8Gi) when the cache was 512Mi; at the current 256Mi cache
+  # it is 2650Mi (~2.6Gi), still well past 2Gi. The limit is deliberately NOT
+  # lowered to track the cache: it is the backstop described below, and the slack
+  # is the point.
   #
   # This is a backstop, not a target: with the cache bounded, a pod's steady state
   # is the cache plus admitted isolates, and the headroom exists so the runtime
@@ -1210,7 +1274,33 @@ edgeFunctions:
     enabled: false
     minReplicas: 2
     maxReplicas: 10
-    targetMemoryUtilizationPercentage: 100
+    # 2026-08-28: 100 -> 80. This is the number that actually explains the
+    # pinning, and it is not "the target was too low".
+    #
+    # The HPA controller applies a default 10% TOLERANCE before acting, so a
+    # target of 100 is really a DEAD BAND of 90-110%, not "above 100 scales up".
+    # Anything landing inside that band moves nothing in either direction. With
+    # the per-pod floor at ~98% of the request, the fleet could never scale DOWN
+    # (that needs <90%), so once an earlier spike had driven it to maxReplicas it
+    # stayed there permanently; and at 109% under load it still would not scale
+    # UP (that needs >110%). Both directions were wedged by the same band.
+    #
+    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
+    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
+    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
+    # those two -- the floor is below it, so a quiet fleet can scale down; a
+    # loaded pod is above it, so a busy fleet can scale up.
+    #
+    # Confirmed live on the prod fleet, cache already at 256Mi:
+    #   18:46   109%/100%   12 replicas   pinned
+    #   18:48   109%/80%    12 replicas   target changed
+    #   18:49    78%/80%    20 replicas   scaled, then settled at equilibrium
+    #
+    # Changing the target is not a substitute for sizing the request from
+    # measured data -- see the resources note above. The two interact: this
+    # target is expressed as a percentage OF the request, so re-setting the
+    # request without redoing this arithmetic re-wedges the band.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
