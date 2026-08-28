@@ -240,13 +240,28 @@ spec:
           #
           # What this trades away: a permanently wedged postmaster is no longer
           # restarted automatically. The pod stays Running and NotReady until
-          # someone intervenes. That is the intended trade — readiness (kept
-          # below) already stops traffic being routed here, which is the useful
-          # half of the signal and is non-destructive, and the wedged case now
-          # surfaces as alerts instead of a blind restart: the pawtograder.app
-          # group pages critical within 1-5m once the app cannot reach the DB, and
-          # PawtograderPostgresExporterQueryFailing / ...ExporterDown fire on the
-          # exporter sidecar in this same pod. Detection without amputation.
+          # someone intervenes. Readiness (kept below) stops traffic being routed
+          # here, which is the useful half of the signal and is non-destructive.
+          #
+          # The other half of the trade is DETECTION, and it had to be built —
+          # an earlier version of this comment claimed the pawtograder.app group
+          # would page critical within 1-5m once the app could not reach the DB.
+          # That was WRONG, and the error mattered because it was the safety
+          # argument for removing the probe. Every critical rule in that group is
+          # `metric > threshold` on a series that DISAPPEARS when the database is
+          # gone (the queue gauges come from the metrics edge function, whose
+          # handler returns HTTP 500 when its first DB RPC fails), and a threshold
+          # against no data returns no data. They fail OPEN. Same for
+          # PawtograderPostgresConnectionsSaturated, which reads the exporter
+          # sidecar in THIS pod. Before the fix a wedged primary was silent for 30
+          # minutes and then only warned (PawtograderPostgresExporterDown).
+          #
+          # PawtograderPostgresUnavailable now covers it: critical, for 5m, keyed
+          # on kube_statefulset_status_replicas_ready from kube-state-metrics —
+          # deliberately OUTSIDE this pod, so it survives both a dead database and
+          # a dead exporter. See templates/prometheus-rules.yaml. Detection
+          # without amputation, but only because that rule exists: do not remove
+          # it and leave this probe removed.
           #
           # If you reintroduce a liveness probe, you must also update the
           # assertion in charts/pawtograder/tests/render-guardrails.sh that pins

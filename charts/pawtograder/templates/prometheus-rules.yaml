@@ -20,6 +20,7 @@ docs/operations/monitoring-alerting.md.
      have a letter after `<name>-`). Keeps a failing/slow verify or drill from
      masking a stale real backup or paging as a backup outage. */}}
 {{- $backupJob := include "pawtograder.componentName" (dict "ctx" . "component" "backup") }}
+{{- $pgSts := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
 {{- $backupMaxAge := .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -202,6 +203,66 @@ spec:
     {{- if .Values.postgres.enabled }}
     - name: pawtograder.postgres
       rules:
+        # DATABASE AVAILABILITY — the one rule that actually detects a dead or
+        # wedged primary. Read this before touching any other rule in this group.
+        #
+        # Why it has to exist, and why it is keyed on kube-state-metrics rather
+        # than on anything the platform itself emits: EVERY other critical rule in
+        # this chart fails OPEN when the database is gone. They are all
+        # `metric > threshold` on series that DISAPPEAR in that scenario, and a
+        # threshold comparison against no data returns no data, so the alert
+        # simply never fires:
+        #
+        #   PawtograderPostgresConnectionsSaturated (critical, 5m) reads
+        #     pawtograder_db_connections_*, produced by the postgres_exporter
+        #     SIDECAR — which lives in the postgres pod and dies with it.
+        #   PawtograderRecalcStalled (3m), PawtograderAsyncDLQGrowing (1m),
+        #     PawtograderAsyncQueueBacklog (5m), PawtograderQueueOldestMessageAging
+        #     (10m) — all critical — read pawtograder_*queue* series from the
+        #     `metrics` edge function, whose handler THROWS and returns HTTP 500
+        #     when its first DB RPC fails, so the whole target goes away.
+        #   PawtograderPostgresExporterDown notices, but at warning after 30m.
+        #
+        # So before this rule, a wedged primary was silent for 30 minutes and then
+        # merely warned. That gap became load-bearing when the liveness probes were
+        # removed from postgres-statefulset.yaml / postgres-replica.yaml: nothing
+        # restarts a wedged postmaster automatically now, so the condition MUST
+        # page. Detection is the other half of that trade.
+        #
+        # kube_statefulset_status_replicas_ready is independent of the database,
+        # the exporter and the edge function, and it is precisely the signal the
+        # retained readinessProbe produces. Labels are `statefulset` and
+        # `namespace` (kube-state-metrics, STABLE). max() because kube-state-metrics
+        # may run more than one replica and kube-prometheus-stack adds per-target
+        # labels; we want one alert, not one per KSM pod.
+        #
+        # Known limitation, deliberate and consistent with this file's stated
+        # philosophy: if kube-state-metrics is absent the series is missing and this
+        # rule is silent rather than firing. No absent() arm — that would page every
+        # install without KSM. Do not "simplify" this rule away on the grounds that
+        # the queue alerts look like they cover it. They do not.
+        - alert: PawtograderPostgresUnavailable
+          expr: max(kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="{{ $pgSts }}"}) == 0
+          for: {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres has no ready replica — database unavailable"
+            description: >-
+              The {{ $pgSts }} StatefulSet in {{ $ns }} has reported zero ready
+              replicas for
+              {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}.
+              Every tier is down: PostgREST, GoTrue, realtime, storage and the edge
+              functions all depend on this database. The pod is NOT restarted
+              automatically — the liveness probes were deliberately removed after
+              they killed the primary twice during a transient NFS stall (see
+              templates/postgres-statefulset.yaml), so recovery here is a human
+              decision. Check `kubectl describe pod` and the postgres container
+              logs first: if the postmaster is wedged on storage, restarting will
+              not help and may extend the outage by forcing WAL replay. Do not
+              expect the queue or connection alerts to corroborate this — they read
+              series that vanish when the database is gone. Runbook:
+              docs/operations/monitoring-alerting.md.
         # Connection-budget saturation. pawtograder_db_connections (postgres_exporter
         # query in monitoring.yaml) reports used backends against max_connections;
         # the ratio is compared to a percent threshold. max() not sum(): there is a

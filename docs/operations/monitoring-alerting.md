@@ -126,6 +126,12 @@ Each alert's expression depends on an exporter being present in the cluster:
 - replication alerts → the chart's own `postgres_exporter` custom query
   (`pawtograder_replication_*`, defined in `templates/monitoring.yaml`; read from
   the **primary's** `pg_stat_replication`, not `pg_replication_slots`).
+- **database availability** (`PawtograderPostgresUnavailable`, critical, `for`
+  `monitoring.prometheusRules.postgresUnavailableFor`, default 5m) →
+  **kube-state-metrics** (`kube_statefulset_status_replicas_ready`, labels
+  `statefulset` / `namespace`). Deliberately keyed OUTSIDE the postgres pod, and
+  the only rule in the chart that actually detects a dead or wedged primary — see
+  the fail-open note below.
 - vacuum health and RAM/buffer-cache dashboards
   (`docs/grafana-dashboard-vacuum-health.json`) → the chart's own
   `postgres_exporter` custom queries `pawtograder_vacuum_alert`,
@@ -182,6 +188,40 @@ query_preview)` label sets whenever a statement ran under more than one
 > entire `/metrics` endpoint**, taking down \_all* postgres metrics (the target
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
+
+> **Every other critical rule fails OPEN when the database is down.** This
+> predates the availability alert and is worth understanding before you trust any
+> of them as an outage signal. All of them are `metric > threshold` on series that
+> **disappear** in that scenario, and a threshold comparison against no data
+> returns no data — so they go silent rather than firing:
+>
+> | rule                                      | severity / `for` | series it reads                                    | why it vanishes                                                          |
+> | ----------------------------------------- | ---------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+> | `PawtograderPostgresConnectionsSaturated` | critical / 5m    | `pawtograder_db_connections_*`                     | postgres_exporter is a **sidecar in the postgres pod**                   |
+> | `PawtograderRecalcStalled`                | critical / 3m    | `pawtograder_gradebook_row_recalculate_queue_size` | `metrics` edge function returns **HTTP 500** when its first DB RPC fails |
+> | `PawtograderAsyncDLQGrowing`              | critical / 1m    | `pawtograder_async_dlq_size`                       | same                                                                     |
+> | `PawtograderAsyncQueueBacklog`            | critical / 5m    | `pawtograder_async_queue_size`                     | same                                                                     |
+> | `PawtograderQueueOldestMessageAging`      | critical / 10m   | `pawtograder_queue_oldest_message_seconds`         | same                                                                     |
+>
+> Before `PawtograderPostgresUnavailable` existed, a wedged primary was therefore
+> **silent for 30 minutes** and then only warned
+> (`PawtograderPostgresExporterDown`). That became load-bearing when the Postgres
+> liveness probes were removed — nothing restarts a wedged postmaster
+> automatically now, so the condition has to page. `PawtograderPostgresUnavailable`
+> is keyed on kube-state-metrics precisely so it survives a dead database, a dead
+> exporter _and_ a dead edge function. **Do not remove it on the grounds that the
+> queue alerts appear to cover the same ground — they do not.**
+>
+> The two exporter self-health rules have a narrower job and keep their existing
+> shape: `PawtograderPostgresExporterQueryFailing` (warning, 15m) means a custom
+> query is broken while the DB is fine, and `PawtograderPostgresExporterDown`
+> (warning, 30m) means the exporter specifically is not being scraped. Neither is
+> an availability signal.
+>
+> Not fixed here: adding `absent()` companions to the queue alerts would close the
+> fail-open for those specific rules, but it changes the meaning of long-standing
+> critical alerts and risks paging on any edge-function scrape gap, so it belongs
+> in its own change.
 
 > **Externally managed database (`postgres.enabled=false`) has no DB metrics.**
 > Every DB-derived series this chart ships — `pawtograder_vacuum_alert`,

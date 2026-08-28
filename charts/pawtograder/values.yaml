@@ -1626,6 +1626,28 @@ monitoring:
     # 45m and never fired on one. Ten minutes is ten or more consecutive scrapes (so a scrape gap
     # cannot flap it) with 20 minutes of margin left inside the shortest window.
     discordCircuitOpenFor: 10m
+    # How long the chart-managed Postgres StatefulSet may report ZERO ready
+    # replicas before PawtograderPostgresUnavailable pages (critical).
+    #
+    # This is the alert that covers a wedged primary. It exists because the
+    # liveness probes were removed (see postgres-statefulset.yaml): nothing
+    # restarts a wedged postmaster automatically any more, so the condition has to
+    # page instead. It is keyed on kube-state-metrics, NOT on anything produced
+    # inside the postgres pod — the exporter sidecar and the metrics edge function
+    # both die with the database, which is exactly why the pre-existing critical
+    # rules cannot detect this (they are `metric > threshold` on series that
+    # disappear, so they fail OPEN).
+    #
+    # Must outlast a NORMAL rollout or the chart pages on every deploy: the
+    # StatefulSet legitimately goes not-ready on any config change. Budget is
+    # roughly preStop fast shutdown (seconds) + a possible cold image pull of the
+    # supabase/postgres image (1-3 min) + postgres start and readiness
+    # (initialDelay 10s + up to 3x5s) — call it 3-4 min worst case on a cold node.
+    # 5m clears that with margin and matches the 5m used by
+    # PawtograderPostgresConnectionsSaturated and PawtograderAsyncQueueBacklog.
+    # Raise it if your nodes pull images slowly; lower it only if images are always
+    # warm.
+    postgresUnavailableFor: 5m
     # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
