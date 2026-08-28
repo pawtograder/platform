@@ -24,8 +24,11 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
  * descriptors at shared_buffers = 4GB, per call, per pod.
  *
  * Both now live in the postgres_exporter's queries.yaml
- * (charts/pawtograder/templates/monitoring.yaml), which is scraped once, from one pod. The metric
- * and label names are unchanged, so dashboards and alerts kept working across the cutover.
+ * (charts/pawtograder/templates/monitoring.yaml), which is scraped once, from one pod. The vacuum,
+ * buffer-cache and dead-tuple metrics kept their exact names and labels. Connections and table
+ * sizes did NOT: pawtograder_db_connections{state} is gone, and table sizes are now
+ * pawtograder_table_sizes_total_bytes{relation} with a schema-qualified value. See
+ * supabase/migrations/20260827120000_drop_database_ram_metrics.sql for the full mapping.
  *
  * What stays here, and why: the queue sizes and circuit breaker states below are ~0.3% of DB exec
  * time combined and drive paging alerts where scrape-interval freshness matters, and the

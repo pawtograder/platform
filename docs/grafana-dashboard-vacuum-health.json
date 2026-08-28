@@ -99,7 +99,7 @@
     },
     {
       "title": "Vacuum Collector Health",
-      "description": "1 = pawtograder_vacuum_alert is absent, i.e. the postgres_exporter's pawtograder_vacuum query is not reporting (function dropped or renamed, permission revoked, query error). Read this ALONGSIDE the two alert-count panels: those use `OR vector(0)`, so if the series vanishes entirely they render 0 and look green. Before this metric moved to the exporter, the metrics edge function emitted an explicit pawtograder_vacuum_alert{check=\"rpc_failed\",severity=\"error\"} 1 on RPC failure, which the count panels picked up. postgres_exporter has no equivalent: a failing custom query is dropped from the output and only sets pg_exporter_last_scrape_error, for which this chart defines no alert rule. This panel restores the fail-loud behaviour. The namespace matcher is REQUIRED, not cosmetic: absent() returns empty if ANY matching series exists, so unscoped (or with an All/regex $namespace) a healthy neighbouring release in the shared kube-prometheus-stack would render this deployment as Reporting while its own collector is dead - inverting the exact signal this panel exists to give. The $namespace variable is single-select for that reason.",
+      "description": "1 = NOT REPORTING: pawtograder_vacuum_alert is absent, i.e. the postgres_exporter's pawtograder_vacuum query is not reporting (function dropped or renamed, permission revoked, query error). This is the immediate DASHBOARD signal for that state; the alerting side is covered by PawtograderPostgresExporterQueryFailing (pg_exporter_last_scrape_error > 0, 15m) and PawtograderPostgresExporterDown (absent(pg_exporter_last_scrape_error), 30m) in templates/prometheus-rules.yaml. This panel is the at-a-glance version, not the only fail-loud mechanism. Why it is needed at all: the two alert-count panels use `OR vector(0)`, so if the series vanishes entirely they render 0 and look green. Before this metric moved to the exporter, the metrics edge function emitted an explicit pawtograder_vacuum_alert{check=\"rpc_failed\",severity=\"error\"} 1 on RPC failure, which the count panels picked up; postgres_exporter has no equivalent, because a failing custom query is dropped from the output rather than failing the scrape. Two things in this expression are load-bearing, both verified with promtool unit tests. (1) max() is NOT decorative. absent() preserves the equality matchers as output labels, so absent(...{namespace=\"X\"}) returns {namespace=\"X\"} 1 while vector(0) returns {} 0 - different label sets, so plain `or` returns BOTH and the stat panel has two series and no single collector state, during exactly the failure this panel reports. max() collapses them to one. (2) The namespace matcher is required: absent() returns empty if ANY matching series exists, so unscoped - or with an All/regex $namespace - a healthy neighbouring release in the shared kube-prometheus-stack would render this deployment as Reporting while its own collector is dead. The $namespace variable is single-select for that reason.",
       "type": "stat",
       "id": 26,
       "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 },
@@ -134,7 +134,7 @@
       },
       "targets": [
         {
-          "expr": "absent(pawtograder_vacuum_alert{namespace=\"$namespace\"}) OR vector(0)",
+          "expr": "max(absent(pawtograder_vacuum_alert{namespace=\"$namespace\"}) OR vector(0))",
           "legendFormat": "collector absent",
           "refId": "A"
         }

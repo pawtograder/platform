@@ -137,9 +137,15 @@ Each alert's expression depends on an exporter being present in the cluster:
   32 replicas in prod, ~1.07 calls/sec, and **77.7% of all database execution
   time**, almost all of it `pg_buffercache` scans (524,288 buffer descriptors
   per call at `shared_buffers = 4GB`). They are global database state, so the
-  exporter — scraped once — is the right home. Metric and label names did not
-  change. The buffer-cache queries carry `cache_seconds: 300`, so the scan runs
-  at most once per 5 minutes even from that one target.
+  exporter — scraped once — is the right home. These four kept their exact metric
+  and label names; **two other contracts did change** in the same move, and are
+  documented in `supabase/migrations/20260827120000_drop_database_ram_metrics.sql`
+  — the per-state `pawtograder_db_connections{state}` series is gone (use the
+  built-in `pg_stat_activity_count` if you need the breakdown), and table sizes
+  moved to `pawtograder_table_sizes_total_bytes{relation}` where the label is
+  `relation` rather than `relname` and its value is schema-qualified. The
+  buffer-cache queries carry `cache_seconds: 300`, so the scan runs at most once
+  per 5 minutes even from that one target.
 - exporter self-health alerts (`PawtograderPostgresExporterQueryFailing`,
   `PawtograderPostgresExporterDown`) → `pg_exporter_last_scrape_error`, which
   `postgres_exporter` emits on every scrape. These exist because a failing custom

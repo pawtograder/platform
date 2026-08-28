@@ -15,8 +15,42 @@
 --
 -- Those metrics now come from the postgres-exporter's custom queries
 -- (charts/pawtograder/templates/monitoring.yaml, the queries.yaml ConfigMap),
--- which is scraped ONCE — one postgres pod, one endpoint. Metric and label names
--- were preserved exactly, so dashboards and alerts were unaffected.
+-- which is scraped ONCE — one postgres pod, one endpoint.
+--
+-- METRIC COMPATIBILITY — four of six preserved exactly, two contracts CHANGED.
+-- (An earlier draft of this comment claimed all names and labels were preserved.
+-- That was wrong; corrected here, because an overstated compatibility claim in an
+-- ops log is worse than none.)
+--
+-- Preserved exactly, same metric name AND same label names:
+--   pawtograder_db_buffer_cache_bytes{relname}
+--   pawtograder_db_buffer_cache_total_used_bytes   (no labels)
+--   pawtograder_db_dead_tuples{relname}
+--   pawtograder_vacuum_alert{check,severity,table_name}
+--
+-- CHANGED — connections. This function emitted
+-- pawtograder_db_connections{state} (a per-state breakdown from
+-- pg_stat_activity). That series is GONE. The exporter's pre-existing
+-- pawtograder_db_connections block emits pawtograder_db_connections_used /
+-- _max / _reserved instead: a count of backend_type = 'client backend' against
+-- max_connections, with NO per-state dimension. It is the count max_connections
+-- actually governs and what the PawtograderPostgresConnections* alerts use, but
+-- it is not the same contract. If anything needs the state breakdown back, do
+-- NOT revive this function: postgres_exporter's built-in pg_stat_activity
+-- collector already publishes it as pg_stat_activity_count, labelled
+-- datname/state/usename/application_name/backend_type/wait_event_type/wait_event
+-- (verified in the pinned v0.18.0 metric map). It is on by default — the sidecar
+-- does not pass --disable-default-metrics — so the data is already being scraped.
+--
+-- CHANGED — table sizes. This function emitted
+-- pawtograder_db_table_total_bytes{relname} with a BARE table name. The
+-- exporter's pre-existing pawtograder_table_sizes block emits
+-- pawtograder_table_sizes_total_bytes / _heap_bytes, and BOTH the label name and
+-- its value format differ: the label is `relation`, not `relname`, and the value
+-- is schema-qualified (public.submissions, not submissions). Any query, panel or
+-- rule matching on relname= for table sizes must be rewritten to relation= with
+-- a schema prefix. The only consumer was
+-- docs/grafana-dashboard-vacuum-health.json, updated in the same PR.
 --
 -- =============================================================================
 -- DO NOT DROP THE pg_buffercache EXTENSION. IT IS STILL REQUIRED.
