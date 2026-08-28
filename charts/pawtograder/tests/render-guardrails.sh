@@ -156,6 +156,38 @@ assert_edge_envfrom_optional() {
   if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
 }
 
+# assert_env_value "<label>" "<template>" "<ENV_NAME>" "<expected value>" <extra --set args...>
+# Pins one container env var to an exact rendered value, matched by NAME then the
+# `value:` line immediately below it.
+#
+# Matching on the name is the whole point here rather than pedantry: the two eszip
+# budgets both render 268435456 at the current defaults (a 256Mi cache and a 256Mi
+# cold-load allowance are the same number of bytes), so a bare grep for the number
+# passes even if the two are swapped, or if one is left behind at 512Mi while the
+# other supplies the match. Anchor to the name and the adjacent line.
+assert_env_value() {
+  local label="$1" template="$2" envname="$3" want="$4"; shift 4
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(grep -A1 -E "^[[:space:]]*- name: ${envname}\$" "$OUTFILE" \
+          | grep -E '^[[:space:]]*value:' \
+          | head -1 | sed -E 's/^[[:space:]]*value:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: $envname is not rendered in $template at all"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: $envname rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 echo "== baseline =="
 assert_renders "clean production baseline renders"
 
@@ -511,6 +543,35 @@ assert_edge_envfrom_optional "edge-function channels envFrom is optional" \
   --set 'channels[0].web.hostname=canary.pawtograder.example.com' \
   --set 'channels[0].edgeFunctions.image.tag=v1.0.0' \
   --set channelWildcardTlsSecret=wildcard-tls
+
+# The eszip cache is a load-INDEPENDENT term in per-pod RSS, so it sets the FLOOR
+# the memory-target HPA measures against the request. At 512Mi that floor sat at
+# ~992Mi against prod's 1Gi request, i.e. ~100% before any load, and the HPA
+# pinned at maxReplicas 32 with CPU at 5% — see the note on eszipCacheMaxMb in
+# values.yaml. 2026-08-28 halved it to 256Mi. Pin the rendered BYTES so a future
+# edit cannot quietly restore 512 and re-pin the autoscaler: this is a number
+# whose regression is invisible in behaviour for hours (the floor climbs with
+# cache warmth after each deploy) and then permanent.
+echo "== edge-function eszip byte budgets are pinned (HPA floor, 2026-08-28) =="
+assert_env_value "eszip cache renders 256Mi in bytes" \
+  templates/edge-functions.yaml EDGE_ESZIP_CACHE_MAX_BYTES 268435456
+assert_env_value "eszip cold-load allowance renders 256Mi in bytes" \
+  templates/edge-functions.yaml EDGE_ESZIP_COLD_LOAD_MAX_BYTES 268435456
+
+# The budget assertion is the thing that makes the four terms safe to tune at all,
+# so prove it still REFUSES rather than trusting that it would. 2650Mi is the exact
+# sum at the current defaults (256 + 256 + 8 x 256 + 90), so one MiB below it is
+# the tightest possible negative case and it also pins the arithmetic itself.
+assert_refused "memory budget refuses a limit one MiB below the computed sum" \
+  "+ ~90Mi Deno host = 2650Mi" \
+  --set edgeFunctions.resources.limits.memory=2649Mi
+assert_renders "memory budget accepts a limit exactly equal to the computed sum" \
+  --set edgeFunctions.resources.limits.memory=2650Mi
+# eszipColdLoadHeadroomMb must still cover the largest bundle in the image. It is
+# NOT reduced alongside the cache: halving the cache makes cold reads MORE frequent.
+assert_refused "cold-load allowance below the largest bundle is refused" \
+  "below the 64Mi needed to cover the largest bundle" \
+  --set edgeFunctions.eszipColdLoadHeadroomMb=32
 
 echo
 if [ "$FAILED" -ne 0 ]; then
