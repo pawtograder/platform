@@ -53,6 +53,37 @@
 -- docs/grafana-dashboard-vacuum-health.json, updated in the same PR.
 --
 -- =============================================================================
+-- ACCEPTED DEVIATION FROM THE EXPAND/CONTRACT RULE. READ BEFORE ROLLING BACK.
+-- =============================================================================
+-- docs/operations/rollback.md ("Preventing the §C case") says: never ship a
+-- destructive migration coupled to the same release that stops using the old
+-- shape — split it across two releases so a rollback target always exists.
+--
+-- This migration KNOWINGLY breaks that rule. It drops the function in the same
+-- release that stops calling it, so there is no rollback target: migrations are
+-- forward-only (charts/pawtograder/images/migrations/migrate.sh records each in
+-- supabase_migrations.schema_migrations and skips anything already applied), and
+-- the older migration that CREATES database_ram_metrics() is already recorded as
+-- applied, so a rollback does not recreate it.
+--
+-- Concretely, if the application image is rolled back past this release:
+--   the previous metrics edge function calls database_ram_metrics() on every
+--   scrape, gets a PostgREST 404, and logs + Sentry-reports it ~1.07 times a
+--   second (32 functions pods x 30s). The buffer-cache, dead-tuple,
+--   connection-state and table-size series are lost for the duration.
+--
+-- Judged acceptable because the blast radius is OBSERVABILITY ONLY. This
+-- function is read by nothing but the metrics scrape path — it writes nothing,
+-- no application query calls it, and no user-facing data is lost or becomes
+-- unreadable. That is a different class of risk from the schema drops the
+-- expand/contract rule exists to prevent.
+--
+-- REMEDY if a rollback happens: forward-fix, which is option 1 in
+-- rollback.md's own hierarchy — ship a migration recreating the function (its
+-- body is in 20260325000000_autovacuum_tuning.sql). Do NOT restore from backup
+-- for this; it would trade real data for metrics.
+--
+-- =============================================================================
 -- DO NOT DROP THE pg_buffercache EXTENSION. IT IS STILL REQUIRED.
 -- =============================================================================
 -- Two earlier migrations justify pg_buffercache by naming this function:
