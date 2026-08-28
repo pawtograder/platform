@@ -188,6 +188,38 @@ assert_env_value() {
   fi
 }
 
+# assert_hpa_utilization "<label>" "<memory|cpu>" "<expected>" <extra --set args...>
+# Pins one HPA resource metric's averageUtilization, keyed on the RESOURCE NAME.
+#
+# The HPA renders `averageUtilization` once per metric, so the field name alone is
+# ambiguous — memory and cpu both produce a line spelled identically. Anchor on the
+# `name: <resource>` line and read the averageUtilization from the following lines
+# of that metric block, so a memory assertion cannot be satisfied by the cpu target.
+assert_hpa_utilization() {
+  local label="$1" resource="$2" want="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set edgeFunctions.autoscaling.enabled=true \
+      "$@" --show-only templates/edge-functions-hpa.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(grep -A4 -E "^[[:space:]]*name: ${resource}\$" "$OUTFILE" \
+          | grep -E '^[[:space:]]*averageUtilization:' \
+          | head -1 | sed -E 's/^[[:space:]]*averageUtilization:[[:space:]]*//')"
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: no averageUtilization found for resource $resource"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: $resource averageUtilization rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 echo "== baseline =="
 assert_renders "clean production baseline renders"
 
@@ -572,6 +604,16 @@ assert_renders "memory budget accepts a limit exactly equal to the computed sum"
 assert_refused "cold-load allowance below the largest bundle is refused" \
   "below the 64Mi needed to cover the largest bundle" \
   --set edgeFunctions.eszipColdLoadHeadroomMb=32
+
+# The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
+# band of 90-110%. The edge tier's load-independent floor sat inside that band,
+# which wedged scaling in BOTH directions: it could not scale down (needs <90%) and
+# at 109% under load it could not scale up (needs >110%). 80 puts the band at
+# 72-88%, between the measured ~56% floor and ~146% loaded peak. Pin it so the
+# value cannot drift back to a number whose dead band swallows the floor.
+echo "== edge-function HPA targets are pinned (dead-band sizing, 2026-08-28) =="
+assert_hpa_utilization "memory target renders 80, not 100" memory 80
+assert_hpa_utilization "cpu target renders 200" cpu 200
 
 echo
 if [ "$FAILED" -ne 0 ]; then

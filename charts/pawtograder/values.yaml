@@ -1173,9 +1173,10 @@ edgeFunctions:
   # is load-INDEPENDENT and dominated by this cache:
   #   ~320Mi Deno host baseline (measured, see resources notes)
   #    512Mi eszip cache at its cap
-  #   ~160Mi isolates (8 x ~20Mi marginal under eszip, per main.ts)
   #   -------
-  #   ~992Mi against prod's 1Gi request  => ~100% before any load at all.
+  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
+  #          and measured idle sat higher still (~98%) because a pod keeps
+  #          some isolates resident between requests.
   #
   # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
   # were recreated, and the SAME fleet under the SAME load went from mean
@@ -1191,17 +1192,31 @@ edgeFunctions:
   # (the slow, memory-heavy path) only when a bundle is MISSING from the image,
   # which is not what eviction causes.
   #
-  # NOT done here, deliberately: resources.requests.memory stays as it is. With
-  # the cache at 256 the floor drops to ~576Mi idle / ~736Mi loaded, so raising
-  # the request to 1.5Gi would put a FULLY LOADED pod near 48% and the memory
-  # target could never be reached — flipping the failure from pinned-at-max to
-  # pinned-at-min, with CPU at 5% unable to trigger either way. Re-set the
-  # request and targetMemoryUtilizationPercentage from measured idle-vs-loaded
-  # numbers taken from pods that have been up ~24h on this setting, not from
-  # this arithmetic. Deeper caveat: the load-DEPENDENT component is only ~160Mi
-  # against a 576-832Mi floor, so memory is a structurally weak scaling signal
-  # here at ANY request value. The real fix is scaling on a load signal —
-  # pgmq queue depth (pawtograder_async_queue_size and friends already exist).
+  # Isolate sizing, corrected 2026-08-28: an earlier version of this note put the
+  # load-dependent term at 8 x ~20Mi = ~160Mi, reading the "~16-20MB marginal"
+  # figure out of main.ts. That figure describes the marginal cost of an ADDITIONAL
+  # isolate for the SAME function once its module graph is loaded; a real isolate
+  # under production load measures ~116Mi. So the load-dependent band is
+  # 8 x ~116Mi = ~900Mi, and with the cache at 256 a pod runs a ~576Mi floor
+  # (56% of prod's 1Gi request) up to a ~1500Mi loaded peak (146%).
+  #
+  # That makes memory a STRONG scaling signal here — ~900Mi of swing on a ~576Mi
+  # floor. An earlier version of this note concluded the opposite ("structurally
+  # weak signal at any request value") and pointed at pgmq queue depth as the real
+  # fix; that conclusion rested on the ~160Mi figure and is retracted. The problem
+  # was never signal strength. It was that the floor sat inside the HPA's default
+  # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
+  # below now addresses.
+  #
+  # NOT changed here: resources.requests.memory. Note the corrected numbers also
+  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
+  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
+  # would read ~98%, not 48%. The request is simply out of scope for this change:
+  # the target bump below is what was measured and confirmed live, and the request
+  # should be re-set from the idle-vs-loaded band observed on pods that have been
+  # up ~24h on these settings rather than from either version of this arithmetic.
+  # The two are coupled — the target is a percentage OF the request, so moving one
+  # without redoing the band calculation re-wedges the dead band.
   #
   # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
   # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
@@ -1259,7 +1274,33 @@ edgeFunctions:
     enabled: false
     minReplicas: 2
     maxReplicas: 10
-    targetMemoryUtilizationPercentage: 100
+    # 2026-08-28: 100 -> 80. This is the number that actually explains the
+    # pinning, and it is not "the target was too low".
+    #
+    # The HPA controller applies a default 10% TOLERANCE before acting, so a
+    # target of 100 is really a DEAD BAND of 90-110%, not "above 100 scales up".
+    # Anything landing inside that band moves nothing in either direction. With
+    # the per-pod floor at ~98% of the request, the fleet could never scale DOWN
+    # (that needs <90%), so once an earlier spike had driven it to maxReplicas it
+    # stayed there permanently; and at 109% under load it still would not scale
+    # UP (that needs >110%). Both directions were wedged by the same band.
+    #
+    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
+    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
+    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
+    # those two -- the floor is below it, so a quiet fleet can scale down; a
+    # loaded pod is above it, so a busy fleet can scale up.
+    #
+    # Confirmed live on the prod fleet, cache already at 256Mi:
+    #   18:46   109%/100%   12 replicas   pinned
+    #   18:48   109%/80%    12 replicas   target changed
+    #   18:49    78%/80%    20 replicas   scaled, then settled at equilibrium
+    #
+    # Changing the target is not a substitute for sizing the request from
+    # measured data -- see the resources note above. The two interact: this
+    # target is expressed as a percentage OF the request, so re-setting the
+    # request without redoing this arithmetic re-wedges the band.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
