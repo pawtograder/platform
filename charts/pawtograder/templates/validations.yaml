@@ -30,6 +30,30 @@ keyed off global.environment (dev | preview | staging | production):
 {{- fail "studio.ingressEnabled=true without studio.basicAuth.enabled exposes full database control to anyone with the URL. Enable basic-auth, or set studio.allowUnauthenticatedIngress=true to confirm another auth layer (VPN / oauth2-proxy / IP allowlist) fronts this host." -}}
 {{- end -}}
 
+{{- /*
+Monitoring with an externally managed database. Every DB-derived series the chart
+ships comes from the postgres_exporter SIDECAR in the chart-managed Postgres
+StatefulSet, so postgres.enabled=false leaves no collector at all — and the
+`metrics` edge function no longer gathers them, because scraping it once per
+functions pod (32 replicas in prod) cost 77.7% of all database execution time.
+The PawtograderPostgresExporter* self-health rules are gated on postgres.enabled
+too, so nothing would even report the absence. Fail loudly here rather than
+degrade silently.
+
+Guarded any-environment, not just staging/production: this is a configuration
+that does not WORK, like postgres.replica without walg above, rather than one
+that is merely risky in a durable tier. It also cannot fire by accident — it
+needs monitoring.enabled=true (default false) AND postgres.enabled=false
+(default true), both deliberate.
+
+Acknowledgement rather than a hard fail, following studio.allowUnauthenticatedIngress:
+running your own exporter against the external DB is a legitimate setup the chart
+cannot detect.
+*/ -}}
+{{- if and .Values.monitoring.enabled (not .Values.postgres.enabled) (not .Values.monitoring.externalPostgresExporter) -}}
+{{- fail "monitoring.enabled=true with postgres.enabled=false ships NO database metrics collector. pawtograder_vacuum_alert, pawtograder_db_buffer_cache*, pawtograder_db_dead_tuples, pawtograder_db_connections_*, pawtograder_table_sizes_*, pawtograder_replication_*, pawtograder_wal_archiving_* and pg_stat_statements_top all come from the postgres_exporter sidecar inside the chart-managed Postgres StatefulSet, which this mode does not deploy; the metrics edge function no longer collects them either. The PawtograderPostgresExporterQueryFailing/Down alerts are skipped under the same condition, so the absence would be silent. Point your own postgres_exporter at the external database (the queries.yaml ConfigMap still renders, so you can mount it and keep the same metric names), add a ServiceMonitor for it, then set monitoring.externalPostgresExporter=true to confirm. Set monitoring.enabled=false if you do not want DB metrics." -}}
+{{- end -}}
+
 {{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
 {{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
 {{- end -}}

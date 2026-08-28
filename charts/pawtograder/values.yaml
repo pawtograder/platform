@@ -1561,6 +1561,27 @@ monitoring:
   serviceMonitors:
     storage: true
 
+  # Acknowledge that a postgres_exporter you manage is pointed at an externally
+  # managed database. ONLY relevant with postgres.enabled=false.
+  #
+  # Every DB-derived series this chart ships comes from the postgres_exporter
+  # SIDECAR inside the chart-managed Postgres StatefulSet (see
+  # templates/postgres-statefulset.yaml). With postgres.enabled=false that pod
+  # does not exist, so there is no collector — and the `metrics` edge function
+  # no longer gathers them either, because doing so cost 77.7% of all database
+  # execution time when Prometheus scraped it once per functions pod (32 in
+  # prod). templates/validations.yaml therefore REFUSES
+  # monitoring.enabled=true + postgres.enabled=false unless you set this,
+  # rather than letting vacuum/buffer-cache/dead-tuple metrics vanish silently.
+  #
+  # Setting this true asserts you run your own exporter against the external
+  # database. The queries.yaml ConfigMap still renders, so you can mount it into
+  # your exporter and keep the same metric names the dashboards and alert rules
+  # expect. The chart's own postgres-exporter Service and ServiceMonitor are NOT
+  # rendered when postgres.enabled=false (they would select no pods and sit
+  # permanently "down"), so supply your own ServiceMonitor for your exporter.
+  externalPostgresExporter: false
+
   # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
   # staleness, ExternalSecret sync failure, and TLS cert expiry — the
   # operational alerts PRODUCTION-READINESS deferred to cluster monitoring.

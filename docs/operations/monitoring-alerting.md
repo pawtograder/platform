@@ -183,6 +183,29 @@ query_preview)` label sets whenever a statement ran under more than one
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
 
+> **Externally managed database (`postgres.enabled=false`) has no DB metrics.**
+> Every DB-derived series this chart ships — `pawtograder_vacuum_alert`,
+> `pawtograder_db_buffer_cache*`, `pawtograder_db_dead_tuples`,
+> `pawtograder_db_connections_*`, `pawtograder_table_sizes_*`,
+> `pawtograder_replication_*`, `pawtograder_wal_archiving_*` and
+> `pg_stat_statements_top` — comes from the `postgres_exporter` **sidecar inside
+> the chart-managed Postgres StatefulSet**. With `postgres.enabled=false` that pod
+> does not exist, so there is no collector, and the `metrics` edge function no
+> longer gathers them either (it cost 77.7% of all database execution time when
+> Prometheus scraped it once per functions pod). The
+> `PawtograderPostgresExporter*` self-health rules are gated on the same
+> condition, so nothing would report the absence.
+>
+> `templates/validations.yaml` therefore **refuses** `monitoring.enabled=true`
+> together with `postgres.enabled=false` unless you set
+> `monitoring.externalPostgresExporter=true`, which asserts you run your own
+> exporter against the external database. In that mode the chart still renders the
+> `queries.yaml` ConfigMap (mount it into your exporter to keep the metric names
+> the dashboards and alert rules expect) but deliberately does **not** render its
+> own postgres-exporter Service or ServiceMonitor — they select the sidecar's pod,
+> which is absent, so they would sit permanently "down" and mask your real
+> exporter. Supply a ServiceMonitor for your own exporter instead.
+
 > **Every custom query sets `master: true`.** The exporter sidecar runs with
 > `PG_EXPORTER_AUTO_DISCOVER_DATABASES=true`, so without that flag a block runs
 > once per discovered database. Every query in `templates/monitoring.yaml` is

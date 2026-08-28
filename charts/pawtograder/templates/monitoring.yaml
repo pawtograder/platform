@@ -526,6 +526,18 @@ data:
             usage: "GAUGE"
             description: "Heap size only (no indexes)"
 ---
+{{- /*
+Both of the following are gated on postgres.enabled: the sidecar they front only
+exists inside the chart-managed Postgres StatefulSet. With postgres.enabled=false
+(externally managed database) this Service would select no pods and the
+ServiceMonitor would sit permanently "down" — masking the real exporter an
+operator supplies for the external DB. validations.yaml refuses that combination
+unless monitoring.externalPostgresExporter=true, and in that mode the operator
+brings their own ServiceMonitor. The queries.yaml ConfigMap above is NOT gated:
+it is still useful to mount into an external exporter to keep the metric names
+the dashboards and alert rules expect.
+*/ -}}
+{{- if .Values.postgres.enabled }}
 # Headless Service that fronts the postgres_exporter sidecar's :9187
 # inside the postgres pod. We can't add the metrics port to the existing
 # pawtograder-postgres Service because that Service is consumed as the
@@ -568,6 +580,7 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
 ---
 # ServiceMonitor: storage-api. /metrics on the http port. Toggleable via
 # monitoring.serviceMonitors.storage: storage-api only exposes /metrics on its

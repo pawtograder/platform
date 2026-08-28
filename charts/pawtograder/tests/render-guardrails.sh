@@ -85,6 +85,24 @@ assert_rendered_contains() {
   fi
 }
 
+# assert_rendered_lacks "<label>" "<template>" "<forbidden substring>" <extra --set args...>
+# Inverse of assert_rendered_contains: the render must SUCCEED and must NOT contain
+# the substring. Used to prove a manifest is absent in a mode where it would be
+# actively harmful, rather than merely unused.
+assert_rendered_lacks() {
+  local label="$1" template="$2" forbidden="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+  elif grep -qF "$forbidden" "$OUTFILE"; then
+    echo "FAIL [$label]: rendered, but still contains: $forbidden"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_edge_envfrom_optional "<label>" "<template>" <extra --set args...>
 # Every Secret listed in edgeFunctions.envFromSecrets must render optional: true.
 # envFrom is one-shot and all-or-nothing: a single absent Secret puts the whole
@@ -153,6 +171,37 @@ assert_refused "studio ingress without auth" \
 assert_refused "replica without wal-g" \
   "requires postgres.walg.enabled=true" \
   --set postgres.replica.enabled=true --set postgres.replica.persistence.storageClass=lp
+
+# Monitoring with an externally managed database. Every DB-derived series comes
+# from the postgres_exporter SIDECAR in the chart-managed Postgres StatefulSet, so
+# postgres.enabled=false leaves no collector — and since this PR the `metrics` edge
+# function no longer gathers them (it cost 77.7% of all DB execution time, scraped
+# once per functions pod). The PawtograderPostgresExporter* self-health rules are
+# gated on postgres.enabled too, so nothing would report the absence. The guard
+# must refuse that combination, and the acknowledgement must clear it.
+assert_refused "monitoring without the chart's postgres (no collector)" \
+  "ships NO database metrics collector" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_renders "monitoring without postgres is allowed once an external exporter is declared" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
+# ...and in that mode the chart must NOT ship its own exporter Service/ServiceMonitor:
+# they select the sidecar's pod, which does not exist, so they would sit permanently
+# "down" and mask the operator's real exporter. The queries.yaml ConfigMap SHOULD
+# still render — it is worth mounting into an external exporter to keep the metric
+# names the dashboards and alert rules expect.
+assert_rendered_lacks "external-exporter mode ships no dangling exporter Service/ServiceMonitor" \
+  templates/monitoring.yaml "9187" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "external-exporter mode still ships queries.yaml to mount" \
+  templates/monitoring.yaml "queries.yaml: |" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
 
 echo "== staging + production guards =="
 assert_refused "secrets.create in production" \
