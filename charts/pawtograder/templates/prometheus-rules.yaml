@@ -20,6 +20,7 @@ docs/operations/monitoring-alerting.md.
      have a letter after `<name>-`). Keeps a failing/slow verify or drill from
      masking a stale real backup or paging as a backup outage. */}}
 {{- $backupJob := include "pawtograder.componentName" (dict "ctx" . "component" "backup") }}
+{{- $pgSts := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
 {{- $backupMaxAge := .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -202,6 +203,66 @@ spec:
     {{- if .Values.postgres.enabled }}
     - name: pawtograder.postgres
       rules:
+        # DATABASE AVAILABILITY — the one rule that actually detects a dead or
+        # wedged primary. Read this before touching any other rule in this group.
+        #
+        # Why it has to exist, and why it is keyed on kube-state-metrics rather
+        # than on anything the platform itself emits: EVERY other critical rule in
+        # this chart fails OPEN when the database is gone. They are all
+        # `metric > threshold` on series that DISAPPEAR in that scenario, and a
+        # threshold comparison against no data returns no data, so the alert
+        # simply never fires:
+        #
+        #   PawtograderPostgresConnectionsSaturated (critical, 5m) reads
+        #     pawtograder_db_connections_*, produced by the postgres_exporter
+        #     SIDECAR — which lives in the postgres pod and dies with it.
+        #   PawtograderRecalcStalled (3m), PawtograderAsyncDLQGrowing (1m),
+        #     PawtograderAsyncQueueBacklog (5m), PawtograderQueueOldestMessageAging
+        #     (10m) — all critical — read pawtograder_*queue* series from the
+        #     `metrics` edge function, whose handler THROWS and returns HTTP 500
+        #     when its first DB RPC fails, so the whole target goes away.
+        #   PawtograderPostgresExporterDown notices, but at warning after 30m.
+        #
+        # So before this rule, a wedged primary was silent for 30 minutes and then
+        # merely warned. That gap became load-bearing when the liveness probes were
+        # removed from postgres-statefulset.yaml / postgres-replica.yaml: nothing
+        # restarts a wedged postmaster automatically now, so the condition MUST
+        # page. Detection is the other half of that trade.
+        #
+        # kube_statefulset_status_replicas_ready is independent of the database,
+        # the exporter and the edge function, and it is precisely the signal the
+        # retained readinessProbe produces. Labels are `statefulset` and
+        # `namespace` (kube-state-metrics, STABLE). max() because kube-state-metrics
+        # may run more than one replica and kube-prometheus-stack adds per-target
+        # labels; we want one alert, not one per KSM pod.
+        #
+        # Known limitation, deliberate and consistent with this file's stated
+        # philosophy: if kube-state-metrics is absent the series is missing and this
+        # rule is silent rather than firing. No absent() arm — that would page every
+        # install without KSM. Do not "simplify" this rule away on the grounds that
+        # the queue alerts look like they cover it. They do not.
+        - alert: PawtograderPostgresUnavailable
+          expr: max(kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="{{ $pgSts }}"}) == 0
+          for: {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres has no ready replica — database unavailable"
+            description: >-
+              The {{ $pgSts }} StatefulSet in {{ $ns }} has reported zero ready
+              replicas for
+              {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}.
+              Every tier is down: PostgREST, GoTrue, realtime, storage and the edge
+              functions all depend on this database. The pod is NOT restarted
+              automatically — the liveness probes were deliberately removed after
+              they killed the primary twice during a transient NFS stall (see
+              templates/postgres-statefulset.yaml), so recovery here is a human
+              decision. Check `kubectl describe pod` and the postgres container
+              logs first: if the postmaster is wedged on storage, restarting will
+              not help and may extend the outage by forcing WAL replay. Do not
+              expect the queue or connection alerts to corroborate this — they read
+              series that vanish when the database is gone. Runbook:
+              docs/operations/monitoring-alerting.md.
         # Connection-budget saturation. pawtograder_db_connections (postgres_exporter
         # query in monitoring.yaml) reports used backends against max_connections;
         # the ratio is compared to a percent threshold. max() not sum(): there is a
@@ -243,6 +304,97 @@ spec:
               app-usable ceiling below max_connections, so new client connections
               are about to be refused (FATAL: too many clients). Kill leaked/idle
               sessions or scale down connection consumers immediately. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # Monitoring blind-spot guard. Added when the vacuum, buffer-cache and
+        # dead-tuple metrics moved off the `metrics` edge function into the
+        # postgres_exporter's queries.yaml (monitoring.yaml).
+        #
+        # postgres_exporter does NOT fail a scrape when one custom query breaks. It
+        # drops that namespace from /metrics entirely and records the failure only
+        # here. Traced in the pinned v0.18.0: a db.Query error becomes
+        # queryNamespaceMapping's fatal (third) return, lands in
+        # queryNamespaceMappings' errMap, and Server.Scrape turns a non-empty errMap
+        # into the error that sets this gauge to 1.
+        #
+        # Without this alert that failure is not just silent, it fails OPEN. The
+        # vacuum dashboard reads
+        # `count(pawtograder_vacuum_alert{severity!="ok"} == 1) OR vector(0)`, so a
+        # dropped namespace renders as 0 active alerts — green. A dropped function, a
+        # revoked grant, or a pg_buffercache extension relocated out of `public`
+        # would look exactly like a healthy database. The edge function used to emit
+        # an explicit pawtograder_vacuum_alert{check="rpc_failed"} 1 on failure; the
+        # exporter has no equivalent, so the signal has to come from here.
+        #
+        # severity: warning, not critical — nothing user-facing is broken. We have
+        # gone blind on vacuum/XID-wraparound and RAM telemetry, which needs fixing
+        # in hours, not a 3am page. `for: 15m` so a single bad scrape (or one query
+        # hitting a transient lock timeout) cannot flap it, matching
+        # PawtograderPostgresConnectionsHigh and PawtograderWALArchiveFailing.
+        #
+        # max() for the same reason as the connection rules above: the ServiceMonitor
+        # attaches pod/instance/endpoint labels, and this should be one alert rather
+        # than one per label set.
+        - alert: PawtograderPostgresExporterQueryFailing
+          expr: max(pg_exporter_last_scrape_error{namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder postgres_exporter custom queries are failing"
+            description: >-
+              At least one postgres_exporter custom query in {{ $ns }} has failed for
+              15m (pg_exporter_last_scrape_error=1). The exporter silently OMITS the
+              failing query's metrics from /metrics, so affected panels read as empty
+              or — for pawtograder_vacuum_alert, whose dashboard wraps it in
+              `OR vector(0)` — as healthy. Likely causes: a function the queries wrap
+              was dropped or renamed (public.vacuum_health_check), a grant was revoked
+              from the exporter's role (supabase_admin), the pg_buffercache extension
+              moved out of `public`, or a query is timing out under load. Check the
+              postgres-exporter container logs in the postgres pod — it logs the
+              failing namespace and the Postgres error. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # The watcher's watcher. The rule above needs pg_exporter_last_scrape_error to
+        # EXIST. If the exporter sidecar is gone, the postgres-exporter Service or its
+        # ServiceMonitor selector breaks, or Prometheus stops scraping that target,
+        # the gauge disappears and that rule goes quiet along with every signal it was
+        # guarding.
+        #
+        # This matters more than it used to: the vacuum, buffer-cache and dead-tuple
+        # series previously came from 32 edge-function pods, so losing any one changed
+        # nothing. The exporter is a single target, so it is now a single point of
+        # monitoring failure for those signals.
+        #
+        # absent() is deliberately on pg_exporter_last_scrape_error and NOT on the
+        # pawtograder_db_* families themselves. Those are legitimately empty on a
+        # healthy database: pawtograder_db_dead_tuples only has series for tables with
+        # more than 100 dead tuples, and pawtograder_db_buffer_cache_bytes only for
+        # relations over 1 MiB, so absent() on either would page on an idle instance.
+        # This gauge is emitted on every scrape regardless of what the queries return,
+        # so its absence means exactly one thing: the exporter is not being scraped.
+        #
+        # `for: 30m` and severity: warning — rides out a postgres StatefulSet roll or
+        # a Prometheus reload without paging (matching PawtograderBackupMissing's 30m),
+        # and deliberately overlaps kube-prometheus-stack's own TargetDown: this is the
+        # Pawtograder-scoped, self-contained version for installs that have not wired
+        # generic target alerting to a receiver.
+        - alert: PawtograderPostgresExporterDown
+          expr: absent(pg_exporter_last_scrape_error{namespace="{{ $ns }}"})
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder postgres_exporter is not being scraped"
+            description: >-
+              pg_exporter_last_scrape_error has been absent from {{ $ns }} for 30m, so
+              Prometheus is not scraping the postgres_exporter sidecar at all. Every
+              pawtograder_db_*, pawtograder_table_sizes, pawtograder_vacuum_alert,
+              pawtograder_replication_* and pawtograder_wal_archiving_* series is
+              missing, which also silences PawtograderPostgresConnections*,
+              PawtograderWALArchiveFailing, PawtograderReplica* and
+              PawtograderPostgresExporterQueryFailing. Check that the postgres pod's
+              postgres-exporter container is running, that the postgres-exporter
+              Service still selects it, and that the ServiceMonitor's labels still
+              match your Prometheus ruleSelector/serviceMonitorSelector. Runbook:
               docs/operations/monitoring-alerting.md.
     {{- end }}
     # App-level KPI alerts. Converted from the Ripley Grafana-managed rules

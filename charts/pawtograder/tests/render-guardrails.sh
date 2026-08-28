@@ -85,6 +85,24 @@ assert_rendered_contains() {
   fi
 }
 
+# assert_rendered_lacks "<label>" "<template>" "<forbidden substring>" <extra --set args...>
+# Inverse of assert_rendered_contains: the render must SUCCEED and must NOT contain
+# the substring. Used to prove a manifest is absent in a mode where it would be
+# actively harmful, rather than merely unused.
+assert_rendered_lacks() {
+  local label="$1" template="$2" forbidden="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+  elif grep -qF "$forbidden" "$OUTFILE"; then
+    echo "FAIL [$label]: rendered, but still contains: $forbidden"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_edge_envfrom_optional "<label>" "<template>" <extra --set args...>
 # Every Secret listed in edgeFunctions.envFromSecrets must render optional: true.
 # envFrom is one-shot and all-or-nothing: a single absent Secret puts the whole
@@ -153,6 +171,37 @@ assert_refused "studio ingress without auth" \
 assert_refused "replica without wal-g" \
   "requires postgres.walg.enabled=true" \
   --set postgres.replica.enabled=true --set postgres.replica.persistence.storageClass=lp
+
+# Monitoring with an externally managed database. Every DB-derived series comes
+# from the postgres_exporter SIDECAR in the chart-managed Postgres StatefulSet, so
+# postgres.enabled=false leaves no collector — and since this PR the `metrics` edge
+# function no longer gathers them (it cost 77.7% of all DB execution time, scraped
+# once per functions pod). The PawtograderPostgresExporter* self-health rules are
+# gated on postgres.enabled too, so nothing would report the absence. The guard
+# must refuse that combination, and the acknowledgement must clear it.
+assert_refused "monitoring without the chart's postgres (no collector)" \
+  "ships NO database metrics collector" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_renders "monitoring without postgres is allowed once an external exporter is declared" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
+# ...and in that mode the chart must NOT ship its own exporter Service/ServiceMonitor:
+# they select the sidecar's pod, which does not exist, so they would sit permanently
+# "down" and mask the operator's real exporter. The queries.yaml ConfigMap SHOULD
+# still render — it is worth mounting into an external exporter to keep the metric
+# names the dashboards and alert rules expect.
+assert_rendered_lacks "external-exporter mode ships no dangling exporter Service/ServiceMonitor" \
+  templates/monitoring.yaml "9187" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "external-exporter mode still ships queries.yaml to mount" \
+  templates/monitoring.yaml "queries.yaml: |" \
+  --set monitoring.enabled=true --set postgres.enabled=false \
+  --set monitoring.externalPostgresExporter=true \
+  --set monitoring.prometheusRules.labels.release=kps
 
 echo "== staging + production guards =="
 assert_refused "secrets.create in production" \
@@ -244,6 +293,204 @@ assert_renders "prometheus rules with ruleSelector label renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
+
+# assert_exporter_metric "<block>" "<column>" [<label>...]
+# postgres_exporter names every custom metric `<block key>_<column name>`, so the
+# queries.yaml block key and the column name TOGETHER are the metric name that
+# Grafana panels and alert rules query — a block rename that looks like tidying
+# silently blanks a dashboard.
+#
+# The four metrics pinned below moved off the `metrics` edge function, which
+# Prometheus scraped once per functions pod (32 replicas in prod, ~1.07
+# scrapes/sec, 77.7% of all database execution time). Their block/column splits
+# were chosen to land on the pre-existing names, not for elegance — hence e.g.
+# block `pawtograder_db_dead` + column `tuples`. Label names are pinned too:
+# panels legend on them and alert rules can match on them.
+assert_exporter_metric() {
+  local block="$1" column="$2"; shift 2
+  local label="exporter metric ${block}_${column}"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # Slice this block's stanza out of the embedded queries.yaml: queries.yaml is a
+  # YAML literal inside the ConfigMap, so blocks sit at exactly 4 spaces and the
+  # next 4-space key ends the stanza. Anchoring on the exact key keeps
+  # `pawtograder_db_buffer_cache` from matching `pawtograder_db_buffer_cache_total`.
+  local stanza
+  stanza="$(awk -v b="    $block:" '
+    $0 == b { inb = 1; next }
+    inb && /^    [^ ]/ { exit }
+    inb { print }
+  ' "$OUTFILE")"
+  if [ -z "$stanza" ]; then
+    echo "FAIL [$label]: queries.yaml has no block named '$block'"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if ! printf '%s\n' "$stanza" | grep -qE "^        - $column:$"; then
+    echo "FAIL [$label]: block '$block' declares no column '$column'"
+    bad=1
+  fi
+  local lbl
+  for lbl in "$@"; do
+    # The column key, then the two lines under it (usage, description). A LABEL
+    # column must render usage: "LABEL" so the exporter turns it into a label
+    # rather than a second metric.
+    if ! printf '%s\n' "$stanza" | grep -A2 -E "^        - $lbl:$" | grep -qF 'usage: "LABEL"'; then
+      echo "FAIL [$label]: block '$block' does not expose '$lbl' as a LABEL"
+      bad=1
+    fi
+  done
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+echo "== postgres_exporter metric names moved off the edge function are pinned =="
+assert_exporter_metric pawtograder_db_buffer_cache bytes relname
+assert_exporter_metric pawtograder_db_buffer_cache_total used_bytes
+assert_exporter_metric pawtograder_db_dead tuples relname
+assert_exporter_metric pawtograder_vacuum alert check severity table_name
+
+# assert_exporter_all_master
+# Every custom query block in the exporter's queries.yaml must set `master: true`.
+#
+# The sidecar runs PG_EXPORTER_AUTO_DISCOVER_DATABASES=true, so without it a
+# block runs once per discovered database. Every query in that file is either
+# cluster-wide (pg_stat_statements, pg_buffercache, pg_settings,
+# pg_stat_replication) or specific to the application database (public.classes,
+# public.submissions, public.help_requests, the pawtograder_* functions), so
+# per-database execution is wrong in all of them.
+#
+# Latent on the currently deployed supabase/postgres 17.4.x: the discovery query
+# excludes templates, and prod has only `postgres`, `template0` and `template1`,
+# so nothing is discovered (prod pg_exporter_last_scrape_error is 0, one `server`
+# label value). On 17.6.x and later Supabase adds `_supabase` and
+# `storage_vectors`, and then four of these blocks error once per discovered
+# database on every scrape and pawtograder_table_sizes runs against the wrong
+# databases — so this is a prerequisite for the next Postgres image bump. It also
+# guards worse than noise: the `server` label is only host:port
+# (parseFingerprint, no database name), so databases on one instance are
+# indistinguishable by label, and the first query that returns a row from a
+# second database yields a duplicate label set — which makes the exporter return
+# HTTP 500 for the WHOLE /metrics endpoint, taking down all postgres metrics.
+#
+# Blanket assertion on purpose. A future block that genuinely means something
+# different per database is fine, but it has to be added to ALLOW_NO_MASTER here
+# with a reason, so the decision is deliberate and reviewable instead of a
+# forgotten default.
+assert_exporter_all_master() {
+  local label="every exporter query block sets master: true"
+  # Blocks legitimately exempt (per-database by design). Space-separated.
+  local ALLOW_NO_MASTER=""
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # Slice out just the queries.yaml literal: starts after `queries.yaml: |` and
+  # ends at the next document separator. Keeps the 4-space block scan below from
+  # straying into the Service/ServiceMonitor manifests further down the file.
+  local queries
+  queries="$(awk '
+    /^  queries\.yaml: \|$/ { inq = 1; next }
+    inq && /^---$/ { exit }
+    inq { print }
+  ' "$OUTFILE")"
+  if [ -z "$queries" ]; then
+    echo "FAIL [$label]: could not find the queries.yaml literal in the rendered ConfigMap"
+    FAILED=1
+    return
+  fi
+  # One line per block: "<name> <has_master>". A 4-space key with no value opens
+  # a block; `master: true` at 6 spaces belongs to the block currently open.
+  local report
+  report="$(printf '%s\n' "$queries" | awk '
+    /^    [a-z_]+:$/ { if (blk != "") print blk, has; blk = substr($1, 1, length($1) - 1); has = 0; next }
+    /^      master: true$/ { has = 1 }
+    END { if (blk != "") print blk, has }
+  ')"
+  local nblocks bad=0 name flag
+  nblocks="$(printf '%s\n' "$report" | grep -c . || true)"
+  if [ "$nblocks" -lt 10 ]; then
+    echo "FAIL [$label]: only parsed $nblocks query blocks — the scan looks broken, not the file"
+    FAILED=1
+    return
+  fi
+  while read -r name flag; do
+    [ -z "$name" ] && continue
+    if [ "$flag" != "1" ] && ! printf ' %s ' "$ALLOW_NO_MASTER" | grep -qF " $name "; then
+      echo "FAIL [$label]: block '$name' does not set master: true (and is not in ALLOW_NO_MASTER)"
+      bad=1
+    fi
+  done <<EOF
+$report
+EOF
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label] ($nblocks blocks)"; fi
+}
+
+assert_exporter_all_master
+
+# assert_no_liveness_probe "<label>" "<template>" <extra --set args...>
+# The postgres primary and its replica must render NO livenessProbe, and must
+# still render a readinessProbe.
+#
+# On 2026-08-27 the hardcoded liveness probes killed BOTH pods during a transient
+# NetApp NFS stall caused by network maintenance — the primary at 14:02:44 and
+# postgres-replica-0 at 17:18:18. Each template carried periodSeconds 10 /
+# timeoutSeconds 5 with failureThreshold unset, so both inherited the Kubernetes
+# default of 3 and had only ~30s of tolerance. The shutdown checkpoint one second
+# after the primary was killed flushed 1397 buffers in 0.122s (sync 0.002s), so
+# storage was already healthy: the probe's patience ran out about a second before
+# the problem cleared itself. Each misfire cost the 4GB warm buffer pool, every
+# connection, and a hard exit of all three realtime pods.
+#
+# Restarting a single-writer Postgres cannot fix external storage, so waiting is
+# strictly better. Loosening was rejected because pg_isready ALSO exits non-zero
+# during crash recovery ("rejecting connections"), and on this ~29 GB database WAL
+# replay can outlast any sane liveness window — the probe would then kill the pod
+# mid-recovery, each kill leaving more WAL to replay than the last.
+#
+# This assertion exists so that cannot be silently undone. Readiness is asserted
+# present in the same breath, because removing THAT would be the opposite mistake:
+# it is the non-destructive half of the signal. Rationale lives in
+# templates/postgres-statefulset.yaml.
+assert_no_liveness_probe() {
+  local label="$1" template="$2"; shift 2
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if grep -qE '^[[:space:]]*livenessProbe:' "$OUTFILE"; then
+    echo "FAIL [$label]: $template renders a livenessProbe — see the note above and in postgres-statefulset.yaml"
+    bad=1
+  fi
+  if ! grep -qE '^[[:space:]]*readinessProbe:' "$OUTFILE"; then
+    echo "FAIL [$label]: $template renders NO readinessProbe — that is the half we must keep"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+echo "== postgres liveness probes stay removed (2026-08-27 incident) =="
+assert_no_liveness_probe "postgres primary has no livenessProbe, keeps readinessProbe" \
+  templates/postgres-statefulset.yaml
+assert_no_liveness_probe "postgres replica has no livenessProbe, keeps readinessProbe" \
+  templates/postgres-replica.yaml \
+  --set postgres.replica.enabled=true \
+  --set postgres.replica.persistence.storageClass=lp \
+  --set postgres.walg.enabled=true \
+  --set postgres.walg.s3Prefix=s3://b/walg
 
 echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
 assert_rendered_contains "internal redis pod runs non-root with a securityContext" \

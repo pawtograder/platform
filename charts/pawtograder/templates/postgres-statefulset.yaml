@@ -186,21 +186,86 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
-          livenessProbe:
-            exec:
-              command:
-                - pg_isready
-                # Probe the bootstrap superuser, not `postgres`. The
-                # `postgres` role is created later by migrate.sh; on first
-                # boot it doesn't exist yet, so probing it would keep the
-                # pod NotReady (or trip liveness) until migrations finish.
-                - -U
-                - supabase_admin
-                - -d
-                - {{ .Values.postgres.database }}
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
+          # NO livenessProbe. Deliberate, and load-bearing — see the 2026-08-27
+          # incident below before adding one back.
+          #
+          # There was one here: pg_isready with initialDelaySeconds 30,
+          # periodSeconds 10, timeoutSeconds 5 and failureThreshold unset, so it
+          # inherited the Kubernetes default of 3 — about 30 seconds of tolerance.
+          # It took the platform down twice in one day:
+          #
+          #   14:02:19.677  all 7 pg_cron jobs log "job startup timeout"
+          #                 (the postmaster could not fork background workers)
+          #   14:02:44      kubelet: "Container postgres failed liveness probe,
+          #                 will be restarted"
+          #   14:02:45.452  shutdown checkpoint: 1397 buffers, write=0.122s,
+          #                 sync=0.002s  <- storage was already FINE
+          #   14:02:46.169  database system is shut down
+          #   14:02:51      all 3 realtime pods exit 1 (Postgrex admin_shutdown ->
+          #                 Erlang app exit + crash dump)
+          #   17:18:18      the same sequence again, on postgres-replica-0
+          #
+          # The probe was not wrong. pg_cron's "job startup timeout" means the
+          # postmaster genuinely could not fork workers, which is exactly what
+          # pg_isready needs; it really was unresponsive for 25s+. But the
+          # condition was transient and self-resolving: the shutdown checkpoint
+          # one second after the kill flushed 1397 buffers in 0.122s with a 2ms
+          # sync, so storage was healthy again by then. The probe's patience ran
+          # out roughly a second before the problem cleared itself.
+          #
+          # Cause was external: network maintenance that day. PGDATA is NetApp
+          # NFS, and hard mounts BLOCK rather than error, so the fork path stalled
+          # while Postgres logged nothing — the log is empty for the 12 minutes
+          # before the kill.
+          #
+          # Why removed rather than loosened. Restarting a single-writer Postgres
+          # cannot fix external storage, so waiting is strictly better. Liveness
+          # only helps a permanently wedged postmaster, which is rare, warrants a
+          # human, and on this stack means manual failover anyway. Against that,
+          # every misfire costs the 4GB warm buffer pool, every connection, and a
+          # hard exit of all three realtime pods (dropping every WebSocket client
+          # at once). The expected value is negative.
+          #
+          # Loosening to ~90s (timeoutSeconds 10 / periodSeconds 15 /
+          # failureThreshold 6) was the other candidate and is NOT enough, because
+          # of a second failure mode: pg_isready also exits non-zero during crash
+          # recovery, printing "rejecting connections" (observed on the replica
+          # during startup). This database is ~29 GB, so WAL replay after any
+          # unclean stop can exceed 90 seconds — and initialDelaySeconds does not
+          # help, it delays the first probe rather than widening the window once
+          # probing starts. Liveness would then kill the pod MID-RECOVERY, and
+          # each kill is another unclean stop with more WAL to replay than the
+          # last: a self-worsening restart loop at the exact moment the database
+          # can least afford one.
+          #
+          # What this trades away: a permanently wedged postmaster is no longer
+          # restarted automatically. The pod stays Running and NotReady until
+          # someone intervenes. Readiness (kept below) stops traffic being routed
+          # here, which is the useful half of the signal and is non-destructive.
+          #
+          # The other half of the trade is DETECTION, and it had to be built —
+          # an earlier version of this comment claimed the pawtograder.app group
+          # would page critical within 1-5m once the app could not reach the DB.
+          # That was WRONG, and the error mattered because it was the safety
+          # argument for removing the probe. Every critical rule in that group is
+          # `metric > threshold` on a series that DISAPPEARS when the database is
+          # gone (the queue gauges come from the metrics edge function, whose
+          # handler returns HTTP 500 when its first DB RPC fails), and a threshold
+          # against no data returns no data. They fail OPEN. Same for
+          # PawtograderPostgresConnectionsSaturated, which reads the exporter
+          # sidecar in THIS pod. Before the fix a wedged primary was silent for 30
+          # minutes and then only warned (PawtograderPostgresExporterDown).
+          #
+          # PawtograderPostgresUnavailable now covers it: critical, for 5m, keyed
+          # on kube_statefulset_status_replicas_ready from kube-state-metrics —
+          # deliberately OUTSIDE this pod, so it survives both a dead database and
+          # a dead exporter. See templates/prometheus-rules.yaml. Detection
+          # without amputation, but only because that rule exists: do not remove
+          # it and leave this probe removed.
+          #
+          # If you reintroduce a liveness probe, you must also update the
+          # assertion in charts/pawtograder/tests/render-guardrails.sh that pins
+          # its absence.
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
         {{- if and .Values.postgres.walg.enabled .Values.postgres.walg.baseBackup.enabled }}
