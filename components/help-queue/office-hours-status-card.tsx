@@ -25,18 +25,13 @@ import { useMemo } from "react";
 import { FaPlus, FaQuestionCircle } from "react-icons/fa";
 import { FiChevronDown } from "react-icons/fi";
 import PersonAvatar from "@/components/ui/person-avatar";
-import dynamic from "next/dynamic";
-
-const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
-  ssr: false
-});
-
 export function OfficeHoursStatusCard() {
   const { course_id } = useParams();
   const router = useRouter();
   const { role } = useClassProfiles();
   const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
-  const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
+  // The drawer itself is mounted once by HelpDrawerProvider, so this only needs to open it.
+  const { openDrawer } = useHelpDrawer();
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   // Student-visible variant so view-as counts don't include private peer requests; no-op
@@ -229,7 +224,6 @@ export function OfficeHoursStatusCard() {
           )}
         </HStack>
       </HStack>
-      {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       {queuesWithActiveStaff.length === 0 ? (
         <CardRoot>
           <CardBody>

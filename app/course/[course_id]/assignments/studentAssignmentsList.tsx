@@ -162,7 +162,10 @@ export default function StudentAssignmentsList() {
         }
       }
 
-      // The view already provides the effective due date with all calculations
+      // `due_date` off get_assignments_for_student_dashboard is the FINAL per-student deadline:
+      // the RPC selects calculate_final_due_date, so lab-section offsets AND due-date exceptions
+      // (extensions / late tokens) are already applied server-side. Do not add the RPC's
+      // exception_hours/exception_minutes on top of it here -- that would double-count.
       const modifiedDueDate = assignment.due_date
         ? new TZDate(assignment.due_date, course?.time_zone ?? "America/New_York")
         : undefined;

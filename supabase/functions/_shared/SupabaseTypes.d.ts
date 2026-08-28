@@ -5351,6 +5351,13 @@ export type Database = {
             referencedColumns: ["student_private_profile_id"];
           },
           {
+            foreignKeyName: "help_requests_followup_to_fkey";
+            columns: ["followup_to"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "help_requests_help_queue_fkey";
             columns: ["help_queue"];
             isOneToOne: false;
@@ -12523,6 +12530,7 @@ export type Database = {
       create_help_request_with_participants: {
         Args: {
           p_file_references?: Json;
+          p_followup_to?: number;
           p_help_queue_id: number;
           p_is_private?: boolean;
           p_location_type?: Database["public"]["Enums"]["location_type"];
