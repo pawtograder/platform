@@ -22,6 +22,7 @@ import {
   Box,
   Button,
   Card,
+  chakra,
   Code,
   Float,
   Heading,
@@ -35,6 +36,7 @@ import {
 } from "@chakra-ui/react";
 
 import { Alert } from "@/components/ui/alert";
+import { SpokenValue } from "@/components/ui/spoken-value";
 import pluralize from "pluralize";
 import type { CSSProperties, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -130,9 +132,16 @@ function WhatIfScoreCell({
     whatIfVal?.what_if !== null &&
     whatIfVal?.what_if !== score;
   const max_score = column.max_score ?? 100;
-  let scoreToShow: string | number | null | undefined = "N/A";
+  // `hasNumericScore` tracks whether `scoreToShow` is a real point value rather
+  // than a status word. The two are rendered very differently: only a number
+  // takes the "/max" suffix, and only a number is spoken as "N of M points"
+  // (issue #915 — every status used to pick up the suffix, so a submitted-but-
+  // ungraded item rendered "Submitted/100" and announced "Submitted slash 100").
+  let scoreToShow: string | number = "N/A";
+  let hasNumericScore = false;
   if (score !== null && score !== undefined) {
     scoreToShow = score;
+    hasNumericScore = true;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
   } else if (submissionStatus.status === "found") {
@@ -145,11 +154,19 @@ function WhatIfScoreCell({
     scoreToShow = "In Progress";
   }
   if (isShowingWhatIf) {
-    if (whatIfVal?.what_if !== null && whatIfVal?.what_if !== undefined) {
-      scoreToShow = whatIfVal.what_if;
-    } else {
-      scoreToShow = "0";
-    }
+    scoreToShow = whatIfVal?.what_if ?? 0;
+    hasNumericScore = true;
+  }
+  const showMaxScore = hasNumericScore && column.max_score != null;
+  // Screen readers get the value in words. "5/100" is at best ambiguous read as
+  // "5 slash 100"; a status word paired with a max is actively wrong, so the max
+  // moves to a "worth N points" clause where it is still available but no longer
+  // reads as a fraction of a score the student does not have.
+  let spokenScore: string;
+  if (hasNumericScore) {
+    spokenScore = column.max_score != null ? `${scoreToShow} of ${column.max_score} points` : `${scoreToShow} points`;
+  } else {
+    spokenScore = column.max_score != null ? `${scoreToShow}, worth ${column.max_score} points` : `${scoreToShow}`;
   }
   return (
     <HStack gap={0} pr={2} flexWrap="wrap" justifyContent="flex-end">
@@ -192,12 +209,17 @@ function WhatIfScoreCell({
           </Text>
         </Box>
       )}
-      {column.render_expression && "("}
+      {/* Punctuation that only groups the rendered expression with the raw
+          score visually — spoken it is just "left paren" noise, and the
+          SpokenValue below already reads the score as a phrase. */}
+      {column.render_expression && <chakra.span aria-hidden="true">(</chakra.span>}
       <Text fontSize="sm" whiteSpace="nowrap">
-        {scoreToShow}
-        {column.max_score && `/${column.max_score}`}
+        <SpokenValue spoken={spokenScore}>
+          {scoreToShow}
+          {showMaxScore && `/${column.max_score}`}
+        </SpokenValue>
       </Text>
-      {column.render_expression && ")"}
+      {column.render_expression && <chakra.span aria-hidden="true">)</chakra.span>}
       {whatIfEnabled && canEditColumn(column) && (
         // Keyboard path into what-if editing (WCAG 2.1.1): the card-level click
         // handler is a pointer convenience; this button is the operable control.
@@ -337,12 +359,18 @@ function GradebookCard({
   column,
   private_profile_id,
   isCollapsedGroupItem = false,
-  whatIfEnabled
+  whatIfEnabled,
+  // A column inside a group sits under that group's <h2>, so it is an h3;
+  // an ungrouped column is a direct child of the page's h1 and stays an h2.
+  // Keeping this honest matters for heading navigation — a fixed level would
+  // either skip h2 or flatten the group relationship away (WCAG 1.3.1).
+  headingLevel = 2
 }: {
   column: GradebookColumn;
   private_profile_id: string;
   isCollapsedGroupItem?: boolean;
   whatIfEnabled: boolean;
+  headingLevel?: 2 | 3;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const whatIfVal = useWhatIfGrade(column.id);
@@ -402,7 +430,7 @@ function GradebookCard({
       <HStack align="start" flexWrap="wrap" gap={2} w="100%">
         <Card.Header flexGrow={10} minW={0} p={0}>
           <VStack align="start" w="100%">
-            <Heading size="sm" id={`grade-title-${column.id}`}>
+            <Heading as={headingLevel === 3 ? "h3" : "h2"} size="sm" id={`grade-title-${column.id}`}>
               {column.name}
             </Heading>
             {linkToAssignment && (
@@ -449,34 +477,43 @@ function GroupHeader({
   onToggle: () => void;
 }) {
   return (
-    // A real <button> (WCAG 2.1.1/4.1.2): keyboard focusable/operable with the
-    // expanded state announced — the clickable-div version locked keyboard users
-    // out of expanding gradebook groups entirely. type="button" pins the default
-    // away from type=submit so a form ancestor never treats toggling as a submit.
-    <Card.Root
-      asChild
-      w="100%"
-      bg="bg.subtle"
-      cursor="pointer"
-      borderRadius="none"
-      borderBottom="none"
-      textAlign="left"
-      px={2}
-      py={2}
-      _hover={{ bg: "bg.info" }}
-    >
-      <button type="button" aria-expanded={!isCollapsed} onClick={onToggle}>
-        {/* Buttons only permit phrasing content, so the layout wrappers render as spans. */}
-        <HStack as="span" justifyContent="space-between" alignItems="center">
-          <HStack as="span" gap={2}>
-            <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
-            <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
-              {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
-            </Text>
+    // The group name is a heading as well as a control (WCAG 1.3.1): it labels
+    // the block of columns beneath it, so heading navigation has to be able to
+    // reach it. As a bare <button> it was invisible to heading nav, leaving a
+    // grouped gradebook with no reachable structure between the h1 and the
+    // individual columns. <h2><button> is the standard disclosure pattern —
+    // the heading carries the structure, the button carries the operability.
+    // fontSize/fontWeight inherit so this stays visually identical.
+    <chakra.h2 w="100%" m={0} fontSize="inherit" fontWeight="inherit">
+      {/* A real <button> (WCAG 2.1.1/4.1.2): keyboard focusable/operable with the
+          expanded state announced — the clickable-div version locked keyboard users
+          out of expanding gradebook groups entirely. type="button" pins the default
+          away from type=submit so a form ancestor never treats toggling as a submit. */}
+      <Card.Root
+        asChild
+        w="100%"
+        bg="bg.subtle"
+        cursor="pointer"
+        borderRadius="none"
+        borderBottom="none"
+        textAlign="left"
+        px={2}
+        py={2}
+        _hover={{ bg: "bg.info" }}
+      >
+        <button type="button" aria-expanded={!isCollapsed} onClick={onToggle}>
+          {/* Buttons only permit phrasing content, so the layout wrappers render as spans. */}
+          <HStack as="span" justifyContent="space-between" alignItems="center">
+            <HStack as="span" gap={2}>
+              <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
+              <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
+                {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
+              </Text>
+            </HStack>
           </HStack>
-        </HStack>
-      </button>
-    </Card.Root>
+        </button>
+      </Card.Root>
+    </chakra.h2>
   );
 }
 
@@ -522,6 +559,7 @@ function CollapsedGroupColumn({
       private_profile_id={private_profile_id}
       isCollapsedGroupItem={true}
       whatIfEnabled={whatIfEnabled}
+      headingLevel={3}
     />
   );
 }
@@ -687,6 +725,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
                 column={column}
                 private_profile_id={private_profile_id}
                 whatIfEnabled={whatIfEnabled}
+                headingLevel={3}
               />
             );
           });
