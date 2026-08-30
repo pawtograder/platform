@@ -1,3 +1,4 @@
+import SessionUserRecovery from "@/components/SessionUserRecovery";
 import { createClient } from "@/utils/supabase/server";
 import { Link, Box, Flex, VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
@@ -52,6 +53,11 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
 
   return (
     <TimeZoneProvider courseTimeZone={ADMIN_DISPLAY_TIME_ZONE}>
+      {/* Same self-healing the course layout installs: without it, an admin tab
+          whose session was signed out or swapped in another tab keeps showing
+          this dashboard — the most sensitive surface in the app — until someone
+          reloads by hand (issue #911). */}
+      <SessionUserRecovery userId={user.id} />
       <Box minH="100vh" bg="bg.canvas">
         <Box as="header" bg="bg" shadow="sm" borderBottom="1px" borderColor="border.muted">
           <Box maxW="7xl" mx="auto" px={{ base: 4, sm: 6, lg: 8 }}>

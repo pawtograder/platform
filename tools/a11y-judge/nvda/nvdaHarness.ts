@@ -561,12 +561,76 @@ const NON_TEXT_INPUT_TYPES = [
 
 const FIELD_SELECTOR = `input${NON_TEXT_INPUT_TYPES.map((t) => `:not([type=${t}])`).join("")}, textarea, [contenteditable="true"]`;
 
+/**
+ * Controls whose VALUE an arrow key changes when NVDA is in focus mode — the
+ * reason `next`/`previous` are not the pure reading commands this driver treats
+ * them as.
+ *
+ * `next` is ArrowDown (see moveToControl's preamble). In BROWSE mode that moves
+ * the review caret by line and changes nothing. In FOCUS mode the keystroke goes
+ * to the control, and for a radio group ArrowDown does not merely move — it
+ * MOVES AND SELECTS, because that is native radio-group behaviour on every
+ * platform. So a sweep looking for a milestone rewrites the answer it is
+ * reading, once per press.
+ *
+ * That is the whole of issue #913, which was filed against the app as "NVDA
+ * announces all three survey options as checked". NVDA was right every time.
+ * Driving the seeded survey's q2 group in focus mode and reading the DOM back
+ * after each press:
+ *
+ *   press#1 spoken="Just right, radio button, checked, 2 of 3"  DOM=Just right
+ *   press#2 spoken="Too fast,   radio button, checked, 3 of 3"  DOM=Too fast
+ *   press#3 spoken="Too slow,   radio button, checked, 1 of 3"  DOM=Too slow
+ *
+ * Every named radio says "checked" because the arrow that reached it also
+ * checked it; the only "not checked" in the run is the first announcement, which
+ * focus (not an arrow) arrived at. VoiceOver never showed this because VO+arrow
+ * moves the VO cursor without activating, which is why the same commit read
+ * correctly on macOS and made the divergence look like an app bug.
+ *
+ * A browse-mode sweep over the same markup announces "not checked / checked /
+ * not checked", identical to plain `<input type=radio>` — so this list is about
+ * the DRIVER's gestures, not about any markup the app can fix.
+ *
+ * `checkbox` is deliberately absent: Space toggles a checkbox, arrows do not.
+ */
+/**
+ * Does a browse LINE announce a control of its own?
+ *
+ * The discriminator retargetActToControl turns on. NVDA renders a control the
+ * user can activate with its role in the line ("Privacy (Optional), check box,
+ * checked, ..."), whereas the SurveyJS choice defect leaves a line of pure label
+ * text with no role word at all ("Just right") while the control sits on the
+ * previous line, nameless. Enter works on the first and is a dead key on the
+ * second, and nothing else in the observation distinguishes them — both report a
+ * bare `label` navigator object.
+ */
+export const ACT_LINE_NAMES_A_CONTROL =
+  /\b(check ?box|radio button|button|link|edit|combo box|list box|slider|spin button|menu item|tab|tree view|graphic)\b/i;
+
+const ARROW_MUTABLE_SELECTOR = [
+  "input[type=radio]",
+  "input[type=range]",
+  "input[type=number]",
+  "input[type=date]",
+  "input[type=datetime-local]",
+  "input[type=month]",
+  "input[type=time]",
+  "input[type=week]",
+  "select"
+].join(", ");
+
 /** Page-side globals: the element hostFocusField routed to (so verification can
  *  tell "the text landed" from "the text landed SOMEWHERE"), and the element the
  *  rung 0c probe measured (so before/after are the same element). Namespaced,
  *  and cleared/overwritten on every use — a page navigation drops them anyway. */
 const FOCUS_TARGET_KEY = "__a11yJudgeFocusTarget";
 const PROBE_ELEMENT_KEY = "__a11yJudgeProbeElement";
+/** The arrow-mutable control a sweep step is about to arrow past, remembered so
+ *  the after-reading and any restore address the SAME element (see hostFieldValue,
+ *  which learned the same lesson: a focus change mid-probe otherwise reads as a
+ *  successful move). */
+const SWEEP_ELEMENT_KEY = "__a11yJudgeSweepElement";
 
 const settle = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -613,6 +677,138 @@ function hostFieldWriteJs(text: string): string {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     const back = el.isContentEditable ? (el.innerText || el.textContent || '') : String(el.value == null ? '' : el.value);
     return 'wrote|' + where + '|' + back;
+  })()`;
+}
+
+/** Parsed form of a sweep signature. `kind` is the discriminator; `none`/`safe`
+ *  are the two cheap exits (nothing focused / focus is not arrow-mutable). */
+interface SweepSignature {
+  kind: "none" | "safe" | "radio" | "value";
+  key: string;
+  value: string;
+}
+
+/** No selection at all — distinct from a control whose value is the empty
+ *  string, which is why it is a sentinel rather than "". */
+const SWEEP_NO_SELECTION = " none";
+
+/**
+ * Page-side expression reading the ANSWER the focused arrow-mutable control
+ * carries. Returns JSON: `{kind, key, value}`.
+ *
+ * JSON rather than a delimited string, because the fields are arbitrary DOM
+ * `name`/`value` content. A pipe-delimited encoding parsed with split("|") — the
+ * first version of this — truncates a legitimate option value like "A|one" to
+ * "A", so a change to "A|two" compares EQUAL and the guard silently misses the
+ * mutation it exists to catch.
+ *
+ * For a radio the value is the group's CHECKED member, not the focused one:
+ * focus and selection are different things in a radio group, and it is the
+ * selection a sweep must not disturb. Everything else reports its own value.
+ *
+ * `remember` stashes the element so the reading taken after the arrow, and any
+ * restore, address the same node.
+ */
+function sweepSignatureJs(remember: boolean): string {
+  return `(() => {
+    const NONE = ${JSON.stringify(SWEEP_NO_SELECTION)};
+    const el = ${remember ? "document.activeElement" : `window[${JSON.stringify(SWEEP_ELEMENT_KEY)}] || document.activeElement`};
+    ${remember ? `window[${JSON.stringify(SWEEP_ELEMENT_KEY)}] = el;` : ""}
+    const out = (kind, key, value) => JSON.stringify({ kind: kind, key: key, value: value });
+    if (!el || el === document.body || !el.matches) return out('none', '', '');
+    if (!el.matches(${JSON.stringify(ARROW_MUTABLE_SELECTOR)})) return out('safe', el.tagName, '');
+    if (el.tagName === 'INPUT' && el.type === 'radio') {
+      if (!el.name) return out('radio', '<unnamed>', el.checked ? el.value : NONE);
+      const scope = el.form || document;
+      const picked = [...scope.querySelectorAll('input[type=radio]')].find((r) => r.name === el.name && r.checked);
+      return out('radio', el.name, picked ? picked.value : NONE);
+    }
+    return out('value', el.name || el.id || el.tagName, String(el.value == null ? '' : el.value));
+  })()`;
+}
+
+/** Parse a sweep signature; null when the host read failed or returned garbage,
+ *  which the caller must treat as "no evidence", never as "unchanged". */
+function parseSweepSignature(raw: string): SweepSignature | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { kind, key, value } = parsed as Partial<SweepSignature>;
+    if (kind !== "none" && kind !== "safe" && kind !== "radio" && kind !== "value") return null;
+    return { kind, key: typeof key === "string" ? key : "", value: typeof value === "string" ? value : "" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Page-side expression putting back the selection a sweep step changed, through
+ * the same native-setter-plus-bubbling-events path hostFieldWriteJs uses (a
+ * plain assignment is swallowed by React's value tracker).
+ *
+ * This is a DOM write, and like rung 4's hostSetValue it is recorded rather than
+ * hidden — see SweepMutation. Restoring is nevertheless the right default: the
+ * alternative is that whatever the sweep last landed on gets submitted and then
+ * reported as the screen-reader user's answer, which is precisely how #913
+ * stayed invisible for as long as it did.
+ */
+function sweepRestoreJs(kind: string, key: string, value: string): string {
+  return `(() => {
+    const kind = ${JSON.stringify(kind)}, key = ${JSON.stringify(key)}, want = ${JSON.stringify(value)};
+    const el = window[${JSON.stringify(SWEEP_ELEMENT_KEY)}];
+    if (!el || !el.isConnected) return 'no-element|';
+    const fire = (n) => { n.dispatchEvent(new Event('input', { bubbles: true })); n.dispatchEvent(new Event('change', { bubbles: true })); };
+    if (kind === 'radio') {
+      const scope = el.form || document;
+      const group = [...scope.querySelectorAll('input[type=radio]')].filter((r) => r.name === key);
+      if (!group.length) return 'no-group|' + key;
+      // No target: the group had NO selection before the arrow. Uncheck every
+      // member and notify on each, but say so — this is DOM-only, and a
+      // framework that keeps the answer in its own model (SurveyJS does) may
+      // re-derive it, so the caller must not report this as a verified restore.
+      const target = group.find((r) => r.value === want);
+      if (!target) { group.forEach((r) => { r.checked = false; fire(r); }); return 'cleared-dom-only|' + key; }
+      const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
+      if (desc && desc.set) { desc.set.call(target, true); } else { target.checked = true; }
+      fire(target);
+      return 'restored|' + key + '|' + target.value;
+    }
+    const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (!desc || !desc.set) return 'no-setter|' + key;
+    try { desc.set.call(el, want); } catch (e) { return 'setter-threw|' + key + '|' + String((e && e.message) || e); }
+    fire(el);
+    return 'restored|' + key + '|' + String(el.value == null ? '' : el.value);
+  })()`;
+}
+
+/**
+ * Page-side "did that Enter change an ANSWER?" signature.
+ *
+ * Checkable state only — deliberately not focus, and not location. Run
+ * 31312543653 is why: this began as checked-state plus activeElement plus href,
+ * and Enter on a SurveyJS label moves focus to BODY while changing nothing at
+ * all, so the signature differed, the Enter was scored as effective and the
+ * retarget never ran. Focus moving is not an answer being given.
+ *
+ * The `act` retarget only ever engages on a line of bare label text (see
+ * retargetActToControl), where Enter either activates the control the label
+ * belongs to or does nothing — and every such control in these plans is a
+ * checkbox or a radio. Buttons and links never reach this path: their lines name
+ * their own role.
+ */
+/** The prefix keeps "nothing is checked" (a real, common reading — the survey
+ *  starts blank) distinguishable from "the host read failed", which hostEval
+ *  reports as the empty string. */
+const ACT_SIGNATURE_PREFIX = "checked:";
+
+function actStateSignatureJs(): string {
+  return `(() => {
+    return ${JSON.stringify(ACT_SIGNATURE_PREFIX)} + [...document.querySelectorAll('input[type=checkbox],input[type=radio]')]
+      .filter((i) => i.checked)
+      .map((i) => (i.name || i.id || '?') + '=' + i.value)
+      .join(',');
   })()`;
 }
 
@@ -1011,6 +1207,42 @@ export interface TypeStepFidelity {
 }
 
 /**
+ * A `next`/`previous` step that changed the page's ANSWERS instead of merely
+ * reading them, drained per task by takeSweepMutations().
+ *
+ * It exists for the same reason TypeStepFidelity and NvdaCursorCheck do: the
+ * lane's whole claim is that a screen-reader user can complete the task, and a
+ * sweep that rewrites a radio group on its way past makes the recorded answer
+ * an artefact of the driver. Issue #913 spent its life as an app accessibility
+ * bug ("all three options announce as checked", filed against 4.1.2 Name, Role,
+ * Value) because nothing in the run said the sweep had touched anything, and the
+ * survey lane asserted only `survey_responses.is_submitted === true`.
+ *
+ * `restored` is a separate field from `mutated` on purpose: putting the value
+ * back keeps the REST of the task honest, but it does not make the step a
+ * reading, and run.ts fails the task on `mutated` regardless of whether the
+ * repair worked.
+ */
+export interface SweepMutation {
+  /** Index this step has in NvdaHarness.steps. */
+  stepIndex: number;
+  command: "next" | "previous" | "readNext";
+  /** 'radio' or 'value' — which arrow-mutable control was under focus. */
+  kind: string;
+  /** Radio group name, or the control's name/id. */
+  key: string;
+  /** The answer before the arrow, and after it. */
+  before: string;
+  after: string;
+  /** Did the pre-emptive exitFocusMode fire before the arrow? */
+  leftFocusMode: boolean;
+  /** Result of the restore attempt, verbatim ('restored|…', 'no-element|', …). */
+  restore: string;
+  /** Did a confirming read agree the answer is back? */
+  restored: boolean;
+}
+
+/**
  * What the cursor oracle said about one state-changing step, and what that
  * means. Five verdicts, because collapsing any two of them re-creates the bug:
  *  - "agreed"       the navigator object shares content words with the milestone;
@@ -1093,6 +1325,10 @@ export class NvdaHarness implements AtDriver {
   private lastContentItem: NvdaContentItem | null = null;
   private typeFidelity: TypeStepFidelity[] = [];
   private cursorChecks: NvdaCursorCheck[] = [];
+  private sweepMutations: SweepMutation[] = [];
+  /** Which focused control this sweep has already left focus mode for, so the
+   *  Escape fires once rather than on every step (see arrowSweep). */
+  private sweepFocusModeExitKey: string | null = null;
   /** The interrogation the CURRENT command performed, if any — consumed by
    *  undoOracleEcho and cleared at the top of every run(). */
   private oracleEcho: CursorOracleReply | null = null;
@@ -1180,6 +1416,8 @@ export class NvdaHarness implements AtDriver {
     // step from the previous task must not be reported against this one.
     this.typeFidelity = [];
     this.cursorChecks = [];
+    this.sweepMutations = [];
+    this.sweepFocusModeExitKey = null;
     this.oracleEcho = null;
     this.cursorGate = null;
     await this.enterWebArea();
@@ -1207,6 +1445,16 @@ export class NvdaHarness implements AtDriver {
   takeCursorChecks(): NvdaCursorCheck[] {
     const collected = this.cursorChecks;
     this.cursorChecks = [];
+    return collected;
+  }
+
+  /**
+   * Hand over — and clear — the sweep steps that changed the page's answers.
+   * Drained rather than read, for the same reason the two above are.
+   */
+  takeSweepMutations(): SweepMutation[] {
+    const collected = this.sweepMutations;
+    this.sweepMutations = [];
     return collected;
   }
 
@@ -1263,8 +1511,8 @@ export class NvdaHarness implements AtDriver {
 
   /**
    * Control-level cursor hop for replayPlan (AtDriver.moveToControl): browse-mode
-   * quick nav, B / Shift-B (guidepup keyCodeCommands.moveToNextButton /
-   * moveToPreviousButton).
+   * quick nav, F / Shift-F (guidepup keyCodeCommands.moveToNextFormField /
+   * moveToPreviousFormField).
    *
    * WHY a second mover at all. `next`/`previous` are ArrowDown/ArrowUp: they move
    * the browse caret by LINE and leave it at the line START. Run 30760469666's
@@ -1274,8 +1522,35 @@ export class NvdaHarness implements AtDriver {
    * (the line names Reply, and nvdaLineSegmentAlternates offers it) and the
    * cursor oracle answered "Like (0 likes), button" every time: `contradicted`,
    * correctly, 75 presses in a row. The matcher and the gate were both right; the
-   * ladder simply had no gesture that could reach the button. B is that gesture,
-   * and Reply is two hops from Like.
+   * ladder simply had no gesture that could reach the button. A quick-nav to the
+   * adjacent CONTROL is that gesture, and Reply is two hops from Like.
+   *
+   * WHY FORM FIELD (F) RATHER THAN BUTTON (B). This started as B, which fixed
+   * the discussion case and nothing else: a button hop can only ever reach a
+   * button, so a milestone naming a RADIO or a CHECKBOX had no resync gesture at
+   * all. That is the survey selection failure — measured on the seeded survey,
+   * NVDA's browse buffer splits every SurveyJS choice across two lines, the
+   * control's own line carrying role and state but NO name:
+   *
+   *   line 3  the radio       spoken "radio button, not checked"
+   *                           navigatorObject "Just right, radio button, ... 2 of 3"
+   *   line 4  the label text  spoken "Just right"    navigatorObject "label"
+   *
+   * so the milestone "just right" can only ever match line 4 — and Enter there
+   * does nothing at all (measured: nothing checked, activeElement BODY). Every
+   * line sweep in the ladder lands on text the `act` cannot use.
+   *
+   * F fixes it because NVDA's form-field quick-nav announces the control the way
+   * focus does, name included, and lands the caret on the control itself:
+   *
+   *   F-hop  spoken "Just right, radio button, not checked"
+   *          Enter -> checked=Just right, activeElement=INPUT#q2_1
+   *
+   * F is also a strict SUPERSET of B — NVDA's form fields are edits, buttons,
+   * checkboxes, radio buttons, combo boxes, list boxes and sliders — so the
+   * discussion-reply case this rung was built for still resolves, just through a
+   * gesture that can also reach the other three-quarters of a form. The cost is
+   * hops spent on non-button fields, which the sweep budget already absorbs.
    *
    * Reports nothing on purpose (see the hook's contract): the caller reads where
    * this landed with an ordinary `observe`, so the hop's speech goes through
@@ -1287,11 +1562,11 @@ export class NvdaHarness implements AtDriver {
    */
   async moveToControl(direction: ControlHopDirection): Promise<void> {
     const kc = this.nvda.keyboardCommands;
-    const gesture = direction === "next" ? kc.moveToNextButton : kc.moveToPreviousButton;
+    const gesture = direction === "next" ? kc.moveToNextFormField : kc.moveToPreviousFormField;
     // No "from" reading here on purpose: itemText() is a round trip, replayPlan
     // may spend 24 hops on one milestone, and the observe either side of every
     // hop already records where the cursor was and where it landed.
-    this.debug("control hop: quick-nav to the adjacent button", {
+    this.debug("control hop: quick-nav to the adjacent form control", {
       direction,
       gesture: gesture.representation
     });
@@ -2509,6 +2784,280 @@ export class NvdaHarness implements AtDriver {
     return observation;
   }
 
+  /**
+   * Run one `next`/`previous` arrow without letting it answer the survey.
+   *
+   * Three parts, because neither half alone is enough (see
+   * ARROW_MUTABLE_SELECTOR for the measurement this is built on):
+   *
+   *  1. PREVENT. When DOM focus sits on an arrow-mutable control, leave focus
+   *     mode first. Escape (keyboardCommands.exitFocusMode) is the right gesture
+   *     precisely here: NVDA switches to focus mode AUTOMATICALLY when focus
+   *     reaches a form control, and Escape undoes an automatic switch. It is sent
+   *     ONLY in that case, never on every arrow, because in browse mode Escape
+   *     goes to the page and would dismiss a dialog.
+   *  2. VERIFY. Mode is not observable from the DOM — leaving focus mode moves no
+   *     focus and changes no attribute — so prevention cannot be confirmed by
+   *     asking. The answer itself can be: read it either side of the arrow.
+   *  3. RECORD, then repair. A step that still changed something is a finding
+   *     about the DRIVER, so it becomes a SweepMutation whatever the repair does.
+   *
+   * With no host channel this degrades to the old bare arrow. That is the honest
+   * floor: the probes are host-side, and a driver without one has never been able
+   * to see this.
+   */
+  private async arrowSweep(command: "next" | "previous" | "readNext", arrow: () => Promise<void>): Promise<void> {
+    if (!this.hostEval) return arrow();
+
+    const before = parseSweepSignature(await this.hostEval(sweepSignatureJs(true)).catch(() => ""));
+    // 'none' (nothing focused) and 'safe' (focused, but arrows do not change its
+    // value) are the overwhelmingly common readings on a reading sweep, and both
+    // exit before spending a single extra gesture. An unreadable probe exits the
+    // same way: no evidence is not evidence of danger.
+    if (!before || (before.kind !== "radio" && before.kind !== "value")) return arrow();
+    const { kind, key, value } = before;
+
+    // Escape ONLY on the first sweep step for a given focused control.
+    //
+    // Browse-mode arrows move the review cursor and leave DOM focus where it is,
+    // so once we have left focus mode this probe keeps reporting the same
+    // arrow-mutable element on every subsequent step. Re-sending Escape there is
+    // not a no-op: NVDA is already in browse mode, so the key reaches the PAGE,
+    // and a control inside a dialog or popover would have that UI dismissed by
+    // the very sweep that is supposed to be reading it (raised in review).
+    // The before/after check below is what actually protects the answer, so
+    // skipping the repeat costs nothing.
+    const focusKey = `${kind}:${key}`;
+    const alreadyLeft = this.sweepFocusModeExitKey === focusKey;
+    let leftFocusMode = alreadyLeft;
+    if (!alreadyLeft) {
+      this.debug("sweep: focus is on an arrow-mutable control — leaving focus mode before arrowing", {
+        command,
+        kind,
+        key,
+        answer: value
+      });
+      leftFocusMode = true;
+      await this.withTimeout(
+        "sweep:exitFocusMode",
+        this.nvda.perform(this.nvda.keyboardCommands.exitFocusMode, { capture: "initial" }),
+        FOCUS_RUNG_TIMEOUT_MS
+      ).catch((e) => {
+        leftFocusMode = false;
+        this.debug("sweep: exitFocusMode threw — arrowing anyway, the check below is the real guard", {
+          error: String(e)
+        });
+      });
+      this.sweepFocusModeExitKey = focusKey;
+    }
+
+    await arrow();
+
+    const after = parseSweepSignature(await this.hostEval(sweepSignatureJs(false)).catch(() => ""));
+    // An unreadable after-reading is not a mutation: a lost host probe has never
+    // been treated as proof of failure anywhere else in this file either.
+    if (!after || after.kind !== kind || after.value === value) return;
+    const afterValue = after.value;
+
+    const restore = await this.hostEval(sweepRestoreJs(kind, key, value)).catch((e) => `threw|${String(e)}`);
+    const confirmed = parseSweepSignature(await this.hostEval(sweepSignatureJs(false)).catch(() => ""));
+    // Clearing a radio group back to "no selection" is DOM-only and cannot be
+    // confirmed from here: frameworks keep the answer in their own model (raised
+    // in review — SurveyJS re-derives it, so autosave can still carry the
+    // driver's value while the DOM reads empty). Report that honestly rather
+    // than claiming a restore this cannot verify; run.ts fails the task on the
+    // mutation either way.
+    const restored = value === SWEEP_NO_SELECTION ? false : confirmed !== null && confirmed.value === value;
+    this.debug("sweep: THE ARROW CHANGED THE ANSWER — this step read nothing, it wrote (issue #913)", {
+      command,
+      kind,
+      key,
+      before: value,
+      after: afterValue,
+      leftFocusMode,
+      restore,
+      restored
+    });
+    this.sweepMutations.push({
+      stepIndex: this.steps.length,
+      command,
+      kind,
+      key,
+      before: value,
+      after: afterValue,
+      leftFocusMode,
+      restore: restore.slice(0, 160),
+      restored
+    });
+  }
+
+  /**
+   * Move the review cursor from a control's LABEL TEXT onto the control itself,
+   * so `act`'s Enter has something it can actually activate.
+   *
+   * The failure this exists for, measured on the seeded survey. NVDA's browse
+   * buffer splits a SurveyJS choice across two lines, and the control's own line
+   * carries role and state but NO name (the label text is already adjacent in
+   * the buffer, so NVDA does not repeat it):
+   *
+   *   line 3  the radio       spoken "radio button, not checked"
+   *   line 4  the label text  spoken "Just right"   navigatorObject "label"
+   *
+   * A milestone of "just right" can therefore ONLY match line 4 — and Enter
+   * there does nothing whatsoever (measured: nothing checked, activeElement
+   * BODY). Worse, the ladder never notices: the speech matches, the cursor
+   * oracle answers a bare "label" and correctly ABSTAINS, and the gate accepts
+   * on abstain, so zero resyncs fire and the control-hop rung never runs. The
+   * survey was submitted with whatever was checked by other means.
+   *
+   * BACKWARD, not forward: the control PRECEDES its label text in the buffer, so
+   * the next form field forward from line 4 is the following option — hopping
+   * that way would select "Too fast" when the plan asked for "Just right".
+   *
+   * Reached only as a FALLBACK, after an Enter that provably changed nothing
+   * (see `case "act"`). That ordering is the correction for three red runs spent
+   * trying to predict which widgets need it:
+   *
+   *  - the oracle reply must be a bare `label`. "Any nameless object" also
+   *    catches ordinary prose, whose reply is "paragraph"; that suppressed a
+   *    working Enter on a milestone of "post" (run 31270612942).
+   *  - the LINE must not announce a control, which keeps buttons and links out.
+   *  - EVERY milestone word must appear on what the hop landed on. Overlap
+   *    accepted "Reference Assignment (Optional), combo box" for a milestone of
+   *    "privacy (optional)" on the single word "optional", so Enter opened a
+   *    combo box instead of ticking a checkbox (run 31270612942).
+   *
+   * None of those was enough on its own, because the distinguishing fact is not
+   * visible in the announcement at all. Run 31286526726 measured the Chakra
+   * privacy checkbox presenting the SAME bare-label line as a SurveyJS choice
+   * ("Privacy (Optional)", no role word, `label` object) — yet Enter ticks it,
+   * because its `<label>` activates its input, while SurveyJS's leaves
+   * activeElement on BODY. No amount of reading the speech separates those. Only
+   * pressing the key and looking at the page does, which is why this now runs
+   * after the Enter rather than instead of it.
+   *
+   * `skip` therefore means "the Enter already happened and did nothing, and the
+   * hop could not find the control either" — a genuine dead end, not a
+   * suppressed keystroke.
+   *
+   * Returns "skip" when the hop did not reach a control matching the milestone.
+   * Skipping is safe by construction: the Enter it suppresses is the one already
+   * proven to be a no-op, so this is never worse than the behaviour it replaces,
+   * and it is far better than firing Enter at whatever the hop landed on.
+   */
+  /**
+   * Is this `act` sitting on the shape that MIGHT need retargeting — a line of
+   * bare label text, matched by a naming milestone, with a nameless `label`
+   * navigator object?
+   *
+   * Answering yes costs only the two host reads that bracket the Enter; it does
+   * not change what the Enter does. That is the whole point of the inversion:
+   * the previous shape decided to retarget INSTEAD of pressing Enter, and was
+   * wrong about which widgets need it (run 31286526726 — the Chakra privacy
+   * checkbox has exactly the same bare-label line as SurveyJS, but Enter on it
+   * works, because its `<label>` activates its input where SurveyJS's does not).
+   * Pressing first and checking after replaces that guess with a measurement.
+   */
+  private async actNeedsNoOpCheck(milestone: string | undefined): Promise<boolean> {
+    if (!this.hostEval) return false;
+    const wanted = cursorOracleApplies(milestone);
+    if (!wanted.applies) return false;
+    const check = this.cursorChecks.at(-1);
+    if (!check || check.stepIndex !== this.steps.length || check.command !== "act") return false;
+    if (check.verdict !== "abstained" || check.objectTokens.length > 0) return false;
+    if (clean(check.reply) !== "label") return false;
+    const line = this.undoOracleEcho(await this.itemTextSafe(ITEM_TEXT_PROBE_MS));
+    return !ACT_LINE_NAMES_A_CONTROL.test(line);
+  }
+
+  private async retargetActToControl(milestone: string | undefined): Promise<"proceed" | "skip"> {
+    const wanted = cursorOracleApplies(milestone);
+    if (!wanted.applies) return "proceed";
+    // corroborateCursor ran for THIS step (run() calls it before execute) and
+    // stamped its record with the index this step is about to take.
+    const check = this.cursorChecks.at(-1);
+    if (!check || check.stepIndex !== this.steps.length || check.command !== "act") return "proceed";
+    if (check.verdict !== "abstained" || check.objectTokens.length > 0) return "proceed";
+    // The reply must be a bare LABEL, not merely nameless. Run 31270612942
+    // proved the difference matters: a milestone of "post" sat on ordinary prose
+    // whose reply was "paragraph", this guard engaged, the hop landed on the
+    // reply textarea and SUPPRESSED an Enter that had been working. "paragraph"
+    // is exactly the benign collapse NVDA_ROLE_TOKENS documents — plain text has
+    // no name to give. A `<label>` is different in kind: it is never a thing to
+    // activate, only ever a wrapper around the control that is.
+    if (clean(check.reply) !== "label") return "proceed";
+    // ...and the LINE must be bare text. A nameless `label` navigator object does
+    // NOT imply Enter is a no-op — that was measured on SurveyJS markup and does
+    // not generalise. Run 31273130928 proved the counter-example: the Chakra
+    // privacy checkbox also reports a `label` object, but its browse LINE already
+    // carries name and role ("Privacy (Optional), check box, checked, ...") and
+    // Enter on it works. Suppressing that Enter failed a task that had passed.
+    //
+    // What actually separates the two is whether the line NVDA matched the
+    // milestone against announced a control at all. The broken case is a line of
+    // pure label text with no role word anywhere in it ("Just right"); the
+    // working case names its own role. Only the former needs retargeting, and
+    // only the former is proven to be a dead Enter.
+    // undoOracleEcho, exactly as `case "interact"` does and for the same reason:
+    // itemText() is an alias for lastSpokenPhrase(), corroborateCursor has just
+    // interrogated the oracle for this very step, so without this the "line" read
+    // here is the oracle's own answer — "label" — which of course names no
+    // control. Run 31275593976 is what that cost: the stand-down never fired,
+    // privacy (optional) retargeted anyway and help-request failed a third time.
+    const raw = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    const before = this.undoOracleEcho(raw);
+    if (ACT_LINE_NAMES_A_CONTROL.test(before)) {
+      this.debug("act: line already announces a control — leaving this act alone", { item: before.slice(0, 120) });
+      return "proceed";
+    }
+
+    // Everything the stand-down decision rests on. Run 31282511729 showed it not
+    // firing on the privacy checkbox with no way to tell WHY from the log: the
+    // pre-hop line was never recorded, only the oracle reply. These four fields
+    // separate the possibilities — the echo was not undone (raw === before and
+    // both are "label"), the tail was some third phrase entirely, or the line
+    // genuinely carries no role word at that moment.
+    this.debug("act: cursor is on bare label text, not the control it names", {
+      milestone,
+      oracleReply: check.reply.slice(0, 120),
+      rawTail: raw.slice(0, 160),
+      lineAfterUndoEcho: before.slice(0, 160),
+      namesAControl: ACT_LINE_NAMES_A_CONTROL.test(before),
+      lastContentItem: this.lastContentItem?.raw.slice(0, 160) ?? "(none)",
+      hop: "previous form field (the control precedes its label text)"
+    });
+    await this.moveToControl("previous");
+    const item = await this.itemTextSafe(ITEM_TEXT_PROBE_MS);
+    // The hop's own speech is enough here and costs nothing extra: a form-field
+    // quick-nav announces the control the way focus does, name included
+    // ("Just right, radio button, not checked"), which is exactly the name the
+    // line read omitted.
+    const { content } = nvdaCursorTokens(item);
+    // EVERY milestone word must be present, not merely one. Overlap alone is far
+    // too weak for a gesture that picks WHICH control gets activated: in run
+    // 31270612942 a milestone of "privacy (optional)" shared its one word
+    // "optional" with "Reference Assignment (Optional), combo box" and this hop
+    // accepted it, so Enter opened a combo box instead of ticking the privacy
+    // checkbox and the whole help-request task failed. Overlap is the right rule
+    // for judgeCursorOracle, which only has to decide whether two readings
+    // describe the same place; it is the wrong rule here.
+    const missing = wanted.tokens.filter((token) => !content.includes(token));
+    if (missing.length === 0) {
+      this.debug("act: retargeted onto the control the milestone names", {
+        item: item.slice(0, 120),
+        matched: wanted.tokens
+      });
+      return "proceed";
+    }
+    this.debug("act: RETARGET FAILED — not firing Enter, which would activate the wrong control", {
+      milestone,
+      landedOn: item.slice(0, 120),
+      wanted: wanted.tokens,
+      missing
+    });
+    return "skip";
+  }
+
   private async execute(command: AtCommand, arg?: string, context?: AtStepContext): Promise<void> {
     const nvda = this.nvda;
     const kc = nvda.keyboardCommands;
@@ -2517,11 +3066,35 @@ export class NvdaHarness implements AtDriver {
       case "observe":
         return;
       case "next":
-        return nvda.next(opts);
+        return this.arrowSweep("next", () => nvda.next(opts));
       case "previous":
-        return nvda.previous(opts);
-      case "act":
+        return this.arrowSweep("previous", () => nvda.previous(opts));
+      case "act": {
+        // A milestone can match the LABEL TEXT of a control rather than the
+        // control. Enter there does nothing on some widgets and works fine on
+        // others, so the Enter goes FIRST and the retarget is the fallback for
+        // when it demonstrably did nothing (see retargetActToControl).
+        if (!(await this.actNeedsNoOpCheck(context?.milestone))) return nvda.act(opts);
+        const signature = () => this.hostEval!(actStateSignatureJs()).catch(() => "");
+        const before = await signature();
+        await nvda.act(opts);
+        const after = await signature();
+        // A lost read (hostEval reports "") is not evidence either way, and must
+        // not be mistaken for "nothing is checked" — which is the survey's own
+        // starting state. Only two good reads that AGREE prove the key was dead.
+        const readable = before.startsWith(ACT_SIGNATURE_PREFIX) && after.startsWith(ACT_SIGNATURE_PREFIX);
+        if (!readable || after !== before) {
+          this.debug("act: Enter changed an answer, or the check was unreadable — no retarget", {
+            milestone: context?.milestone,
+            before,
+            after,
+            readable
+          });
+          return;
+        }
+        if ((await this.retargetActToControl(context?.milestone)) === "skip") return;
         return nvda.act(opts);
+      }
       case "interact": {
         // NVDA has no interaction levels; entering focus mode is the analogue.
         // But NVDA+Space is a TOGGLE, not a descent, and toggling focus mode onto
@@ -2917,7 +3490,14 @@ export class NvdaHarness implements AtDriver {
       }
       case "readNext": {
         const n = Math.min(Math.max(parseInt(arg ?? "10", 10) || 10, 1), READ_NEXT_MAX);
-        for (let i = 0; i < n; i++) await nvda.next(opts);
+        // Through arrowSweep, exactly like `next`/`previous`: these are the SAME
+        // ArrowDown, and a read-ahead is if anything the more dangerous of the
+        // two because it fires up to READ_NEXT_MAX of them in a row. Calling
+        // nvda.next() directly here left the biggest sweep in the plans
+        // unguarded, which is why q2 kept coming back "Too slow" long after the
+        // `act` had correctly selected "Just right" (run 31315071708), and why
+        // the original #913 log shows 27-28 announcements of each option.
+        for (let i = 0; i < n; i++) await this.arrowSweep("readNext", () => nvda.next(opts));
         return;
       }
       case "restartFromTop":
