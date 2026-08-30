@@ -156,18 +156,6 @@ export function FloatingHelpRequestWidget() {
     setIsExpanded((prev) => !prev);
   }, []);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        if (e.key === " ") {
-          e.preventDefault();
-        }
-        handleToggleExpand();
-      }
-    },
-    [handleToggleExpand]
-  );
-
   // Only show for students when feature is enabled
   if (role.role !== "student" || !featureEnabled || isReadOnly) {
     return null;
@@ -234,15 +222,19 @@ export function FloatingHelpRequestWidget() {
         <Card.Body p={0}>
           {!isExpanded ? (
             // Minimized state
+            // The card is clickable as a mouse convenience, but it is not a
+            // button: it contains three of them. A focusable role="button"
+            // wrapping focusable children is WCAG 4.1.2 nested-interactive,
+            // and it was reported on every course route because this widget
+            // lives in shared chrome. Keyboard and AT users toggle with the
+            // "Expand chat" button below, which mirrors "Minimize" in the
+            // expanded state.
             <Flex
               align="center"
               gap={3}
               p={4}
               cursor="pointer"
-              role="button"
-              tabIndex={0}
               onClick={handleToggleExpand}
-              onKeyDown={handleKeyDown}
               _hover={{ bg: "bg.subtle" }}
               borderLeftWidth={unreadCount > 0 ? "4px" : "0"}
               borderLeftColor={unreadCount > 0 ? "red.500" : "transparent"}
@@ -347,6 +339,7 @@ export function FloatingHelpRequestWidget() {
                 </IconButton>
                 <IconButton
                   aria-label="Expand chat"
+                  aria-expanded={isExpanded}
                   variant="ghost"
                   size="sm"
                   onClick={(e) => {
@@ -400,7 +393,13 @@ export function FloatingHelpRequestWidget() {
                   >
                     <Icon as={BsArrowRight} />
                   </IconButton>
-                  <IconButton aria-label="Minimize" variant="ghost" size="sm" onClick={handleToggleExpand}>
+                  <IconButton
+                    aria-label="Minimize"
+                    aria-expanded={isExpanded}
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleToggleExpand}
+                  >
                     <Icon as={BsChevronDown} />
                   </IconButton>
                 </HStack>

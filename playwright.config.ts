@@ -41,8 +41,11 @@ export default defineConfig({
     [
       "@argos-ci/playwright/reporter",
       {
-        // Upload to Argos on CI only.
-        uploadToArgos: !!process.env.CI,
+        // Upload to Argos on CI only — and never from the a11y coverage sweep,
+        // which screenshots pages in two color schemes at two viewport widths
+        // for its own measurements. Those are not visual-regression baselines,
+        // and uploading them would file 39 routes' worth of spurious diffs.
+        uploadToArgos: !!process.env.CI && !process.env.A11Y_COVERAGE,
 
         // Set your Argos token (required if not using GitHub Actions).
         token: process.env.ARGOS_TOKEN || ""
@@ -52,7 +55,11 @@ export default defineConfig({
     [
       "html",
       {
-        outputFolder: "playwright-report",
+        // The sweep runs as a second `playwright test` invocation in the same
+        // CI job, so it needs its own folder: the default would overwrite the
+        // main suite's report, and a failing sweep would take the evidence for
+        // the failure it was reporting alongside with it.
+        outputFolder: process.env.A11Y_COVERAGE ? "playwright-report-a11y" : "playwright-report",
         open: "never"
       }
     ]

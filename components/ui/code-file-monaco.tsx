@@ -16,6 +16,7 @@ import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoEditor from "monaco-editor";
 import type { editor } from "monaco-editor";
 import { MonacoRubricContextMenu, RubricContextMenuAction } from "./monaco-rubric-context-menu";
+import { accessibleMonacoTheme, lineHighlightRail, registerAccessibleMonacoThemes } from "./monaco-a11y-theme";
 import { useRubricAnnotationActions } from "@/hooks/useRubricAnnotationActions";
 import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { AnnotationCommentDialog } from "./annotation-comment-dialog";
@@ -1142,8 +1143,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       // instanceId is a stable per-mount constant, so this still only runs cleanup on unmount.
     }, [instanceId]);
 
-    // Handle editor before mount (worker setup)
-    const handleEditorWillMount = useCallback(() => {
+    // Handle editor before mount (worker setup, AA syntax themes)
+    const handleEditorWillMount = useCallback((monaco: Monaco) => {
+      // Must happen before the editor asks for the theme by name, or Monaco
+      // falls back to its own vs/vs-dark and the corrected tokens never apply.
+      registerAccessibleMonacoThemes(monaco);
       if (typeof window !== "undefined") {
         window.MonacoEnvironment = {
           getWorker(_moduleId, label) {
@@ -1174,6 +1178,8 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
       return <Skeleton />;
     }
 
+    const railColor = lineHighlightRail(colorMode);
+
     return (
       <Box
         border="1px solid"
@@ -1186,9 +1192,20 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         display="flex"
         flexDirection="column"
         css={{
+          // Frame the deep-linked row instead of filling it, and put the loud
+          // part of the cue in the glyph margin, which is left of the code and
+          // has nothing behind it. `lineHighlightRail` holds the measurements
+          // for why the old full-line wash had to go.
           "& .monaco-line-highlight": {
-            backgroundColor: "rgba(255, 235, 59, 0.3)",
-            transition: "opacity 2s ease-out"
+            boxShadow: `inset 4px 0 0 ${railColor}, inset 0 2px 0 ${railColor}, inset 0 -2px 0 ${railColor}`
+          },
+          // Was applied but never styled, so it did nothing. It is the one part
+          // of the row that can carry a solid fill. NOTE: this shares the glyph
+          // margin lane with `.monaco-comment-glyph`, so on a line that already
+          // has comments the marker covers the 💬 for the 2s it lives.
+          "& .monaco-line-highlight-glyph": {
+            backgroundColor: railColor,
+            borderRadius: "2px"
           },
           "& .monaco-comment-glyph": {
             "&::before": {
@@ -1336,7 +1353,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           <Editor
             height="100%"
             width="100%"
-            theme={colorMode === "dark" ? "vs-dark" : "vs"}
+            theme={accessibleMonacoTheme(colorMode)}
             beforeMount={handleEditorWillMount}
             onMount={handleEditorDidMount}
             options={{

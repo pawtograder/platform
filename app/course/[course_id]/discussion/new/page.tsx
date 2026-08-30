@@ -156,6 +156,10 @@ export default function NewDiscussionThread() {
                         value={field.value}
                         onChange={field.onChange}
                       >
+                        {/* The group's aria-labelledby always points at RadioCard.Label, so omitting
+                            it leaves a dangling reference and an unnamed group. The visible "Topic"
+                            label comes from the surrounding Field, hence the hidden copy here. */}
+                        <RadioCardLabel srOnly>Topic</RadioCardLabel>
                         {/* General Topics Section */}
                         <Flex flexWrap="wrap" gap="2" w="100%">
                           {generalTopics.map((topic) => (
@@ -402,6 +406,9 @@ export default function NewDiscussionThread() {
                         value={field.value}
                         enableFilePicker={true}
                         disabled={formBusy}
+                        // Matches the visible "Description" label above: the
+                        // editor's textarea cannot be the target of that label.
+                        ariaLabel="Description"
                       />
                     );
                   }}
