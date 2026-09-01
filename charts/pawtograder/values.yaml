@@ -1150,12 +1150,27 @@ edgeFunctions:
   # has ever been asked for. Unbounded, that alone exceeded the container limit
   # and OOM-killed pods after a few days' uptime (2026-08-19).
   #
-  # Bundle inventory, measured 2026-08-28 from /home/deno/eszips in a running
-  # pod (the earlier "55 bundles, ~2.2GB, 19-59MB" here was stale — it came from
-  # the Dockerfile bundler's own log line, which main.ts still quotes):
-  #   58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  # Bundle inventory. Re-measure this rather than trusting it: nothing pins the
+  # dependency graph (deno.lock is gitignored AND `rm -f`'d by the Dockerfile), so
+  # the corpus drifts on its own and every figure here has a date for that reason.
+  #   2026-08-28, from /home/deno/eszips in a running pod:
+  #     58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  #   2026-09-01, from `docker build --target bundler` on the same tree:
+  #     58 bundles, 1569MiB total; min 5.5MiB / median 36.1MiB / max 48.6MiB.
+  # That is +13% in four days with no deliberate dependency change — which is the
+  # argument for pinning, and the reason to re-measure before re-tuning.
+  # (The much older "55 bundles, ~2.2GB, 19-59MB" came from the Dockerfile
+  # bundler's own log line, which main.ts still quotes; it predates the
+  # @sentry/deno pin in #934.)
   # Averaging these is how you get surprised, so size the cache off the MEDIAN:
-  # 512Mi holds ~16 of 58, 256Mi holds ~8.
+  # at 36.1MiB, 512Mi holds ~14 of 58 and 256Mi holds ~7.
+  #
+  # To re-measure:
+  #   docker build -f charts/pawtograder/images/edge-functions/Dockerfile \
+  #     --target bundler -t eszip-check .
+  #   docker run --rm --entrypoint sh eszip-check -c \
+  #     'cd /home/deno/eszips && for f in *.eszip; do \
+  #        printf "%s\t%s\n" "$(stat -c%s "$f")" "${f%.eszip}"; done | sort -n'
   #
   # The container budget is four terms that must be reconciled together:
   #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
@@ -1232,8 +1247,9 @@ edgeFunctions:
   # what keeps this term small — but it is not zero, and a burst of cold requests
   # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
   # roughly four of the largest bundle in the image (58.4MiB when this was
-  # written; re-measured 43.2MiB on 2026-08-28, so the render-time floor of
-  # 64Mi is now conservative — left alone deliberately, it costs nothing).
+  # written; 43.2MiB on 2026-08-28, 48.6MiB on 2026-09-01 — it moves, see the
+  # inventory note above). The render-time floor of 64Mi still covers the
+  # largest, with less margin than the 2026-08-28 figure suggested.
   # After warmup the working set is resident and this is not touched at all.
   # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
   # COLD reads, and halving the cache makes cold reads more frequent, not less.
@@ -1406,8 +1422,9 @@ edgeFunctions:
   #     lease scope parks a resident drain loop and holds one of
   #     maxParallelism's 8 slots for the isolate's life. On the request tier
   #     those slots are the same ones student requests queue behind.
-  #  2. ESZIP CACHE OCCUPANCY. eszipCacheMaxMb 256 holds ~8 of 58 bundles at the
-  #     30.7MiB median. These four are poked every ~30s, so they are never
+  #  2. ESZIP CACHE OCCUPANCY. eszipCacheMaxMb 256 holds ~7 of 58 bundles at the
+  #     36.1MiB median, and these four are 90.3MiB of them. They are poked every
+  #     ~30s, so they are never
   #     LRU-evicted and permanently occupy about half of every request-tier
   #     pod's cache — on all 12-24 replicas — while serving zero user requests.
   #
@@ -1464,9 +1481,12 @@ edgeFunctions:
     # exact failure workerRun.ts was written to escape, so this is not the knob
     # to economize on; the memory it costs is bounded and this tier has 2 pods.
     maxParallelism: 8
-    # 4 bundles at the 43.2MiB worst case = 173Mi, so 192Mi holds the entire
-    # routed working set and this tier NEVER evicts — unlike the request tier,
-    # where 256Mi holds ~8 of 58 and eviction is the steady state. Asserted at
+    # The four routed bundles MEASURED 2026-09-01: notification-queue-processor
+    # 14.2 + github-async-worker 36.7 + discord-async-worker 13.9 +
+    # gradebook-column-recalculate 25.6 = 90.3MiB. 192Mi holds the entire routed
+    # working set with room for them to roughly double, so this tier NEVER evicts
+    # — unlike the request tier, where 256Mi holds ~7 of 58 and eviction is the
+    # steady state. Asserted at
     # render time against len(functions): a routed tier that evicts re-reads a
     # bundle it will need again seconds later, which is the opposite of the point.
     eszipCacheMaxMb: 192

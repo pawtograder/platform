@@ -109,11 +109,13 @@ number is worse than one that admits it cannot.
 {{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
      than the largest bundle in the image cannot bound it -- an oversized bundle is
      admitted alone and overshoots by (size - allowance). 64Mi covers the largest
-     bundle measured in this image (58.4MiB); if the bundles grow past that, this
-     minimum and the sizing note in values.yaml both need revisiting. */}}
+     bundle measured in this image (48.6MiB, autograder-create-submission,
+     re-measured 2026-09-01 -- the 58.4MiB this note used to quote predates the
+     @sentry/deno pin). If the bundles grow past 64MiB, this minimum and the
+     sizing note in values.yaml both need revisiting. */}}
 {{- $minColdMi := 64 -}}
 {{- if lt $coldMi $minColdMi -}}
-{{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
+{{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (48.6MiB measured 2026-09-01). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
 {{- end -}}
 {{/* Extra assertions that apply only to a ROUTED tier -- one Kong sends a known,
      fixed set of function names to. The stable tier serves all 58 bundles and has
@@ -121,13 +123,25 @@ number is worse than one that admits it cannot.
 {{- if $ef.functions -}}
 {{- $routed := len $ef.functions -}}
 {{/* A routed tier exists partly so it never evicts: it serves a handful of
-     bundles, all of them hot. Sized off the LARGEST bundle in the image (43.2MiB
-     measured 2026-08-28, rounded to 44) rather than the median, because with a
-     set this small the median is not a bound -- averaging bundle sizes is how
-     the 2026-08-19 OOM happened. */}}
-{{- $cacheNeed := mul $routed 44 -}}
+     bundles, all of them hot, so the cache should hold the whole routed set.
+
+     Sized off the MEDIAN bundle (36.1MiB measured 2026-09-01, rounded to 37),
+     and this is the opposite of the rule for the stable tier's cache -- worth
+     saying why, because the reasoning does not transfer. The stable tier caches
+     an UNKNOWN subset of 58 bundles, so a median is not a bound there and
+     averaging is how the 2026-08-19 OOM happened. A routed tier's set is KNOWN
+     at render time and small, so what matters is its actual total, and charging
+     the largest bundle for every member systematically over-requires: the four
+     workers measure 90.3MiB together while 4 x the 48.6MiB largest would demand
+     196MiB. That is not conservative, it is wrong in a way that forces an
+     oversized cache -- and it would reject this chart's own 192Mi default.
+
+     Still a real guard: it refuses a cache that cannot plausibly hold the set
+     (128Mi for four bundles), which is the mistake worth catching. It cannot be
+     exact, because the chart does not know its image's bundle inventory. */}}
+{{- $cacheNeed := mul $routed 37 -}}
 {{- if lt $cacheMi $cacheNeed -}}
-{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d routed bundles (%d x 44Mi, the largest bundle in the image). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $routed $routed) -}}
+{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d routed bundles (%d x 37Mi, the median bundle in the image). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $routed $routed) -}}
 {{- end -}}
 {{/* Under per_worker an isolate is REUSED across requests, so a routed tier needs
      one resident isolate per routed function -- doubled, because beforeUnload
