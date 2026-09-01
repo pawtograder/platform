@@ -864,6 +864,12 @@ assert_refused "a channel named workers collides with the tier" \
 # Sprig's mergeOverwrite (mergo) skips empty source values, so a mistyped or
 # unsupported override key would be silently ignored rather than applied. The
 # allowlist turns that into a render error.
+# A duplicate renders two Kong services and two routes with the same name, and
+# Kong rejects a declarative config with duplicate entity names outright -- so
+# Kong does not start and the whole deployment's API is down, not just this tier.
+assert_refused "a duplicated worker function name is refused" \
+  "more than once" \
+  "${WT[@]}" --set 'edgeFunctions.workerTier.functions={github-async-worker,github-async-worker}'
 assert_refused "an unrecognised override key is refused, not ignored" \
   "is not an overridable per-tier key" \
   "${WT[@]}" --set edgeFunctions.workerTier.polciy=oneshot

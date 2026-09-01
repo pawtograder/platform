@@ -23,6 +23,19 @@ own admission budget and eszip cache.
 {{- if not $wt.functions }}
 {{- fail "edgeFunctions.workerTier is enabled but `functions` is empty. Kong routes this tier by function NAME, so nothing would reach it: the pods would run, be scraped and cost their whole memory limit while the four workers kept running on the request tier. Either list the names or set enabled: false." }}
 {{- end }}
+{{- /* A duplicated name renders two Kong services and two routes both called
+   functions-v1-worker-<name>. Kong enforces uniqueness on entity names in a
+   declarative config and REJECTS the whole file -- so the blast radius is not
+   the worker tier, it is that Kong itself will not start and every API request
+   in the deployment fails. Refuse it here, where the message can say which name,
+   rather than at Kong boot where it is a uniqueness-violation stack trace. */ -}}
+{{- $dupSeen := dict }}
+{{- range $fn := $wt.functions }}
+{{- if hasKey $dupSeen $fn }}
+{{- fail (printf "edgeFunctions.workerTier.functions lists %q more than once. That renders two Kong services and two routes with the same name, and Kong rejects a declarative config with duplicate entity names outright -- meaning Kong does not start and the whole deployment's API is down, not just this tier. Remove the duplicate." $fn) }}
+{{- end }}
+{{- $_ := set $dupSeen $fn true }}
+{{- end }}
 {{- /* A channel named "workers" would render the SAME Service and Deployment name
    (<release>-functions-workers) as this tier. That is an install-time collision
    between two helm resources, not a routing subtlety, so fail loudly rather than

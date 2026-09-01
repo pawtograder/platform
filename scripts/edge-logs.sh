@@ -56,11 +56,26 @@ assert_namespace "$NAMESPACE"
 # workers -- which are exactly the functions someone reaches for this tool to
 # debug. Also picks up channels (functions-<channel>).
 LOGQL="{namespace=\"${NAMESPACE}\", component=~\"functions(-.*)?\"}"
-# kubectl has no regex label matching, so the pod fallback selects on the shared
-# app label instead of a component and gets every edge tier at once. `-l` also
-# replaces `deploy/pawtograder-functions`, which hardcoded both the release name
-# and the single-Deployment assumption.
-POD_SELECTOR="app.kubernetes.io/name=pawtograder,app.kubernetes.io/component in (functions,functions-workers)"
+# The kubectl fallback must cover the SAME components as the LogQL selector
+# above, or "logcli is not installed" silently becomes "some tiers are missing"
+# -- and a hardcoded list cannot, because channel names come from values and are
+# unknown here. kubectl has no regex label matching either, so the component set
+# is discovered from the cluster and fed to an `in (...)` selector, which keeps
+# the two paths in step no matter how many channels or tiers exist.
+#
+# Resolved lazily (only the fallback path needs it) so the normal Loki path costs
+# no extra API call. `-l` also replaces `deploy/pawtograder-functions`, which
+# hardcoded both the release name and the single-Deployment assumption.
+edge_pod_selector() {
+  local components
+  components="$(kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name=pawtograder \
+      -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' 2>/dev/null \
+    | grep -E '^functions(-.+)?$' | sort -u | paste -sd, -)"
+  # No Deployments found (wrong namespace, no RBAC): fall back to the two tiers
+  # the chart always names, rather than emitting `in ()` which selects nothing.
+  [ -z "$components" ] && components="functions,functions-workers"
+  echo "app.kubernetes.io/name=pawtograder,app.kubernetes.io/component in (${components})"
+}
 [ -n "$function" ]  && LOGQL="${LOGQL} |= \"[fn=${function}]\""
 [ -n "$grep_text" ] && LOGQL="${LOGQL} |= \"${grep_text}\""
 
@@ -70,11 +85,11 @@ if [ "$follow" -eq 1 ] && ! command -v logcli >/dev/null 2>&1; then
   echo "==> logcli not found; live-tailing pod stdout via kubectl (no history)" >&2
   if [ -n "$function" ] || [ -n "$grep_text" ]; then
     pat="${function:+[fn=${function}]}"
-    kubectl logs -f -l "$POD_SELECTOR" -n "$NAMESPACE" --max-log-requests=10 --prefix=false \
+    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests=10 --prefix=false \
       | { [ -n "$pat" ] && grep --line-buffered -F "$pat" || cat; } \
       | { [ -n "$grep_text" ] && grep --line-buffered -F "$grep_text" || cat; }
   else
-    kubectl logs -f -l "$POD_SELECTOR" -n "$NAMESPACE" --max-log-requests=10 --prefix=false
+    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests=10 --prefix=false
   fi
   exit 0
 fi
