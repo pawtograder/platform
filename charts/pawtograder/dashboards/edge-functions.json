@@ -440,7 +440,7 @@
           },
           "editorMode": "code",
           "queryType": "range",
-          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+          "expr": "{namespace=\"$namespace\", component=~\"functions(-.*)?\"} |~ \"\\[fn=(${fn:pipe})\\]\""
         }
       ],
       "options": {

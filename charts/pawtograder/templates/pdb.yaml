@@ -59,6 +59,31 @@ spec:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
 {{- end }}
+{{- /* The worker tier needs this MORE than the request tier does, not less: it is
+   2 pods, not 12-24, so one node drain can take the whole tier — and while it is
+   down Kong has no healthy upstream for the four worker function paths, so pgmq
+   stops draining until the next pg_cron tick. Guarded on >1 replica for the same
+   reason as above: over a single replica minAvailable:1 blocks every voluntary
+   eviction, including a node drain. */}}
+{{- $workerReplicas := 2 }}
+{{- if hasKey .Values.edgeFunctions.workerTier "replicas" }}
+{{- $workerReplicas = int .Values.edgeFunctions.workerTier.replicas }}
+{{- end }}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled (gt $workerReplicas 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions-workers") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions-workers") | nindent 6 }}
+{{- end }}
 {{- if and .Values.postgres.enabled .Values.postgres.pdb.enabled }}
 ---
 # maxUnavailable:1 (NOT minAvailable:1): over a single replica, minAvailable:1

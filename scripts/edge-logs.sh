@@ -50,7 +50,17 @@ NAMESPACE="$(resolve_namespace "$env" "$preview" "$namespace")"
 assert_namespace "$NAMESPACE"
 
 # Build the LogQL stream selector + line filters.
-LOGQL="{namespace=\"${NAMESPACE}\", component=\"functions\"}"
+# Regex, not an exact match: the background-worker tier runs as a separate
+# Deployment with component=functions-workers (chart: edgeFunctions.workerTier),
+# so an exact match on "functions" silently omits every line from the four pgmq
+# workers -- which are exactly the functions someone reaches for this tool to
+# debug. Also picks up channels (functions-<channel>).
+LOGQL="{namespace=\"${NAMESPACE}\", component=~\"functions(-.*)?\"}"
+# kubectl has no regex label matching, so the pod fallback selects on the shared
+# app label instead of a component and gets every edge tier at once. `-l` also
+# replaces `deploy/pawtograder-functions`, which hardcoded both the release name
+# and the single-Deployment assumption.
+POD_SELECTOR="app.kubernetes.io/name=pawtograder,app.kubernetes.io/component in (functions,functions-workers)"
 [ -n "$function" ]  && LOGQL="${LOGQL} |= \"[fn=${function}]\""
 [ -n "$grep_text" ] && LOGQL="${LOGQL} |= \"${grep_text}\""
 
@@ -60,11 +70,11 @@ if [ "$follow" -eq 1 ] && ! command -v logcli >/dev/null 2>&1; then
   echo "==> logcli not found; live-tailing pod stdout via kubectl (no history)" >&2
   if [ -n "$function" ] || [ -n "$grep_text" ]; then
     pat="${function:+[fn=${function}]}"
-    kubectl logs -f "deploy/pawtograder-functions" -n "$NAMESPACE" --max-log-requests=10 --prefix=false \
+    kubectl logs -f -l "$POD_SELECTOR" -n "$NAMESPACE" --max-log-requests=10 --prefix=false \
       | { [ -n "$pat" ] && grep --line-buffered -F "$pat" || cat; } \
       | { [ -n "$grep_text" ] && grep --line-buffered -F "$grep_text" || cat; }
   else
-    kubectl logs -f "deploy/pawtograder-functions" -n "$NAMESPACE" --max-log-requests=10 --prefix=false
+    kubectl logs -f -l "$POD_SELECTOR" -n "$NAMESPACE" --max-log-requests=10 --prefix=false
   fi
   exit 0
 fi

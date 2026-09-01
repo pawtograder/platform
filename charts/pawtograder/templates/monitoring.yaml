@@ -623,14 +623,48 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
 spec:
+  {{- /* matchExpressions, not an exact component match: the worker tier carries
+     component=functions-workers (edge-functions-worker-tier.yaml), and an exact
+     match on "functions" would leave it UNSCRAPED. That failure is silent in the
+     worst way — the dashboard's $fn dropdown is built from
+     label_values(deno_http_requests_total, function), so the four worker
+     functions would not show up as broken, they would show up as ABSENT.
+     Channels (component=functions-<channel>) are still not scraped; they are a
+     whole-function-set A/B on their own host and out of scope here. */}}
   selector:
     matchLabels:
-      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - functions
+          {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+          - functions-workers
+          {{- end }}
   endpoints:
     - port: http
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      {{- /* Without this every series from both tiers is indistinguishable, so
+         "is the worker tier serving?" is not a question PromQL can ask. Copies
+         the Service's component label onto each series as edge_tier=functions |
+         functions-workers. Adding a label cannot break existing selectors.
+
+         Note this endpoint resolves as the `metrics` FUNCTION — the demuxer
+         routes /metrics on the first path segment — so worker-tier pods also
+         report the ABSOLUTE pgmq queue depths, and a panel that summed them
+         across pods would inflate by the pod count. Checked rather than assumed:
+         every pgmq panel in dashboards/queues-and-workers.json already uses
+         max() (max(pawtograder_async_queue_size) and siblings), which is
+         correct and pod-count-independent. The sum() queue panels in
+         app-business.json read pawtograder_help_queue_depth, which comes from
+         the postgres-exporter (see above in this file) and not from this
+         endpoint at all. So adding this tier moves no queue-depth number. */}}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+          targetLabel: edge_tier
       authorization:
         type: Bearer
         credentials:

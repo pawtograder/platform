@@ -624,7 +624,10 @@ spec:
               {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
               If the last termination reason is OOMKilled, check that eszipCacheMaxMb +
               (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi fits inside the container
-              memory limit.
+              memory limit. The POD NAME says which values block holds those knobs: a
+              <release>-functions-<hash> pod is the request tier (edgeFunctions.*), and a
+              <release>-functions-workers-<hash> pod is the background-worker tier
+              (edgeFunctions.workerTier.*), whose budget is a different sum.
         # Gated on a RECENT restart, not on the reason alone. kube_pod_container_status_last_terminated_reason
         # reflects the container's lastState, so it keeps reporting OOMKilled=1 for the rest of that
         # container's life -- a single 03:00 kill would hold a critical alert firing for days after
@@ -654,7 +657,12 @@ spec:
               eszipCacheMaxMb + eszipColdLoadHeadroomMb
               + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
               asserts it at render time, so a pod that OOMs despite fitting means one of the
-              measured constants has drifted -- re-measure before raising the limit. The cache term is the one that is easy to forget: it fills with
+              measured constants has drifted -- re-measure before raising the limit.
+              Read the knobs off the tier the POD NAME names: <release>-functions-<hash> is the
+              request tier (edgeFunctions.*), <release>-functions-workers-<hash> is the
+              background-worker tier (edgeFunctions.workerTier.*). Each tier has its OWN sum, and
+              this rule selects container="functions" so it covers both -- comparing every pod
+              against its own limit, which is what makes per-tier limits safe here. The cache term is the one that is easy to forget: it fills with
               the DISTINCT FUNCTIONS a pod has served rather than with load, up to eszipCacheMaxMb,
               and evicts least-recently-used past that. So it is bounded, but the bound is a term in
               this budget and raising it without raising the limit is how you get back here.
@@ -724,6 +732,41 @@ spec:
               {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
               {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
               memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
+        {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+        # The background-worker tier is routed by PATH: Kong sends the four worker function names
+        # to it and nowhere else, so unlike the request tier there is no other pool to absorb the
+        # traffic when it is down -- pgmq simply stops draining. None of the rules above can see
+        # this, because they are all per-pod and a tier with zero pods has no pod to alert on.
+        #
+        # Rendered ONLY when the tier is enabled, so it can never exist as a permanently-Inactive
+        # rule for a Deployment that does not exist. That shape -- a rule that looks shipped and
+        # silently never fires -- is what #934 was about, and it is worth the `if`.
+        #
+        # Availability, deliberately NOT drain health. These handlers return 200 immediately and do
+        # the real work under waitUntil, so HTTP status carries no information about whether the
+        # queue is moving; an error-rate rule here would be inert by construction. Drain health is
+        # already covered by PawtograderAsyncQueueBacklog / QueueStuck /
+        # NotificationEmailBacklog / QueueOldestMessageAging / RecalcStalled above.
+        - alert: PawtograderEdgeWorkerTierUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge worker tier has no available pods"
+            description: >-
+              {{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+              in {{ $ns }} has had zero available replicas for 5m. Kong routes
+              {{ join ", " .Values.edgeFunctions.workerTier.functions }} to this tier by path, so
+              every call to those functions is failing -- including the pg_cron pokes that drain
+              pgmq. The blast radius is queue depth, on the queues-and-workers dashboard.
+              Check the per-tier memory budget under edgeFunctions.workerTier first: a limit that
+              no longer holds its sum OOM-kills this tier exactly like the request tier, and this
+              tier's sum is NOT the same as edgeFunctions.*. Setting
+              edgeFunctions.workerTier.enabled=false returns all four functions to the request
+              tier in one helm upgrade.
+        {{- end }}
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and
