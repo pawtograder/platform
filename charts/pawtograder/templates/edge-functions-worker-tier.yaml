@@ -38,6 +38,16 @@ own admission budget and eszip cache.
    edge-functions-channels.yaml does this. Read from the RAW block, never from
    the merged config, because 0 would not survive mergeOverwrite. */ -}}
 {{- $replicas := ternary $wt.replicas 2 (hasKey $wt "replicas") }}
+{{- /* The image has to be merged HERE, not left to the workload's own merge.
+   `image` is on the override allowlist, and the merged config ($ef) does pick it
+   up — but the workload takes its actual image from the `image` ARGUMENT, and
+   RELEASE_VERSION reads `$image.tag`. Passing .Values.edgeFunctions.image would
+   accept `workerTier.image` in values, merge it into a dict nothing reads, and
+   silently run the base image: exactly the "accepted then ignored" failure the
+   allowlist exists to prevent. deepCopy on both sides because mergeOverwrite
+   mutates its destination and would otherwise corrupt .Values for the request
+   tier's own image. */ -}}
+{{- $image := mergeOverwrite (deepCopy .Values.edgeFunctions.image) (deepCopy ($wt.image | default dict)) }}
 ---
-{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" .Values.edgeFunctions.image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" $image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
 {{- end }}

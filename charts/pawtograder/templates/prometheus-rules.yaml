@@ -732,7 +732,17 @@ spec:
               {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
               {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
               memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
-        {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+        {{- /* replicas: 0 is a SUPPORTED way to idle the tier (the workload reads it
+           via hasKey precisely so zero survives), and this rule's expression is
+           `replicas_available == 0`, which is then permanently true. Rendering it
+           anyway would turn an intentional configuration into a continuous
+           critical page five minutes after deploy. So the rule requires a
+           positive configured replica count as well as the tier being enabled. */}}
+        {{- $wtReplicas := 2 }}
+        {{- if hasKey .Values.edgeFunctions.workerTier "replicas" }}
+        {{- $wtReplicas = int .Values.edgeFunctions.workerTier.replicas }}
+        {{- end }}
+        {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled (gt $wtReplicas 0) }}
         # The background-worker tier is routed by PATH: Kong sends the four worker function names
         # to it and nowhere else, so unlike the request tier there is no other pool to absorb the
         # traffic when it is down -- pgmq simply stops draining. None of the rules above can see

@@ -832,8 +832,17 @@ echo "== worker-tier Kong routes carry the function name in the upstream URL =="
 assert_rendered_contains "worker route upstream ends in the function name" \
   templates/kong-config.yaml \
   "url: http://t-pawtograder-functions-workers:9000/github-async-worker" "${WT[@]}"
-assert_rendered_contains "worker route path is the full function path" \
-  templates/kong-config.yaml "- /functions/v1/github-async-worker" "${WT[@]}"
+# ANCHORED, and this is the assertion that prevents a silently-wrong function.
+# A plain prefix matches on the path string, not segment boundaries: measured
+# against Kong 3.9.1, `/functions/v1/github-async-worker-v2` was routed to the
+# worker tier AND rewritten to `/github-async-worker/-v2`, so the demuxer would
+# read pathParts[0] and execute github-async-worker instead. Note the syntax is
+# format-2.1 (no `~` prefix; Kong auto-detects the regex) -- the `~/` form is
+# REJECTED by this config version.
+assert_rendered_contains "worker route path is anchored to the function name" \
+  templates/kong-config.yaml '- "/functions/v1/github-async-worker$"' "${WT[@]}"
+assert_absent "no worker route uses an unanchored plain prefix" \
+  "- /functions/v1/github-async-worker" "${WT[@]}"
 assert_rendered_contains "request tier keeps the catch-all route" \
   templates/kong-config.yaml "- /functions/v1/" "${WT[@]}"
 # hosts on a worker route would miss every in-cluster pg_net poke, because
@@ -861,8 +870,11 @@ assert_refused "an unrecognised override key is refused, not ignored" \
 # A routed tier exists partly so it never evicts: it serves a handful of bundles,
 # all of them hot. Sized off the LARGEST bundle, not the median -- averaging
 # bundle sizes is how 2026-08-19 happened.
-assert_refused "a cache too small to hold every routed bundle is refused" \
-  "needed to hold all 4 routed bundles" \
+# 5, not 4: `metrics` is hot on every tier and in no route list -- the
+# ServiceMonitor scrapes /metrics, the demuxer resolves it by first path segment
+# like any other function, and its bundle stays resident at the scrape interval.
+assert_refused "a cache too small to hold every hot bundle is refused" \
+  "needed to hold all 5 hot bundles" \
   "${WT[@]}" --set edgeFunctions.workerTier.eszipCacheMaxMb=128
 # Under per_worker an isolate is reused, so a routed tier needs one resident
 # isolate per routed function, doubled for beforeUnload recycling overlap.
@@ -884,13 +896,37 @@ assert_renders "worker tier accepts a limit exactly equal to its sum (2426Mi)" \
 # boundary), but that is luck rather than design: a future function whose name
 # extends a worker's would be silently routed to the worker tier and 404 there.
 # Checked against the real tree, not a hardcoded list.
+echo "== worker-tier override surface is honoured, not merely accepted =="
+# `image` is on the allowlist AND the workload takes its image from an ARGUMENT,
+# so passing the base image would accept workerTier.image in values and silently
+# run the base image anyway -- the exact "accepted then ignored" failure the
+# allowlist exists to prevent.
+assert_rendered_contains "workerTier.image.tag actually changes the running image" \
+  templates/edge-functions-worker-tier.yaml "edge-functions:wt-canary" \
+  "${WT[@]}" --set edgeFunctions.workerTier.image.tag=wt-canary
+# Booleans cannot survive mergeOverwrite, so they must be refused rather than
+# accepted-and-ignored. spreadAcrossNodes was briefly on the allowlist.
+assert_refused "a boolean override (spreadAcrossNodes) is refused, not ignored" \
+  "is not an overridable per-tier key" \
+  "${WT[@]}" --set edgeFunctions.workerTier.spreadAcrossNodes=false
+# replicas: 0 is a supported way to idle the tier, so an availability alert whose
+# expression is `replicas_available == 0` must not render -- it would be
+# permanently true and page continuously five minutes after deploy.
+assert_absent "availability alert is absent when the tier is idled at 0 replicas" \
+  "PawtograderEdgeWorkerTierUnavailable" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=0 \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "availability alert IS present at a positive replica count" \
+  templates/prometheus-rules.yaml "PawtograderEdgeWorkerTierUnavailable" \
+  "${WT[@]}" --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
 echo "== no routed worker name shadows another function's path =="
 shadow_check() {
   local fns_dir="$CHART/../../supabase/functions" bad=0 w f
   local workers
   workers="$(helm template t "$CHART" "${BASE[@]}" "${WT[@]}" \
     --show-only templates/kong-config.yaml 2>/dev/null \
-    | sed -nE 's#^[[:space:]]*- /functions/v1/([a-z0-9-]+)$#\1#p' | sort -u)"
+    | sed -nE 's#^[ \t]*- "/functions/v1/([a-z0-9-]+)[$]"$#\1#p' | sort -u)"
   if [ -z "$workers" ]; then
     echo "FAIL [prefix shadowing]: could not read routed worker names from the render"
     FAILED=1

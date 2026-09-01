@@ -1483,10 +1483,15 @@ edgeFunctions:
     maxParallelism: 8
     # The four routed bundles MEASURED 2026-09-01: notification-queue-processor
     # 14.2 + github-async-worker 36.7 + discord-async-worker 13.9 +
-    # gradebook-column-recalculate 25.6 = 90.3MiB. 192Mi holds the entire routed
-    # working set with room for them to roughly double, so this tier NEVER evicts
-    # — unlike the request tier, where 256Mi holds ~7 of 58 and eviction is the
-    # steady state. Asserted at
+    # gradebook-column-recalculate 25.6 = 90.3MiB.
+    #
+    # The hot set is FIVE bundles, not four: `metrics` is in no route list, but
+    # the ServiceMonitor scrapes /metrics on every pod of this tier and the
+    # demuxer resolves that by first path segment like any other request, so that
+    # bundle is loaded and stays resident at the scrape interval. The render-time
+    # assertion counts it (len(functions) + 1); at 192Mi there is room for all
+    # five plus growth, so this tier NEVER evicts — unlike the request tier, where
+    # 256Mi holds ~7 of 58 and eviction is the steady state. Asserted at
     # render time against len(functions): a routed tier that evicts re-reads a
     # bundle it will need again seconds later, which is the opposite of the point.
     eszipCacheMaxMb: 192

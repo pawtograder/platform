@@ -138,10 +138,23 @@ number is worse than one that admits it cannot.
 
      Still a real guard: it refuses a cache that cannot plausibly hold the set
      (128Mi for four bundles), which is the mistake worth catching. It cannot be
-     exact, because the chart does not know its image's bundle inventory. */}}
-{{- $cacheNeed := mul $routed 37 -}}
+     exact, because the chart does not know its image's bundle inventory.
+
+     THE ROUTED LIST IS NOT THE WHOLE HOT SET. `metrics` is hot on every tier and
+     appears in no route list: the ServiceMonitor scrapes /metrics on each pod,
+     the demuxer resolves that by first path segment like any other request, and
+     the `metrics` function's bundle is therefore loaded and kept hot on this tier
+     at the scrape interval (30s). Counting only `functions` would accept a cache
+     between routed x 37Mi and (routed + 1) x 37Mi that then evicts and reloads a
+     bundle every scrape -- passing a guard whose own stated model is "hold every
+     hot bundle". So the metrics bundle is counted unconditionally rather than
+     gated on monitoring.enabled: it is one 37Mi allowance, this assertion cannot
+     see .Values.monitoring from here, and over-counting by one bundle on a tier
+     that is not scraped is the harmless direction. */}}
+{{- $hot := add1 $routed -}}
+{{- $cacheNeed := mul $hot 37 -}}
 {{- if lt $cacheMi $cacheNeed -}}
-{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d routed bundles (%d x 37Mi, the median bundle in the image). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $routed $routed) -}}
+{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d hot bundles (%d routed + the `metrics` bundle that /metrics scrapes keep hot, x 37Mi median). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $hot $routed) -}}
 {{- end -}}
 {{/* Under per_worker an isolate is REUSED across requests, so a routed tier needs
      one resident isolate per routed function -- doubled, because beforeUnload
@@ -155,7 +168,13 @@ number is worse than one that admits it cannot.
      the same reasoning would need a bound on "distinct functions served
      concurrently", which is up to 58 and unknowable -- so what
      (maxParallelism x worker.memoryLimitMb) means under per_worker is an open
-     question there. See issue #926; measure it on this tier first. */}}
+     question there. See issue #926; measure it on this tier first.
+
+     `metrics` is counted in the CACHE requirement above but deliberately not
+     here. The difference is lifetime: its bundle stays resident once scraped, so
+     it occupies cache permanently, but its isolate is transient and the x2 for
+     recycling already leaves slack for one. Adding it here would instead force
+     maxParallelism past the default purely to run the per_worker experiment. */}}
 {{- if eq ($ef.policy | toString) "per_worker" -}}
 {{- $slotsNeed := mul 2 $routed -}}
 {{- if lt ($par | int) $slotsNeed -}}
@@ -198,13 +217,20 @@ edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
 */}}
 {{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
 {{- $tier := .tier -}}
+{{/* `spreadAcrossNodes` was here and is deliberately NOT: it is a boolean, and
+     the whole point of this allowlist is that mergeOverwrite cannot carry a
+     `false`. Allowing it meant `workerTier.spreadAcrossNodes: false` against a
+     base of `true` silently left the anti-affinity in place -- accepting a
+     setting and then ignoring it, which is the exact failure this list exists to
+     prevent. It is shared from edgeFunctions; a tier that genuinely needs
+     different placement has `nodeSelector`, `tolerations` and `affinity`. */}}
 {{- $allowed := list
       "enabled" "replicas" "functions"
       "policy" "maxParallelism" "beforeUnload" "worker"
       "eszipCacheMaxMb" "eszipColdLoadHeadroomMb" "resources" "image"
       "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
       "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
-      "priorityClassName" "updateStrategy" "spreadAcrossNodes" -}}
+      "priorityClassName" "updateStrategy" -}}
 {{- range $k, $v := .overrides -}}
 {{- if not (has $k $allowed) -}}
 {{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honoured. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}

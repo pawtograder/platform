@@ -160,11 +160,36 @@ data:
          /auth/v1/ catch-all, and have in production for as long as this file has
          existed.
 
-         PRIORITY. These routes carry `paths` only, exactly like functions-v1-all,
-         so Kong's traditional_compatible router (3.9.1, no KONG_ROUTER_FLAVOR
-         set) orders them by prefix length and the longer, more specific prefix
-         wins. No regex and no regex_priority needed — again, the same plain-path
-         pair as /auth/v1/verify vs /auth/v1/ in this file.
+         ANCHORED REGEX, NOT A PLAIN PREFIX. A plain prefix path matches on the
+         path STRING, not on segment boundaries, so `/functions/v1/foo` also
+         matches `/functions/v1/foo-bar`. That is not a near-miss: verified
+         against Kong 3.9.1 with this exact config, `/functions/v1/github-async-worker-v2`
+         was routed to the worker tier AND rewritten to `/github-async-worker/-v2`,
+         so the demuxer would read pathParts[0] and silently execute
+         github-async-worker instead. A future function whose name merely EXTENDS
+         a worker's would run the wrong code.
+
+         Note the syntax: this config is `_format_version: "2.1"`, where a regex
+         path is written WITHOUT the `~` prefix and Kong auto-detects it from the
+         metacharacters (it normalises to `~/...$` internally). The `~/` form
+         requires format 3.0 and is REJECTED here — "should start with: / (fixed
+         path) or ~/ (regex path)", which is a confusing way to say "your format
+         version is too old".
+
+         Sub-paths deliberately fall through to the request tier. The anchor means
+         `/functions/v1/<fn>/sub` does not match this route, so it lands on
+         functions-v1-all and is served by the request tier — same function, path
+         intact. That is the better trade: the sub-path-tolerant regex
+         `(?:/.*)?$` keeps such a request on the worker tier but strip_path then
+         removes the sub-path too, delivering `/github-async-worker` and losing
+         it. Both were measured. None of these four functions uses a sub-path
+         (pg_net posts the bare path), so the fallthrough is unreachable today.
+
+         PRIORITY. Verified live, not inferred: with these anchored regexes the
+         four worker paths reach the worker tier, every other function reaches
+         the request tier via functions-v1-all, and upstream paths are exactly
+         `/<fn>`. Kong evaluates regex routes ahead of plain prefixes, so the
+         `/functions/v1/` catch-all does not shadow them.
 
          DELIBERATELY NO `hosts`. It would look tidier and it would break the
          traffic that matters: SUPABASE_URL is http://<kong-svc>:8000, so
@@ -184,7 +209,8 @@ data:
           - name: functions-v1-worker-{{ $fn }}
             strip_path: true
             paths:
-              - /functions/v1/{{ $fn }}
+              # Anchored so the name matches at a segment boundary — see above.
+              - "/functions/v1/{{ $fn }}$"
         plugins:
           - name: cors
       {{- end }}
