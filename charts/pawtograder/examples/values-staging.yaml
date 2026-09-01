@@ -232,7 +232,15 @@ edgeFunctions:
     enabled: true
     minReplicas: 12
     maxReplicas: 20
-    targetMemoryUtilizationPercentage: 100
+    # 80, not 100: the HPA controller applies a default 10% TOLERANCE, so a target of
+    # 100 is really a dead BAND of 90-110% and anything inside it moves nothing in
+    # either direction. 80 puts the band at 72-88%, and the memory request below is
+    # sized to straddle it: above idle/0.72 so a quiet fleet can scale down, below
+    # loaded/0.88 so a busy one can scale up. 100 is known-wrong at ANY request
+    # value for that reason. This matches the chart default — an overlay that sets
+    # 100 silently overrides it back to the configuration that pinned prod at
+    # maxReplicas for weeks.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   image:
     repository: ghcr.io/pawtograder/edge-functions
@@ -247,10 +255,14 @@ edgeFunctions:
   # 2s/5s CPU), matching supabase.com. With eszip bundling the per-isolate
   # baseline sits ~10x below the 256MB cap, so per_request isolation is cheap
   # and no per-isolate memory override is needed.
-  # 2026-09-01: request 512Mi -> 1.5Gi, tracking the chart default. A memory-target
-  # HPA measures against the REQUEST, and the ~600Mi load-independent Deno baseline
-  # puts an idle pod over 100% of 512Mi — which pins the HPA at maxReplicas
-  # permanently. See the resources note in charts/pawtograder/values.yaml.
+  # 2026-09-01: request 512Mi -> 1.5Gi, tracking the chart default, paired with
+  # autoscaling.targetMemoryUtilizationPercentage 80 above. A memory-target HPA
+  # measures against the REQUEST, and the ~600Mi load-independent Deno baseline put
+  # an idle pod over 100% of 512Mi — which pinned the HPA at maxReplicas
+  # permanently, at any load, including none. Left at the chart default rather than
+  # prod's 1.8Gi: staging serves fewer distinct functions, so its floor is lower and
+  # 1.5Gi + target 80 is coherent here. See the resources note in
+  # charts/pawtograder/values.yaml, and measure on pods >24h old at low CPU.
   resources:
     requests: { cpu: "200m", memory: "1.5Gi" }
     limits:   { cpu: "2",    memory: "4Gi"   }

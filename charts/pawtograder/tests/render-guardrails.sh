@@ -675,6 +675,48 @@ assert_container_memory "functions container requests 1.5Gi, not 512Mi" \
 assert_container_memory "functions container limit stays 4Gi" \
   templates/edge-functions.yaml functions limits 4Gi
 
+# The (request, memory target) pair has to be coherent, and the example overlays are
+# where that is easiest to get wrong: an overlay setting a target OVERRIDES the
+# chart default, so an overlay left at 100 hands an operator back exactly the
+# configuration that pinned production for weeks -- while the freshly-tuned request
+# beside it makes the file look deliberately sized.
+#
+# Both failure modes are the same dead band seen from opposite ends. At target 100
+# the band is 90-110% of the request; at 80 it is 72-88%. A request below
+# idle/0.72 can never scale DOWN (the floor never leaves the band) and a request
+# above loaded/0.88 can never scale UP. With request 1.5Gi and target 100 the band
+# is 1382-1690Mi, and 1690Mi is the measured loaded ceiling -- so the fleet would
+# sit at minReplicas and never scale up on memory. Pin both numbers per overlay.
+#
+# The overlays ship placeholders (blank image tags, blank storage class, blank
+# ruleSelector label, wal-g without an s3 prefix) that are meant to be filled in per
+# install, so fill them here rather than weakening the guards that reject them.
+OVERLAY_FILL=(
+  --set monitoring.prometheusRules.labels.release=kube-prometheus-stack
+  --set postgres.walg.s3Prefix=s3://example/wal-archive
+)
+echo "== example overlays carry a coherent (memory request, HPA target) pair =="
+for _ov in values-prod values-prod-noeso; do
+  # Production overlays carry the measured PROD pair, not the chart default: prod's
+  # converged idle floor is ~1260Mi and its loaded ceiling ~1690Mi, so the usable
+  # window is 1750-1920Mi and 1.5Gi (1536Mi) sits below it.
+  assert_container_memory "$_ov: functions requests 1.8Gi (prod window 1750-1920Mi)" \
+    templates/edge-functions.yaml functions requests 1.8Gi \
+    -f "$CHART/examples/$_ov.yaml" "${OVERLAY_FILL[@]}"
+  assert_hpa_utilization "$_ov: memory target 80, not 100" memory 80 \
+    -f "$CHART/examples/$_ov.yaml" "${OVERLAY_FILL[@]}"
+done
+# Staging keeps the chart default request: it serves fewer distinct functions, so its
+# floor is lower and 1.5Gi against target 80 is coherent there. It enables e2e, which
+# a production render legitimately refuses, so render it as the staging tier it is.
+assert_container_memory "values-staging: functions requests 1.5Gi (chart default)" \
+  templates/edge-functions.yaml functions requests 1.5Gi \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+assert_hpa_utilization "values-staging: memory target 80, not 100" memory 80 \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+
 # The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
 # band of 90-110%. The edge tier's load-independent floor sat inside that band,
 # which wedged scaling in BOTH directions: it could not scale down (needs <90%) and
