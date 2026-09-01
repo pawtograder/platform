@@ -1208,15 +1208,16 @@ edgeFunctions:
   # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
   # below now addresses.
   #
-  # NOT changed here: resources.requests.memory. Note the corrected numbers also
-  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
-  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
-  # would read ~98%, not 48%. The request is simply out of scope for this change:
-  # the target bump below is what was measured and confirmed live, and the request
-  # should be re-set from the idle-vs-loaded band observed on pods that have been
-  # up ~24h on these settings rather than from either version of this arithmetic.
-  # The two are coupled — the target is a percentage OF the request, so moving one
-  # without redoing the band calculation re-wedges the dead band.
+  # Host baseline corrected again 2026-09-01: the ~320Mi above is wrong by half.
+  # Measured on a fleet that had converged, the load-independent Deno baseline is
+  # ~600Mi, so the floor with a 256Mi cache is ~860Mi rather than the ~576Mi this
+  # note computed — and that wrong term is why halving the cache on 08-28 moved
+  # the floor much less than its arithmetic promised. An earlier version of this
+  # note also left resources.requests.memory alone as "out of scope"; it is not
+  # out of scope any more, and the default is now 1.5Gi. See the note on
+  # resources below, which carries the converged measurements. The two stay
+  # coupled — the HPA target is a percentage OF the request, so moving one without
+  # redoing the band calculation re-wedges the dead band.
   #
   # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
   # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
@@ -1247,6 +1248,49 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory REQUEST is what a memory-target HPA measures utilization against,
+  # so on this tier it is an autoscaling input and not just a scheduling hint.
+  #
+  # 2026-09-01: 512Mi -> 1.5Gi. 512Mi was not merely a low number — it was below
+  # the floor on ANY deployment, at ANY load, including a completely idle one.
+  # The Deno host baseline for this runtime measures ~600Mi and is
+  # load-INDEPENDENT: it is the runtime itself, not per-request work. So
+  # utilization started above 100% before a single request was served, and a
+  # memory-target HPA is pinned at maxReplicas from the moment it is enabled —
+  # it cannot scale down (that needs <90% of target, given the controller's 10%
+  # tolerance) and cannot scale up (already at max). Production spent weeks that
+  # way, and its own values file has carried a warning since 2026-08-11 telling
+  # operators not to copy this block wholesale because of exactly this value. A
+  # default that has to ship with a "do not use this" note attached is a bug.
+  #
+  # The floor takes ~24h to CONVERGE, not the 2-3h every previous attempt at this
+  # value assumed. Measured in production at 2-10m CPU (i.e. no load), request
+  # 1.5Gi, eszipCacheMaxMb 256:
+  #     30m  mean  459Mi (30%)     10h  mean 1069Mi (70%)
+  #      2h  mean  723Mi (47%)     24h  mean 1227Mi (80%)
+  #      4h  mean  898Mi (58%)     29h  mean 1268Mi (83%)
+  #      6h  mean  972Mi (63%)   2d11h  mean 1253Mi (82%)  <- converged
+  # Four values have now been set on this tier (512Mi -> 1Gi -> 1.5Gi -> 1.8Gi);
+  # the first three were each chosen from a fleet that had not converged, and each
+  # looked correct for a few hours. Anyone re-tuning this has to measure on pods
+  # more than 24h old at low CPU, or they will repeat that.
+  #
+  # Why 1.5Gi as the CHART DEFAULT rather than the 1.8Gi production runs: the
+  # floor is not a constant. It scales with how many distinct functions a pod
+  # serves and how big its eszip cache is, so the default must not encode one
+  # deployment's floor. Prod's converged idle floor is ~1260Mi, which puts its
+  # usable request window at 1750-1920Mi (derived from the 72-88% dead band at
+  # target 80: the request must exceed idle/0.72 and stay below loaded/0.88), and
+  # prod overrides this to 1.8Gi in its own values. 1.5Gi is chosen here because
+  # it sits comfortably above the ~600Mi load-independent baseline, so the HPA is
+  # never pinned out of the box; it is a value production ran stably for days; and
+  # it does not impose prod's capacity cost on smaller installs.
+  #
+  # Operators should measure their OWN converged floor — idle mean and min at low
+  # CPU on pods >24h old — and size this from it, together with
+  # autoscaling.targetMemoryUtilizationPercentage below. The target is a
+  # percentage of this number, so the two cannot be set independently.
+  #
   # The memory LIMIT has to hold the whole budget documented above
   # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
   #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
@@ -1264,7 +1308,7 @@ edgeFunctions:
   # it. Limits are not scheduled (requests are), so raising it does not change
   # placement.
   resources:
-    requests: { cpu: "200m", memory: "512Mi" }
+    requests: { cpu: "200m", memory: "1.5Gi" }
     limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two

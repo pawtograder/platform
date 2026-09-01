@@ -165,8 +165,13 @@ edgeFunctions:
   # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
   # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
   maxParallelism: 8
+  # 2026-09-01: request 512Mi -> 1.5Gi, tracking the chart default. A memory-target
+  # HPA measures against the REQUEST, and the ~600Mi load-independent Deno baseline
+  # puts an idle pod over 100% of 512Mi — which pins the HPA at maxReplicas
+  # permanently. See the resources note in charts/pawtograder/values.yaml; size this
+  # from your own converged idle floor, measured on pods >24h old at low CPU.
   resources:
-    requests: { cpu: "200m", memory: "512Mi" }
+    requests: { cpu: "200m", memory: "1.5Gi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
   # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
   # Without it SMTP_HOST is unset in the functions environment, and the notification processor read

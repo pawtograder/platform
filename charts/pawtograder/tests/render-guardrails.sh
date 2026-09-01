@@ -220,6 +220,58 @@ assert_hpa_utilization() {
   fi
 }
 
+# assert_container_memory "<label>" "<template>" "<container>" "<requests|limits>" "<expected>" <extra --set args...>
+# Pins one container's resources.<requests|limits>.memory to an exact rendered
+# value, keyed on the CONTAINER NAME.
+#
+# Anchoring on the container is the point, not pedantry. `memory:` under
+# `requests:` is spelled identically in every workload the chart ships, and a
+# `--show-only` of one template can still hold several containers, so a bare grep
+# would happily be satisfied by a sidecar, an init container, or the limit when the
+# request is what regressed. Container list items and the nested `- name:` entries
+# for ports and env vars are told apart by INDENT: the block ends at the next
+# `- name:` at the same column, and deeper ones are skipped.
+assert_container_memory() {
+  local label="$1" template="$2" container="$3" section="$4" want="$5"; shift 5
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" \
+      --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(awk -v c="$container" -v s="$section" '
+    /^[[:space:]]*- name: / {
+      ind = index($0, "-")
+      name = $0; sub(/^[[:space:]]*- name: /, "", name); gsub(/"/, "", name)
+      if (inc && ind == cind) { inc = 0; inres = 0; insec = 0 }
+      if (!inc && name == c) { inc = 1; cind = ind; inres = 0; insec = 0 }
+      next
+    }
+    !inc { next }
+    /^[[:space:]]*resources:[[:space:]]*$/ { inres = 1; insec = 0; next }
+    inres && /^[[:space:]]*(limits|requests):[[:space:]]*$/ {
+      sec = $0; sub(/^[[:space:]]*/, "", sec); sub(/:.*$/, "", sec)
+      insec = (sec == s)
+      next
+    }
+    insec && /^[[:space:]]*memory:[[:space:]]*/ {
+      v = $0; sub(/^[[:space:]]*memory:[[:space:]]*/, "", v); gsub(/"/, "", v)
+      print v; exit
+    }
+  ' "$OUTFILE")"
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: no $section.memory found for container $container in $template"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: container $container $section.memory rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 echo "== baseline =="
 assert_renders "clean production baseline renders"
 
@@ -604,6 +656,24 @@ assert_renders "memory budget accepts a limit exactly equal to the computed sum"
 assert_refused "cold-load allowance below the largest bundle is refused" \
   "below the 64Mi needed to cover the largest bundle" \
   --set edgeFunctions.eszipColdLoadHeadroomMb=32
+
+# A memory-target HPA measures utilization against the REQUEST, so the request is
+# an autoscaling input on this tier and not just a scheduling hint. The chart
+# default was 512Mi, which is below the per-pod floor on any deployment at any
+# load: the load-independent Deno baseline alone measures ~600Mi. An idle pod
+# therefore reads over 100%, and the HPA is pinned at maxReplicas from the moment
+# it is enabled — it cannot scale down (needs <90% of target) and cannot scale up
+# (already at max). Production ran that way for weeks.
+#
+# Pin both halves of the block. The request is what regressed and what must not
+# drift back to 512Mi; the limit is pinned alongside it because the render-time
+# budget assertion is computed against the LIMIT, and this is the cheapest place
+# to prove the two were not confused for each other in a later edit. 2026-09-01.
+echo "== edge-function memory request is pinned (the HPA measures against it, 2026-09-01) =="
+assert_container_memory "functions container requests 1.5Gi, not 512Mi" \
+  templates/edge-functions.yaml functions requests 1.5Gi
+assert_container_memory "functions container limit stays 4Gi" \
+  templates/edge-functions.yaml functions limits 4Gi
 
 # The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
 # band of 90-110%. The edge tier's load-independent floor sat inside that band,
