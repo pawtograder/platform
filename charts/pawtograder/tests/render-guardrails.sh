@@ -77,7 +77,7 @@ assert_rendered_contains() {
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
-  elif ! grep -qF "$want" "$OUTFILE"; then
+  elif ! grep -qF -- "$want" "$OUTFILE"; then
     echo "FAIL [$label]: rendered, but missing expected text: $want"
     FAILED=1
   else
@@ -95,7 +95,7 @@ assert_rendered_lacks() {
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
-  elif grep -qF "$forbidden" "$OUTFILE"; then
+  elif grep -qF -- "$forbidden" "$OUTFILE"; then
     echo "FAIL [$label]: rendered, but still contains: $forbidden"
     FAILED=1
   else
@@ -726,6 +726,189 @@ assert_hpa_utilization "values-staging: memory target 80, not 100" memory 80 \
 echo "== edge-function HPA targets are pinned (dead-band sizing, 2026-08-28) =="
 assert_hpa_utilization "memory target renders 80, not 100" memory 80
 assert_hpa_utilization "cpu target renders 200" cpu 200
+
+# assert_cli_arg "<label>" "<template>" "<flag>" "<expected>" <extra --set args...>
+# Pins the value that FOLLOWS a container arg flag. edge-runtime takes its config
+# as `- --flag` / `- value` pairs, so a bare grep for the value cannot tell which
+# flag it belongs to -- and once two tiers render from one template, cannot tell
+# which TIER either. Anchor on the flag and read the next non-comment list item.
+assert_cli_arg() {
+  local label="$1" template="$2" flag="$3" want="$4"; shift 4
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(awk -v f="$flag" '
+    $0 ~ "^[[:space:]]*- " f "[[:space:]]*$" { hit = 1; next }
+    hit && /^[[:space:]]*#/ { next }
+    hit && /^[[:space:]]*- / {
+      v = $0; sub(/^[[:space:]]*- /, "", v); gsub(/"/, "", v)
+      print v; exit
+    }
+  ' "$OUTFILE")"
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: $flag is not rendered in $template at all"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: $flag rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+# assert_absent "<label>" "<forbidden substring>" <extra --set args...>
+# Proves a string appears NOWHERE in the whole rendered chart.
+#
+# Not assert_rendered_lacks: that takes --show-only, and helm ERRORS with "could
+# not find template" when the named template renders nothing at all -- which is
+# precisely the state an absence assertion needs to accept. Rendering everything
+# also catches the string leaking in from a template you did not think to name.
+assert_absent() {
+  local label="$1" forbidden="$2"; shift 2
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+  elif grep -qF -- "$forbidden" "$OUTFILE"; then
+    echo "FAIL [$label]: rendered chart still contains: $forbidden"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Background-worker tier (edgeFunctions.workerTier)
+# -----------------------------------------------------------------------------
+# The tier splits the edge fleet by isolation model: the four pg_cron-poked pgmq
+# consumers get their own Deployment, their own admission budget and their own
+# eszip cache, and Kong routes those function NAMES to it by path.
+#
+# The single most important property is that it is OFF by default and inert when
+# off, because hosted supabase.com and `supabase functions serve` have neither the
+# demuxer nor our Kong. Assert absence first.
+echo "== background-worker tier is absent unless enabled =="
+WT=(--set edgeFunctions.workerTier.enabled=true)
+assert_absent "no worker-tier workload by default" "functions-workers"
+assert_absent "no worker-tier Kong routes by default" "functions-v1-worker-"
+assert_absent "no worker-tier availability alert by default" \
+  "PawtograderEdgeWorkerTierUnavailable"
+
+echo "== background-worker tier renders its own isolation config =="
+assert_rendered_contains "worker tier renders a Deployment" \
+  templates/edge-functions-worker-tier.yaml "kind: Deployment" "${WT[@]}"
+# The two tiers must differ in the args that define the split. Pinning the REQUEST
+# tier alongside is what catches the mutation hazard in the shared template:
+# mergeOverwrite aliases sub-maps out of its source, so without deepCopy on both
+# operands a tier's overrides leak into .Values and the request tier silently
+# inherits them.
+assert_cli_arg "worker tier graceful-exit is 60s, not the base 410s" \
+  templates/edge-functions-worker-tier.yaml --graceful-exit-timeout 60 "${WT[@]}"
+assert_cli_arg "request tier keeps graceful-exit 410s (no override leak)" \
+  templates/edge-functions.yaml --graceful-exit-timeout 410 "${WT[@]}"
+assert_env_value "worker tier eszip cache renders 192Mi in bytes" \
+  templates/edge-functions-worker-tier.yaml EDGE_ESZIP_CACHE_MAX_BYTES 201326592 "${WT[@]}"
+assert_env_value "request tier eszip cache stays 256Mi (no override leak)" \
+  templates/edge-functions.yaml EDGE_ESZIP_CACHE_MAX_BYTES 268435456 "${WT[@]}"
+assert_container_memory "worker tier limit is 3Gi, not the base 4Gi" \
+  templates/edge-functions-worker-tier.yaml functions limits 3Gi "${WT[@]}"
+# resources is a nested map, so a shallow merge would replace `limits` and drop
+# `requests` entirely. Assert the sibling survived.
+assert_container_memory "worker tier requests survive the deep merge" \
+  templates/edge-functions-worker-tier.yaml functions requests 1Gi "${WT[@]}"
+assert_container_memory "request tier limit stays 4Gi (no override leak)" \
+  templates/edge-functions.yaml functions limits 4Gi "${WT[@]}"
+
+# The Kong construction that fails quietly. strip_path removes the MATCHED route
+# path, so a worker route pointed at a service url of ".../" delivers "/" upstream
+# and main.ts answers 400 "missing function name in request path" on every poke.
+# The function name MUST be in the service URL. This is the assertion that catches
+# it, and it is the easiest thing in this change to break by tidying.
+echo "== worker-tier Kong routes carry the function name in the upstream URL =="
+assert_rendered_contains "worker route upstream ends in the function name" \
+  templates/kong-config.yaml \
+  "url: http://t-pawtograder-functions-workers:9000/github-async-worker" "${WT[@]}"
+assert_rendered_contains "worker route path is the full function path" \
+  templates/kong-config.yaml "- /functions/v1/github-async-worker" "${WT[@]}"
+assert_rendered_contains "request tier keeps the catch-all route" \
+  templates/kong-config.yaml "- /functions/v1/" "${WT[@]}"
+# hosts on a worker route would miss every in-cluster pg_net poke, because
+# SUPABASE_URL is http://<kong-svc>:8000 and those requests carry the Kong service
+# name as Host. That would send all worker traffic back to the request tier while
+# looking correct.
+assert_rendered_lacks "worker routes carry no hosts" \
+  templates/kong-config.yaml "hosts:" "${WT[@]}" --set channels=null
+
+echo "== worker-tier guards refuse the configurations that fail silently =="
+assert_refused "enabled with no routed functions is refused" \
+  "Kong routes this tier by function NAME" \
+  "${WT[@]}" --set edgeFunctions.workerTier.functions=null
+assert_refused "a channel named workers collides with the tier" \
+  "collides with edgeFunctions.workerTier" \
+  "${WT[@]}" --set channelWildcardTlsSecret=wc \
+  --set 'channels[0].name=workers' --set 'channels[0].web.image.tag=v1' \
+  --set 'channels[0].edgeFunctions.image.tag=v1'
+# Sprig's mergeOverwrite (mergo) skips empty source values, so a mistyped or
+# unsupported override key would be silently ignored rather than applied. The
+# allowlist turns that into a render error.
+assert_refused "an unrecognised override key is refused, not ignored" \
+  "is not an overridable per-tier key" \
+  "${WT[@]}" --set edgeFunctions.workerTier.polciy=oneshot
+# A routed tier exists partly so it never evicts: it serves a handful of bundles,
+# all of them hot. Sized off the LARGEST bundle, not the median -- averaging
+# bundle sizes is how 2026-08-19 happened.
+assert_refused "a cache too small to hold every routed bundle is refused" \
+  "needed to hold all 4 routed bundles" \
+  "${WT[@]}" --set edgeFunctions.workerTier.eszipCacheMaxMb=128
+# Under per_worker an isolate is reused, so a routed tier needs one resident
+# isolate per routed function, doubled for beforeUnload recycling overlap.
+assert_refused "per_worker with too few admission slots is refused" \
+  "needs at least 8 admission slots" \
+  "${WT[@]}" --set edgeFunctions.workerTier.policy=per_worker \
+  --set edgeFunctions.workerTier.maxParallelism=6
+# Each tier has its OWN budget. A failure that named edgeFunctions.* would send
+# the reader to the wrong values block, which defeats the point of the assertion.
+assert_refused "the worker tier's budget failure names the worker tier" \
+  "edgeFunctions.workerTier memory budget does not fit" \
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2425Mi
+assert_renders "worker tier accepts a limit exactly equal to its sum (2426Mi)" \
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2426Mi
+
+# A Kong plain-prefix path also matches LONGER paths, so /functions/v1/<worker>
+# would swallow /functions/v1/<worker>-something. Nothing collides today
+# (gradebook-column-inserted vs gradebook-column-recalculate diverge before the
+# boundary), but that is luck rather than design: a future function whose name
+# extends a worker's would be silently routed to the worker tier and 404 there.
+# Checked against the real tree, not a hardcoded list.
+echo "== no routed worker name shadows another function's path =="
+shadow_check() {
+  local fns_dir="$CHART/../../supabase/functions" bad=0 w f
+  local workers
+  workers="$(helm template t "$CHART" "${BASE[@]}" "${WT[@]}" \
+    --show-only templates/kong-config.yaml 2>/dev/null \
+    | sed -nE 's#^[[:space:]]*- /functions/v1/([a-z0-9-]+)$#\1#p' | sort -u)"
+  if [ -z "$workers" ]; then
+    echo "FAIL [prefix shadowing]: could not read routed worker names from the render"
+    FAILED=1
+    return
+  fi
+  for w in $workers; do
+    for f in "$fns_dir"/*/; do
+      f="$(basename "$f")"
+      [ "$f" = "$w" ] && continue
+      [ -f "$fns_dir/$f/index.ts" ] || continue
+      case "$f" in
+        "$w"*) echo "FAIL [prefix shadowing]: function $f is shadowed by the worker route /functions/v1/$w"; bad=1 ;;
+      esac
+    done
+  done
+  [ "$bad" -eq 0 ] && echo "ok   [no routed worker name is a prefix of another function name]" || FAILED=1
+}
+shadow_check
 
 echo
 if [ "$FAILED" -ne 0 ]; then
