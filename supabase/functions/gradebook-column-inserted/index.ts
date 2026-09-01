@@ -2,8 +2,26 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { all, create } from "npm:mathjs";
-import { minimatch } from "npm:minimatch";
+// Pinned, and the versions are not arbitrary — these were bare `npm:mathjs` and
+// `npm:minimatch`, which resolve to LATEST at image-build time. Two consequences,
+// both measured from the build cache on 2026-09-01:
+//
+//   * mathjs resolved to 15.2.0 here while every other mathjs consumer in the
+//     repo (gradebook-column-recalculate, via its own deno.json `^14.5.2`)
+//     resolved to 14.9.1. This function was silently a MAJOR version ahead of
+//     the code it shares expression semantics with, and would have moved again
+//     on the next mathjs release. 14.5.2 matches the root deno.json's stated
+//     intent.
+//   * minimatch resolved to 10.2.6 here and 9.0.9 in mcp-server, so the corpus
+//     carried two majors of one glob library.
+//
+// Note the root `supabase/functions/deno.json` import map does NOT fix this: an
+// alias for the bare specifier `mathjs` is not consulted for `npm:mathjs`. That
+// is the same trap #934 hit with `@sentry/deno`, and `deno.lock` cannot help
+// either — it is gitignored AND `rm -f`'d by the Dockerfile before bundling, so
+// the inline specifier is the only thing that pins anything.
+import { all, create } from "npm:mathjs@14.5.2";
+import { minimatch } from "npm:minimatch@10.0.3";
 
 type ColumnRow = {
   id: number;
