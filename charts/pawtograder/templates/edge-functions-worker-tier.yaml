@@ -1,0 +1,43 @@
+{{- /*
+Supervised background-worker TIER.
+
+Renders a second edge-functions Service+Deployment (component "functions-workers")
+from the shared pawtograder.edgeFunctions.workload definition, on a config merged
+over .Values.edgeFunctions, with no HPA. Kong routes the function NAMES in
+.Values.edgeFunctions.workerTier.functions to it by path (templates/kong-config.yaml).
+
+Unlike a channel (edge-functions-channels.yaml), which is an A/B of the whole
+function set reached by HOST and needs its own image tag, a tier runs the SAME
+image and is reached by PATH. So it needs no `web` block and no tag of its own.
+
+See the workerTier block in values.yaml for why these four functions want their
+own admission budget and eszip cache.
+*/ -}}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+{{- $wt := .Values.edgeFunctions.workerTier }}
+{{- /* Enabled with no routed names would render pods that are scheduled, scraped
+   and charged their full memory limit while receiving nothing, because Kong
+   routes this tier by name and there would be no routes -- meanwhile the four
+   workers would keep running on the request tier exactly as before. Nothing
+   would look broken, which is the worst way for this to fail. */ -}}
+{{- if not $wt.functions }}
+{{- fail "edgeFunctions.workerTier is enabled but `functions` is empty. Kong routes this tier by function NAME, so nothing would reach it: the pods would run, be scraped and cost their whole memory limit while the four workers kept running on the request tier. Either list the names or set enabled: false." }}
+{{- end }}
+{{- /* A channel named "workers" would render the SAME Service and Deployment name
+   (<release>-functions-workers) as this tier. That is an install-time collision
+   between two helm resources, not a routing subtlety, so fail loudly rather than
+   let one silently win. */ -}}
+{{- range $c := .Values.channels }}
+{{- if eq $c.name "workers" }}
+{{- fail (printf "channel %q collides with edgeFunctions.workerTier: both render component \"functions-workers\", i.e. one Kubernetes Service and Deployment name for two different workloads. Rename the channel." $c.name) }}
+{{- end }}
+{{- end }}
+{{- include "pawtograder.edgeFunctions.assertTierOverrides" (dict "tier" "workerTier" "overrides" $wt) }}
+{{- /* hasKey, not `default`, so replicas: 0 can idle the tier without its routes
+   disappearing (Sprig `default` treats 0 as empty) -- same reason
+   edge-functions-channels.yaml does this. Read from the RAW block, never from
+   the merged config, because 0 would not survive mergeOverwrite. */ -}}
+{{- $replicas := ternary $wt.replicas 2 (hasKey $wt "replicas") }}
+---
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" .Values.edgeFunctions.image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
+{{- end }}

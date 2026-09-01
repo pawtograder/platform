@@ -115,9 +115,86 @@ number is worse than one that admits it cannot.
 {{- if lt $coldMi $minColdMi -}}
 {{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
 {{- end -}}
+{{/* Extra assertions that apply only to a ROUTED tier -- one Kong sends a known,
+     fixed set of function names to. The stable tier serves all 58 bundles and has
+     no route list, so `functions` is empty there and neither of these fires. */}}
+{{- if $ef.functions -}}
+{{- $routed := len $ef.functions -}}
+{{/* A routed tier exists partly so it never evicts: it serves a handful of
+     bundles, all of them hot. Sized off the LARGEST bundle in the image (43.2MiB
+     measured 2026-08-28, rounded to 44) rather than the median, because with a
+     set this small the median is not a bound -- averaging bundle sizes is how
+     the 2026-08-19 OOM happened. */}}
+{{- $cacheNeed := mul $routed 44 -}}
+{{- if lt $cacheMi $cacheNeed -}}
+{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d routed bundles (%d x 44Mi, the largest bundle in the image). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $routed $routed) -}}
+{{- end -}}
+{{/* Under per_worker an isolate is REUSED across requests, so a routed tier needs
+     one resident isolate per routed function -- doubled, because beforeUnload
+     recycling holds the retiring and the replacement isolate for the same
+     function at the same time. Below that, a poke for one worker queues behind
+     another until --request-wait-timeout (which this chart does not set, so the
+     runtime default applies).
+
+     This is checkable here and NOT on the stable tier precisely because a routed
+     tier's distinct-function count is known at render time. On the stable tier
+     the same reasoning would need a bound on "distinct functions served
+     concurrently", which is up to 58 and unknowable -- so what
+     (maxParallelism x worker.memoryLimitMb) means under per_worker is an open
+     question there. See issue #926; measure it on this tier first. */}}
+{{- if eq ($ef.policy | toString) "per_worker" -}}
+{{- $slotsNeed := mul 2 $routed -}}
+{{- if lt ($par | int) $slotsNeed -}}
+{{- fail (printf "%s.maxParallelism is %s but this tier routes %d functions under policy per_worker, which needs at least %d admission slots: one resident isolate per routed function, doubled because beforeUnload recycling holds the retiring and the replacement isolate at once. Raise maxParallelism (and re-check the memory budget, which counts it) or shorten `functions`." $p $par $routed $slotsNeed) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
 {{- fail (printf "%s memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $p $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate a tier's override keys against an ALLOWLIST.
+
+This exists because of one specific Sprig behaviour: `mergeOverwrite` is mergo
+with `WithOverride`, and mergo SKIPS EMPTY SOURCE VALUES -- `false`, `0`, `""`,
+`{}`, `[]`. So an override of `verifyJwt: false` against a base of `true`, or
+`envFromSecrets: []` against a non-empty base, renders as the BASE value with no
+error at all. A silently-ignored override on this tier is exactly the class of
+bug the memory-budget assertion exists to prevent: the config a reviewer reads
+is not the config the container runs.
+
+So every key that CANNOT merge correctly is kept out of the surface entirely,
+and anything unrecognised is refused rather than ignored. That also turns a typo
+(`polciy: oneshot`) into a render error instead of a no-op.
+
+Allowed keys are maps (merge key-by-key), non-empty lists (replaced wholesale,
+matching channels[].image semantics), strings, or positive numbers that
+assertMemoryBudget already rejects at <= 0.
+
+`enabled`, `replicas` and `functions` are allowed through but are read from the
+RAW tier block by the caller, never from the merged result -- they are the keys
+that need `false`/`0`/absent to mean something.
+
+The chart already works around this family of footgun elsewhere:
+edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
+`replicas: 0` works, and _helpers.tpl uses `dig` rather than `default`.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
+{{- $tier := .tier -}}
+{{- $allowed := list
+      "enabled" "replicas" "functions"
+      "policy" "maxParallelism" "beforeUnload" "worker"
+      "eszipCacheMaxMb" "eszipColdLoadHeadroomMb" "resources" "image"
+      "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
+      "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
+      "priorityClassName" "updateStrategy" "spreadAcrossNodes" -}}
+{{- range $k, $v := .overrides -}}
+{{- if not (has $k $allowed) -}}
+{{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honoured. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

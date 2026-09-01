@@ -1386,6 +1386,124 @@ edgeFunctions:
   tolerations: []
   affinity: {}
 
+  # ---------------------------------------------------------------------------
+  # Supervised background-worker TIER
+  # ---------------------------------------------------------------------------
+  # A second edge-functions Deployment serving ONLY the four pg_cron-poked pgmq
+  # consumers. Same image, same 58 bundles, same database — it differs in its
+  # isolation config and its memory budget, and Kong routes those four function
+  # NAMES to it by path (templates/kong-config.yaml). Everything not set here
+  # inherits from edgeFunctions above.
+  #
+  # A tier is not a channel. A channel is an A/B of the WHOLE function set on
+  # its own image tag, reached by HOST. A tier is a subset of functions on the
+  # same image, reached by PATH.
+  #
+  # Why these four do not belong on the request tier — two measured reasons:
+  #
+  #  1. ADMISSION SLOTS. Three of them run in `leased` mode (see
+  #     supabase/functions/_shared/workerRun.ts): one isolate per worker per
+  #     lease scope parks a resident drain loop and holds one of
+  #     maxParallelism's 8 slots for the isolate's life. On the request tier
+  #     those slots are the same ones student requests queue behind.
+  #  2. ESZIP CACHE OCCUPANCY. eszipCacheMaxMb 256 holds ~8 of 58 bundles at the
+  #     30.7MiB median. These four are poked every ~30s, so they are never
+  #     LRU-evicted and permanently occupy about half of every request-tier
+  #     pod's cache — on all 12-24 replicas — while serving zero user requests.
+  #
+  # A third, non-obvious one: today every request-tier pod contends for each
+  # worker's Redis lease, so 11-23 of them do a Redis round trip per poke and
+  # then return `idle`. Confining pokes to this tier removes that entirely.
+  #
+  # Enabling this is a Kong ROUTING change: no migration, no client change, no
+  # image rebuild. Callers only ever address `/functions/v1/<name>`, and that is
+  # resolved gateway-side. Setting enabled: false returns all four to the
+  # request tier's `/functions/v1/` catch-all in one `helm upgrade`.
+  workerTier:
+    # Off by default, so an existing values file renders exactly what it renders
+    # today. Also correct for the two runtimes that have no demuxer and no Kong
+    # of ours: hosted supabase.com and `supabase functions serve`.
+    enabled: false
+    # The function names Kong routes here. This list is the ONLY source of truth
+    # for the split — the routes are generated from it, so routing and tier
+    # membership cannot disagree. A name NOT listed keeps hitting the request
+    # tier and behaves exactly as it does today, which is what makes shortening
+    # this list a safe way to move one worker back without a rollback.
+    #
+    # Enabled with an empty list is refused at render time: the pods would run,
+    # be scraped, cost their whole memory limit and receive nothing, while the
+    # four workers kept running on the request tier. Nothing would look broken.
+    functions:
+      - notification-queue-processor
+      - github-async-worker
+      - discord-async-worker
+      - gradebook-column-recalculate
+    # 2, and it buys AVAILABILITY, not throughput. Three of the four workers are
+    # leased: exactly one isolate per worker per lease scope drains, and every
+    # other poke returns immediately via `idleRun` (workerRun.ts). Replicas do
+    # not parallelize the work. The second one covers a rolling update and a node
+    # drain. (gradebook-column-recalculate is the exception — `preferBounded:
+    # true` — and pgmq's per-message visibility timeout makes extra drainers safe
+    # there, just unnecessary.)
+    replicas: 2
+    # Deliberately per_request, i.e. the same policy every deployed overlay runs
+    # today, so enabling this tier changes WHERE the workers run and nothing
+    # else. That keeps the split independently revertible.
+    #
+    # This tier is also where per_worker should be VALIDATED before the request
+    # tier is considered (issue #926). It is the cheap place to learn it: its
+    # routed function count is known at render time and small, whereas on the
+    # request tier `--max-parallelism` has two plausible meanings under
+    # per_worker that fail in opposite directions — see the maxParallelism note
+    # above, and the per_worker assertions in _edge-functions-workload.tpl.
+    policy: per_request
+    # 8, matching the request tier rather than inventing a smaller number. The
+    # four workers hold up to 4 resident slots (3 leased loops + 1 bounded
+    # drain), and beforeUnload recycling transiently holds a retiring and a
+    # replacement isolate at once. Slot exhaustion as a function of uptime is the
+    # exact failure workerRun.ts was written to escape, so this is not the knob
+    # to economize on; the memory it costs is bounded and this tier has 2 pods.
+    maxParallelism: 8
+    # 4 bundles at the 43.2MiB worst case = 173Mi, so 192Mi holds the entire
+    # routed working set and this tier NEVER evicts — unlike the request tier,
+    # where 256Mi holds ~8 of 58 and eviction is the steady state. Asserted at
+    # render time against len(functions): a routed tier that evicts re-reads a
+    # bundle it will need again seconds later, which is the opposite of the point.
+    eszipCacheMaxMb: 192
+    # Above the 64Mi floor (the largest bundle in the image), with margin for a
+    # bundle growing. A routed tier does exactly 4 cold loads per pod lifetime,
+    # at startup, so serializing them costs nothing.
+    eszipColdLoadHeadroomMb: 96
+    # 192 + 96 + (8 x 256) + ~90Mi host = 2426Mi. 3Gi leaves 646Mi (21%) of
+    # backstop slack; the request tier runs 2650Mi against 4Gi (35%).
+    #
+    # requests.memory is a SCHEDULING HINT here, not an autoscaling input,
+    # because this tier has no HPA — so unlike the request tier (see the long
+    # note above, and #949) it can be re-measured and changed without re-wedging
+    # a dead band.
+    resources:
+      requests:
+        cpu: "100m"
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 3Gi
+    # The base rule "gracefulExitTimeoutSeconds >= worker.timeoutMs" INVERTS on
+    # this tier. There it protects a long in-flight USER request. Here the
+    # long-lived thing is a deliberately infinite drain loop that will never
+    # finish on its own, so honouring 410s would make every rollout take ~7
+    # minutes per pod. Cutting it is safe: pgmq's visibility timeout makes an
+    # interrupted batch visible again, and the Redis lease lapses at its 60s TTL
+    # — workerRun.ts is explicitly written for a wall-clock kill that leaves the
+    # lease unreleased.
+    gracefulExitTimeoutSeconds: 60
+    terminationGracePeriodSeconds: 90
+    # worker.timeoutMs is deliberately NOT overridden. Raising it would shrink
+    # the lease duty-cycle gap (#926 lists that gap as a revisit trigger), but
+    # the 400s wall clock is also what currently bounds a possible
+    # background-worker memory leak — which #926 lists as its own trigger. Raise
+    # it only after this tier's memory panel has been flat for 24h.
+
 # -----------------------------------------------------------------------------
 # Kong (API gateway)
 # -----------------------------------------------------------------------------
