@@ -194,7 +194,12 @@ edgeFunctions:
   #     avoid. Preview load is e2e only.
   workerTier:
     enabled: true
-    replicas: 1
+    # TEMPORARY (routing proof, reverted in the next commit): 0 idles the tier
+    # without removing its Kong routes, so the four worker paths must 503 while
+    # every other function keeps working. That is the discriminator this
+    # workspace cannot get any other way -- it has no RBAC in the preview
+    # namespace, so pod logs are unreadable.
+    replicas: 0
     maxParallelism: 6
     resources:
       requests: { cpu: "1", memory: "2Gi" }
