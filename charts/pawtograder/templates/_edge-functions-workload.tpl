@@ -343,7 +343,13 @@ spec:
               value: {{ $ctx.Values.global.environment | quote }}
             # The image tag is the closest thing to a build identity the chart knows (previews use
             # pr-<n>-<short_sha>), so it doubles as the Sentry release when nothing more precise is set.
-            {{- with $ef.image.tag }}
+            #
+            # $image.tag, NOT $ef.image.tag: $image is the tag this workload actually RUNS, after a
+            # channel's `mergeOverwrite` (edge-functions-channels.yaml). Reading it off the values
+            # block instead reported the STABLE tag as a canary channel's Sentry release, i.e. the
+            # one field whose whole job is to say which build an error came from named the wrong
+            # build. The container image on line ~199 has always used $image; only this disagreed.
+            {{- with $image.tag }}
             - name: RELEASE_VERSION
               value: {{ . | quote }}
             {{- end }}
