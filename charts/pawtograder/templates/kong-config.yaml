@@ -140,6 +140,55 @@ data:
               - /functions/v1/
         plugins:
           - name: cors
+      {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+      {{- /* Background-worker tier: these function NAMES go to their own Deployment
+         instead of the request tier. This is the whole mechanism of the tier split
+         — no migration, no client change. Callers keep addressing
+         /functions/v1/<name>, which is the one contract shared by hosted
+         supabase.com, `supabase functions serve` and this deployment, and the
+         split is resolved gateway-side.
+
+         ONE KONG SERVICE PER NAME, WITH THE NAME IN THE SERVICE URL PATH. This
+         is not a style choice and getting it wrong fails quietly: `strip_path`
+         removes the MATCHED route path, so a route on /functions/v1/<fn> against
+         a service url of ".../" would hand the demuxer "/" and main.ts would
+         answer `400 missing function name in request path` on every poke. Kong
+         builds the upstream as service-path + stripped-remainder, so carrying
+         <fn> in the url is what reconstructs the single path segment main.ts
+         routes on. The auth-v1-open / auth-v1-open-callback /
+         auth-v1-open-authorize services above use exactly this shape against the
+         /auth/v1/ catch-all, and have in production for as long as this file has
+         existed.
+
+         PRIORITY. These routes carry `paths` only, exactly like functions-v1-all,
+         so Kong's traditional_compatible router (3.9.1, no KONG_ROUTER_FLAVOR
+         set) orders them by prefix length and the longer, more specific prefix
+         wins. No regex and no regex_priority needed — again, the same plain-path
+         pair as /auth/v1/verify vs /auth/v1/ in this file.
+
+         DELIBERATELY NO `hosts`. It would look tidier and it would break the
+         traffic that matters: SUPABASE_URL is http://<kong-svc>:8000, so
+         in-cluster pg_net pokes carry the Kong SERVICE NAME as Host, and a
+         host-scoped route would miss them and send every worker poke back to the
+         request tier. Conversely the channel routes below carry hosts AND paths —
+         two match fields — so they out-prioritize these regardless of path
+         length, and a channel host's worker traffic stays on that channel's own
+         deployment. That is correct: a channel is an A/B of the whole function
+         set, and pg_cron never pokes a channel host. */ -}}
+      {{- $workerHost := include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+      {{- range $fn := .Values.edgeFunctions.workerTier.functions }}
+      - name: functions-v1-worker-{{ $fn }}
+        _comment: "Functions (worker tier): /functions/v1/{{ $fn }} -> functions-workers:{{ $.Values.edgeFunctions.service.port }}/{{ $fn }}"
+        url: http://{{ $workerHost }}:{{ $.Values.edgeFunctions.service.port }}/{{ $fn }}
+        routes:
+          - name: functions-v1-worker-{{ $fn }}
+            strip_path: true
+            paths:
+              - /functions/v1/{{ $fn }}
+        plugins:
+          - name: cors
+      {{- end }}
+      {{- end }}
       {{- range $c := .Values.channels }}
       {{- if $c.edgeFunctions }}
       # Channel "{{ $c.name }}": /functions/v1/* on its own host routes to that
