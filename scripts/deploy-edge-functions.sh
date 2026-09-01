@@ -111,11 +111,30 @@ if [ "$do_build" -eq 1 ]; then
   docker push "$IMAGE_REF"
 fi
 
-echo "==> kubectl set image ${DEPLOYMENT} ${CONTAINER}=${IMAGE_REF}"
-kubectl set image "deploy/${DEPLOYMENT}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"
-echo "==> waiting for rollout…"
-kubectl rollout status "deploy/${DEPLOYMENT}" -n "$NAMESPACE" --timeout=5m
+# Both edge tiers run the SAME image, so patching only the request tier would
+# leave the four pgmq workers on the old code while the tool reported success --
+# a half-updated fleet is worse than an un-updated one, because the symptom shows
+# up as "my change did not take effect" for exactly the functions being debugged.
+# The worker tier is optional (edgeFunctions.workerTier.enabled), so it is
+# patched only when it actually exists.
+TARGETS="$DEPLOYMENT"
+if kubectl get "deploy/${DEPLOYMENT}-workers" -n "$NAMESPACE" >/dev/null 2>&1; then
+  TARGETS="$TARGETS ${DEPLOYMENT}-workers"
+else
+  echo "==> no ${DEPLOYMENT}-workers Deployment in ${NAMESPACE} (worker tier disabled); patching the request tier only"
+fi
+
+for d in $TARGETS; do
+  echo "==> kubectl set image ${d} ${CONTAINER}=${IMAGE_REF}"
+  kubectl set image "deploy/${d}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"
+done
+for d in $TARGETS; do
+  echo "==> waiting for rollout: ${d}"
+  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout=5m
+done
 
 echo
-echo "Done. ${DEPLOYMENT} in ${NAMESPACE} now runs ${IMAGE_REF}"
+for d in $TARGETS; do
+  echo "Done. ${d} in ${NAMESPACE} now runs ${IMAGE_REF}"
+done
 echo "Note: a later 'helm upgrade' / staging auto-deploy resets this to the chart's tag."
