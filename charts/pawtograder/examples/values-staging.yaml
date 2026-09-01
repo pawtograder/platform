@@ -288,6 +288,25 @@ edgeFunctions:
   e2e:
     enabled: true
     mockGitHub: true
+  # Staging is where the tier split is validated before prod (prod-charts) takes
+  # it. See the workerTier block in charts/pawtograder/values.yaml for the
+  # reasoning and the sizing; everything here is the chart default except being
+  # on.
+  #
+  # What this changes: the four pg_cron-poked pgmq workers move off the 12-20
+  # request-tier replicas onto 2 dedicated pods, and Kong routes their function
+  # NAMES there. Nothing else moves, the policy stays per_request on both tiers,
+  # and `enabled: false` puts it back in one helm upgrade.
+  #
+  # Worth knowing before the next staging deploy: release-images.yml's
+  # deploy-staging runs `helm upgrade --wait`, which blocks on EVERY edge pod,
+  # this tier's included. A worker tier that cannot become ready turns an
+  # ordinary staging deploy red — the same trap the canary channel's `image.tag`
+  # comment above warns about. It inherits the request tier's envFromSecrets
+  # (all nine, including pawtograder-redis for the worker lease) and the same
+  # readiness probe, so it comes up on the same terms the request tier does.
+  workerTier:
+    enabled: true
 
 web:
   image:

@@ -15,8 +15,17 @@ app together with the Supabase services it depends on:
 | postgres-meta | `supabase/postgres-meta`                                 | 1                |
 | studio        | `supabase/studio`                                        | 1                |
 | edge-runtime  | `ghcr.io/pawtograder/edge-functions` (built per release) | 2                |
+| edge-runtime (worker tier) | same image, `edgeFunctions.workerTier` (opt-in) | 2 |
 | kong          | `kong:3`                                                 | 2                |
 | web (Next.js) | `ghcr.io/pawtograder/web` (built per release)            | 2                |
+
+`edgeFunctions.workerTier` (off by default) splits the edge fleet by isolation
+model: the four pg_cron-poked pgmq consumers get a second Deployment with their
+own admission budget, eszip cache and memory limit, and Kong routes those
+function names to it by path. Callers are unaffected — everything still lives at
+`/functions/v1/<name>`, so there is no migration and no client change, and the
+split does not exist on hosted supabase.com or under `supabase functions serve`.
+See the `workerTier` block in `values.yaml` for the sizing and the reasoning.
 
 The chart is environment-agnostic. Cluster-specific concerns (ingress class,
 storage class, node selectors, secret backend) come from a values overlay you

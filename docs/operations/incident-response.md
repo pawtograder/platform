@@ -108,6 +108,36 @@ Components:
   `edge-function-secret` to the in-cluster Kong host. Re-run migrations if a
   restore or fresh DB skipped it (see [rollback.md](./rollback.md) / DR notes).
 
+**First question: which tier?** When `edgeFunctions.workerTier.enabled` is set
+there are **two** edge Deployments, and they fail differently:
+
+| Deployment                    | serves                                                                                                        | scaling                | when it is down                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `<release>-functions`         | every function except the routed workers                                                                      | HPA                    | user-facing 502s                                                            |
+| `<release>-functions-workers` | `notification-queue-processor`, `github-async-worker`, `discord-async-worker`, `gradebook-column-recalculate` | fixed replicas, no HPA | those four 503; pgmq stops draining, nothing user-facing breaks immediately |
+
+Kong routes by **path**, not by health, so the request tier does **not** absorb
+worker traffic when the worker tier is down — and it has no HPA, so
+"HPA scaled up?" is not a useful question there. `PawtograderEdgeWorkerTierUnavailable`
+is the alert that names it; queue depth on the queues-and-workers dashboard is
+the blast radius. pg_cron pokes are idempotent and pgmq's per-message visibility
+timeout is the mutual exclusion, so work resumes on the next tick rather than
+being lost.
+
+Two consequences worth knowing before you start pulling threads:
+
+- **Each tier has its OWN memory budget.** `edgeFunctions.*` for the request
+  tier, `edgeFunctions.workerTier.*` for the worker tier. The OOM and
+  memory-high alerts select on the _container_ name, which both tiers share, so
+  they cover both — read the knobs off the tier the **pod name** identifies, not
+  off `edgeFunctions.*` reflexively.
+- **Fastest mitigation is to un-split.** `--set edgeFunctions.workerTier.enabled=false`
+  and `helm upgrade` returns all four functions to the request tier: no DB
+  change, no client change, no image rebuild. It does roll Kong.
+
+`scripts/edge-logs.sh` covers both tiers (it selects `component=~"functions(-.*)?"`),
+so `--function <name>` works regardless of which tier serves it.
+
 ### Kong (`<release>-kong`)
 
 - Symptom: everything behind the gateway 5xx even though upstreams are healthy.
