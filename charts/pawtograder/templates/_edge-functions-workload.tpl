@@ -1,20 +1,30 @@
 {{/*
 Edge functions (Deno edge-runtime) Service + Deployment, parameterized so the
-stable channel and any extra deployment channels (.Values.channels) render from
-one definition.
+stable channel, any extra deployment channels (.Values.channels) and any extra
+ISOLATION TIER (.Values.edgeFunctions.workerTier) render from one definition.
 
 Usage:
   {{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions" "image" .Values.edgeFunctions.image "replicas" .Values.edgeFunctions.replicas "autoscaling" .Values.edgeFunctions.autoscaling.enabled) }}
 
 Args:
   ctx          root context (.)
-  component    component label + name suffix: "functions" for stable, "functions-<channel>" for a channel
+  component    component label + name suffix: "functions" for stable, "functions-<channel>" for a channel, "functions-workers" for the worker tier
   image        image dict ({ repository, tag, pullPolicy })
   replicas     replica count (used when autoscaling is false)
   autoscaling  when true, omit replicas (an HPA owns it — stable only)
+  overrides    OPTIONAL dict merged over .Values.edgeFunctions for this workload only
+  tier         OPTIONAL values-block name ("workerTier") used in budget-failure messages
 
-All other config is shared from .Values.edgeFunctions; channels differ only by
-name, labels, image, and replicas, and target the same Postgres/auth/storage.
+Two dimensions, deliberately different:
+  * A CHANNEL differs only by name, labels, image and replicas. It serves the
+    same function set with the same isolation config, is reached by HOST, and
+    passes no `overrides`.
+  * A TIER differs by isolation config (policy, maxParallelism, the memory
+    budget) and is reached by PATH — Kong routes specific function NAMES to it
+    (see templates/kong-config.yaml). It passes `overrides`.
+
+Everything not overridden comes from .Values.edgeFunctions, and every workload
+targets the same Postgres/auth/storage.
 */}}
 {{/*
 Guardrail: the edge-function container memory budget is a SUM, and every
@@ -48,7 +58,12 @@ skipped rather than mis-parsed -- a guardrail that silently computes the wrong
 number is worse than one that admits it cannot.
 */}}
 {{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
-{{- $ef := .Values.edgeFunctions -}}
+{{- $ef := .cfg -}}
+{{/* Which values block this failure is about. Every tier renders from one
+     definition and each has its OWN budget, so a message that always said
+     "edgeFunctions.*" would send a reader to the wrong block -- and the whole
+     value of this assertion is that it names the knob to change. */}}
+{{- $p := ternary "edgeFunctions" (printf "edgeFunctions.%s" .tier) (empty .tier) -}}
 {{- $limit := "" -}}
 {{- if $ef.resources -}}
 {{- if $ef.resources.limits -}}
@@ -63,7 +78,7 @@ number is worse than one that admits it cannot.
 {{- end -}}
 {{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
 {{- if le $cacheMi 0 -}}
-{{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
+{{- fail (printf "%s.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $p $ef.eszipCacheMaxMb) -}}
 {{- end -}}
 {{/* Every one of these is rendered into the environment AND has a fallback in
      main.ts of the shape `Number(env) || default`. A zero, negative or
@@ -77,19 +92,19 @@ number is worse than one that admits it cannot.
      validated knob beside four unvalidated ones. */}}
 {{- range $knob, $value := dict "worker.memoryLimitMb" $ef.worker.memoryLimitMb "worker.timeoutMs" $ef.worker.timeoutMs "worker.cpuSoftMs" $ef.worker.cpuSoftMs "worker.cpuHardMs" $ef.worker.cpuHardMs "worker.lowMemoryMultiplier" $ef.worker.lowMemoryMultiplier -}}
 {{- if le ($value | int) 0 -}}
-{{- fail (printf "edgeFunctions.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $knob $value) -}}
+{{- fail (printf "%s.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $p $knob $value) -}}
 {{- end -}}
 {{- end -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
 {{- if or (eq $par "") (le ($par | int) 0) -}}
-{{- fail (printf "edgeFunctions.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $par) -}}
+{{- fail (printf "%s.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $p $par) -}}
 {{- end -}}
 {{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
 {{- $hostMi := 90 -}}
 {{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
 {{- if le $coldMi 0 -}}
-{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $ef.eszipColdLoadHeadroomMb) -}}
+{{- fail (printf "%s.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $p $ef.eszipColdLoadHeadroomMb) -}}
 {{- end -}}
 {{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
      than the largest bundle in the image cannot bound it -- an oversized bundle is
@@ -98,17 +113,43 @@ number is worse than one that admits it cannot.
      minimum and the sizing note in values.yaml both need revisiting. */}}
 {{- $minColdMi := 64 -}}
 {{- if lt $coldMi $minColdMi -}}
-{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $coldMi $minColdMi) -}}
+{{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
 {{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
-{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- fail (printf "%s memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $p $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "pawtograder.edgeFunctions.workload" -}}
 {{- $ctx := .ctx -}}
-{{- include "pawtograder.edgeFunctions.assertMemoryBudget" $ctx -}}
+{{/* Effective config for THIS workload: .Values.edgeFunctions, optionally with a
+     tier's overrides merged over it. Every knob below reads $ef rather than
+     .Values.edgeFunctions directly, which is what lets two workloads run
+     different policies and different memory budgets from one definition.
+
+     deepCopy on both sides is required, not defensive: mergeOverwrite MUTATES
+     its destination and aliases sub-maps out of src, so without it a second
+     tier rendered in the same pass would see the first tier's `worker` block --
+     and .Values itself would be corrupted for every template after this one.
+
+     `workerTier` is unset from the result so a tier can never carry a tier of
+     its own. Nothing reads that key off $ef, so removing it changes no output.
+
+     MERGE SEMANTICS, stated because one of them is a trap: mergeOverwrite is
+     mergo with WithOverride, and mergo SKIPS EMPTY SOURCE VALUES -- false, 0,
+     "", {} and []. So an override of `verifyJwt: false` against a base of true
+     is SILENTLY IGNORED. That is why the override surface is an allowlist
+     (assertTierOverrides below) that excludes every boolean, and why `enabled`,
+     `replicas` and `autoscaling` are read from the RAW tier block by callers
+     instead of from this merged result. Helm's own values coalescing across -f
+     files handles false correctly; only this template-level merge does not. */}}
+{{- $ef := deepCopy $ctx.Values.edgeFunctions -}}
+{{- $_ := unset $ef "workerTier" -}}
+{{- with .overrides -}}
+{{- $ef = mergeOverwrite $ef (deepCopy .) -}}
+{{- end -}}
+{{- include "pawtograder.edgeFunctions.assertMemoryBudget" (dict "cfg" $ef "tier" (.tier | default "")) -}}
 {{- $component := .component -}}
 {{- $image := .image -}}
 {{- $name := include "pawtograder.componentName" (dict "ctx" $ctx "component" $component) -}}
@@ -123,7 +164,7 @@ spec:
   type: ClusterIP
   ports:
     - name: http
-      port: {{ $ctx.Values.edgeFunctions.service.port }}
+      port: {{ $ef.service.port }}
       targetPort: http
   selector:
     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
@@ -138,7 +179,7 @@ metadata:
   namespace: {{ $ctx.Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
-  {{- if $ctx.Values.edgeFunctions.reloader.enabled }}
+  {{- if $ef.reloader.enabled }}
   annotations:
     # Stakater Reloader: roll this Deployment when a referenced Secret changes.
     # The edge-functions env (incl. GITHUB_PRIVATE_KEY_STRING) comes from a
@@ -152,7 +193,7 @@ spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}
   {{- end }}
-  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.edgeFunctions) | nindent 2 }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $ef) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -163,18 +204,18 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
-      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
-      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
-      terminationGracePeriodSeconds: {{ $ctx.Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ef) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ef) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $ef.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
-          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 10 }}
-          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ef) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $ef) | nindent 10 }}
           ports:
             - name: http
-              containerPort: {{ $ctx.Values.edgeFunctions.service.port }}
+              containerPort: {{ $ef.service.port }}
           command: ["edge-runtime"]
           # NOTE: --no-verify-jwt isn't supported by edge-runtime (as of v1.74.0);
           # JWT verification (or lack thereof) is handled inside main.ts.
@@ -183,10 +224,10 @@ spec:
             - --main-service
             - /home/deno/functions/main
             - -p
-            - "{{ $ctx.Values.edgeFunctions.service.port }}"
+            - "{{ $ef.service.port }}"
             - --policy
-            - {{ $ctx.Values.edgeFunctions.policy | quote }}
-            {{- with $ctx.Values.edgeFunctions.gracefulExitTimeoutSeconds }}
+            - {{ $ef.policy | quote }}
+            {{- with $ef.gracefulExitTimeoutSeconds }}
             # On SIGTERM (scale-down / rolling deploy / node drain) edge-runtime
             # stops new intake and lets in-flight handlers finish for up to this
             # many seconds before forcibly terminating, then exits (immediately if
@@ -195,13 +236,13 @@ spec:
             - --graceful-exit-timeout
             - {{ . | quote }}
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.maxParallelism }}
+            {{- if $ef.maxParallelism }}
             # Cap on simultaneous isolates; under per_request this bounds max
             # concurrent requests/pod (excess queue via --request-wait-timeout).
             - --max-parallelism
-            - {{ $ctx.Values.edgeFunctions.maxParallelism | quote }}
+            - {{ $ef.maxParallelism | quote }}
             {{- end }}
-            {{- with $ctx.Values.edgeFunctions.beforeUnload }}
+            {{- with $ef.beforeUnload }}
             # EarlyDrop: retire+recycle a per_worker isolate at this % of a
             # resource limit so memory is reclaimed before the hard cap (default
             # 90% is too late under bursty load). ~50% mirrors supabase.com.
@@ -243,27 +284,27 @@ spec:
             - name: SUPABASE_DB_URL
               value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" $ctx }}:{{ $ctx.Values.postgres.service.port }}/{{ $ctx.Values.postgres.database }}"
             - name: VERIFY_JWT
-              value: {{ $ctx.Values.edgeFunctions.verifyJwt | quote }}
+              value: {{ $ef.verifyJwt | quote }}
             # Per-isolate worker limits read by the main.ts demuxer.
             - name: EDGE_WORKER_MEMORY_LIMIT_MB
-              value: {{ $ctx.Values.edgeFunctions.worker.memoryLimitMb | quote }}
+              value: {{ $ef.worker.memoryLimitMb | quote }}
             - name: EDGE_WORKER_TIMEOUT_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.timeoutMs | quote }}
+              value: {{ $ef.worker.timeoutMs | quote }}
             - name: EDGE_WORKER_CPU_SOFT_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.cpuSoftMs | quote }}
+              value: {{ $ef.worker.cpuSoftMs | quote }}
             - name: EDGE_WORKER_CPU_HARD_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
+              value: {{ $ef.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
-              value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+              value: {{ $ef.worker.lowMemoryMultiplier | quote }}
             # Byte budget for the demuxer's resident eszip cache. This is the
             # THIRD term in the container's memory budget, alongside
             # maxParallelism x worker.memoryLimitMb — see values.yaml.
             - name: EDGE_ESZIP_CACHE_MAX_BYTES
-              value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
+              value: {{ mul $ef.eszipCacheMaxMb 1048576 | quote }}
             # Enforced at runtime by main.ts, not just budgeted here: a semaphore
             # holds these bytes from before a cold read until create() returns.
             - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
-              value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
+              value: {{ mul $ef.eszipColdLoadHeadroomMb 1048576 | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with
@@ -302,7 +343,7 @@ spec:
               value: {{ $ctx.Values.global.environment | quote }}
             # The image tag is the closest thing to a build identity the chart knows (previews use
             # pr-<n>-<short_sha>), so it doubles as the Sentry release when nothing more precise is set.
-            {{- with $ctx.Values.edgeFunctions.image.tag }}
+            {{- with $ef.image.tag }}
             - name: RELEASE_VERSION
               value: {{ . | quote }}
             {{- end }}
@@ -326,7 +367,7 @@ spec:
             - name: GIT_COMMIT_SHA
               value: {{ . | quote }}
             {{- end }}
-            {{- $emailEnabled := $ctx.Values.edgeFunctions.email.enabled }}
+            {{- $emailEnabled := $ef.email.enabled }}
             {{- if or (kindIs "bool" $emailEnabled) $emailEnabled }}
             # Explicit switch for notification email, consumed by
             # supabase/functions/_shared/emailTransportConfig.ts. Leave unset to infer from
@@ -342,11 +383,11 @@ spec:
             - name: EMAIL_ENABLED
               value: {{ $emailEnabled | toString | quote }}
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
+            {{- if $ef.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.e2e.mockGitHub }}
+            {{- if $ef.e2e.mockGitHub }}
             - name: E2E_MOCK_GITHUB
               value: "true"
             {{- end }}
@@ -354,7 +395,7 @@ spec:
             - secretRef:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
                 optional: true
-            {{- if $ctx.Values.edgeFunctions.envFromSecrets }}
+            {{- if $ef.envFromSecrets }}
             # These are always optional: true, deliberately and permanently. envFrom is one-shot
             # and all-or-nothing: if any named Secret is absent when the pod starts, the kubelet
             # fails the container with CreateContainerConfigError and never retries the lookup on
@@ -372,7 +413,7 @@ spec:
             # explicit `optional: false` secretRef (see pawtograder-redis below), not a
             # chart-wide switch over a list of unrelated names.
             {{- end }}
-            {{- range $ctx.Values.edgeFunctions.envFromSecrets }}
+            {{- range $ef.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
                 optional: true
@@ -406,14 +447,14 @@ spec:
             periodSeconds: 30
             failureThreshold: 4
           resources:
-            {{- toYaml $ctx.Values.edgeFunctions.resources | nindent 12 }}
-      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
+            {{- toYaml $ef.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ef)) }}
       nodeSelector:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $ef)) }}
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions "name" $component) | nindent 6 }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ef "name" $component) | nindent 6 }}
 {{- end -}}
