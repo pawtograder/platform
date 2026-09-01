@@ -173,6 +173,32 @@ edgeFunctions:
   e2e:
     enabled: true
     mockGitHub: true
+  # Previews run the same TOPOLOGY as staging, so a PR that breaks the tier split
+  # fails here rather than on staging. Sized for a preview, not copied from the
+  # chart default:
+  #
+  #   * replicas: 1. The chart default is 2 for availability across a rolling
+  #     update; a preview has no availability requirement, and three of the four
+  #     workers are leased anyway (one drainer per lease scope), so a second pod
+  #     would add nothing but memory.
+  #   * requests == limits → Guaranteed QoS, for the same reason as the request
+  #     tier above and NOT negotiable here. The chart default is Burstable
+  #     (100m/1Gi against 1/3Gi), which on a shared Talos worker is exactly the
+  #     oom_score_adj ≈ 989 shape that made the kernel pick these pods first and
+  #     tripped the page-table-check panic. A new Burstable edge Deployment in
+  #     every preview namespace would have walked straight back into it.
+  #   * maxParallelism 6, not the chart's 8, which is what lets the budget fit
+  #     2Gi instead of 3Gi: 192 + 96 + (6 x 256) + 90 = 1914Mi. 6 still clears the
+  #     4 resident slots the workers need (3 leased loops + 1 bounded drain) plus
+  #     recycling overlap; 4 would be the slot exhaustion workerRun.ts exists to
+  #     avoid. Preview load is e2e only.
+  workerTier:
+    enabled: true
+    replicas: 1
+    maxParallelism: 6
+    resources:
+      requests: { cpu: "1", memory: "2Gi" }
+      limits: { cpu: "1", memory: "2Gi" }
 
 # Migration drift handling: previews are ephemeral, so when somebody
 # edits an already-applied migration we'd rather wipe + replay than fail
