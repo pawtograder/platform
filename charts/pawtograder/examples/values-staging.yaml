@@ -260,8 +260,8 @@ edgeFunctions:
   # measures against the REQUEST, and the ~600Mi load-independent Deno baseline put
   # an idle pod over 100% of 512Mi — which pinned the HPA at maxReplicas
   # permanently, at any load, including none. Left at the chart default rather than
-  # prod's 1.8Gi: staging serves fewer distinct functions, so its floor is lower and
-  # 1.5Gi + target 80 is coherent here. See the resources note in
+  # the 1.8Gi the prod overlays set: staging serves fewer distinct functions, so its
+  # floor is lower and 1.5Gi + target 80 is coherent here. See the resources note in
   # charts/pawtograder/values.yaml, and measure on pods >24h old at low CPU.
   resources:
     requests: { cpu: "200m", memory: "1.5Gi" }

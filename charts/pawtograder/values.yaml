@@ -1275,7 +1275,7 @@ edgeFunctions:
   # looked correct for a few hours. Anyone re-tuning this has to measure on pods
   # more than 24h old at low CPU, or they will repeat that.
   #
-  # Why 1.5Gi as the CHART DEFAULT rather than the 1.8Gi production runs: the
+  # Why 1.5Gi as the CHART DEFAULT rather than the 1.8Gi prod sets for itself: the
   # floor is not a constant. It scales with how many distinct functions a pod
   # serves and how big its eszip cache is, so the default must not encode one
   # deployment's floor. Prod's converged idle floor is ~1260Mi, which puts its
@@ -1329,11 +1329,22 @@ edgeFunctions:
     # stayed there permanently; and at 109% under load it still would not scale
     # UP (that needs >110%). Both directions were wedged by the same band.
     #
-    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
-    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
-    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
-    # those two -- the floor is below it, so a quiet fleet can scale down; a
-    # loaded pod is above it, so a busy fleet can scale up.
+    # The band this was originally sized against -- floor ~576Mi = 56% of prod's
+    # then-1Gi request, loaded peak ~1500Mi = 146% -- is HISTORICAL and both
+    # numbers have since been retired. See the resources note above: the floor is
+    # ~860Mi, not ~576Mi (the host baseline is ~600Mi, not ~320Mi), it takes ~24h
+    # to converge, and prod measures a converged idle floor of ~1260Mi against a
+    # loaded ceiling of ~1690Mi. Do not re-derive a request from the figures in
+    # this paragraph.
+    #
+    # What survives the correction is the shape of the argument, which is why 80
+    # is still right: a target of 80 puts the dead band at 72-88%, and the request
+    # is sized to straddle it -- above idle/0.72 so a quiet fleet can scale down,
+    # below loaded/0.88 so a busy one can scale up. With the converged numbers
+    # that window is 1750-1920Mi for prod (which sets 1.8Gi in its own values), and
+    # the chart default of 1.5Gi clears the ~600Mi load-independent baseline by
+    # enough that a stock install is never pinned. Every install should still
+    # re-measure its own floor.
     #
     # Confirmed live on the prod fleet, cache already at 256Mi:
     #   18:46   109%/100%   12 replicas   pinned
