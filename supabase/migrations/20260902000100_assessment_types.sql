@@ -597,7 +597,10 @@ begin
   end loop;
 
   update public.grader_results
-    set score = least(greatest(round(v_total), 0), 32767), max_score = least(greatest(round(v_max), 0), 32767)
+    -- No round(): both columns are numeric, and the per-question grader_result_tests rows keep
+    -- exact values, so rounding here made the summary disagree with its own tests and with the
+    -- recomputed grade (a 1.5/2.5 quiz reported 2/3). The clamp stays.
+    set score = least(greatest(v_total, 0), 32767), max_score = least(greatest(v_max, 0), 32767)
     where id = v_grader_result_id;
 
   -- fold the autograde score into the grading review's total (and gradebook).

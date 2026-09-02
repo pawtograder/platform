@@ -243,10 +243,25 @@ end $$;
 do $$
 declare
   t text;
+  parent_check text;
   instructor_tables text[] := array['exams','exam_template_pages','exam_questions','exam_question_regions'];
   staff_write_tables text[] := array['exam_scan_batches','exam_scan_pages','exam_scanned_submissions'];
 begin
+  -- Authorizing on the row's OWN class_id is not sufficient: none of the foreign keys couple a
+  -- parent id to a class, so an instructor in class A could insert an `exams` row for class B's
+  -- ASSIGNMENT while satisfying RLS with class_id = A -- blocking class B from creating its own
+  -- exam (the assignment_id is unique) and injecting questions that the student-delivery and
+  -- autograde RPCs then consume purely by exam_id. Each policy therefore also requires the
+  -- referenced parent to live in the same class. (A composite (class_id, parent_id) foreign key
+  -- would additionally constrain service-role writers, at the cost of a new unique constraint on
+  -- the shared assignments table; the exposure reported was via RLS, which this closes.)
   foreach t in array instructor_tables loop
+    parent_check := case t
+      when 'exams' then
+        'exists (select 1 from public.assignments a where a.id = ' || t || '.assignment_id and a.class_id = ' || t || '.class_id)'
+      else
+        'exists (select 1 from public.exams e where e.id = ' || t || '.exam_id and e.class_id = ' || t || '.class_id)'
+    end;
     execute format('drop policy if exists %I on public.%I;', t || '_instructor_write', t);
     execute format($f$
       create policy %I on public.%I for all to authenticated
@@ -254,13 +269,23 @@ begin
         select 1 from public.user_privileges up
         where up.user_id = auth.uid() and up.class_id = %I.class_id and up.role = 'instructor'
       ))
-      with check (exists (
-        select 1 from public.user_privileges up
-        where up.user_id = auth.uid() and up.class_id = %I.class_id and up.role = 'instructor'
-      ));
-    $f$, t || '_instructor_write', t, t, t);
+      with check (
+        exists (
+          select 1 from public.user_privileges up
+          where up.user_id = auth.uid() and up.class_id = %I.class_id and up.role = 'instructor'
+        )
+        and %s
+      );
+    $f$, t || '_instructor_write', t, t, t, parent_check);
   end loop;
   foreach t in array staff_write_tables loop
+    -- Same parent-class coupling for the staff-writable scan tables.
+    parent_check := case t
+      when 'exam_scan_pages' then
+        'exists (select 1 from public.exam_scan_batches b where b.id = exam_scan_pages.batch_id and b.class_id = exam_scan_pages.class_id)'
+      else
+        'exists (select 1 from public.exams e where e.id = ' || t || '.exam_id and e.class_id = ' || t || '.class_id)'
+    end;
     execute format('drop policy if exists %I on public.%I;', t || '_staff_write', t);
     execute format($f$
       create policy %I on public.%I for all to authenticated
@@ -269,12 +294,15 @@ begin
         where up.user_id = auth.uid() and up.class_id = %I.class_id
           and up.role in ('instructor','grader')
       ))
-      with check (exists (
-        select 1 from public.user_privileges up
-        where up.user_id = auth.uid() and up.class_id = %I.class_id
-          and up.role in ('instructor','grader')
-      ));
-    $f$, t || '_staff_write', t, t, t);
+      with check (
+        exists (
+          select 1 from public.user_privileges up
+          where up.user_id = auth.uid() and up.class_id = %I.class_id
+            and up.role in ('instructor','grader')
+        )
+        and %s
+      );
+    $f$, t || '_staff_write', t, t, t, parent_check);
   end loop;
 end $$;
 
@@ -501,9 +529,15 @@ declare
   v_check_points numeric;
   v_l2_count integer;
   v_l3_count integer;
+  v_delivery text;
+  v_in_app boolean;
 begin
-  select class_id, assignment_id into v_class_id, v_assignment_id
+  select class_id, assignment_id, delivery_mode into v_class_id, v_assignment_id, v_delivery
     from public.exams where id = p_exam_id;
+  -- Only an IN-APP quiz is auto-scored: quiz_autograde is reachable only from quiz_submit,
+  -- which rejects anything that is not delivery_mode 'in_app'. A paper exam has no autograder
+  -- at all, so its objective questions must still get a manual check to grade against.
+  v_in_app := coalesce(v_delivery, 'paper') = 'in_app';
   if v_class_id is null then
     raise exception 'Exam % not found', p_exam_id;
   end if;
@@ -564,7 +598,12 @@ begin
           where id = v_crit_id;
       end if;
       -- INSERT-ONLY, matching the level-3 checks below: never overwrite a grader's edits.
-      if not exists (
+      -- Skipped entirely for an auto-scored leaf: quiz_autograde already awards that question
+      -- through grader_result_tests, and _submission_review_recompute_scores sums both channels
+      -- -- so a grader ticking the manual check would count the points TWICE (or consume the
+      -- assignment cap and displace points earned on hand-graded answers).
+      if not (v_in_app and r1.answer_type in ('multiple_choice','true_false','numeric') and r1.correct_answer is not null)
+         and not exists (
         select 1 from public.rubric_checks
         where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r1.id
       ) then
@@ -607,7 +646,9 @@ begin
       -- Same reasoning one level down: an additive criterion with no checks has nothing to add,
       -- so a two-level tree's level-2 leaves need a check of their own.
       if v_l3_count = 0 then
-        if not exists (
+        -- Same auto-scored exclusion as the level-1 leaf above.
+        if not (v_in_app and r2.answer_type in ('multiple_choice','true_false','numeric') and r2.correct_answer is not null)
+           and not exists (
           select 1 from public.rubric_checks
           where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r2.id
         ) then
@@ -620,7 +661,9 @@ begin
 
       for r3 in select * from public.exam_questions
                 where exam_id = p_exam_id and level = 3 and parent_id = r2.id order by ordinal loop
-        if not exists (
+        -- Same auto-scored exclusion as the leaf cases above.
+        if not (v_in_app and r3.answer_type in ('multiple_choice','true_false','numeric') and r3.correct_answer is not null)
+           and not exists (
           select 1 from public.rubric_checks
           where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r3.id
         ) then
@@ -647,6 +690,36 @@ begin
       end if;
     end loop;
   end loop;
+
+  -- Reconcile: drop generated rows whose question no longer exists. exam_upsert_questions_and_
+  -- regions prunes deleted questions, but this sync only ever iterated the SURVIVING ones, so a
+  -- question deleted while the quiz was still a draft left its part/criterion/check behind --
+  -- and _submission_review_recompute_scores kept counting that orphaned criterion for every
+  -- future submission. Only rows carrying a data.exam_question_id are touched, so genuinely
+  -- user-authored parts/criteria/checks are never removed. Safe to delete rather than merely
+  -- hide, because the write RPC now refuses any question change once a submission exists: an
+  -- orphan can only have been created while the assignment was still ungraded.
+  delete from public.rubric_checks c
+  where c.rubric_id = p_rubric_id
+    and c.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (c.data->>'exam_question_id')::bigint
+    );
+  delete from public.rubric_criteria cr
+  where cr.rubric_id = p_rubric_id
+    and cr.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (cr.data->>'exam_question_id')::bigint
+    );
+  delete from public.rubric_parts pt
+  where pt.rubric_id = p_rubric_id
+    and pt.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (pt.data->>'exam_question_id')::bigint
+    );
 end;
 $$;
 revoke all on function public.exam_sync_rubric_from_questions(bigint, bigint) from public;
@@ -913,14 +986,21 @@ create or replace function public.invoke_exam_async_worker_background_task()
 returns void
 language plpgsql
 security definer
-set search_path = public
+-- pgmq on the path for pgmq.metrics() below; public for call_edge_function_internal.
+set search_path = public, pgmq
 as $$
 declare
   message_count integer;
   worker_count integer;
   i integer;
 begin
-  select count(*)::integer into message_count from pgmq_public.read('exam_processing', 0, 20);
+  -- pgmq.metrics is a PASSIVE count. pgmq_public.read(..., vt => 0), which this used before,
+  -- is not: read() increments read_ct on the messages it returns (up to 20 here) and makes them
+  -- visible again immediately. So a backlog -- or worker invocations that fail to start -- had
+  -- its read_ct bumped once a minute by the scheduler alone, and after eight polls the worker's
+  -- `read_ct >= PGMQ_MAX_READ_CT` poison guard dead-lettered OCR and finalize jobs that no
+  -- handler had ever attempted. Autoscaling must observe the queue, not consume it.
+  select queue_length::integer into message_count from pgmq.metrics('exam_processing');
   if message_count = 0 then
     return;
   elsif message_count >= 10 then

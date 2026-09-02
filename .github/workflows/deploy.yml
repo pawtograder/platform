@@ -189,6 +189,10 @@ jobs:
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
+          # Explicit, because getExamVisionProvider now fails closed on an unset value: it used
+          # to default to 'fake', which meant a real deployment silently produced placeholder
+          # OCR that reported success. The exam e2e suites need the offline provider.
+          EXAM_VISION_PROVIDER=fake
           # E2E_ENABLE only opens the edge functions' auth bypass. The GitHub
           # bypass is a separate flag: without it, isE2ERun still falls through
           # to cloneRepository -> getOctoKit and issues a real GitHub request,

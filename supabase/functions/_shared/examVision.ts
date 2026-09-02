@@ -317,8 +317,41 @@ class CompositeExamVisionProvider implements ExamVisionProvider {
   }
 }
 
+// Cached per isolate. Each call used to construct a fresh provider, and with the external
+// backend that meant a fresh RateLimiter whose nextAt starts at zero -- so EXAM_OCR_RPM was not
+// enforced even between the pages of one runBatch, and ordinary batches tripped provider quotas
+// and fell into repeated backoff/DLQ handling. Caching makes the limiter span every message an
+// isolate handles.
+//
+// Known limitation, stated rather than implied: the scheduler spawns up to five workers, each a
+// separate isolate with its own limiter, so the effective ceiling is up to 5x EXAM_OCR_RPM.
+// Enforcing a true global rate needs shared state (a DB token bucket); until then set
+// EXAM_OCR_RPM to your provider quota divided by the worker count.
+let cachedProvider: ExamVisionProvider | null = null;
+
 export function getExamVisionProvider(): ExamVisionProvider {
-  const which = (Deno.env.get("EXAM_VISION_PROVIDER") ?? "fake").toLowerCase();
+  if (cachedProvider) return cachedProvider;
+  cachedProvider = buildExamVisionProvider();
+  return cachedProvider;
+}
+
+function buildExamVisionProvider(): ExamVisionProvider {
+  const configured = Deno.env.get("EXAM_VISION_PROVIDER")?.trim().toLowerCase();
+  // FAIL CLOSED on an unset variable. This used to default to "fake", and nothing in the repo
+  // sets the variable -- so any deployment that had not been specially configured produced
+  // deterministic PLACEHOLDER OCR while every job still reported success. Staff could reach
+  // match review and finalization, confirm students against fabricated text, and have grades
+  // recorded from it, with no error anywhere to indicate the scans were never read. A missing
+  // configuration must look like a missing configuration, so the fake provider is now opt-IN
+  // (tests and the local/e2e stack set EXAM_VISION_PROVIDER=fake explicitly).
+  if (!configured) {
+    throw new Error(
+      "EXAM_VISION_PROVIDER is not set. Set it to 'gemini' (with GOOGLE_API_KEY) for real OCR, " +
+        "or explicitly to 'fake' for tests and local development. It previously defaulted to " +
+        "'fake', which silently produced placeholder OCR that looked like a successful scan."
+    );
+  }
+  const which = configured;
   if (which === "fake") return new FakeExamVisionProvider();
   const ocrKey = Deno.env.get("EXAM_OCR_API_KEY") ?? Deno.env.get("GOOGLE_API_KEY") ?? "";
   const geminiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";

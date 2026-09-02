@@ -409,13 +409,32 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
       // never clobber a decision a human already made.
       humanDecided = existing.match_status === "confirmed" || existing.match_status === "skipped";
     } else {
-      const { data: created, error: cErr } = await admin
+      // UPSERT on the (batch_id, exam_index) unique index rather than a bare insert. Matching a
+      // large batch can outlast the queue's 120s visibility window, so a second worker can pick
+      // up the same `match` message, see no row in the lookup above, and insert concurrently.
+      // The unique index makes that fail rather than duplicate, but failing would DLQ the batch;
+      // ignoreDuplicates + a select makes the whole lookup-or-create idempotent, so whichever
+      // worker loses the race simply adopts the existing row.
+      const { error: upsertErr } = await admin
         .from("exam_scanned_submissions")
-        .insert({ class_id: classId, exam_id: batch.exam_id, batch_id: batch.id, exam_index: g })
-        .select("id")
+        .upsert(
+          { class_id: classId, exam_id: batch.exam_id, batch_id: batch.id, exam_index: g },
+          { onConflict: "batch_id,exam_index", ignoreDuplicates: true }
+        );
+      if (upsertErr) throw new Error(`create scanned submission failed: ${upsertErr.message}`);
+      const { data: created, error: reReadErr } = await admin
+        .from("exam_scanned_submissions")
+        .select("id, match_status")
+        .eq("batch_id", batch.id)
+        .eq("exam_index", g)
         .single();
-      if (cErr || !created) throw new Error(`create scanned submission failed: ${cErr?.message}`);
+      if (reReadErr || !created) {
+        throw new Error(`read back scanned submission (batch ${batch.id}, index ${g}) failed: ${reReadErr?.message}`);
+      }
       scannedId = created.id;
+      // The row may have been created by the concurrent worker AND already decided by a human
+      // between our lookup and now; respect that exactly as the found-row branch does.
+      humanDecided = created.match_status === "confirmed" || created.match_status === "skipped";
     }
     // Check this one: it is the only link between a scanned submission and its pages. Failing
     // silently left the row with no pages attached, and finalize would then have nothing to
