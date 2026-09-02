@@ -75,11 +75,46 @@ jobs:
           # The fixtures were run green against this exact version and against
           # 2.53.3, so the suite is not relying on a behaviour specific to either.
           PROM_VERSION: "3.14.0"
+          # SHA-256 of prometheus-3.14.0.linux-amd64.tar.gz, pinned because this
+          # job downloads a tarball over the network and then EXECUTES what comes
+          # out of it, on a self-hosted runner, in a repo where every other
+          # toolchain arrives through a pinned action. Without this the version
+          # check below is the only gate, and a version string is something the
+          # artifact asserts about itself.
+          #
+          # Established from three independent sources that agree, 2026-09-02:
+          #   1. the release's own sha256sums.txt
+          #      (github.com/prometheus/prometheus/releases/download/v3.14.0/)
+          #   2. GitHub's asset `digest` field from the releases API, which GitHub
+          #      computes server-side from the stored blob rather than reading the
+          #      publisher's checksum file
+          #   3. sha256sum of a locally downloaded copy
+          # Bump this WITH PROM_VERSION -- a stale digest fails the job loudly,
+          # which is the intended failure mode and not a reason to delete it.
+          PROM_SHA256: "f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d"
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/promtool-bin"
-          curl -fsSL -o "$RUNNER_TEMP/prom.tar.gz" \
+          # BOUNDED. `curl -fsSL` with no timeouts will sit on a half-open
+          # connection indefinitely, and this runner is `pawtograder-ci` -- a
+          # single self-hosted pool, so one stalled GitHub endpoint parks a runner
+          # slot until the workflow timeout and every other job queues behind it.
+          # --connect-timeout bounds the handshake, --max-time bounds each whole
+          # attempt (the tarball is ~102MiB, so 180s is generous rather than
+          # tight), and the retries are capped so the worst case is ~9m and
+          # arithmetic rather than "until something gives up".
+          curl -fsSL \
+            --connect-timeout 10 --max-time 180 \
+            --retry 3 --retry-delay 5 --retry-connrefused \
+            -o "$RUNNER_TEMP/prom.tar.gz" \
             "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          # Verify BEFORE extracting, not after: a tar of a hostile archive is
+          # itself the exposure, so the digest has to gate the extraction rather
+          # than the execution. `sha256sum -c` prints "FAILED" and exits non-zero
+          # on a mismatch, and the extra echo is there so the reason is in the log
+          # at the point of failure instead of only in the exit status.
+          echo "${PROM_SHA256}  ${RUNNER_TEMP}/prom.tar.gz" | sha256sum -c - \
+            || { echo "::error::promtool tarball digest does not match the pinned PROM_SHA256 -- refusing to extract"; exit 1; }
           tar -xzf "$RUNNER_TEMP/prom.tar.gz" -C "$RUNNER_TEMP" \
             "prometheus-${PROM_VERSION}.linux-amd64/promtool"
           install -m 0755 \
