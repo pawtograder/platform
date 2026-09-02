@@ -260,22 +260,47 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    #    would also scale the maintenance page down and STILL miss realtime (a
    #    StatefulSet, not a Deployment).
    kubectl -n "$NS" delete hpa <release>-functions
-   for c in web rest auth storage; do
+   for c in rest auth storage; do
      kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0
    done
-   # Every edge tier, not just `functions`. The component label is exact, so a
-   # loop over `functions` misses the background-worker tier
-   # (component=functions-workers, edgeFunctions.workerTier) and any per-course
-   # channel (functions-<channel>) — and the worker tier is the one that keeps
-   # draining pgmq and writing to the primary through a window you believe is
-   # fenced. Enumerate them instead of naming them:
-   for d in $(kubectl -n "$NS" get deploy -l app.kubernetes.io/name=pawtograder \
-       -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' \
-       | awk '$2 ~ /^functions(-.+)?$/ { print $1 }'); do
-     kubectl -n "$NS" scale "deploy/$d" --replicas=0
-   done
+   # Every web and edge tier, not just `web` and `functions`. The component label
+   # is exact, so naming the two stable components misses the background-worker
+   # tier (component=functions-workers, edgeFunctions.workerTier) and every
+   # per-course channel (functions-<channel>, web-<channel>) — and the worker tier
+   # is the one that keeps draining pgmq and writing to the primary through a
+   # window you believe is fenced. Enumerate them instead of naming them.
+   #
+   # Selected on app.kubernetes.io/INSTANCE, which is the release name.
+   # NOT on app.kubernetes.io/name: `pawtograder.name` stamps `nameOverride` into
+   # that label, so `-l app.kubernetes.io/name=pawtograder` matches NOTHING on an
+   # install that sets one — and this loop failing open is silent, because
+   # enumerating zero Deployments scales zero Deployments, exits 0 and prints
+   # nothing, while the procedure goes on claiming writes are fenced. The
+   # component regex is what keeps this from being the whole-release selector
+   # warned against above: `maintenance` (the page you are about to serve),
+   # `kong`, `postgres` and `supavisor` do not match it.
+   WRITERS="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" \
+     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
+     | awk '$1 ~ /^(web|functions)(-.+)?$/ { print $2 }')"
+   echo "$WRITERS"   # eyeball it first: this list IS the fence
+   [ -n "$WRITERS" ] || { echo "NOTHING MATCHED — wrong release name or namespace; do not proceed"; }
+   kubectl -n "$NS" scale deploy $WRITERS --replicas=0
    kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
-   # plus any per-course channel Deployments (<release>-web-<channel>).
+
+   # 3. WAIT for the writers to actually be gone. `kubectl scale` only writes
+   #    `.spec.replicas`; termination is asynchronous and these pods have a drain
+   #    window (terminationGracePeriodSeconds plus the edge tier's preStop), so
+   #    for a minute or more after the scale returns a "fenced" writer is still
+   #    committing — including a worker still draining pgmq into the primary you
+   #    are about to bounce.
+   PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" \
+     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
+     | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+   # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
+   # matching resources found" when nothing matches, which is the NORMAL state
+   # here once the pods are already gone — and a step that fails when everything
+   # is correct is a step that gets skipped next time.
+   [ -n "$PODS" ] && kubectl -n "$NS" wait --for=delete $PODS --timeout=5m
    ```
 
 2. **Confirm the physical standby is caught up** before you disturb the primary —
@@ -309,8 +334,10 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    do **not** force-delete the pod as a habit.
 
    > **If the drain hangs on `<release>-functions-workers` instead.** The
-   > background-worker tier (`edgeFunctions.workerTier`, off except in staging)
-   > gets a `minAvailable: 1` PDB, and unlike the Postgres case that shape is
+   > background-worker tier (`edgeFunctions.workerTier`, disabled in the chart
+   > default and enabled by environment overlay — staging here, and production
+   > through the separate `prod-charts` repo) gets a `minAvailable: 1` PDB, and
+   > unlike the Postgres case that shape is
    > correct — it is a 2-pod tier and losing both at once stops pgmq draining for
    > all four routed functions. But at 2 replicas it allows exactly one
    > disruption, so if **one pod is already unhealthy** the budget is exhausted
@@ -344,7 +371,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > `replicas: 0` is not an alternative: the chart refuses it, because it would
    > leave Kong routing those four names at a Service with no endpoints while
    > suppressing both the PDB and the availability alert.
-
+   >
    > **Node-local storage is a hard exception.** This "reschedule onto another
    > node and reattach the PVC" only works when the primary's volume is
    > network-attached and movable (Khoury prod uses NetApp NFS — fine). If

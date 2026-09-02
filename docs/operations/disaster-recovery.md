@@ -148,19 +148,51 @@ nothing writes during the restore and no half-restored state is served.
 
 1. **Stop writers.** Scale the write tiers to zero so PostgREST/edge/realtime
    stop issuing writes:
+
    ```bash
-   kubectl -n "$NS" scale deploy \
-     <release>-web <release>-rest <release>-functions <release>-realtime \
-     --replicas=0
-   # When edgeFunctions.workerTier is enabled there is a SECOND edge Deployment,
-   # and it is the one that drains pgmq — leaving it up means writes continue
-   # through a window this step exists to close. It is absent on installs that
-   # have the tier off, so ignore-not-found:
-   kubectl -n "$NS" scale deploy <release>-functions-workers --replicas=0 \
-     --ignore-not-found
+   # Discover the write tiers by LABEL rather than naming them. A fixed list is
+   # wrong here in three separate ways, and each one leaves a writer running
+   # through a window this step exists to close:
+   #   * `edgeFunctions.workerTier` adds a SECOND edge Deployment
+   #     (`<release>-functions-workers`), and it is the one that drains pgmq.
+   #   * deployment channels add `<release>-functions-<channel>` and
+   #     `<release>-web-<channel>`, which share this Postgres.
+   #   * `auth` and `storage` write too (GoTrue's user tables, storage's object
+   #     rows); an earlier version of this step named neither.
+   # Select on `app.kubernetes.io/instance`, which is the RELEASE NAME. Do not
+   # select on `app.kubernetes.io/name`: `pawtograder.name` stamps `nameOverride`
+   # into it, so `-l app.kubernetes.io/name=pawtograder` matches nothing at all on
+   # an install that sets one -- and a selector that matches nothing scales
+   # nothing, exits 0, and prints nothing, so the failure is silent. The component
+   # regex is what keeps this from being a whole-release selector: `postgres`,
+   # `kong`, `supavisor` and the maintenance page do not match it.
+   WRITERS="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" \
+     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
+     | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print $2 }')"
+   echo "$WRITERS"   # eyeball it first: this list IS the fence
+   [ -n "$WRITERS" ] || { echo "NOTHING MATCHED -- wrong release name or namespace; do not proceed"; }
+   kubectl -n "$NS" scale deploy $WRITERS --replicas=0
+   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
+
+   # Then WAIT. `kubectl scale` only writes `.spec.replicas`; termination is
+   # asynchronous and these pods have a drain window
+   # (terminationGracePeriodSeconds plus the edge tier's preStop), so for a minute
+   # or more after the scale returns a "fenced" writer is still committing --
+   # including a worker still draining pgmq. Waiting is the difference between
+   # this step fencing writes and merely requesting that they stop.
+   PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" \
+     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
+     | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+   # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
+   # matching resources found" when nothing matches, which is the NORMAL state
+   # here once the pods are already gone -- and a step that fails when everything
+   # is correct is a step that gets skipped next time.
+   [ -n "$PODS" ] && kubectl -n "$NS" wait --for=delete $PODS --timeout=5m
    ```
+
    Leave Postgres running. (Rancher UI: set each workload's scale to 0 from the
    Workloads view if you prefer.)
+
 2. **Restore over the live DB.** `--clean --if-exists` drops and recreates each
    object from the dump:
    ```bash
