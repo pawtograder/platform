@@ -129,20 +129,45 @@ own admission budget and eszip cache.
 {{- if eq $reqName $wkrName }}
 {{- fail (printf "the worker tier's name collides with the request tier's: both render %q. componentName truncates to 63 characters, and once the release fullname reaches 52 characters \"-functions\" and \"-functions-workers\" truncate to the same string -- so the two Deployments and Services would overwrite each other and the tier isolation would silently not exist. Shorten the release name or fullnameOverride (currently %d characters) to at most 51." $reqName (len (include "pawtograder.fullname" .))) }}
 {{- end }}
-{{- /* hasKey, not `default`, so replicas: 0 survives (Sprig `default` treats 0 as
+{{- /* hasKey, not `default`, so a literal 0 reaches the check below instead of
+   being silently replaced by the default of 2 (Sprig `default` treats 0 as
    empty) -- same reason edge-functions-channels.yaml does this. Read from the RAW
    block, never from the merged config, because 0 would not survive mergeOverwrite.
    Resolved by the shared helper so the PDB and the availability alert, which gate
-   on the same number, cannot drift from it.
-
-   NOTE what `replicas: 0` does and does not do. It does NOT return the four
-   functions to the request tier: Kong still routes those names here, deliberately
-   (the routes must not disappear under a scale-to-zero), so every pg_cron poke
-   503s and pgmq stops draining for all four. It is a full outage of those
-   functions, and it is also the one state where the tier's own availability alert
-   and its PodDisruptionBudget are both suppressed by construction. The supported
-   way to move the workers back is `enabled: false`, or shortening `functions`. */ -}}
+   on the same number, cannot drift from it. */ -}}
 {{- $replicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+{{- /* `replicas: 0` READS like "idle the tier" and is nothing of the kind, so it
+   is refused rather than documented. It does NOT return the four functions to the
+   request tier: Kong keeps routing those names here, deliberately, because the
+   routes must not vanish out from under a running deployment. So every pg_cron
+   poke gets a 502/503 from a Service with no endpoints and pgmq stops draining
+   for all four functions -- a full outage of the queue pipeline.
+
+   What makes it worth a `fail` rather than a comment is that it is the one state
+   where BOTH things that would tell you are suppressed by construction. The
+   render matrix, measured at the previous tip:
+
+       replicas: 2  ->  8 Kong route refs, Deployment, 1 PDB, 1 availability alert
+       replicas: 1  ->  8 Kong route refs, Deployment, 0 PDB, 1 availability alert
+       replicas: 0  ->  8 Kong route refs, Deployment(0), 0 PDB, 0 alerts
+
+   The PDB drops out because minAvailable: 1 against 0 replicas is a permanent
+   deadlock, and the alert drops out because its expression is
+   `replicas_available == 0`, which at a configured zero is true forever and would
+   page continuously. Both omissions are individually correct and together they
+   mean the outage is invisible. A template comment cannot help someone running
+   `helm upgrade --set edgeFunctions.workerTier.replicas=0`, which is exactly how
+   this would be reached.
+
+   `lt 1`, not `eq 0`, because the helper pipes through Sprig `int`: a negative
+   count is invalid to the apiserver, and a non-numeric value like "two" converts
+   to 0 rather than erroring, so both arrive here looking like a deliberate zero.
+   This also makes `gt $wtReplicas 0` in prometheus-rules.yaml unreachable while
+   the tier is enabled -- see the note there; it is kept as a backstop because the
+   two files can be edited independently. */ -}}
+{{- if lt $replicas 1 }}
+{{- fail (printf "edgeFunctions.workerTier.replicas resolves to %d, which is refused. This does NOT idle the tier: Kong would still route %s to it by path, so every pg_cron poke would hit a Service with no endpoints, pgmq would stop draining for all four, and BOTH things that would report it are suppressed at zero replicas -- the PodDisruptionBudget (minAvailable: 1 would deadlock) and PawtograderEdgeWorkerTierUnavailable (its `replicas_available == 0` would be permanently true and page continuously). To un-split and return these functions to the request tier, set edgeFunctions.workerTier.enabled: false, which removes the Deployment, the PDB and the Kong routes together in one helm upgrade. To run fewer pods, use 1." $replicas (join ", " $wt.functions)) }}
+{{- end }}
 {{- /* The tier shares the base image BY CONSTRUCTION, and `image` is deliberately
    NOT on the override allowlist (so setting workerTier.image is a render error,
    not a silent no-op).

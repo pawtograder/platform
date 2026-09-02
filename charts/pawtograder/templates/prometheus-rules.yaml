@@ -738,12 +738,25 @@ spec:
               {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
               {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
               memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
-        {{- /* replicas: 0 is a SUPPORTED way to idle the tier (the workload reads it
-           via hasKey precisely so zero survives), and this rule's expression is
-           `replicas_available == 0`, which is then permanently true. Rendering it
-           anyway would turn an intentional configuration into a continuous
-           critical page five minutes after deploy. So the rule requires a
-           positive configured replica count as well as the tier being enabled. */}}
+        {{- /* The replica gate is a BACKSTOP, and as of this version it is
+           unreachable. It exists because this rule's expression is
+           `replicas_available == 0`, which at a configured zero is true forever:
+           rendering the rule anyway would turn a configuration into a continuous
+           critical page five minutes after deploy.
+
+           `replicas: 0` used to be described as a supported way to idle the tier.
+           It is not, and edge-functions-worker-tier.yaml now refuses it outright
+           (it leaves Kong routing four function names at a Service with no
+           endpoints while suppressing both this alert and the PDB -- the full
+           reasoning and the render matrix are at that `fail`). Since the tier
+           cannot render with fewer than 1 replica, `gt $wtReplicas 0` is always
+           true here.
+
+           Kept rather than deleted: it is one comparison, the two files are
+           edited independently, and the failure it prevents -- a critical alert
+           that pages continuously by construction -- is bad enough to be worth a
+           dead branch. Not left unexplained, because a guard whose stated reason
+           is false is worse than no guard. */}}
         {{- $wtReplicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
         {{- if and (include "pawtograder.edgeFunctions.workerTier.enabled" .) (gt $wtReplicas 0) }}
         # The background-worker tier is routed by PATH: Kong sends the four worker function names

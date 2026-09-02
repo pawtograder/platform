@@ -1032,13 +1032,37 @@ assert_renders "a fullname one character shorter still renders" \
 assert_refused "a boolean override (spreadAcrossNodes) is refused, not ignored" \
   "is not an overridable per-tier key" \
   "${WT[@]}" --set edgeFunctions.workerTier.spreadAcrossNodes=false
-# replicas: 0 is a supported way to idle the tier, so an availability alert whose
-# expression is `replicas_available == 0` must not render -- it would be
-# permanently true and page continuously five minutes after deploy.
-assert_absent "availability alert is absent when the tier is idled at 0 replicas" \
-  "PawtograderEdgeWorkerTierUnavailable" \
-  "${WT[@]}" --set edgeFunctions.workerTier.replicas=0 \
-  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+# `replicas: 0` reads like "idle the tier" and is a full outage of the four
+# routed functions: Kong keeps routing them at a Service with no endpoints, and
+# it is the one state where BOTH the PDB and the availability alert are
+# suppressed by construction, so nothing reports it. Refused at render rather
+# than documented, because the way in is `--set` on an upgrade, where a template
+# comment is invisible.
+assert_refused "replicas: 0 is refused, not treated as idling the tier" \
+  "which is refused. This does NOT idle the tier" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=0
+# The guard is `lt 1`, not `eq 0`, and both extra cases it catches arrive looking
+# like a deliberate zero. A negative count is invalid to the apiserver; a
+# non-numeric value converts to 0 through Sprig `int` rather than erroring, which
+# is the silent one.
+assert_refused "a negative replica count is refused" \
+  "which is refused. This does NOT idle the tier" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=-1
+assert_refused "a non-numeric replica count is refused, not read as 0" \
+  "which is refused. This does NOT idle the tier" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=two
+# The supported un-split, which the failure message points at. It must actually
+# work, and it must take the Kong routes with it -- otherwise the advice in the
+# message would leave the routes behind and produce the very outage it describes.
+assert_renders "the un-split the failure message recommends actually renders" \
+  --set edgeFunctions.workerTier.enabled=false
+assert_absent "the recommended un-split removes the Kong worker routes too" \
+  "functions-v1-worker-" --set edgeFunctions.workerTier.enabled=false
+# 1 is explicitly still allowed: it renders no PDB (minAvailable: 1 against a
+# single replica is a drain deadlock) but DOES keep the availability alert, so
+# unlike 0 the state is reported.
+assert_renders "replicas: 1 is still accepted" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=1
 assert_rendered_contains "availability alert IS present at a positive replica count" \
   templates/prometheus-rules.yaml "PawtograderEdgeWorkerTierUnavailable" \
   "${WT[@]}" --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
