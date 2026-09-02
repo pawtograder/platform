@@ -403,9 +403,14 @@ begin
     raise exception 'Assignment % is not an in-app quiz', p_assignment_id;
   end if;
 
+  -- disabled = false matters: a suspended or dropped student keeps their user_roles row (with
+  -- disabled = true) while the sync removes them from user_privileges. quiz_get_for_student
+  -- denies them correctly, but this RPC resolved the profile from user_roles alone -- so a
+  -- still-authenticated user could call quiz_submit directly and create an active, graded
+  -- submission after being dropped.
   select private_profile_id into v_profile_id
   from public.user_roles
-  where user_id = auth.uid() and class_id = v_class_id
+  where user_id = auth.uid() and class_id = v_class_id and disabled = false
   limit 1;
   if v_profile_id is null then
     raise exception 'Caller is not enrolled in this class';
@@ -516,6 +521,7 @@ declare
   v_review_id bigint;
   v_artifact jsonb;
   v_grader_result_id bigint;
+  v_profile_id uuid;
   v_total numeric := 0;
   v_max numeric := 0;
   rec record;
@@ -544,12 +550,18 @@ begin
     return;
   end if;
 
+  select profile_id into v_profile_id from public.submissions where id = p_submission_id;
+
   -- recompute is idempotent: clear any prior auto-grade results for this submission
   delete from public.grader_results where submission_id = p_submission_id;
 
+  -- profile_id is how student RLS reaches these rows. Leaving it null meant that even after the
+  -- instructor released the review, a student could not see their own auto-grader result: the
+  -- nested grader_results came back empty, submission history showed the autograder score as
+  -- N/A, and the per-question breakdown was inaccessible.
   insert into public.grader_results
-    (submission_id, class_id, score, max_score, lint_passed, lint_output, lint_output_format)
-  values (p_submission_id, v_class_id, 0, 0, true, '', 'text')
+    (submission_id, class_id, score, max_score, lint_passed, lint_output, lint_output_format, profile_id)
+  values (p_submission_id, v_class_id, 0, 0, true, '', 'text', v_profile_id)
   returning id into v_grader_result_id;
 
   for rec in
@@ -601,10 +613,12 @@ begin
     v_max := v_max + coalesce(rec.points, 0);
 
     insert into public.grader_result_tests
-      (grader_result_id, class_id, name, score, max_score, output, output_format)
+      -- student_id, like grader_results.profile_id above, is the column student RLS reads; a null
+    -- left the per-question breakdown invisible to the student it belongs to.
+      (grader_result_id, class_id, name, score, max_score, output, output_format, student_id)
     values (v_grader_result_id, v_class_id, coalesce(rec.label, 'Question'),
             v_earned, coalesce(rec.points, 0),
-            case when v_correct then 'Correct' else 'Incorrect' end, 'text');
+            case when v_correct then 'Correct' else 'Incorrect' end, 'text', v_profile_id);
   end loop;
 
   update public.grader_results
@@ -635,6 +649,75 @@ grant execute on function public.quiz_autograde(bigint) to service_role;
 -- student and award full points. Completion is binary and non-sensitive, so the grading
 -- review is released immediately. Routes through the standard submission + review path so
 -- the gradebook column recalculates like every other assignment type.
+-- Extracted so the response trigger and the survey-link trigger can both apply completion for
+-- an EXPLICIT assignment. The link trigger cannot reuse the response path: it fires AFTER the
+-- surveys row is updated, so resolving the assignment from surveys would give the NEW id for
+-- both sides and never revoke credit on the assignment being left.
+create or replace function public.survey_apply_completion(
+  p_assignment_id bigint,
+  p_class_id bigint,
+  p_profile_id uuid,
+  p_revoke boolean
+) returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_total_points numeric;
+  v_submission_id bigint;
+  v_review_id bigint;
+begin
+  if p_assignment_id is null or p_profile_id is null then
+    return;
+  end if;
+  -- Only auto-credit survey-TYPE assignments. surveys.assignment_id can reference ANY
+  -- assignment, so without this guard a survey linked (or mis-linked) to a code/quiz/exam
+  -- assignment would overwrite that submission's review total_score and force released=true,
+  -- silently clobbering its real grade.
+  select total_points into v_total_points from public.assignments
+    where id = p_assignment_id and assignment_type = 'survey';
+  if not found then
+    return;
+  end if;
+
+  select id, grading_review_id into v_submission_id, v_review_id
+  from public.submissions
+  where assignment_id = p_assignment_id and profile_id = p_profile_id and is_active
+  limit 1;
+
+  if v_submission_id is null then
+    -- Nothing to revoke if no submission was ever created; do not create one just to zero it.
+    if p_revoke then
+      return;
+    end if;
+    insert into public.submissions
+      (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
+    values
+      (p_assignment_id, p_profile_id, p_class_id, 'survey',
+       -- Assignment-scoped: the fixed ('survey/<profile>','survey',1,0) tuple collided across
+       -- survey assignments on the global unique index, so completing a second required survey
+       -- failed outright.
+       'survey/' || p_assignment_id::text || '/' || p_profile_id::text, 0, 1, true, 'manual')
+    returning id into v_submission_id;
+    -- grading_review_id is set by submissions_after_insert_hook (an AFTER INSERT trigger), so
+    -- it is not yet visible in the RETURNING row above -- re-read it.
+    select grading_review_id into v_review_id from public.submissions where id = v_submission_id;
+  end if;
+
+  if v_review_id is not null then
+    -- Stay released either way: the honest state of an incomplete response is a visible 0, not
+    -- a hidden grade, and it flips back on re-submit. completed_at moves with the score, since
+    -- student history only shows a score when it is set and staff views treat null as pending.
+    update public.submission_reviews
+      set total_score = case when p_revoke then 0 else coalesce(v_total_points, 0) end,
+          released = true,
+          completed_at = case when p_revoke then null else now() end
+      where id = v_review_id;
+  end if;
+end;
+$$;
+
 create or replace function public.survey_completion_post_grade()
 returns trigger
 language plpgsql
@@ -642,22 +725,16 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_assignment_id bigint;
   v_class_id bigint;
-  v_total_points numeric;
-  v_submission_id bigint;
-  v_review_id bigint;
+  v_assignment_id bigint;
   v_revoking boolean := false;
 begin
-  -- Two transitions matter, not one. AWARD when a response becomes submitted, and REVOKE when
-  -- an already-submitted response becomes unsubmitted: with response editing enabled, reopening
-  -- a submitted response and changing an answer autosaves is_submitted = false, and this used to
-  -- return early -- leaving the assignment's review released at FULL credit for a response that
-  -- is no longer complete. A re-submit fires the award path again and restores the score.
+  -- Two transitions matter: AWARD when a response becomes submitted, and REVOKE when an
+  -- already-submitted response becomes unsubmitted (reopening a response for editing autosaves
+  -- is_submitted = false, which used to leave the assignment released at FULL credit).
   if tg_op = 'UPDATE' and coalesce(old.is_submitted, false) and not new.is_submitted then
     v_revoking := true;
   elsif not new.is_submitted or (tg_op = 'UPDATE' and coalesce(old.is_submitted, false)) then
-    -- Not a transition we act on (e.g. re-saving an already-submitted response).
     return new;
   end if;
 
@@ -667,60 +744,44 @@ begin
     return new; -- survey not linked to an assignment: nothing to grade
   end if;
 
-  -- Only auto-credit survey-TYPE assignments. surveys.assignment_id can reference ANY
-  -- assignment, so without this guard a survey linked (or mis-linked) to a code/quiz/exam
-  -- assignment would overwrite that submission's review total_score and force released=true,
-  -- silently clobbering its real grade.
-  select total_points into v_total_points from public.assignments
-    where id = v_assignment_id and assignment_type = 'survey';
-  if not found then
-    return new;
-  end if;
-
-  select id, grading_review_id into v_submission_id, v_review_id
-  from public.submissions
-  where assignment_id = v_assignment_id and profile_id = new.profile_id and is_active
-  limit 1;
-
-  if v_submission_id is null then
-    -- Nothing to revoke if no submission was ever created; do not create one just to zero it.
-    if v_revoking then
-      return new;
-    end if;
-    insert into public.submissions
-      -- 'manual': same reasoning as the quiz insert above.
-      (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
-    values
-      (v_assignment_id, new.profile_id, v_class_id, 'survey',
-       -- Assignment-scoped for the same reason as the quiz insert above: the fixed
-       -- ('survey/<profile>','survey',1,0) tuple collided across survey assignments, so
-       -- completing a second required survey failed on the global unique index.
-       'survey/' || v_assignment_id::text || '/' || new.profile_id::text, 0, 1, true, 'manual')
-    returning id into v_submission_id;
-    -- grading_review_id is set by submissions_after_insert_hook (an AFTER INSERT
-    -- trigger), so it is not yet visible in the RETURNING row above — re-read it.
-    select grading_review_id into v_review_id from public.submissions where id = v_submission_id;
-  end if;
-
-  if v_review_id is not null then
-    -- Stay released either way: the honest state of an incomplete response is a visible 0, not
-    -- a hidden grade, and it flips back on re-submit.
-    --
-    -- completed_at must move with the score. The student's submission history only shows a
-    -- score when completed_at is set, and staff grading views classify a null review as still
-    -- pending -- so releasing full credit while leaving it null made a finished survey look
-    -- ungraded to everybody. Cleared again on revoke so a reopened response goes back to
-    -- pending rather than sitting at a completed 0.
-    update public.submission_reviews
-      set total_score = case when v_revoking then 0 else coalesce(v_total_points, 0) end,
-          released = true,
-          completed_at = case when v_revoking then null else now() end
-      where id = v_review_id;
-  end if;
-
+  perform public.survey_apply_completion(v_assignment_id, v_class_id, new.profile_id, v_revoking);
   return new;
 end;
 $$;
+
+-- Re-grade when a survey's assignment LINK changes. The response trigger below only fires on
+-- survey_responses, so linking a survey after students had already responded awarded nobody
+-- credit, and unlinking (or moving) a previously linked survey left the old assignment's
+-- generated submissions sitting at full credit. The survey edit form permits changing this
+-- field, so handle the transition: revoke on the assignment being left, award on the one being
+-- joined, for every already-submitted response.
+create or replace function public.survey_assignment_link_regrade()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  r record;
+begin
+  if new.assignment_id is not distinct from old.assignment_id then
+    return new;
+  end if;
+  -- Both sides, explicitly: revoke on the assignment being LEFT and award on the one being
+  -- JOINED, for every response that is already submitted. Re-firing the response trigger would
+  -- not work -- it resolves the assignment from surveys, which already holds the new id.
+  for r in select profile_id from public.survey_responses where survey_id = new.id and is_submitted loop
+    perform public.survey_apply_completion(old.assignment_id, old.class_id, r.profile_id, true);
+    perform public.survey_apply_completion(new.assignment_id, new.class_id, r.profile_id, false);
+  end loop;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_survey_assignment_link_regrade on public.surveys;
+create trigger trg_survey_assignment_link_regrade
+  after update of assignment_id on public.surveys
+  for each row execute function public.survey_assignment_link_regrade();
 
 drop trigger if exists trg_survey_completion_post_grade on public.survey_responses;
 create trigger trg_survey_completion_post_grade

@@ -44,11 +44,17 @@ export default function QuizBuilder() {
     setAssignmentTitle(assignment?.title ?? "");
     setGradingRubricId(assignment?.grading_rubric_id ?? null);
 
-    const { data: exam } = await supabase
+    const { data: exam, error: examErr } = await supabase
       .from("exams")
       .select("id, delivery_mode, template_pdf_path")
       .eq("assignment_id", assignmentId)
       .maybeSingle();
+    // My qErr guard below is never reached if THIS query fails: a discarded error leaves `exam`
+    // null, `if (exam)` is skipped entirely, and an existing quiz renders as a new blank one.
+    // Saving from there upserts the same exam and then sends questions with no persisted ids,
+    // so exam_upsert_questions_and_regions prunes the original tree. Same destruction, one
+    // query earlier.
+    if (examErr) throw new Error(`load exam failed: ${examErr.message}`);
 
     if (exam) {
       setExamId(exam.id);

@@ -484,6 +484,13 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     }
     const match = await matchProfile(admin, classId, detectedSisId, detectedName, roster);
 
+    // Conditional on the row STILL being undecided. The humanDecided snapshot above is read
+    // before the vision calls, which can take a while: a duplicate worker (one that outlived the
+    // 120s visibility window) could read the row as undecided, sit in a provider call while the
+    // first worker finished the batch and staff confirmed or skipped this row, and then land
+    // this write and overwrite that decision with a fresh suggestion. The freeze trigger does
+    // not cover it either -- that only engages once submission_id is set. Re-checking the status
+    // in the WHERE clause closes the window instead of narrowing it.
     const { error: matchErr } = await admin
       .from("exam_scanned_submissions")
       .update({
@@ -493,7 +500,8 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
         match_confidence: match.confidence,
         match_status: match.profile_id ? "suggested" : "unmatched"
       })
-      .eq("id", scannedId);
+      .eq("id", scannedId)
+      .in("match_status", ["suggested", "unmatched"]);
     // Throw on write failure so the message requeues instead of being archived with the
     // match result lost.
     if (matchErr) throw new Error(`persist match for scanned submission ${scannedId} failed: ${matchErr.message}`);

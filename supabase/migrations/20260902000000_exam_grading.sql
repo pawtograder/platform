@@ -183,6 +183,18 @@ begin
   end loop;
 end $$;
 
+-- An answer region must reference a question from ITS OWN exam. The write policy validates the
+-- region's declared exam/class and the single-column FK validates only that the question id
+-- exists -- so an instructor authorized for exam A could point a region at exam B's question,
+-- and finalization for A would then emit B's question id and answer type, breaking the
+-- artifact-to-rubric mapping. exam_questions already has a unique key to target below.
+alter table public.exam_questions drop constraint if exists exam_questions_id_exam_id_key;
+alter table public.exam_questions add constraint exam_questions_id_exam_id_key unique (id, exam_id);
+alter table public.exam_question_regions drop constraint if exists exam_question_regions_question_exam_fkey;
+alter table public.exam_question_regions
+  add constraint exam_question_regions_question_exam_fkey
+  foreign key (exam_question_id, exam_id) references public.exam_questions (id, exam_id) on delete cascade;
+
 alter table public.exam_scan_pages drop constraint if exists exam_scan_pages_batch_class_fkey;
 alter table public.exam_scan_pages
   add constraint exam_scan_pages_batch_class_fkey
