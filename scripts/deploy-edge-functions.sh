@@ -158,9 +158,41 @@ done
 # draining while the tool's last word was about the other tier. Both tiers are
 # already patched by this point, so the operator needs the status of both.
 rollout_failed=0
+# Timeout is DERIVED per deployment, because a fixed one was wrong in both
+# directions and the wrong direction that bit was "too short".
+#
+# It was --timeout=5m. The edge tier's terminationGracePeriodSeconds alone is
+# 430s (7.2 min), so a single pod that used its full drain window outlasted the
+# whole timeout -- and prod's own values log records a 24-replica request-tier
+# deploy taking ~12 minutes. So the tool reported failure on rollouts that were
+# healthy and still progressing, which is worse than waiting: both tiers have
+# already been patched by this point, so a spurious failure invites someone to
+# intervene in a deploy that was fine.
+#
+# The rollout is SERIAL, which is what makes it slow: the chart sets
+# maxUnavailable: 0 with maxSurge: 1, so one new pod comes up Ready before one
+# old pod is terminated, N times. Per replica the cost is a new pod reaching
+# readiness (tcpSocket, initialDelay 5s + period 5s) plus an old pod draining
+# (preStop 10s, then edge-runtime's --graceful-exit-timeout: ~0.3s when idle,
+# up to 410s with a long request in flight, SIGKILL-backstopped at 430s).
+#
+# Budget 60s per replica against the ~30s/replica the 24-pod prod deploy actually
+# measured -- 2x, so pods with real in-flight work to drain fit -- plus a fixed 5m
+# for a cold image pull on a node that has never run this tag (the eszip image is
+# large, and that cost is per node, not per replica). Floor of 10m so small
+# deployments still tolerate one full drain window. Deliberately NOT sized to the
+# theoretical worst case (24 x 430s = 172 min): a timeout should be longer than
+# any healthy rollout, not longer than any conceivable one, or it stops being a
+# signal at all.
 for d in $TARGETS; do
-  echo "==> waiting for rollout: ${d}"
-  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout=5m || rollout_failed=1
+  replicas="$(kubectl get "deploy/${d}" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")"
+  case "$replicas" in
+    '' | *[!0-9]*) replicas=1 ;; # unreadable: fall back to the floor
+  esac
+  timeout=$((replicas * 60 + 300))
+  [ "$timeout" -lt 600 ] && timeout=600
+  echo "==> waiting for rollout: ${d} (${replicas} replicas, timeout ${timeout}s)"
+  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout="${timeout}s" || rollout_failed=1
 done
 
 echo
