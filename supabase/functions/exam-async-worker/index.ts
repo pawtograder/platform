@@ -72,10 +72,11 @@ async function sendEnvelope(admin: Admin, next: ExamAsyncEnvelope, delaySeconds:
 
 async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, error: unknown): Promise<void> {
   // Same shape of omission as sendEnvelope above: the caller archives the original right after
-  // this, so a silently-failed DLQ send would drop the job with no record anywhere. Recorded
-  // rather than thrown -- the row inserted below is the durable audit trail and is worth
-  // attempting even if the queue write failed, and throwing here would re-enter the same
-  // error path that led to dead-lettering.
+  // this, so dead-lettering that fails silently drops the job. There are TWO records here and
+  // either one suffices -- the DLQ message (replayable) and the audit row (durable, queryable)
+  // -- so a single failure is reported and tolerated. Both failing is different: nothing
+  // anywhere would remember the job, so throw and let the original message come back after its
+  // visibility timeout instead of being archived into oblivion.
   const { error: dlqErr } = await admin
     .schema("pgmq_public")
     .rpc("send", { queue_name: DLQ, message: env as unknown as Json, sleep_seconds: 0 });
@@ -83,7 +84,7 @@ async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, e
     console.error(`dead-letter queue send failed for ${env.method} (batch ${env.batch_id}): ${dlqErr.message}`);
     Sentry.captureException(new Error(`dead-letter queue send failed: ${dlqErr.message}`));
   }
-  await admin.from("exam_async_worker_dlq_messages").insert({
+  const { error: auditErr } = await admin.from("exam_async_worker_dlq_messages").insert({
     original_msg_id: msgId,
     method: env.method,
     envelope: env as unknown as Json,
@@ -93,6 +94,22 @@ async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, e
     class_id: env.class_id,
     debug_id: env.debug_id ?? null
   });
+  if (auditErr) {
+    console.error(`dead-letter audit insert failed for ${env.method} (batch ${env.batch_id}): ${auditErr.message}`);
+    Sentry.captureException(new Error(`dead-letter audit insert failed: ${auditErr.message}`));
+  }
+  if (dlqErr && auditErr) {
+    // Yes, this can loop: the caller skips its archive, the message redelivers, and dead-lettering
+    // is attempted again. That is intended. Both a pgmq send AND a plain table insert failing
+    // means the database is effectively unavailable, and retrying until it recovers is strictly
+    // better than archiving a student's scanned exam into nothing. pgmq messages do not expire,
+    // and the worker only runs on its invocation cadence, so this costs one failed attempt per
+    // run rather than a hot spin.
+    throw new Error(
+      `dead-lettering ${env.method} (batch ${env.batch_id}) failed on BOTH the queue send and the audit insert; ` +
+        `refusing to archive the original message (queue: ${dlqErr.message}; audit: ${auditErr.message})`
+    );
+  }
 }
 
 async function setBatchError(admin: Admin, batchId: number, message: string): Promise<void> {
