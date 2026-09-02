@@ -39,6 +39,23 @@ So the sum is asserted at render time rather than documented and hoped for:
       + (maxParallelism x worker.memoryLimitMb) + ~600Mi host
       <= resources.limits.memory
 
+WHAT THIS SUM IS AND IS NOT. It is the FLOOR a pod needs, and passing it means
+"this configuration is not obviously impossible". It is NOT an upper bound on
+what a pod can use, and the isolate term is the reason: --max-parallelism is per
+SERVICE PATH, not per pod (pool.rs keys active_workers by service path and gives
+each its own Semaphore(max_parallelism) -- :242/:325/:169, v1.74.0 b1edf453), and
+a permit is held for the isolate's life rather than the request's (stored at
+:513, released only via retire() at :727). So the true ceiling on resident
+isolates is (distinct paths served) x maxParallelism, which on the stable tier is
+up to 58 x 8 while this term charges 8. `force_create` can even mint an isolate
+holding NO permit (:343-347, with an in-source NOTE questioning it).
+
+What actually keeps a pod under its limit is `beforeUnload` recycling,
+worker.timeoutMs retiring IDLE isolates, and the pool's idle cleanup. None of
+those is asserted here, and none has a render-time expression -- which is exactly
+why the limit needs slack rather than being tightened to track the sum. Do not
+read a passing assertion as a bound.
+
 The host term is measured, not guessed -- but measured at the RIGHT moment,
 which is the correction this note previously got wrong. A freshly started pod
 with an empty cache sits at ~87Mi; that was the old ~90Mi term. The limit is a
@@ -185,29 +202,48 @@ writing the limit the same way as the request beside it.
 {{- if lt $cacheMi $cacheNeed -}}
 {{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d hot bundles (%d routed + the `metrics` bundle that /metrics scrapes keep hot, x 37Mi median). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $hot $routed) -}}
 {{- end -}}
-{{/* Under per_worker an isolate is REUSED across requests, so a routed tier needs
-     one resident isolate per routed function -- doubled, because beforeUnload
-     recycling holds the retiring and the replacement isolate for the same
-     function at the same time. Below that, a poke for one worker queues behind
-     another until --request-wait-timeout (which this chart does not set, so the
-     runtime default applies).
+{{/* --max-parallelism IS PER SERVICE PATH, NOT PER POD. This assertion used to
+     require `2 x len(functions)` on the reasoning that a poke for one worker
+     would queue behind another. That failure mode cannot occur, and the
+     correction matters in both directions: the old form refused safe
+     configurations (5 routed names at maxParallelism 8 was rejected, demanding
+     10) and its remediation said "raise maxParallelism", which multiplies the
+     real per-path ceiling across EVERY path -- advice that increases the exposure
+     the memory budget already fails to bound.
 
-     This is checkable here and NOT on the stable tier precisely because a routed
-     tier's distinct-function count is known at render time. On the stable tier
-     the same reasoning would need a bound on "distinct functions served
-     concurrently", which is up to 58 and unknowable -- so what
-     (maxParallelism x worker.memoryLimitMb) means under per_worker is an open
-     question there. See issue #926; measure it on this tier first.
+     Established from the runtime source, supabase/edge-runtime v1.74.0
+     (b1edf453), crates/base/src/worker/pool.rs -- read directly, not inferred
+     from behaviour:
 
-     `metrics` is counted in the CACHE requirement above but deliberately not
-     here. The difference is lifetime: its bundle stays resident once scraped, so
-     it occupies cache permanently, but its isolate is transient and the x2 for
-     recycling already leaves slack for one. Adding it here would instead force
-     maxParallelism past the default purely to run the per_worker experiment. */}}
+       :242  active_workers: HashMap<String, ActiveWorkerRegistry>, keyed by
+             SERVICE PATH (the comment at :230 spells the mapping out).
+       :325  .entry(service_path).or_insert_with(||
+             ActiveWorkerRegistry::new(self.policy.max_parallelism)) -- every
+             distinct function name gets its OWN registry with a FULL allotment.
+       :169  that allotment is Semaphore::const_new(max_parallelism).
+       :341  permits are acquired per registry, stored in the worker profile at
+             :513, and released ONLY at :727 (profile.permit.take(), reached from
+             retire()). Nothing in the request path releases one, so a permit is
+             held for the ISOLATE's life, not the request's.
+       :343  in force_create mode the pool returns Create(None, tx) -- an isolate
+             holding no permit at all, with an in-source NOTE questioning exactly
+             that.
+
+     There is no global admission semaphore anywhere in the runtime. So function
+     A never waits on B's permits, and the per-POD ceiling is
+     (distinct paths served) x maxParallelism, not maxParallelism.
+
+     What remains true per path under per_worker: the isolate is reused across
+     requests, and beforeUnload recycling holds the retiring and the replacement
+     isolate for the same path at once. That needs 2 permits in ONE registry, and
+     is independent of how many functions are routed. Hence the constant.
+
+     Deliberately NOT scaled by $routed any more, and the message no longer
+     recommends raising the value. `metrics` needs no term here either: it gets
+     its own registry like everything else. */}}
 {{- if eq ($ef.policy | toString) "per_worker" -}}
-{{- $slotsNeed := mul 2 $routed -}}
-{{- if lt ($par | int) $slotsNeed -}}
-{{- fail (printf "%s.maxParallelism is %s but this tier routes %d functions under policy per_worker, which needs at least %d admission slots: one resident isolate per routed function, doubled because beforeUnload recycling holds the retiring and the replacement isolate at once. Raise maxParallelism (and re-check the memory budget, which counts it) or shorten `functions`." $p $par $routed $slotsNeed) -}}
+{{- if lt ($par | int) 2 -}}
+{{- fail (printf "%s.maxParallelism is %s, but policy per_worker needs at least 2. maxParallelism is per SERVICE PATH, not per pod (edge-runtime pool.rs keys active_workers by service path and gives each its own Semaphore(max_parallelism)), so this is not about how many functions the tier routes -- it is that ONE path needs two permits at once, because beforeUnload recycling holds the retiring isolate and its replacement together. Set it to at least 2. Note that RAISING it does not buy headroom safely: it raises the ceiling on EVERY path independently, so the pod's real isolate ceiling is (distinct paths served) x maxParallelism, which the memory budget does not bound." $p $par) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

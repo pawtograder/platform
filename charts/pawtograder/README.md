@@ -21,8 +21,10 @@ app together with the Supabase services it depends on:
 
 `edgeFunctions.workerTier` (off by default) splits the edge fleet by isolation
 model: the four pg_cron-poked pgmq consumers get a second Deployment with their
-own admission budget, eszip cache and memory limit, and Kong routes those
-function names to it by path. Callers are unaffected — everything still lives at
+own `maxParallelism`, eszip cache and memory limit, and Kong routes those
+function names to it by path. (Not an "admission budget": `--max-parallelism` is
+per service path rather than per pod, so it is not a per-pod cap on concurrency —
+see the `maxParallelism` note in `values.yaml`.) Callers are unaffected — everything still lives at
 `/functions/v1/<name>`, so there is no migration and no client change, and the
 split does not exist on hosted supabase.com or under `supabase functions serve`.
 See the `workerTier` block in `values.yaml` for the sizing and the reasoning.
@@ -40,15 +42,28 @@ that rendered fine on 0.3.x. Neither touches the cluster when it fires.
   `3Gi` is the likely one — is now refused. Raise the limit; the message prints
   every term.
 - **A memory limit must be a whole number of `Mi` or `Gi`.** The assertion reads
-  only those two forms, and a fractional `Gi` used to switch the whole check off
-  rather than fail. Spell a fractional limit in `Mi` (`3584Mi`, not `3.5Gi`).
+  only those two forms, and anything else used to switch the whole check off
+  rather than fail. That is more than fractional `Gi`: **decimal SI** (`4G`,
+  `4000M`), **bare bytes** (`4294967296`) and other binary suffixes (`4Ki`) are
+  all refused too, and all of them are valid Kubernetes quantities that rendered
+  fine on 0.3.x. Verified against the chart, not inferred from the regex. Spell
+  the limit in whole `Mi` or `Gi` (`3584Mi`, not `3.5Gi`; `4Gi`, not `4G`).
 
-`edgeFunctions.resources.requests.memory` also moves 512Mi → 1.5Gi and
-`autoscaling.targetMemoryUtilizationPercentage` 100 → 80. Requests are what the
-scheduler reserves, so check that `autoscaling.minReplicas x 1.5Gi` still fits
-your node pool before upgrading — at the shipped `minReplicas: 12` that is 18Gi
-where it used to be 6Gi, and `updateStrategy` is `maxUnavailable: 0`, so a pod
-that cannot be scheduled stalls the rollout rather than replacing an old one.
+`edgeFunctions.resources.requests.memory` also moves 512Mi → 1.5Gi. Requests are
+what the scheduler reserves, so check that `autoscaling.minReplicas x 1.5Gi`
+still fits your node pool before upgrading — at the shipped `minReplicas: 12`
+that is 18Gi where it used to be 6Gi, and `updateStrategy` is
+`maxUnavailable: 0`, so a pod that cannot be scheduled stalls the rollout rather
+than replacing an old one.
+
+`autoscaling.targetMemoryUtilizationPercentage` is **unchanged** at 80: it was
+already 80 in 0.3.17 (#948). What moved in 0.4.0 is the three example
+overlays — `values-prod.yaml`, `values-prod-noeso.yaml` and
+`values-staging.yaml` — which set it explicitly and went 100 → 80. If your own
+overlay pins 100, nothing about this upgrade changes that, and you should read
+the target note in `values.yaml`: 100 is a dead band of 90–110% once the HPA's
+default tolerance is applied, which is what pinned prod at `maxReplicas` for
+weeks.
 
 The chart is environment-agnostic. Cluster-specific concerns (ingress class,
 storage class, node selectors, secret backend) come from a values overlay you

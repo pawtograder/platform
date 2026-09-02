@@ -1096,9 +1096,40 @@ edgeFunctions:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
     pullPolicy: IfNotPresent
-  policy: per_worker # per_worker | per_request | oneshot. per_request gives each
-                     # request its own isolate (no concurrent co-location → no shared-heap
-                     # memory pile-up under bursts); per_worker co-locates for efficiency.
+  # per_worker | per_request | oneshot. per_request gives each request its own
+  # isolate (no concurrent co-location → no shared-heap memory pile-up under
+  # bursts); per_worker co-locates for efficiency.
+  #
+  # KNOWN EXPOSURE, LEFT AS per_worker DELIBERATELY — READ BEFORE RELYING ON IT.
+  # Every overlay that is actually operated pins per_request: values-prod.yaml,
+  # values-prod-noeso.yaml, values-staging.yaml, and the workerTier block below.
+  # No overlay sets per_worker. So this default is the one configuration none of
+  # them vouches for, and the only thing that inherits it is the preview overlay,
+  # which serves all 58 functions from one pod.
+  #
+  # That matters more than it used to, because --max-parallelism is PER SERVICE
+  # PATH, not per pod: edge-runtime keys its worker registry by service path and
+  # gives each path its own Semaphore(max_parallelism) (pool.rs :242/:325/:169,
+  # v1.74.0 b1edf453), and under per_worker a permit is held for the ISOLATE's
+  # life, released only in retire() (:727) — not at the end of a request. So a
+  # preview pod's runtime permit ceiling is 58 x 8 = 464 resident isolates, while
+  # the memory budget charges 8 x 256Mi = 2048Mi. The charged term is a LOWER
+  # bound on resident isolate memory, roughly 57x below the ceiling.
+  #
+  # Not flipped here on purpose, and the reason is evidence rather than taste:
+  # previews have run exactly this configuration for months and are not OOMing.
+  # Checked against the live cluster across ~15 preview namespaces — every edge
+  # pod runs `--policy per_worker --max-parallelism 8`, and total container
+  # restarts across all of them is 1. The ceiling is real but unrealized, because
+  # a preview never serves anywhere near 58 distinct paths with resident isolates
+  # at once. Flipping the fleet-wide default is a behaviour change with an
+  # unmeasured throughput cost on the one workload that would feel it, and it does
+  # not belong in a change about the worker tier.
+  #
+  # If you are sizing a NEW install: set per_request explicitly, as every operated
+  # overlay does. If you keep per_worker, the number to watch is distinct paths
+  # served per pod, not maxParallelism.
+  policy: per_worker
   # NOTE for the pg_cron-poked background workers (notification-queue-processor,
   # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
   # module-level state to keep one poll loop per pod, because `per_request` gives every
@@ -1112,14 +1143,42 @@ edgeFunctions:
   #     work waits for the next cron tick instead. Safer, slower.
   # Raising maxParallelism does not substitute for either: an unbounded loop consumes
   # whatever you give it.
-  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
-  # is effectively the max concurrent requests per pod (excess queue up to
-  # request-wait-timeout).
+  # Cap on simultaneous worker isolates (--max-parallelism), PER SERVICE PATH.
+  #
+  # Not per pod, which is how this was documented until 2026-09-02 and is the
+  # single most misleading thing you can believe about the memory budget.
+  # edge-runtime holds `active_workers: HashMap<String, ActiveWorkerRegistry>`
+  # keyed by service path, and creates each entry with a FULL allotment —
+  # `.or_insert_with(|| ActiveWorkerRegistry::new(self.policy.max_parallelism))`,
+  # whose semaphore is `Semaphore::const_new(max_parallelism)` (pool.rs :242,
+  # :325-329, :169; v1.74.0 b1edf453). There is no global admission semaphore
+  # anywhere in the runtime. So a pod's real ceiling is
+  # (distinct paths it serves) x maxParallelism, and one function never queues
+  # behind another — they cannot contend for the same permits.
+  #
+  # Two consequences:
+  #   * RAISING this does not buy safe headroom. It raises the ceiling on every
+  #     path at once, so it multiplies the exposure the budget fails to bound. If
+  #     something is queueing, add replicas.
+  #   * (maxParallelism x worker.memoryLimitMb) in the budget below is a LOWER
+  #     bound on resident isolate memory, not an upper bound. What actually bounds
+  #     it is `beforeUnload` recycling, worker.timeoutMs on IDLE isolates, and the
+  #     pool's own idle cleanup — none of which this chart asserts, and none of
+  #     which has a render-time expression. Treat the budget as "the floor a pod
+  #     needs", never as "the most it can use".
+  #
+  # Under per_request the isolate is still RETAINED and reused after a request
+  # (strategy_per_request.rs :199, :240-250: EarlyDrop with oneshot == false sends
+  # UserWorkerMsgs::Idle rather than tearing down) and the wall clock is reset per
+  # request — so worker.timeoutMs bounds an IDLE isolate, not a busy one. Any
+  # comment claiming per_request tears the isolate down, or re-instantiates the
+  # module graph per request, is wrong. per_request's guarantee is that two
+  # requests never share a heap, not that the heap is short-lived.
   #
   # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
   # is a term in the container memory budget, and unset means "whatever the runtime
   # infers from CPU count", which cannot be checked at render time. 8 is what
-  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  # production runs.
   maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
@@ -1517,11 +1576,38 @@ edgeFunctions:
     # requests.memory is a SCHEDULING HINT here, not an autoscaling input,
     # because this tier has no HPA — so unlike the request tier (see the long
     # note above, and #949) it can be re-measured and changed without re-wedging
-    # a dead band.
+    # a dead band. But a hint that is 23% low is how you get evictions, which is
+    # why it is 1.5Gi and not the 1Gi it started as.
+    #
+    # Derived from this tier's own constants rather than copied from the request
+    # tier:
+    #
+    #     600Mi  converged Deno host baseline (#949, load-independent)
+    #   + 192Mi  eszipCacheMaxMb for this tier
+    #   ------
+    #     792Mi  with zero isolates resident
+    #   + 464Mi  4 resident worker isolates at the ~116Mi/isolate measured in prod
+    #   ------
+    #    1256Mi  steady state
+    #
+    # 1256Mi is ~123% of a 1Gi request, so at 1Gi these pods are Burstable and sit
+    # permanently ABOVE their request: they lead the eviction order under node
+    # memory pressure, and they understate their scheduling footprint by ~230Mi
+    # each on a 3-node cluster. 1.5Gi (1536Mi) covers the derived steady state
+    # with ~22% headroom.
+    #
+    # The 3584Mi LIMIT is unchanged and stays deliberately loose (~35% of it is
+    # the charged sum): per the maxParallelism note above, that sum is a floor
+    # rather than a ceiling, and the slack is what lets the runtime retire an
+    # isolate instead of the kernel killing PID 1.
+    #
+    # Check the derivation against reality after the first 24h: the isolate term
+    # is the soft one, and 4 x ~116Mi assumes each routed function keeps exactly
+    # one resident isolate. Measure idle mean/min at low CPU on pods >24h old.
     resources:
       requests:
         cpu: "100m"
-        memory: 1Gi
+        memory: 1.5Gi
       limits:
         cpu: "1"
         memory: 3584Mi

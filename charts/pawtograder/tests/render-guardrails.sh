@@ -752,25 +752,38 @@ assert_hpa_utilization "values-staging: memory target 80, not 100" memory 80 \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 
-# Staging's replica bounds were resized on 2026-09-02 to hold its RAM reservation
-# flat across the 512Mi -> 1.5Gi request change, counting BOTH tiers:
-#     floor    3 x 1.5Gi + 2 x 1Gi =  6.5GiB   (was 12 x 512Mi =  6.0GiB)
-#     ceiling  5 x 1.5Gi + 2 x 1Gi =  9.5GiB   (was 20 x 512Mi = 10.0GiB)
+# Staging's replica bounds were resized on 2026-09-02 to BOUND its RAM reservation
+# across the 512Mi -> 1.5Gi request change. Counting all THREE edge Deployments the
+# overlay renders — the request tier, the worker tier, and the `canary` CHANNEL,
+# which an earlier version of this comment omitted:
+#     floor    3 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi =  9.0GiB  (was 13 x 512Mi =  6.5GiB)
+#     ceiling  5 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi = 12.0GiB  (was 21 x 512Mi = 10.5GiB)
+# So it is +38% at the floor and +14% at the ceiling, not flat overall — the
+# earlier "flat" claim counted only two of the three Deployments AND used the
+# worker tier's old 1Gi request. Figures read off the rendered manifests.
+#
 # Restoring either bound to its old value without also restoring the old request
-# is what this pins against: at 1.5Gi a pod, 12-20 reserves 18.0-30.0GiB, a 3x
+# is what this pins against: at 1.5Gi a pod, 12-20 reserves 19.5-32.5GiB, a ~3x
 # jump that renders identically in every other respect. The worker tier's 2 pods
-# are part of the sum, so they are pinned here too — that Deployment has no HPA,
-# which is why it is a constant in the arithmetic above.
-assert_hpa_replica_bound "values-staging: minReplicas 3 (RAM floor 6.5GiB across both tiers)" \
+# and the canary channel's 1 are part of the sum and have no HPA, which is why
+# they are constants in the arithmetic above.
+assert_hpa_replica_bound "values-staging: minReplicas 3 (RAM floor 9.0GiB across all three edge Deployments)" \
   minReplicas 3 \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
-assert_hpa_replica_bound "values-staging: maxReplicas 5 (RAM ceiling 9.5GiB; the dead band makes this the real budget)" \
+assert_hpa_replica_bound "values-staging: maxReplicas 5 (RAM ceiling 12.0GiB; this is what actually bounds the reservation)" \
   maxReplicas 5 \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 assert_rendered_contains "values-staging: worker tier stays 2 pods (the constant in that sum)" \
   templates/edge-functions-worker-tier.yaml "replicas: 2" \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+# The canary channel is the THIRD edge Deployment in that sum, and leaving it out
+# is what made the arithmetic above wrong once already. Pinned so the sum has a
+# test behind every term rather than only the two anyone remembers.
+assert_rendered_contains "values-staging: the canary channel is a third edge pod in that sum" \
+  templates/edge-functions-channels.yaml "name: t-pawtograder-functions-canary" \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 
@@ -931,8 +944,14 @@ assert_container_memory "worker tier limit is 3584Mi, not the base 4Gi" \
   templates/edge-functions-worker-tier.yaml functions limits 3584Mi "${WT[@]}"
 # resources is a nested map, so a shallow merge would replace `limits` and drop
 # `requests` entirely. Assert the sibling survived.
+# 1.5Gi, raised from 1Gi on 2026-09-02: this tier's derived steady state is
+# 600Mi host + 192Mi cache + 4 resident isolates at ~116Mi = ~1256Mi, which is
+# ~123% of a 1Gi request. A pod permanently above its request leads the eviction
+# order under node memory pressure and understates its footprint to the
+# scheduler by ~230Mi. Pinned because the tier has no HPA, so nothing else would
+# notice the request drifting back down.
 assert_container_memory "worker tier requests survive the deep merge" \
-  templates/edge-functions-worker-tier.yaml functions requests 1Gi "${WT[@]}"
+  templates/edge-functions-worker-tier.yaml functions requests 1.5Gi "${WT[@]}"
 assert_container_memory "request tier limit stays 4Gi (no override leak)" \
   templates/edge-functions.yaml functions limits 4Gi "${WT[@]}"
 
@@ -1024,12 +1043,27 @@ assert_refused "an unrecognized override key is refused, not ignored" \
 assert_refused "a cache too small to hold every hot bundle is refused" \
   "needed to hold all 5 hot bundles" \
   "${WT[@]}" --set edgeFunctions.workerTier.eszipCacheMaxMb=128
-# Under per_worker an isolate is reused, so a routed tier needs one resident
-# isolate per routed function, doubled for beforeUnload recycling overlap.
-assert_refused "per_worker with too few admission slots is refused" \
-  "needs at least 8 admission slots" \
+# maxParallelism is PER SERVICE PATH, not per pod: edge-runtime's pool.rs keys
+# active_workers by service path and gives each its own Semaphore(max_parallelism)
+# (v1.74.0 b1edf453, :242/:325/:169). So the per_worker requirement is a constant
+# 2 -- one path needs the retiring isolate and its replacement at once during
+# beforeUnload recycling -- and NOT 2 x len(functions), which is what this
+# asserted before. The old form refused safe configurations: 5 routed names at
+# maxParallelism 8 was rejected, demanding 10.
+assert_refused "per_worker below 2 admission slots per path is refused" \
+  "needs at least 2" \
+  "${WT[@]}" --set edgeFunctions.workerTier.policy=per_worker \
+  --set edgeFunctions.workerTier.maxParallelism=1
+# The case the old assertion got wrong, pinned so it cannot come back: 4 routed
+# names under per_worker at the chart's default maxParallelism of 8 is fine, and
+# used to be refused for demanding 8 -- and 6, which the old rule also refused,
+# is likewise fine.
+assert_renders "per_worker at maxParallelism 6 with 4 routed names is accepted" \
   "${WT[@]}" --set edgeFunctions.workerTier.policy=per_worker \
   --set edgeFunctions.workerTier.maxParallelism=6
+assert_renders "per_worker at exactly 2 is accepted" \
+  "${WT[@]}" --set edgeFunctions.workerTier.policy=per_worker \
+  --set edgeFunctions.workerTier.maxParallelism=2
 # Each tier has its OWN budget. A failure that named edgeFunctions.* would send
 # the reader to the wrong values block, which defeats the point of the assertion.
 assert_refused "the worker tier's budget failure names the worker tier" \
