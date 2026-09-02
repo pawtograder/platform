@@ -67,21 +67,42 @@ own admission budget and eszip cache.
 {{- fail "edgeFunctions.workerTier is enabled but kong.enabled is false. This tier is reached only by Kong path routing (templates/kong-config.yaml), so with Kong off the pods would schedule and cost their full memory limit while every routed function kept being served by the request tier -- the split would silently not exist. Enable Kong, or set edgeFunctions.workerTier.enabled: false." }}
 {{- end }}
 {{- include "pawtograder.edgeFunctions.assertTierOverrides" (dict "tier" "workerTier" "overrides" $wt) }}
+{{- /* componentName truncates `<fullname>-<component>` to 63 characters, and
+   "functions-workers" is 8 characters longer than "functions" -- so once the
+   fullname reaches 52 characters BOTH tiers truncate to the same name. Verified:
+   at 52 the request tier renders `<52>-functions` (62 chars) and the worker tier
+   renders `<52>-functions-workers` truncated to 63 then trimSuffix'"'"'d back to the
+   identical 62-char string.
+
+   That is not a cosmetic clash. Two Deployments and two Services with one name
+   means whichever manifest helm applies last wins, both Kong upstreams resolve
+   to it, and the isolation this whole feature exists for silently disappears --
+   with nothing in the render to show for it. Reachable from a long Helm release
+   name or a long fullnameOverride, so it is refused rather than documented. */ -}}
+{{- $reqName := include "pawtograder.componentName" (dict "ctx" . "component" "functions") }}
+{{- $wkrName := include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+{{- if eq $reqName $wkrName }}
+{{- fail (printf "the worker tier's name collides with the request tier's: both render %q. componentName truncates to 63 characters, and once the release fullname reaches 52 characters \"-functions\" and \"-functions-workers\" truncate to the same string -- so the two Deployments and Services would overwrite each other and the tier isolation would silently not exist. Shorten the release name or fullnameOverride (currently %d characters) to at most 51." $reqName (len (include "pawtograder.fullname" .))) }}
+{{- end }}
 {{- /* hasKey, not `default`, so replicas: 0 can idle the tier without its routes
    disappearing (Sprig `default` treats 0 as empty) -- same reason
    edge-functions-channels.yaml does this. Read from the RAW block, never from
    the merged config, because 0 would not survive mergeOverwrite. */ -}}
 {{- $replicas := ternary $wt.replicas 2 (hasKey $wt "replicas") }}
-{{- /* The image has to be merged HERE, not left to the workload's own merge.
-   `image` is on the override allowlist, and the merged config ($ef) does pick it
-   up — but the workload takes its actual image from the `image` ARGUMENT, and
-   RELEASE_VERSION reads `$image.tag`. Passing .Values.edgeFunctions.image would
-   accept `workerTier.image` in values, merge it into a dict nothing reads, and
-   silently run the base image: exactly the "accepted then ignored" failure the
-   allowlist exists to prevent. deepCopy on both sides because mergeOverwrite
-   mutates its destination and would otherwise corrupt .Values for the request
-   tier's own image. */ -}}
-{{- $image := mergeOverwrite (deepCopy .Values.edgeFunctions.image) (deepCopy ($wt.image | default dict)) }}
+{{- /* The tier shares the base image BY CONSTRUCTION, and `image` is deliberately
+   NOT on the override allowlist (so setting workerTier.image is a render error,
+   not a silent no-op).
+
+   An earlier revision honoured a per-tier image, on the reasoning that canarying
+   worker code independently is useful. That was wrong twice over. It escaped
+   templates/validations.yaml, which enforces the production no-floating-tag rule
+   on web/edgeFunctions/migrations images only -- so `workerTier.image.tag=latest`
+   would have deployed a floating worker image in production, defeating
+   reproducible rollback for exactly the four functions that drain the queues.
+   And the mechanism for running a different image already exists: a CHANNEL is
+   an A/B of the whole function set on its own tag. A tier is a subset of the
+   SAME image reached by path; conflating the two bought a validation gap for a
+   capability that was already available elsewhere. */ -}}
 ---
-{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" $image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" .Values.edgeFunctions.image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
 {{- end }}

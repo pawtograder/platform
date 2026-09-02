@@ -928,13 +928,28 @@ assert_renders "worker tier accepts a limit exactly equal to its sum (2936Mi)" \
 # extends a worker's would be silently routed to the worker tier and 404 there.
 # Checked against the real tree, not a hardcoded list.
 echo "== worker-tier override surface is honoured, not merely accepted =="
-# `image` is on the allowlist AND the workload takes its image from an ARGUMENT,
-# so passing the base image would accept workerTier.image in values and silently
-# run the base image anyway -- the exact "accepted then ignored" failure the
-# allowlist exists to prevent.
-assert_rendered_contains "workerTier.image.tag actually changes the running image" \
-  templates/edge-functions-worker-tier.yaml "edge-functions:wt-canary" \
-  "${WT[@]}" --set edgeFunctions.workerTier.image.tag=wt-canary
+# `image` is deliberately NOT overridable per tier. An earlier revision honoured
+# it, which escaped templates/validations.yaml -- that enforces the production
+# no-floating-tag rule on web/edgeFunctions/migrations only, so
+# workerTier.image.tag=latest would have deployed a floating image for exactly
+# the four functions that drain the queues. A channel is the mechanism for
+# running a different image; a tier is a subset of the SAME one.
+assert_refused "workerTier.image is refused, not silently floating in prod" \
+  "is not an overridable per-tier key" \
+  "${WT[@]}" --set edgeFunctions.workerTier.image.tag=latest
+# mergeOverwrite skips empty values at EVERY depth, so a non-empty map with an
+# empty child is the same silent-inherit bug: the tier would run the base's
+# limit while the values file said otherwise. A top-level-only check misses it.
+assert_refused "a NESTED empty override is refused" \
+  "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {resources: {limits: {memory: ""}}}}'
+# componentName truncates to 63 chars, and "functions-workers" is 8 longer than
+# "functions" -- so at a 52-char fullname BOTH tiers render the same name, the
+# two Deployments overwrite each other and the isolation silently disappears.
+assert_refused "a fullname long enough to collide the two tiers is refused" \
+  "collides with the request tier" \
+  "${WT[@]}" --set fullnameOverride=pppppppppppppppppppppppppppppppppppppppppppppppppppp
+assert_renders "a fullname one character shorter still renders" \
+  "${WT[@]}" --set fullnameOverride=ppppppppppppppppppppppppppppppppppppppppppppppppppp
 # Booleans cannot survive mergeOverwrite, so they must be refused rather than
 # accepted-and-ignored. spreadAcrossNodes was briefly on the allowlist.
 assert_refused "a boolean override (spreadAcrossNodes) is refused, not ignored" \

@@ -227,6 +227,36 @@ The chart already works around this family of footgun elsewhere:
 edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
 `replicas: 0` works, and _helpers.tpl uses `dig` rather than `default`.
 */}}
+{{/*
+Refuse an empty value ANYWHERE inside a tier override, not just at the top level.
+
+mergeOverwrite skips empty source values at every depth, so a non-empty map with
+an empty child is the same silent-inherit bug wearing a disguise:
+`resources: {limits: {memory: ""}}` merges the map, drops the empty leaf, and the
+tier runs the BASE's limit while the values file says otherwise. A top-level-only
+check passes that, which is why this recurses.
+
+Recursion is by self-include, which Helm supports. Lists are treated as leaves:
+an empty list is refused, but elements are not descended into -- our allowlisted
+lists (envFromSecrets, tolerations) hold scalars, and an empty element there is
+not a merge hazard.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertNoEmptyLeaves" -}}
+{{- $path := .path -}}
+{{/* `empty` FIRST, then recurse. The other order is a real bug and I shipped it
+     briefly: an empty map IS empty, but `kindIs "map"` is also true for it, so
+     testing map-ness first sends `nodeSelector: {}` into a loop over zero keys
+     and it passes -- silently inheriting, which is the exact thing being
+     guarded. Caught by the empty-map guardrail. */}}
+{{- if empty .value -}}
+{{- fail (printf "%s is empty (%v). Sprig's mergeOverwrite (mergo) SKIPS empty source values at every depth, so this would silently render the value from edgeFunctions instead of the empty one you asked for -- the tier would keep the base's setting while the values file said otherwise. Remove the key to inherit deliberately, or set a non-empty value. (enabled/replicas/functions are exempt: they are read from the raw tier block, so false and 0 work there.)" $path .value) -}}
+{{- else if kindIs "map" .value -}}
+{{- range $k, $v := .value -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "%s.%s" $path $k)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
 {{- $tier := .tier -}}
 {{/* `spreadAcrossNodes` was here and is deliberately NOT: it is a boolean, and
@@ -239,7 +269,7 @@ edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
 {{- $allowed := list
       "enabled" "replicas" "functions"
       "policy" "maxParallelism" "beforeUnload" "worker"
-      "eszipCacheMaxMb" "eszipColdLoadHeadroomMb" "resources" "image"
+      "eszipCacheMaxMb" "eszipColdLoadHeadroomMb" "resources"
       "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
       "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
       "priorityClassName" "updateStrategy" -}}
@@ -258,8 +288,8 @@ edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
 {{- if not (has $k $allowed) -}}
 {{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honoured. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
 {{- end -}}
-{{- if and (empty $v) (not (has $k (list "enabled" "replicas" "functions"))) -}}
-{{- fail (printf "edgeFunctions.%s.%s is empty (%v). Sprig's mergeOverwrite (mergo) SKIPS empty source values, so this would silently render the value from edgeFunctions instead of the empty one you asked for -- the tier would keep the base's setting while the values file said otherwise. Remove the key to inherit deliberately, or set a non-empty value. (enabled/replicas/functions are exempt: they are read from the raw tier block, so false and 0 work there.)" $.tier $k $v) -}}
+{{- if not (has $k (list "enabled" "replicas" "functions")) -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "edgeFunctions.%s.%s" $tier $k)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
