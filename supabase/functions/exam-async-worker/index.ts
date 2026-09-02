@@ -346,13 +346,20 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
       if (cErr || !created) throw new Error(`create scanned submission failed: ${cErr?.message}`);
       scannedId = created.id;
     }
-    await admin
+    // Check this one: it is the only link between a scanned submission and its pages. Failing
+    // silently left the row with no pages attached, and finalize would then have nothing to
+    // assemble -- it now refuses that case loudly, but failing here points at the actual cause
+    // instead of surfacing three steps later.
+    const { error: linkErr } = await admin
       .from("exam_scan_pages")
       .update({ scanned_submission_id: scannedId })
       .in(
         "id",
         groupPages.map((p) => p.id)
       );
+    if (linkErr) {
+      throw new Error(`link pages to scanned submission ${scannedId} failed: ${linkErr.message}`);
+    }
 
     // Preserve a human's confirmed/skipped decision across re-runs: leave the existing
     // match untouched rather than re-detecting and overwriting it.
