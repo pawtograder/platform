@@ -56,15 +56,33 @@ async function requeueWaitingForOcr(admin: Admin, env: ExamAsyncEnvelope, delayS
 }
 
 async function sendEnvelope(admin: Admin, next: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  await admin.schema("pgmq_public").rpc("send", {
+  const { error } = await admin.schema("pgmq_public").rpc("send", {
     queue_name: QUEUE,
     message: next as unknown as Json,
     sleep_seconds: delaySeconds
   });
+  // Throwing is what preserves the job. Every caller is followed by archive() of the message
+  // being replaced, so swallowing a failed send would archive the original with no replacement
+  // queued -- the OCR, match or finalize work would simply vanish. Throwing instead propagates
+  // out before that archive, leaving the original message to reappear when its pgmq visibility
+  // timeout lapses. (Reported by Codex against 13b45d59; the omission predates the sendEnvelope
+  // refactor but that refactor put both the retry and the OCR-wait path through it.)
+  if (error) throw new Error(`requeue ${next.method} (batch ${next.batch_id}) failed: ${error.message}`);
 }
 
 async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, error: unknown): Promise<void> {
-  await admin.schema("pgmq_public").rpc("send", { queue_name: DLQ, message: env as unknown as Json, sleep_seconds: 0 });
+  // Same shape of omission as sendEnvelope above: the caller archives the original right after
+  // this, so a silently-failed DLQ send would drop the job with no record anywhere. Recorded
+  // rather than thrown -- the row inserted below is the durable audit trail and is worth
+  // attempting even if the queue write failed, and throwing here would re-enter the same
+  // error path that led to dead-lettering.
+  const { error: dlqErr } = await admin
+    .schema("pgmq_public")
+    .rpc("send", { queue_name: DLQ, message: env as unknown as Json, sleep_seconds: 0 });
+  if (dlqErr) {
+    console.error(`dead-letter queue send failed for ${env.method} (batch ${env.batch_id}): ${dlqErr.message}`);
+    Sentry.captureException(new Error(`dead-letter queue send failed: ${dlqErr.message}`));
+  }
   await admin.from("exam_async_worker_dlq_messages").insert({
     original_msg_id: msgId,
     method: env.method,
@@ -641,7 +659,18 @@ async function runBatch(): Promise<number> {
     const messages = (data ?? []) as QueueMessage[];
     if (messages.length === 0) break;
     for (const msg of messages) {
-      await processMessage(admin, msg, scope.clone());
+      // Isolate per-message failures. processMessage handles its own errors, but it can now
+      // throw on the way out: sendEnvelope throws when a requeue cannot be queued (deliberately,
+      // so the original is not archived without a replacement). Letting that escape would
+      // abandon the rest of this read batch. Nothing is lost either way -- an un-archived
+      // message reappears when its 120s visibility timeout lapses -- but the remaining
+      // messages should not have to wait for that.
+      try {
+        await processMessage(admin, msg, scope.clone());
+      } catch (error) {
+        Sentry.captureException(error, scope.clone());
+        console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+      }
       processed++;
     }
   }
