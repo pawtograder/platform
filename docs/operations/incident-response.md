@@ -157,6 +157,32 @@ empty `functions` list, and `kong.enabled: false`). Enable it in a window where 
 minute of 502s on those four paths is acceptable, which — because pg_cron retries
 every minute and pgmq holds the message — is any window at all.
 
+**Manual pre-flight when enabling the tier from a DOWNSTREAM values repo.** The
+chart checks the routed names it can see: `tests/render-guardrails.sh`'s
+`shadow_check` renders the chart's own `values.yaml` and asserts every name in
+`edgeFunctions.workerTier.functions` has a matching `supabase/functions/<name>/`
+directory. That check cannot see an overlay in another repository, and production
+is deployed from one (`prod-charts`). A typo there is the quietest failure this
+tier has: the name passes the chart's format guard (it is a legal DNS-1123
+label), Kong loads the route cleanly, the demuxer 404s on it, and the real
+function keeps being served by the request tier. Nothing looks broken — two pods
+run and serve nothing, and the split silently does not exist.
+
+So before enabling the tier in a downstream repo, hand-check the list against the
+image's inventory:
+
+```bash
+# From a platform checkout at the SHA the target environment runs.
+for fn in notification-queue-processor github-async-worker \
+          discord-async-worker gradebook-column-recalculate; do
+  [ -f "supabase/functions/$fn/index.ts" ] && echo "ok   $fn" || echo "MISSING $fn"
+done
+```
+
+`PawtograderEdgeWorkerTierNoTraffic` is the backstop if this is missed — a typo
+in all four names produces exactly its firing condition — but it takes 30m and
+tells you the split is not in effect, not which name is wrong.
+
 `scripts/edge-logs.sh` covers both tiers (it selects
 `component=~"functions|functions-workers"`), so `--function <name>` works
 regardless of which tier serves it. Deployment channels are deliberately outside

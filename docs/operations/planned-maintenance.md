@@ -308,6 +308,43 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    enabled in this environment — see [above](#what-makes-the-bounce-safe-and-cheap);
    do **not** force-delete the pod as a habit.
 
+   > **If the drain hangs on `<release>-functions-workers` instead.** The
+   > background-worker tier (`edgeFunctions.workerTier`, off except in staging)
+   > gets a `minAvailable: 1` PDB, and unlike the Postgres case that shape is
+   > correct — it is a 2-pod tier and losing both at once stops pgmq draining for
+   > all four routed functions. But at 2 replicas it allows exactly one
+   > disruption, so if **one pod is already unhealthy** the budget is exhausted
+   > and the eviction API refuses forever. A memory-budget mistake is the usual
+   > way in: the tier's limit and its four-term sum are checked at render, but a
+   > pod that OOM-kills in a loop is `Running`/not-`Ready`, which spends the
+   > budget without ever releasing it.
+   >
+   > Note the PDB renders **only at 2 or more replicas** (at 1 it is omitted, for
+   > the same reason Postgres uses `maxUnavailable`), and the tier's
+   > anti-affinity is `preferred`, not `required` — so on a 3-worker-node cluster
+   > both pods can and do land on one node, and draining that node needs the
+   > budget it cannot get.
+   >
+   > The unblock is to **un-split**, not to delete the PDB:
+   >
+   > ```bash
+   > helm upgrade <release> <chart> -n "$NS" --reuse-values \
+   >   --set edgeFunctions.workerTier.enabled=false
+   > ```
+   >
+   > That removes the PDB, the Deployment **and** the Kong routes in one release,
+   > which is what makes it safe: the four functions return to the request tier
+   > and keep being served, so the drain proceeds with nothing degraded. Deleting
+   > the PDB by hand instead leaves the Deployment and the routes in place, so the
+   > drain evicts both worker pods and the four functions 502 until they
+   > reschedule — and it leaves the cluster in a state the chart will recreate on
+   > the next `helm upgrade`, so the next drain hangs the same way with no record
+   > of why. Re-enable after the node is back.
+   >
+   > `replicas: 0` is not an alternative: the chart refuses it, because it would
+   > leave Kong routing those four names at a Service with no endpoints while
+   > suppressing both the PDB and the availability alert.
+
    > **Node-local storage is a hard exception.** This "reschedule onto another
    > node and reattach the PVC" only works when the primary's volume is
    > network-attached and movable (Khoury prod uses NetApp NFS — fine). If

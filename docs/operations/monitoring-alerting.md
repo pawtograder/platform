@@ -66,22 +66,28 @@ the age of the last backup) and confirm a human actually gets paged.
 
 ## Alerts shipped by the chart
 
-| Alert                                     | Severity | Fires when                                                                                                                       | Runbook                                                  |
-| ----------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `PawtograderBackupJobFailed`              | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                                          | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderBackupMissing`                | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                                       | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderBackupVerifyJobFailed`        | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)                             | [disaster-recovery.md](./disaster-recovery.md)           |
-| `PawtograderWALArchiveFailing`            | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderReplicaNotStreaming`          | warning  | (`postgres.replica` on) no standby in `state=streaming` for 10m — warm failover target stale                                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderReplicaLagHigh`               | warning  | (`postgres.replica` on) standby replay lag exceeds `replicationLagBytesWarning` (default 100 MiB) for 15m — failover RPO growing | [point-in-time-recovery.md](./point-in-time-recovery.md) |
-| `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                  | below                                                    |
-| `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused | below                                                    |
-| `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
-| `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                              | below                                                    |
-| `PawtograderRecalcStalled`                | critical | gradebook row-recalculate queue > 1000 for 3m — grades going stale                                                               | below                                                    |
-| `PawtograderAsyncDLQGrowing`              | critical | async dead-letter queue > 200 for 1m — jobs failing repeatedly                                                                   | below                                                    |
-| `PawtograderAsyncQueueBacklog`            | critical | async worker queue > 1000 for 5m — enqueue outpacing drain                                                                       | below                                                    |
-| `PawtograderAsyncQueueStuck`              | critical | async worker queue > 10 for 1h — workers stuck/starved                                                                           | below                                                    |
+| Alert                                     | Severity | Fires when                                                                                                                                                                                                                                       | Runbook                                                  |
+| ----------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `PawtograderBackupJobFailed`              | critical | The nightly pg_dump Job (only) has a recently-started failed pod for 5m                                                                                                                                                                          | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupMissing`                | critical | No pg_dump Job has completed in `backupMaxAgeHours` (default 36h), or the metric is absent                                                                                                                                                       | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderBackupVerifyJobFailed`        | warning  | A backup-verify or restore-drill Job has a recently-started failure for 5m (recoverability in doubt)                                                                                                                                             | [disaster-recovery.md](./disaster-recovery.md)           |
+| `PawtograderWALArchiveFailing`            | critical | (`postgres.walg` on) the latest `archive_command` failed and hasn't since succeeded for 15m — pg_wal filling                                                                                                                                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderReplicaNotStreaming`          | warning  | (`postgres.replica` on) no standby in `state=streaming` for 10m — warm failover target stale                                                                                                                                                     | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderReplicaLagHigh`               | warning  | (`postgres.replica` on) standby replay lag exceeds `replicationLagBytesWarning` (default 100 MiB) for 15m — failover RPO growing                                                                                                                 | [point-in-time-recovery.md](./point-in-time-recovery.md) |
+| `PawtograderPostgresConnectionsHigh`      | warning  | (`postgres.enabled`) backends exceed `connectionUsagePercentWarning` (default 80%) of `max_connections` for 15m                                                                                                                                  | below                                                    |
+| `PawtograderPostgresConnectionsSaturated` | critical | backends exceed `connectionUsagePercentCritical` (default 90%) of `max_connections` for 5m — new connections about to be refused                                                                                                                 | below                                                    |
+| `PawtograderExternalSecretNotReady`       | warning  | An ExternalSecret's `Ready` condition is `False` for 15m                                                                                                                                                                                         | [secrets-rotation.md](./secrets-rotation.md)             |
+| `PawtograderCertificateExpiringSoon`      | warning  | A cert-manager Certificate is within `certExpiryWarningDays` (default 14) of expiry                                                                                                                                                              | below                                                    |
+| `PawtograderRecalcStalled`                | critical | gradebook row-recalculate queue > 1000 for 3m — grades going stale                                                                                                                                                                               | below                                                    |
+| `PawtograderAsyncDLQGrowing`              | critical | async dead-letter queue > 200 for 1m — jobs failing repeatedly                                                                                                                                                                                   | below                                                    |
+| `PawtograderAsyncQueueBacklog`            | critical | async worker queue > 1000 for 5m — enqueue outpacing drain                                                                                                                                                                                       | below                                                    |
+| `PawtograderAsyncQueueStuck`              | critical | async worker queue > 10 for 1h — workers stuck/starved                                                                                                                                                                                           | below                                                    |
+| `PawtograderEdgeFunctionsOOMKilled`       | critical | An edge-functions container was OOM-killed — the per-tier memory budget no longer holds its sum                                                                                                                                                  | [incident-response.md](./incident-response.md)           |
+| `PawtograderEdgeFunctionsRestarting`      | warning  | An edge-functions pod is restarting repeatedly                                                                                                                                                                                                   | [incident-response.md](./incident-response.md)           |
+| `PawtograderEdgeFunctionsMemoryHigh`      | warning  | An edge-functions pod held above `edgeFunctionMemoryRatio` (default 0.85) of its memory limit for 15m — expect an OOM kill and a burst of 502s                                                                                                   | [incident-response.md](./incident-response.md)           |
+| `PawtograderEdgeFunctionsNodeMemoryHigh`  | warning  | A node running edge functions is near its allocatable memory                                                                                                                                                                                     | [incident-response.md](./incident-response.md)           |
+| `PawtograderEdgeWorkerTierUnavailable`    | critical | (`edgeFunctions.workerTier` on, at least 1 replica) the worker tier has had zero available replicas for 5m, **or the series is absent entirely** — Kong keeps routing the four pgmq workers at a Service with no backend and pgmq stops draining | [incident-response.md](./incident-response.md)           |
+| `PawtograderEdgeWorkerTierNoTraffic`      | warning  | (same gate) Kong has recorded no requests on any `functions-v1-worker-*` route for 30m while `functions-v1-all` is serving — either the tier split is not in effect (stale Kong config) or nothing is poking the four (pg_cron stopped)          | [incident-response.md](./incident-response.md)           |
 
 The last four (group `pawtograder.app`) are app-level KPI alerts, converted from
 the Grafana-managed rules that run against staging, so the same thresholds now
@@ -90,6 +96,32 @@ uniform routing.
 
 Tunables live under `monitoring.prometheusRules` in `values.yaml`
 (`backupMaxAgeHours`, `certExpiryWarningDays`, `replicationLagBytesWarning`).
+
+> **This table is not yet the whole set.** With every gate enabled the chart
+> renders **28** alerts and this table lists **20**. The eight missing are
+> `PawtograderPostgresUnavailable`, `PawtograderPostgresExporterDown`,
+> `PawtograderPostgresExporterQueryFailing`, `PawtograderQueueOldestMessageAging`,
+> `PawtograderNotificationEmailBacklog`, `PawtograderGradebookRecalcDLQGrowing`,
+> `PawtograderDiscordDLQGrowing` and `PawtograderDiscordCircuitBreakerOpen` —
+> all of them shipped and firing, several discussed by name in the sections
+> below, just absent from the catalog. The `PawtograderEdge*` family was added
+> here when the worker tier landed; the rest is pre-existing drift and is called
+> out rather than left to be discovered by someone grepping for an alert name
+> they were paged by. To re-measure after a change:
+>
+> ```bash
+> # rendered alert names, all gates on, vs the ones catalogued above
+> diff <(grep -oE '^\| `Pawtograder[A-Za-z]+' docs/operations/monitoring-alerting.md \
+>          | tr -d '|` ' | sort) \
+>      <(helm template t charts/pawtograder --set monitoring.enabled=true \
+>          --set monitoring.prometheusRules.labels.release=kps \
+>          --set edgeFunctions.workerTier.enabled=true \
+>          --set backup.enabled=true --set backup.s3.endpoint=https://s3.x --set backup.s3.bucket=b \
+>          --set postgres.walg.enabled=true --set postgres.walg.s3Prefix=s3://b/w \
+>          --set postgres.replica.enabled=true --set postgres.replica.persistence.storageClass=lp \
+>          --show-only templates/prometheus-rules.yaml \
+>          | grep -oE 'alert: Pawtograder[A-Za-z]+' | sed 's/alert: //' | sort -u)
+> ```
 
 ### Why these
 
@@ -100,6 +132,36 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
   catch (`PawtograderBackupMissing` covers that). When `postgres.walg` is on, the
   separate `PawtograderWALArchiveFailing` alert covers a stalled WAL archive
   (pg_wal filling the primary's volume).
+
+  > **The `absent()` arms fire on telemetry gaps, and that is deliberate.** > `PawtograderBackupMissing` and `PawtograderEdgeWorkerTierUnavailable` are both
+  > written as `<condition> or absent(<series>)`, because for both of them the
+  > dangerous state produces **no series at all** rather than a bad value: a
+  > CronJob that never ran emits no completion time, and a Deployment that was
+  > never created (or renamed, or deleted) emits no
+  > `kube_deployment_status_replicas_available`. A bare comparison against a
+  > missing series yields an empty vector, which is silence — precisely when the
+  > alert matters most.
+  >
+  > The cost is that anything which takes the _metric_ away looks identical to the
+  > thing going away: a kube-state-metrics restart, a Prometheus reload, or a
+  > Mimir `remote_write` gap on the shared Khoury ingest endpoint. Both alerts
+  > have paged for exactly this, with nothing actually broken. It is still the
+  > right default — for the worker tier, silence means Kong is routing four
+  > function names at a Service with no backend and pgmq is not draining — but
+  > when one of these fires, **check that Prometheus can see the namespace at all
+  > before believing the alert**:
+  >
+  > ```bash
+  > # If this is also empty, you have a telemetry gap, not an outage.
+  > count(kube_deployment_status_replicas_available{namespace="$NS"})
+  > ```
+  >
+  > `PawtograderEdgeWorkerTierNoTraffic` is deliberately shaped the other way — its
+  > request-tier arm means a Kong scrape gap silences it rather than firing it —
+  > because there the informative state is a _comparison_ between two live arms,
+  > and "I cannot see" is not evidence of a misroute. The two rules sit next to
+  > each other in `prometheus-rules.yaml` and disagree on this on purpose.
+
 - **Postgres connections** because the budget is `postgres.config.max_connections`
   (default 400), shared by the PostgREST pools (`rest.dbPool` × replicas),
   supavisor, GoTrue, realtime, storage, and the exporter. As client backends approach
