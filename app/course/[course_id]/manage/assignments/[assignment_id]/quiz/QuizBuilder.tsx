@@ -9,7 +9,7 @@ import { toaster } from "@/components/ui/toaster";
 import QuestionTreeEditor, { type BuilderQuestion } from "@/components/exam/QuestionTreeEditor";
 import { generateAndUploadExamTemplate, type AssessmentQuestion } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
-import { Alert, Badge, Box, Button, Heading, HStack, NativeSelect, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Alert, Badge, Box, Button, Heading, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
@@ -122,7 +122,12 @@ export default function QuizBuilder() {
         grading_tolerance: q.grading_tolerance
       }));
       const result = await generateAndUploadExamTemplate(supabase, courseId, assignmentId, payload, {
-        deliveryMode,
+        // Always in_app. This builder is reachable only for assignment_type 'quiz', and offering
+        // "Printable paper exam" here produced an assignment with no usable delivery at all:
+        // the student's "Take the quiz" link hits quiz_get_for_student, which rejects a paper
+        // exam, while the Scan & OCR pages stay hidden because the nav gates them on
+        // assignment_type 'exam'. Paper exams are authored under the 'exam' type instead.
+        deliveryMode: "in_app",
         title: assignmentTitle
       });
       setExamId(result.examId);
@@ -138,6 +143,13 @@ export default function QuizBuilder() {
           toaster.error({ title: "Rubric sync failed", description: syncErr.message });
         }
       }
+      // Re-read the persisted tree so component state carries the database ids. Without this a
+      // newly authored quiz keeps id: null for every question, so a second save without an
+      // intervening reload looks like an all-new tree to exam_upsert_questions_and_regions:
+      // it prunes the existing rows and inserts fresh ids, and the rubric sync -- which keys
+      // parts/criteria on exam_question_id and inserts checks unconditionally -- then scaffolds
+      // a duplicate structure that no longer matches the old back-references.
+      await load();
       toaster.success({
         title: "Saved",
         description: `Generated ${result.pages.length} page(s) and ${result.regions} region(s).`
@@ -147,7 +159,7 @@ export default function QuizBuilder() {
     } finally {
       setSaving(false);
     }
-  }, [questions, courseId, assignmentId, deliveryMode, assignmentTitle, gradingRubricId]);
+  }, [questions, courseId, assignmentId, assignmentTitle, gradingRubricId, load]);
 
   const downloadPdf = useCallback(async () => {
     if (!pdfPath) return;
@@ -169,6 +181,20 @@ export default function QuizBuilder() {
         {examId && <Badge colorPalette="green">Saved</Badge>}
       </HStack>
 
+      {deliveryMode === "paper" && !locked && (
+        <Alert.Root status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>This quiz is saved as a printable paper exam</Alert.Title>
+            <Alert.Description>
+              That combination has no working delivery path: students can&apos;t take it in the app, and the Scan &amp;
+              OCR pages are only available on paper-exam assignments. Saving here will convert it to an in-app quiz. For
+              a paper exam, create an assignment of type &quot;Paper exam (scan &amp; OCR)&quot; instead.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert.Root>
+      )}
+
       {locked && (
         <Alert.Root status="warning">
           <Alert.Indicator />
@@ -183,17 +209,6 @@ export default function QuizBuilder() {
       )}
 
       <HStack gap={3} wrap="wrap">
-        <Box>
-          <Text fontSize="xs" color="fg.muted" mb={1}>
-            Delivery
-          </Text>
-          <NativeSelect.Root size="sm" width="220px" disabled={locked}>
-            <NativeSelect.Field value={deliveryMode} onChange={(e) => setDeliveryMode(e.target.value as DeliveryMode)}>
-              <option value="in_app">In-app quiz</option>
-              <option value="paper">Printable paper exam</option>
-            </NativeSelect.Field>
-          </NativeSelect.Root>
-        </Box>
         <Box alignSelf="flex-end">
           <Button size="sm" colorPalette="green" onClick={save} loading={saving} disabled={locked}>
             Save &amp; generate

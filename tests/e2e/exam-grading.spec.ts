@@ -47,6 +47,7 @@ test.describe("Exam grading OCR pipeline", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Midterm Exam",
+      assignment_type: "exam",
       due_date: addDays(new Date(), 7).toISOString()
     });
     expect(assignment.grading_rubric_id).toBeTruthy();

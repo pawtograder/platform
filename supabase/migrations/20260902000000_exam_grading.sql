@@ -657,6 +657,12 @@ begin
     raise exception 'Scanned submission % is not a confirmed match', p_scanned_submission_id;
   end if;
 
+  -- Shared lock on the assignment, matching quiz_submit. FOR KEY SHARE does not conflict with
+  -- itself (concurrent finalize workers proceed in parallel) but does conflict with the
+  -- FOR UPDATE taken by exam_upsert_questions_and_regions, so an instructor cannot rewrite the
+  -- question set while this submission's exam_v1 artifact is being written against it.
+  perform 1 from public.assignments where id = v_assignment_id for key share;
+
   insert into public.submissions
     (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active)
   values

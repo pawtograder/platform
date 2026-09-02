@@ -301,6 +301,24 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   }, [examId, questions, regions]);
 
   const autoExtract = useCallback(async () => {
+    // Auto-extraction replaces the whole tree with proposed questions carrying id: null and no
+    // answer key, and the next save sends those NULLs through the all-column upsert -- so on an
+    // exam that already has an answer key this silently discards it. The proposal's client_ids
+    // are freshly generated, so there is no dependable key to re-attach existing answers by
+    // (matching on level/ordinal could attach the WRONG answer to a question, which is worse
+    // than losing it). Confirm explicitly instead.
+    const withAnswerKey = questions.filter(
+      (q) => q.id !== null && (q.correct_answer !== null || q.grading_tolerance !== null)
+    ).length;
+    if (withAnswerKey > 0) {
+      const ok = window.confirm(
+        `Auto-extraction replaces the current question structure. ${withAnswerKey} saved ` +
+          `question${withAnswerKey === 1 ? "" : "s"} ` +
+          `${withAnswerKey === 1 ? "has" : "have"} an answer key or grading tolerance, and ` +
+          `${withAnswerKey === 1 ? "it" : "they"} will be cleared when you save. Continue?`
+      );
+      if (!ok) return;
+    }
     try {
       const supabase = createClient();
       const proposal = await examExtractTemplate({ exam_id: examId }, supabase);
@@ -343,7 +361,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     } catch (e) {
       toaster.error({ title: "Auto-extract failed", description: e instanceof Error ? e.message : String(e) });
     }
-  }, [examId]);
+  }, [examId, questions]);
 
   const buildRubric = useCallback(async () => {
     if (!gradingRubricId) {
@@ -500,30 +518,41 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
               )}
               {regions
                 .filter((r) => r.page_number === p.page_number)
-                .map((r) => (
-                  <Box
-                    key={r.client_id}
-                    position="absolute"
-                    left={`${r.x * 100}%`}
-                    top={`${r.y * 100}%`}
-                    width={`${r.width * 100}%`}
-                    height={`${r.height * 100}%`}
-                    borderWidth="2px"
-                    borderColor={r.kind === "answer" ? "green.500" : "purple.500"}
-                    bg={r.kind === "answer" ? "green.500/10" : "purple.500/10"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeRegion(r.client_id);
-                    }}
-                    title="Click to remove"
-                  >
-                    <Text fontSize="2xs" bg="bg.panel" px={1}>
-                      {r.kind === "answer"
-                        ? (questions.find((q) => q.client_id === r.question_client_id)?.label ?? "answer")
-                        : r.kind}
-                    </Text>
-                  </Box>
-                ))}
+                .map((r) => {
+                  const regionLabel =
+                    r.kind === "answer"
+                      ? (questions.find((q) => q.client_id === r.question_client_id)?.label ?? "answer")
+                      : r.kind;
+                  return (
+                    // A native button, not a Box: as a plain div this overlay was unfocusable, so
+                    // the only way to delete a region was a mouse click, and `title` gave it no
+                    // accessible name. as="button" makes it tabbable and Enter/Space-activated.
+                    <Box
+                      as="button"
+                      key={r.client_id}
+                      position="absolute"
+                      left={`${r.x * 100}%`}
+                      top={`${r.y * 100}%`}
+                      width={`${r.width * 100}%`}
+                      height={`${r.height * 100}%`}
+                      borderWidth="2px"
+                      borderColor={r.kind === "answer" ? "green.500" : "purple.500"}
+                      bg={r.kind === "answer" ? "green.500/10" : "purple.500/10"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRegion(r.client_id);
+                      }}
+                      // The pointer handlers on the parent draw new regions; a keypress here must
+                      // not also start a drag on the page underneath.
+                      onPointerDown={(e) => e.stopPropagation()}
+                      aria-label={`Remove ${regionLabel} region on page ${p.page_number}`}
+                    >
+                      <Text fontSize="2xs" bg="bg.panel" px={1}>
+                        {regionLabel}
+                      </Text>
+                    </Box>
+                  );
+                })}
               {preview && preview.page === p.page_number && (
                 <Box
                   position="absolute"

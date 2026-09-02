@@ -36,12 +36,12 @@ test.describe("Assessment types (quiz + survey)", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Unit Quiz",
+      assignment_type: "quiz",
       due_date: addDays(new Date(), 7).toISOString()
     });
     expect(assignment.grading_rubric_id).toBeTruthy();
 
     // Mark the assignment as a quiz.
-    await supabase.from("assignments").update({ assignment_type: "quiz" }).eq("id", assignment.id);
 
     // Create the assessment definition in in_app delivery mode.
     const { data: examId, error: examErr } = await supabase.rpc("exam_create", {
@@ -196,6 +196,7 @@ test.describe("Assessment types (quiz + survey)", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Quiz B",
+      assignment_type: "quiz",
       due_date: addDays(new Date(), 7).toISOString()
     });
     const { data: examId } = await supabase.rpc("exam_create", {
@@ -308,6 +309,7 @@ test.describe("Assessment types (quiz + survey)", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Mixed Quiz",
+      assignment_type: "quiz",
       due_date: addDays(new Date(), 7).toISOString()
     });
 
@@ -423,6 +425,7 @@ test.describe("Assessment types (quiz + survey)", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Re-save Quiz",
+      assignment_type: "quiz",
       due_date: addDays(new Date(), 7).toISOString()
     });
     expect(assignment.grading_rubric_id).toBeTruthy();

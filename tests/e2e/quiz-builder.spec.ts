@@ -19,9 +19,9 @@ test.describe("Quiz builder", () => {
     const assignment = await insertAssignment({
       class_id: course.id,
       name: "Built Quiz",
+      assignment_type: "quiz",
       due_date: addDays(new Date(), 7).toISOString()
     });
-    await supabase.from("assignments").update({ assignment_type: "quiz" }).eq("id", assignment.id);
 
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/quiz`);

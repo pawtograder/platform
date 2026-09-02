@@ -80,10 +80,19 @@ as $$
 declare
   v_class_id bigint;
   v_exam_id bigint;
+  v_assignment_type public.assignment_type;
 begin
-  select class_id into v_class_id from public.assignments where id = p_assignment_id;
+  select class_id, assignment_type into v_class_id, v_assignment_type
+    from public.assignments where id = p_assignment_id;
   if v_class_id is null then
     raise exception 'Assignment % not found', p_assignment_id;
+  end if;
+  -- An exam/quiz definition only means something for those two types. Without this check the
+  -- authoring routes would happily attach a question tree to a 'code' or 'survey' assignment,
+  -- which then has an exam nothing renders and no student path can reach.
+  if v_assignment_type not in ('quiz', 'exam') then
+    raise exception 'Assignment % is of type %; only quiz and exam assignments can have an exam definition',
+      p_assignment_id, v_assignment_type;
   end if;
   if auth.uid() is not null and not exists (
     select 1 from public.user_privileges up
@@ -132,6 +141,9 @@ set search_path = ''
 as $$
 declare
   v_class_id bigint;
+  v_assignment_id bigint;
+  v_assignment_type public.assignment_type;
+  v_submission_count integer;
   q jsonb;
   r jsonb;
   v_lvl int;
@@ -139,15 +151,43 @@ declare
   v_new_id bigint;
   v_parent_id bigint;
 begin
-  select class_id into v_class_id from public.exams where id = p_exam_id;
+  select e.class_id, e.assignment_id, a.assignment_type
+    into v_class_id, v_assignment_id, v_assignment_type
+    from public.exams e join public.assignments a on a.id = e.assignment_id
+    where e.id = p_exam_id;
   if v_class_id is null then
     raise exception 'Exam % not found', p_exam_id;
+  end if;
+  -- Re-checked here, not just in exam_create: an exams row can predate this guard (or be
+  -- inserted directly by a service-role caller), and this is the function that actually
+  -- writes the question tree.
+  if v_assignment_type not in ('quiz', 'exam') then
+    raise exception 'Assignment % is of type %; only quiz and exam assignments can have exam questions',
+      v_assignment_id, v_assignment_type;
   end if;
   if auth.uid() is not null and not exists (
     select 1 from public.user_privileges up
     where up.user_id = auth.uid() and up.class_id = v_class_id and up.role = 'instructor'
   ) then
     raise exception 'Access denied: instructors only';
+  end if;
+
+  -- Refuse to rewrite the tree once anything has been submitted. This function prunes and
+  -- re-parents exam_questions, so a later edit can delete ids that submitted exam_v1 artifacts
+  -- and rubric back-references still point at, leaving those answers ungradable or attached to
+  -- a different question. The quiz builder has a client-side lock, but it is advisory: it is
+  -- bypassable, the paper-exam region editor has no equivalent, and a submission can land in
+  -- the window between the client's count and this call. Locking the row FIRST makes that
+  -- window closed rather than merely small. FOR UPDATE here and FOR KEY SHARE on the submit
+  -- paths (quiz_submit, exam_create_submission) give reader/writer semantics: concurrent
+  -- students never block each other, but an instructor edit waits for in-flight submissions
+  -- and an in-flight submission waits for an edit.
+  perform 1 from public.assignments where id = v_assignment_id for update;
+  select count(*) into v_submission_count from public.submissions where assignment_id = v_assignment_id;
+  if v_submission_count > 0 then
+    raise exception
+      'Assignment % already has % submission(s); the question set can no longer be changed (it would orphan submitted answers). Duplicate the assignment to make changes.',
+      v_assignment_id, v_submission_count;
   end if;
 
   -- STABLE IDS: preserve exam_questions.id across saves so the {exam_question_id} back-
@@ -358,6 +398,13 @@ begin
   ) then
     raise exception 'Assignment % is not yet released', p_assignment_id;
   end if;
+
+  -- Shared lock on the assignment row for the rest of this transaction. FOR KEY SHARE does not
+  -- conflict with itself, so students submitting at the same time never queue behind each other;
+  -- it does conflict with the FOR UPDATE that exam_upsert_questions_and_regions takes, so a
+  -- question-set rewrite cannot interleave with a submission and orphan the answers being
+  -- written here.
+  perform 1 from public.assignments where id = p_assignment_id for key share;
 
   -- Build the exam_v1 questions[] from the submitted answers, attaching the answer
   -- region (page + bbox) when one exists so the grader can see where it lives.
