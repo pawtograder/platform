@@ -199,6 +199,21 @@ export async function generateExamPdf(
 
   const drawAnswerBox = (qClientId: string, answerType: string | null | undefined, choices: string[]) => {
     const boxH = answerBoxHeight(answerType, choices.length);
+    // ensureSpace only ever starts ONE new page, so a block taller than a whole page silently
+    // overflowed: the rectangle and the later choices were drawn below the page edge, and the
+    // normalized region emitted for OCR could exceed height 1 -- an answer box that no scan
+    // can ever be read against. Reject it here, with the count that caused it, rather than
+    // producing a broken template. (Same choice as the WinAnsi pre-flight: fail loudly rather
+    // than emit something subtly unusable.)
+    const maxBlockHeight = pageHeight - 2 * MARGIN;
+    if (boxH + BLOCK_GAP > maxBlockHeight) {
+      throw new Error(
+        `An answer block for this question needs ${Math.ceil(boxH)}pt but a page only provides ` +
+          `${Math.floor(maxBlockHeight)}pt` +
+          (choices.length > 0 ? ` (${choices.length} choices)` : "") +
+          `. Split the question or reduce the number of choices.`
+      );
+    }
     ensureSpace(boxH + BLOCK_GAP);
     const boxTopY = cursorY;
     const boxBottomY = boxTopY - boxH;

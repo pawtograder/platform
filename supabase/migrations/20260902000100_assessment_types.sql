@@ -94,6 +94,22 @@ begin
     raise exception 'Assignment % is of type %; only quiz and exam assignments can have an exam definition',
       p_assignment_id, v_assignment_type;
   end if;
+
+  -- Block REPLACING an existing template once anything has been submitted. Both template paths
+  -- (upload-a-PDF and generate-a-PDF) call this before touching storage, and uploadTemplatePages
+  -- then DELETEs exam_template_pages -- so without a guard here staff could swap the pages under
+  -- question regions whose coordinates belong to the old template, and every later scanned exam
+  -- would be finalized against stale regions. exam_upsert_questions_and_regions has the same
+  -- invariant, but the direct PDF-upload path never calls it, and it runs after the pages are
+  -- already gone. Only the UPDATE case is blocked; first-time creation is always allowed.
+  if exists (select 1 from public.exams where assignment_id = p_assignment_id) then
+    perform 1 from public.assignments where id = p_assignment_id for update;
+    if exists (select 1 from public.submissions where assignment_id = p_assignment_id) then
+      raise exception
+        'Assignment % already has submissions; the exam template can no longer be replaced (existing question regions are tied to the current pages). Duplicate the assignment to make changes.',
+        p_assignment_id;
+    end if;
+  end if;
   if auth.uid() is not null and not exists (
     select 1 from public.user_privileges up
     where up.user_id = auth.uid() and up.class_id = v_class_id and up.role = 'instructor'

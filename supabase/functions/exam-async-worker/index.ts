@@ -40,6 +40,10 @@ type QueueMessage = {
 type Admin = SupabaseClient<Database>;
 
 async function archive(admin: Admin, msgId: number): Promise<void> {
+  // The one queue call whose error is deliberately ignored. A failed archive leaves the message
+  // to be redelivered and the handler re-run, which every handler here is written to tolerate
+  // (at-least-once). Throwing would turn a harmless duplicate delivery into a batch-level
+  // failure -- the opposite trade-off from sendEnvelope, where a swallowed failure LOSES work.
   await admin.schema("pgmq_public").rpc("archive", { queue_name: QUEUE, message_id: msgId });
 }
 
@@ -175,11 +179,14 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
 type RosterEntry = { profile_id: string; name: string | null };
 
 async function loadRoster(admin: Admin, classId: number): Promise<RosterEntry[]> {
-  const { data } = await admin
+  // Not optional: an empty roster makes every name lookup miss, so a failed read would mark a
+  // whole batch unmatched (or match on the SIS id alone) instead of failing and retrying.
+  const { data, error } = await admin
     .from("user_roles")
     .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name)")
     .eq("class_id", classId)
     .eq("role", "student");
+  if (error) throw new Error(`load roster for class ${classId} failed: ${error.message}`);
   return (data ?? [])
     .filter((r) => r.private_profile_id)
     .map((r) => ({
@@ -194,19 +201,23 @@ async function sisIdToProfile(
   detectedSisId: string | undefined
 ): Promise<string | null> {
   if (!detectedSisId || !/^\d+$/.test(detectedSisId)) return null;
-  const { data: user } = await admin
+  const { data: user, error: userErr } = await admin
     .from("users")
     .select("user_id")
     .eq("sis_user_id", parseInt(detectedSisId, 10))
     .maybeSingle();
+  // Distinguish "no such SIS id" from "the lookup failed": returning null for the latter
+  // silently downgrades a confident SIS match to a name guess, or to unmatched.
+  if (userErr) throw new Error(`look up SIS id ${detectedSisId} failed: ${userErr.message}`);
   if (!user?.user_id) return null;
-  const { data: ur } = await admin
+  const { data: ur, error: urErr } = await admin
     .from("user_roles")
     .select("private_profile_id")
     .eq("class_id", classId)
     .eq("role", "student")
     .eq("user_id", user.user_id)
     .maybeSingle();
+  if (urErr) throw new Error(`look up enrollment for SIS id ${detectedSisId} failed: ${urErr.message}`);
   return ur?.private_profile_id ?? null;
 }
 
@@ -277,7 +288,11 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     return;
   }
 
-  await admin.from("exam_scan_batches").update({ status: "matching" }).eq("id", batch.id);
+  const { error: matchingErr } = await admin
+    .from("exam_scan_batches")
+    .update({ status: "matching" })
+    .eq("id", batch.id);
+  if (matchingErr) throw new Error(`set batch ${batch.id} to matching failed: ${matchingErr.message}`);
 
   const perExam = Math.max(1, batch.pages_per_exam);
   const { data: pages, error: pagesErr } = await admin
@@ -291,7 +306,11 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // state with no way back. Throw so the queue retry path runs instead.
   if (pagesErr) throw new Error(`load scan pages for batch ${batch.id} failed: ${pagesErr.message}`);
   if (!pages || pages.length === 0) {
-    await admin.from("exam_scan_batches").update({ status: "review" }).eq("id", batch.id);
+    const { error: emptyReviewErr } = await admin
+      .from("exam_scan_batches")
+      .update({ status: "review" })
+      .eq("id", batch.id);
+    if (emptyReviewErr) throw new Error(`set empty batch ${batch.id} to review failed: ${emptyReviewErr.message}`);
     return;
   }
   // Refuse a page count that is not a whole number of exams. Math.ceil below would otherwise
@@ -331,7 +350,19 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     cache: Map<string, Promise<Uint8Array>>
   ) => {
     const pageNumber = region?.page_number ?? 1;
-    const page = groupPages[Math.min(pageNumber - 1, groupPages.length - 1)] ?? groupPages[0];
+    // Index the requested template page directly. Clamping to the last available page meant an
+    // identity region on template page 4, in a batch whose pages_per_exam only supplies 3, was
+    // read from page 3 using page-4 coordinates -- the same wrong-page behaviour that was
+    // removed from answer-region handling. The divisibility check does not cover this: it
+    // proves the upload divides into whole exams, not that pages_per_exam spans every template
+    // page a region references.
+    const page = groupPages[pageNumber - 1];
+    if (!page) {
+      throw new Error(
+        `identity region references template page ${pageNumber}, but each exam in batch ${batch.id} ` +
+          `has only ${groupPages.length} page(s); correct pages-per-exam or the region's page`
+      );
+    }
     const bytes = await downloadImageCached(admin, cache, "exam-scans", page.image_path);
     const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
     const rect: NormRect | null = region
@@ -348,12 +379,19 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     // upsert the scanned submission for this group
     let scannedId: number;
     let humanDecided = false;
-    const { data: existing } = await admin
+    // A discarded error here entered the insert branch as though the group did not exist. With
+    // no uniqueness on (batch_id, exam_index) that silently created a SECOND review row for the
+    // same logical exam; the unique index added alongside this makes such an insert fail safely
+    // even if this check is ever bypassed.
+    const { data: existing, error: existingErr } = await admin
       .from("exam_scanned_submissions")
       .select("id, match_status")
       .eq("batch_id", batch.id)
       .eq("exam_index", g)
       .maybeSingle();
+    if (existingErr) {
+      throw new Error(`look up scanned submission (batch ${batch.id}, index ${g}) failed: ${existingErr.message}`);
+    }
     if (existing?.id) {
       scannedId = existing.id;
       // A re-run of the match phase (re-process, or a redelivered 'match' message) must
@@ -441,20 +479,31 @@ const EXAM_ARTIFACT_FORMAT = "exam_v1";
 // on every finalize (including retries of already-done work) so a crash in the last step
 // can't leave the batch stuck in "finalizing".
 async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> {
-  const { count: confirmedCount } = await admin
+  // A failed count is NOT zero, and the two failure modes here are opposite and both bad: a
+  // failed confirmed-count reads as "nothing confirmed" and returns early, leaving a fully
+  // finalized batch stuck in 'finalizing' forever; a failed pending-count reads as "nothing
+  // outstanding" and marks the batch completed while confirmed submissions still have no
+  // artifact. Throw so the finalize message retries instead.
+  const { count: confirmedCount, error: confirmedErr } = await admin
     .from("exam_scanned_submissions")
     .select("id", { count: "exact", head: true })
     .eq("batch_id", batchId)
     .eq("match_status", "confirmed");
+  if (confirmedErr) throw new Error(`count confirmed for batch ${batchId} failed: ${confirmedErr.message}`);
   if ((confirmedCount ?? 0) === 0) return;
-  const { count: pending } = await admin
+  const { count: pending, error: pendingErr } = await admin
     .from("exam_scanned_submissions")
     .select("id", { count: "exact", head: true })
     .eq("batch_id", batchId)
     .eq("match_status", "confirmed")
     .is("finalized_at", null);
+  if (pendingErr) throw new Error(`count pending for batch ${batchId} failed: ${pendingErr.message}`);
   if ((pending ?? 0) === 0) {
-    await admin.from("exam_scan_batches").update({ status: "completed" }).eq("id", batchId);
+    const { error: completeErr } = await admin
+      .from("exam_scan_batches")
+      .update({ status: "completed" })
+      .eq("id", batchId);
+    if (completeErr) throw new Error(`complete batch ${batchId} failed: ${completeErr.message}`);
   }
 }
 
@@ -519,10 +568,16 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     // submission_file_comments / submission_artifacts FKs are NO ACTION) and could wipe
     // unrelated rows. Instead refresh the page bytes in storage (upsert) and insert only
     // the file rows that don't already exist (keyed by the deterministic page name).
-    const { data: existingFiles } = await admin
+    const { data: existingFiles, error: existingFilesErr } = await admin
       .from("submission_files")
       .select("name")
       .eq("submission_id", submissionId);
+    // An error read as "no files exist yet", so a resumed finalize would re-insert rows that are
+    // already there. That surfaces as a unique violation rather than corruption, but failing at
+    // the actual cause is clearer than failing a step later.
+    if (existingFilesErr) {
+      throw new Error(`load existing submission files for ${submissionId} failed: ${existingFilesErr.message}`);
+    }
     const existingNames = new Set((existingFiles ?? []).map((f) => f.name));
 
     const pageRefs: { page_number: number; storage_key: string; width: number; height: number }[] = [];
@@ -587,7 +642,14 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
           const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
           const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
           structuredValue = structured.value;
-        } catch {
+        } catch (structureErr) {
+          // A bare catch also swallowed ProviderRateLimitError, so a rate limit or timeout was
+          // treated as "this answer cannot be structured": the raw OCR string was substituted,
+          // the artifact written, and finalized_at stamped -- permanently degrading a gradeable
+          // answer that the worker's own backoff would have recovered. Retryable provider
+          // failures now propagate to the dispatcher's rate-limit path; the fallback is reserved
+          // for genuinely unstructurable content (e.g. illegible handwriting).
+          if (structureErr instanceof ProviderRateLimitError) throw structureErr;
           // fall back to raw OCR text on structuring failure
         }
       }

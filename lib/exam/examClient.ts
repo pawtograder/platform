@@ -161,6 +161,22 @@ export async function uploadExamScanBatch(
 ): Promise<{ batchId: number; totalPages: number }> {
   const rasters = await rasterizePdf(file, 2);
 
+  // Validate pages-per-exam against the template before creating anything. Staff type this by
+  // hand, and a value below the template's page count still divides an even scan cleanly -- so
+  // pages from different students end up in one exam and the regions on the template pages
+  // beyond the chosen count are skipped at finalization. enqueue_exam_process_batch enforces
+  // the same rule (it is the one that matters); checking here means the instructor is told
+  // before uploading every page.
+  const { data: exam, error: examErr } = await supabase.from("exams").select("num_pages").eq("id", examId).single();
+  if (examErr || !exam) throw new Error(`load exam ${examId} failed: ${examErr?.message}`);
+  const templatePages = exam.num_pages ?? 0;
+  if (templatePages > 0 && pagesPerExam !== templatePages) {
+    throw new Error(
+      `This exam's template has ${templatePages} page(s), but the scan is set to ${pagesPerExam} ` +
+        `page(s) per exam. Set pages-per-exam to ${templatePages} before uploading.`
+    );
+  }
+
   const { data: batch, error: batchErr } = await supabase
     .from("exam_scan_batches")
     .insert({

@@ -242,6 +242,20 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       setPreview(null);
       return;
     }
+    // An answer region with no question is unusable: the RPC stores it with a null
+    // exam_question_id and finalize filters those rows out, so the student's response is
+    // missing from every artifact while the overlay still looked like a valid answer box.
+    // The database now rejects it too (exam_question_regions_answer_needs_question); this is
+    // the part that tells the instructor why, before the work is lost on save.
+    if (draftKind === "answer" && !draftQuestion) {
+      drawing.current = null;
+      setPreview(null);
+      toaster.error({
+        title: "Choose a question first",
+        description: "An answer region must be attached to a question, or it can never be graded."
+      });
+      return;
+    }
     setRegions((rs) => [
       ...rs,
       {
@@ -432,7 +446,13 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
                   onChange={(e) => updateQuestion(q.client_id, { label: e.target.value })}
                   width="140px"
                 />
-                {q.level === 3 && (
+                {/* Grading fields belong to LEAVES, not to level 3. A level-1 or level-2
+                    question with no children is gradeable -- the student renderer gives it an
+                    input and the rubric sync now promotes it to a criterion + check -- so
+                    keying these controls off the level left a flat question stuck at free_text
+                    with 0 points, and an extracted level-2 leaf's points uneditable without
+                    inventing a child level. */}
+                {!questions.some((c) => c.parent_client_id === q.client_id) && (
                   <>
                     <NativeSelect.Root size="xs" width="120px">
                       <NativeSelect.Field
