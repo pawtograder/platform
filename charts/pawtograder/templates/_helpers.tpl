@@ -287,14 +287,35 @@ workload) and three on how many replicas it asks for, so resolve it once here.
 "wrong type for value; expected map[string]interface {}" pointing at whichever
 template happened to run first -- not at the file the operator edited.
 
-replicas uses hasKey, not `default 2`, so `replicas: 0` survives (Sprig `default`
-treats 0 as empty) -- the same reason edge-functions-channels.yaml does this for a
+replicas uses hasKey, not `default 2`, so a literal 0 reaches the workload's
+refusal instead of being silently replaced by the default (Sprig `default` treats
+0 as empty) -- the same reason edge-functions-channels.yaml does this for a
 channel, and the reason the tier reads it off the RAW block rather than off the
-mergeOverwrite'd config.
+mergeOverwrite'd config. See the `lt $replicas 1` fail in
+edge-functions-worker-tier.yaml for why 0 is not a supported value.
+
+The three things that must not drift are the tier's EXISTENCE, its REPLICA COUNT
+and its HOST NAME, and all three now resolve here. The host helper was added with
+this same "so the templates cannot drift" rationale and then left unused while
+seven call sites inlined
+`include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers")`
+-- so the guarantee it advertised was not one it provided. They now all route
+through it (kong-config, pdb, prometheus-rules x3, and the tier's own two name
+variables). That mattered more than tidiness: the Kong upstream host and the
+rendered Service name have to be byte-equal or the whole tier 502s, and they were
+equal only by coincidence of two identical expressions. Verified after the
+change that the Kong upstream, the Service, the Deployment, the PDB and the
+alert's `deployment=` selector all render one identical string.
+
+Note what does NOT go through it: pdb.yaml's componentLabels /
+componentSelectorLabels calls and the `workload` include take the COMPONENT
+("functions-workers"), not the computed host, so they are not the same value and
+are deliberately left alone.
 
 Usage:
   {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
   {{- $n := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+  {{- $host := include "pawtograder.edgeFunctions.workers.host" . }}
 */}}
 {{- define "pawtograder.edgeFunctions.workerTier.enabled" -}}
 {{- $wt := .Values.edgeFunctions.workerTier | default dict -}}
@@ -470,9 +491,39 @@ Deployment rollout strategy from the component's updateStrategy value.
 Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web) | nindent 2 }}
 */}}
 {{- define "pawtograder.deploymentStrategy" -}}
+{{- /* `type: Recreate` drops rollingUpdate, and it has to be done HERE rather
+     than left to the operator. The per-tier override path is a mergeOverwrite
+     over the base config, and the base sets
+     updateStrategy: {type: RollingUpdate, rollingUpdate: {maxSurge, maxUnavailable}}.
+     mergeOverwrite keeps sub-maps the source does not mention, so
+     `--set edgeFunctions.workerTier.updateStrategy.type=Recreate` produced
+     `{type: Recreate, rollingUpdate: {...}}` -- which the apiserver REFUSES:
+
+         spec.strategy.rollingUpdate: Forbidden: may not be specified when
+         strategy `type` is 'Recreate'
+
+     Verified against a live apiserver with a non-mutating server-side dry-run,
+     not reasoned about. It is a cross-field rule, so it is server-side only:
+     the same manifest passes `kubectl apply --dry-run=client --validate=true`,
+     which is why this failed at APPLY time rather than at render.
+
+     And the obvious workaround does not exist: clearing the inherited sub-map
+     with `updateStrategy.rollingUpdate=null` is refused by assertNoEmptyLeaves
+     ("is empty (<nil>)"). So `updateStrategy` was the one allowlisted key with a
+     compound shape and no reachable legal value for one of its two settings.
+
+     Dropping the sub-map here rather than removing `type` from the allowlist:
+     Recreate is a legitimate thing to want on this tier (it trades a brief
+     full-tier outage for never running two versions of a queue consumer at
+     once), and refusing the key outright would remove a capability to fix a
+     merge artifact. */ -}}
 {{- with .component.updateStrategy }}
+{{- $s := . }}
+{{- if eq ($s.type | default "" | toString) "Recreate" }}
+{{- $s = omit $s "rollingUpdate" }}
+{{- end }}
 strategy:
-  {{- toYaml . | nindent 2 }}
+  {{- toYaml $s | nindent 2 }}
 {{- end }}
 {{- /* Deployment progress deadline. Default 1200s, not the k8s default 600s:
      a chart-version bump rolls the postgres StatefulSet (its pod template

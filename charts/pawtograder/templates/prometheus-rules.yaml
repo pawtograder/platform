@@ -783,15 +783,15 @@ spec:
         # the missing series instead.
         - alert: PawtograderEdgeWorkerTierUnavailable
           expr: |
-            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}"} == 0
-              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}"})
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.edgeFunctions.workers.host" . }}"} == 0
+              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.edgeFunctions.workers.host" . }}"})
           for: 5m
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder edge worker tier has no available pods"
             description: >-
-              {{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+              {{ include "pawtograder.edgeFunctions.workers.host" . }}
               in {{ $ns }} has had zero available replicas for 5m. Kong routes
               {{ join ", " .Values.edgeFunctions.workerTier.functions }} to this tier by path, so
               every call to those functions is failing -- including the pg_cron pokes that drain

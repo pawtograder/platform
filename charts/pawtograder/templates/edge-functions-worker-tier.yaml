@@ -104,7 +104,7 @@ own admission budget and eszip cache.
    two workloads, last apply wins, isolation gone silently. So compare the
    COMPUTED names rather than the raw channel string. This subsumes the exact
    matches above, which are kept only because they can give a better message. */ -}}
-{{- $wkr := include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+{{- $wkr := include "pawtograder.edgeFunctions.workers.host" . }}
 {{- range $c := .Values.channels }}
 {{- if $c.edgeFunctions }}
 {{- $chan := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "functions-%s" $c.name)) }}
@@ -136,7 +136,7 @@ own admission budget and eszip cache.
    with nothing in the render to show for it. Reachable from a long Helm release
    name or a long fullnameOverride, so it is refused rather than documented. */ -}}
 {{- $reqName := include "pawtograder.componentName" (dict "ctx" . "component" "functions") }}
-{{- $wkrName := include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+{{- $wkrName := include "pawtograder.edgeFunctions.workers.host" . }}
 {{- if eq $reqName $wkrName }}
 {{- fail (printf "the worker tier's name collides with the request tier's: both render %q. componentName truncates to 63 characters, and once the release fullname reaches 52 characters \"-functions\" and \"-functions-workers\" truncate to the same string -- so the two Deployments and Services would overwrite each other and the tier isolation would silently not exist. Shorten the release name or fullnameOverride (currently %d characters) to at most 51." $reqName (len (include "pawtograder.fullname" .))) }}
 {{- end }}

@@ -1172,6 +1172,24 @@ assert_absent "workerTier: null renders no worker-tier workload" \
 assert_refused "an empty toleration element is refused" \
   "tolerations[0] is empty" \
   "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {tolerations: [{}]}}'
+# updateStrategy is the one allowlisted key with a compound shape, and
+# mergeOverwrite keeps sub-maps the override does not mention -- so setting
+# `type: Recreate` used to render `{type: Recreate, rollingUpdate: {...}}`, which
+# a real apiserver REFUSES ("spec.strategy.rollingUpdate: Forbidden: may not be
+# specified when strategy `type` is 'Recreate'"). Verified with a server-side dry
+# run; it is a cross-field rule, so client-side --validate passes it and the
+# failure landed at apply time. The `rollingUpdate=null` workaround is refused by
+# assertNoEmptyLeaves, so there was no reachable legal value.
+assert_rendered_contains "workerTier updateStrategy Recreate renders type: Recreate" \
+  templates/edge-functions-worker-tier.yaml "type: Recreate" \
+  "${WT[@]}" --set edgeFunctions.workerTier.updateStrategy.type=Recreate
+assert_rendered_lacks "workerTier Recreate drops the inherited rollingUpdate sub-map" \
+  templates/edge-functions-worker-tier.yaml "rollingUpdate" \
+  "${WT[@]}" --set edgeFunctions.workerTier.updateStrategy.type=Recreate
+# The default must be untouched by that special case: RollingUpdate still carries
+# maxUnavailable: 0, which is what keeps a rollout from dropping the whole tier.
+assert_rendered_contains "the default RollingUpdate strategy still carries maxUnavailable: 0" \
+  templates/edge-functions-worker-tier.yaml "maxUnavailable: 0" "${WT[@]}"
 assert_renders "a real toleration is still accepted" \
   "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {tolerations: [{key: w, operator: Equal, value: "y", effect: NoSchedule}]}}'
 

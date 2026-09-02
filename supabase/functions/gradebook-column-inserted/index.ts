@@ -32,6 +32,13 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 // bumping this pin to 14.9.1 or relaxing recalculate's lock, and neither should
 // happen without re-running the gradebook expression specs. `mcp-server` is
 // likewise still on `npm:minimatch@9`.
+//
+// And note the asymmetry that makes those inline pins load-bearing rather than
+// belt-and-braces: THIS directory has no tracked `deno.lock` of its own (only
+// gradebook-column-recalculate does). So for this function the two specifiers
+// below are the ONLY pins that exist — everything else it imports, including
+// `jsr:@supabase/supabase-js@2`, still floats to whatever resolves at
+// image-build time.
 import { all, create } from "npm:mathjs@14.5.2";
 import { minimatch } from "npm:minimatch@10.0.3";
 

@@ -71,7 +71,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+  name: {{ include "pawtograder.edgeFunctions.workers.host" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions-workers") | nindent 4 }}
