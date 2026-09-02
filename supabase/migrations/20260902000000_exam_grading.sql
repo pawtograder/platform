@@ -282,9 +282,17 @@ on conflict (id) do nothing;
 do $$
 declare
   b text;
+  write_roles text;
   buckets text[] := array['exam-templates','exam-scans'];
 begin
   foreach b in array buckets loop
+    -- Reads are staff-wide, but WRITES diverge by bucket. exam-scans is the grader workflow --
+    -- uploading and reprocessing scanned papers -- so graders need to write there. exam-templates
+    -- holds the blank exam and the generated printable PDF, and every table and RPC that defines
+    -- a template restricts changes to instructors; letting a grader overwrite a template object
+    -- directly would desynchronize the printed paper from the instructor-controlled regions while
+    -- leaving the definition untouched.
+    write_roles := case when b = 'exam-templates' then '''instructor''' else '''instructor'',''grader''' end;
     -- staff read
     execute format('drop policy if exists %I on storage.objects;', b || '_staff_read');
     execute format($f$
@@ -309,7 +317,7 @@ begin
           select 1 from public.user_privileges up
           where up.user_id = auth.uid()
             and up.class_id = (storage.foldername(name))[2]::bigint
-            and up.role in ('instructor','grader')
+            and up.role in (%s)
         )
       )
       with check (
@@ -318,10 +326,10 @@ begin
           select 1 from public.user_privileges up
           where up.user_id = auth.uid()
             and up.class_id = (storage.foldername(name))[2]::bigint
-            and up.role in ('instructor','grader')
+            and up.role in (%s)
         )
       );
-    $f$, b || '_staff_write', b, b);
+    $f$, b || '_staff_write', b, write_roles, b, write_roles);
   end loop;
 exception when insufficient_privilege then
   -- Some environments disallow CREATE POLICY on storage.objects (ownership varies);
@@ -674,10 +682,13 @@ begin
   perform 1 from public.assignments where id = v_assignment_id for key share;
 
   insert into public.submissions
-    (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active)
+    -- 'manual': there is no git commit behind a scanned exam, and without this the submission
+    -- history renderer's `sha && repository` branch turns these synthetic values into a
+    -- github.com/<repository>/commit/<sha> link that 404s.
+    (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
   values
     (v_assignment_id, v_profile_id, v_class_id, 'exam',
-     'exam-scan/' || p_scanned_submission_id::text, 0, 1, true)
+     'exam-scan/' || p_scanned_submission_id::text, 0, 1, true, 'manual')
   returning id into v_submission_id;
 
   update public.exam_scanned_submissions set submission_id = v_submission_id
@@ -779,6 +790,28 @@ begin
     where up.user_id = auth.uid() and up.class_id = v_class_id and up.role in ('instructor','grader')
   ) then
     raise exception 'Access denied: staff only';
+  end if;
+
+  -- Refuse to start when two scanned exams are confirmed for the SAME student. The match-review
+  -- selector permits it (two papers can be read as the same person), and each finalize inserts
+  -- an ACTIVE individual submission -- so the first succeeds and the second violates
+  -- submissions_one_active_individual_per_student, which retries and finally errors a batch
+  -- that is already half finalized. Caught up front, while the batch is still wholly
+  -- unfinalized and staff can fix the duplicate in review, since what SHOULD happen to a
+  -- genuine duplicate scan (replace? keep both? merge?) is a product decision, not something
+  -- to guess at inside a retry loop.
+  if exists (
+    select 1
+    from public.exam_scanned_submissions ss
+    where ss.batch_id = p_batch_id
+      and ss.match_status = 'confirmed'
+      and ss.matched_profile_id is not null
+    group by ss.matched_profile_id
+    having count(*) > 1
+  ) then
+    raise exception
+      'Batch % has more than one confirmed exam for the same student; resolve the duplicate matches in review before creating submissions',
+      p_batch_id;
   end if;
 
   -- Re-enqueue every confirmed submission that is not yet finalized. finalized_at is the

@@ -217,10 +217,18 @@ export default function NewAssignmentPage() {
               has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
               has_handgrader: true,
               class_id: Number.parseInt(course_id as string),
-              group_config: getValues("group_config"),
-              min_group_size: getValues("min_group_size") || null,
-              max_group_size: getValues("max_group_size") || null,
-              allow_student_formed_groups: getValues("allow_student_formed_groups"),
+              // Pinned to individual for quiz/exam/survey, for the same reason repo_mode is
+              // pinned to 'none' above: every submission path for these types inserts an
+              // individual row with assignment_group_id NULL (quiz_submit,
+              // exam_create_submission, the survey completion trigger), and
+              // submissions_insert_hook_optimized REJECTS that insert for a student who belongs
+              // to an assignment group. Persisting a group config would therefore break quiz
+              // submission, scanned-exam finalization and survey credit for exactly the
+              // students in groups, with no group-aware path to fall back on.
+              group_config: isCode ? getValues("group_config") : "individual",
+              min_group_size: isCode ? getValues("min_group_size") || null : null,
+              max_group_size: isCode ? getValues("max_group_size") || null : null,
+              allow_student_formed_groups: isCode ? getValues("allow_student_formed_groups") : false,
               enable_repo_analytics: getValues("enable_repo_analytics") || false,
               grader_pseudonymous_mode: getValues("grader_pseudonymous_mode") || false,
               show_leaderboard: getValues("show_leaderboard") || false,
@@ -232,7 +240,7 @@ export default function NewAssignmentPage() {
                   : getValues("minutes_due_after_lab"),
               regrade_deadline: values.regrade_deadline || null,
               self_review_setting_id: selfReviewSettingId as number,
-              group_formation_deadline: values.group_formation_deadline || null,
+              group_formation_deadline: isCode ? values.group_formation_deadline || null : null,
               repo_mode: repoMode,
               source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
               // DB constraint `assignments_no_protection_when_no_repo` rejects non-default

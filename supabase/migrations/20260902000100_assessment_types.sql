@@ -445,10 +445,14 @@ begin
     where assignment_id = p_assignment_id and profile_id = v_profile_id and sha = 'quiz';
 
   insert into public.submissions
-    (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active)
+    -- submitted_via 'manual' is the existing marker for a submission with no git commit behind
+    -- it. Without it the history renderer's `sha && repository` branch fires BEFORE its manual
+    -- branch and builds github.com/<repository>/commit/<sha> out of these synthetic values --
+    -- a dead link on every quiz, exam and survey submission.
+    (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
   values
     (p_assignment_id, v_profile_id, v_class_id, 'quiz',
-     'quiz/' || v_profile_id::text, v_run_attempt, 1, true)
+     'quiz/' || v_profile_id::text, v_run_attempt, 1, true, 'manual')
   returning id into v_submission_id;
 
   insert into public.submission_artifacts (submission_id, class_id, profile_id, name, data)
@@ -654,10 +658,11 @@ begin
       return new;
     end if;
     insert into public.submissions
-      (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active)
+      -- 'manual': same reasoning as the quiz insert above.
+      (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
     values
       (v_assignment_id, new.profile_id, v_class_id, 'survey',
-       'survey/' || new.profile_id::text, 0, 1, true)
+       'survey/' || new.profile_id::text, 0, 1, true, 'manual')
     returning id into v_submission_id;
     -- grading_review_id is set by submissions_after_insert_hook (an AFTER INSERT
     -- trigger), so it is not yet visible in the RETURNING row above — re-read it.
@@ -667,9 +672,16 @@ begin
   if v_review_id is not null then
     -- Stay released either way: the honest state of an incomplete response is a visible 0, not
     -- a hidden grade, and it flips back on re-submit.
+    --
+    -- completed_at must move with the score. The student's submission history only shows a
+    -- score when completed_at is set, and staff grading views classify a null review as still
+    -- pending -- so releasing full credit while leaving it null made a finished survey look
+    -- ungraded to everybody. Cleared again on revoke so a reopened response goes back to
+    -- pending rather than sitting at a completed 0.
     update public.submission_reviews
       set total_score = case when v_revoking then 0 else coalesce(v_total_points, 0) end,
-          released = true
+          released = true,
+          completed_at = case when v_revoking then null else now() end
       where id = v_review_id;
   end if;
 

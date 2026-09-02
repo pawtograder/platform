@@ -280,24 +280,46 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   await admin.from("exam_scan_batches").update({ status: "matching" }).eq("id", batch.id);
 
   const perExam = Math.max(1, batch.pages_per_exam);
-  const { data: pages } = await admin
+  const { data: pages, error: pagesErr } = await admin
     .from("exam_scan_pages")
     .select("id, page_index, image_path, width, height")
     .eq("batch_id", batch.id)
     .order("page_index", { ascending: true });
+  // A discarded error here read as "the batch legitimately has no pages" and marked it `review`.
+  // No match rows get created, and the scans page only offers reprocessing for `uploaded` or
+  // `error` batches -- so one transient database failure stranded the batch in an empty review
+  // state with no way back. Throw so the queue retry path runs instead.
+  if (pagesErr) throw new Error(`load scan pages for batch ${batch.id} failed: ${pagesErr.message}`);
   if (!pages || pages.length === 0) {
     await admin.from("exam_scan_batches").update({ status: "review" }).eq("id", batch.id);
     return;
+  }
+  // Refuse a page count that is not a whole number of exams. Math.ceil below would otherwise
+  // make the last group short, and that group sails through review and finalization with the
+  // regions for its missing template pages silently skipped -- a permanently incomplete
+  // artifact for a real student. enqueue_exam_process_batch already checks that every declared
+  // page persisted; this is the separate question of whether the pages divide into exams.
+  if (pages.length % perExam !== 0) {
+    throw new Error(
+      `batch ${batch.id} has ${pages.length} pages, which is not a multiple of ${perExam} page(s) per exam; ` +
+        `re-scan the batch or correct pages-per-exam before processing`
+    );
   }
 
   // identity regions (kind name/student_id) defined on the template. A template may
   // define one of each; when both exist we read each independently (they can sit on
   // different pages) and combine the two signals to disambiguate the student.
-  const { data: idRegions } = await admin
+  const { data: idRegions, error: idRegionsErr } = await admin
     .from("exam_question_regions")
     .select("kind, page_number, x, y, width, height")
     .eq("exam_id", batch.exam_id)
     .in("kind", ["student_id", "name"]);
+  // Not checking this meant a failed load looked like "no identity regions defined", which
+  // silently falls back to reading the whole first page -- degrading every match in the batch
+  // rather than failing.
+  if (idRegionsErr) {
+    throw new Error(`load identity regions for exam ${batch.exam_id} failed: ${idRegionsErr.message}`);
+  }
   type IdRegion = NormRect & { kind: string; page_number: number };
   const sisRegion = (idRegions ?? []).find((r) => r.kind === "student_id") as IdRegion | undefined;
   const nameRegion = (idRegions ?? []).find((r) => r.kind === "name") as IdRegion | undefined;
@@ -532,12 +554,18 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     }
 
     // answer questions: for each answer region, OCR text from the right page's words ∩ region
-    const { data: regions } = await admin
+    const { data: regions, error: regionsErr } = await admin
       .from("exam_question_regions")
       .select("exam_question_id, page_number, x, y, width, height, exam_questions(answer_type)")
       .eq("exam_id", scanned.exam_id)
       .eq("kind", "answer")
       .not("exam_question_id", "is", null);
+    // Same trap as the scan-page load: a discarded error looked like "this exam defines no
+    // answer regions", so the artifact below was written with an empty questions[] and then
+    // stamped finalized_at -- permanent, and never rebuilt on retry.
+    if (regionsErr) {
+      throw new Error(`load answer regions for exam ${scanned.exam_id} failed: ${regionsErr.message}`);
+    }
 
     const questions: unknown[] = [];
     for (const r of regions ?? []) {

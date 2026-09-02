@@ -377,7 +377,16 @@ export default function AssignmentPage() {
                         #{submission.pr_number}
                         {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
                       </Link>
-                    ) : submission.sha && submission.repository ? (
+                    ) : submission.submitted_via !== "manual" &&
+                      submission.submitted_via !== "upload" &&
+                      submission.sha &&
+                      submission.repository ? (
+                      // Only build a commit URL for a channel that actually has one. This branch
+                      // sits BEFORE the manual branch below, so any row carrying a synthetic
+                      // sha/repository (quiz, scanned exam, survey) used to render a github.com
+                      // link that 404s. Excluding the known non-git channels rather than
+                      // requiring via === "git" keeps legacy rows -- real pushes recorded before
+                      // submitted_via existed, so NULL with a genuine sha -- still linking.
                       <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
                         {submission.sha.slice(0, 7)}
                       </Link>
