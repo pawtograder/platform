@@ -148,15 +148,45 @@ fi
 
 # Patch every target first, THEN wait: the rollouts then progress concurrently in
 # the cluster and the waits are max(), not sum().
+#
+# `|| patch_failed=...` for the same reason the rollout loop below collects
+# failures instead of aborting, and this loop needed it more. Under `set -e` a
+# failing `kubectl set image` on the SECOND target exits here immediately --
+# after the first target is already patched and before a single rollout has been
+# waited on or reported. That is the half-updated fleet this whole multi-tier
+# block exists to prevent, reached by the one path that skips every check: the
+# request tier is rolling out to the new image, the worker tier is still on the
+# old one, and the tool's last word is a kubectl error about a Deployment it
+# never touched. The worker Deployment disappearing between discovery and here
+# (a concurrent `helm upgrade` turning the tier off) and a transient API 5xx both
+# get there.
+#
+# The successfully-patched targets are still waited on and still reported, and
+# the script exits non-zero at the end naming what did not get patched -- so the
+# operator learns the fleet is split from this tool rather than from an alert.
+# NOT rolled back: reverting the first patch would start a second rollout of the
+# old image over a fleet that is already mid-rollout, which is more disruption
+# than the split it repairs, and the retry is one re-run of this script.
+patch_failed=""
+PATCHED=""
 for d in $TARGETS; do
   echo "==> kubectl set image ${d} ${CONTAINER}=${IMAGE_REF}"
-  kubectl set image "deploy/${d}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"
+  if kubectl set image "deploy/${d}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"; then
+    PATCHED="$PATCHED $d"
+  else
+    echo "!!! kubectl set image FAILED for ${d} -- it stays on its current image" >&2
+    patch_failed="$patch_failed $d"
+  fi
 done
-# Every target is waited on even if an earlier one fails. Under `set -e` a failing
-# `rollout status` used to abort here, so when the request tier timed out the
-# worker tier was never waited on and never reported -- pgmq quietly stopped
-# draining while the tool's last word was about the other tier. Both tiers are
-# already patched by this point, so the operator needs the status of both.
+if [ -z "$PATCHED" ]; then
+  echo "No Deployment was patched. Nothing to wait for; the fleet is unchanged." >&2
+  exit 1
+fi
+# Every patched target is waited on even if an earlier one fails. Under `set -e` a
+# failing `rollout status` used to abort here, so when the request tier timed out
+# the worker tier was never waited on and never reported -- pgmq quietly stopped
+# draining while the tool's last word was about the other tier. The patched tiers
+# need their status reported whatever happened to the others.
 rollout_failed=0
 # Timeout is DERIVED per deployment, because a fixed one was wrong in both
 # directions and the wrong direction that bit was "too short".
@@ -184,7 +214,7 @@ rollout_failed=0
 # theoretical worst case (24 x 430s = 172 min): a timeout should be longer than
 # any healthy rollout, not longer than any conceivable one, or it stops being a
 # signal at all.
-for d in $TARGETS; do
+for d in $PATCHED; do
   replicas="$(kubectl get "deploy/${d}" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")"
   case "$replicas" in
     '' | *[!0-9]*) replicas=1 ;; # unreadable: fall back to the floor
@@ -196,11 +226,16 @@ for d in $TARGETS; do
 done
 
 echo
-for d in $TARGETS; do
+for d in $PATCHED; do
   echo "Done. ${d} in ${NAMESPACE} now runs ${IMAGE_REF}"
 done
+if [ -n "$patch_failed" ]; then
+  echo "SPLIT FLEET: these Deployments were NOT patched and are still on their previous image:${patch_failed}" >&2
+  echo "The tiers share a database and a pgmq queue set, so re-run this script until every target reports Done." >&2
+  exit 1
+fi
 if [ "$rollout_failed" -ne 0 ]; then
-  echo "One or more rollouts did not complete — see above. Both tiers were patched, so check every Deployment listed." >&2
+  echo "One or more rollouts did not complete — see above. Every tier listed was patched, so check each Deployment." >&2
   exit 1
 fi
 echo "Note: a later 'helm upgrade' / staging auto-deploy resets this to the chart's tag."
