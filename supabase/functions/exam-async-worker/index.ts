@@ -236,8 +236,15 @@ function nameToProfile(detectedName: string | undefined, roster: RosterEntry[]):
   if (!detectedName) return null;
   const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
   const want = norm(detectedName);
-  const hit = roster.find((r) => r.name && norm(r.name) === want);
-  return hit?.profile_id ?? null;
+  // Collect ALL matches, not the first. Two students who normalize to the same name made
+  // .find() hand back whichever happened to come first, as a 0.6-confidence suggestion -- and
+  // the review selector labels both profiles with just that name, so staff had no way to tell
+  // which paper belonged to whom and could confirm a submission for the wrong student. An
+  // ambiguous name is no evidence at all: return null so the row stays unmatched and a human
+  // resolves it deliberately.
+  const hits = roster.filter((r) => r.name && norm(r.name) === want);
+  if (hits.length !== 1) return null;
+  return hits[0].profile_id ?? null;
 }
 
 // Resolve the two identity signals independently and combine them. When both an SIS id

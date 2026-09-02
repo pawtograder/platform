@@ -29,6 +29,10 @@ export default function QuizBuilder() {
   const [locked, setLocked] = useState(false);
   const [examId, setExamId] = useState<number | null>(null);
   const [pdfPath, setPdfPath] = useState<string | null>(null);
+  // Set when the initial load fails. The builder must NOT fall through to its normal empty-state
+  // UI in that case: an existing quiz would look like a blank one, and saving over it prunes the
+  // real question tree.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -59,7 +63,7 @@ export default function QuizBuilder() {
         .eq("assignment_id", assignmentId);
       setLocked((count ?? 0) > 0);
 
-      const { data: qrows } = await supabase
+      const { data: qrows, error: qErr } = await supabase
         .from("exam_questions")
         .select(
           "id, parent_id, level, ordinal, label, prompt, answer_type, choices, points, correct_answer, grading_tolerance"
@@ -67,6 +71,11 @@ export default function QuizBuilder() {
         .eq("exam_id", exam.id)
         .order("level")
         .order("ordinal");
+      // A discarded error here presented an EXISTING quiz as an empty tree. If the instructor
+      // then authored replacement questions and saved, the payload carried no persisted ids, so
+      // exam_upsert_questions_and_regions pruned the original tree and its rubric links --
+      // silent destruction of a real quiz from one transient read failure.
+      if (qErr) throw new Error(`load quiz questions failed: ${qErr.message}`);
       const idToClient = new Map<number, string>();
       const loaded: BuilderQuestion[] = (qrows ?? []).map((q) => {
         const client_id = Math.random().toString(36).slice(2, 10);
@@ -96,7 +105,11 @@ export default function QuizBuilder() {
   }, [assignmentId]);
 
   useEffect(() => {
-    load();
+    setLoadError(null);
+    load().catch((e) => {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      setLoading(false);
+    });
   }, [load]);
 
   const save = useCallback(async () => {
@@ -173,6 +186,20 @@ export default function QuizBuilder() {
   }, [pdfPath]);
 
   if (loading) return <Spinner />;
+  if (loadError) {
+    return (
+      <Alert.Root status="error">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Title>Could not load this quiz</Alert.Title>
+          <Alert.Description>
+            {loadError} — reload the page. The builder deliberately will not open with an empty question list, because
+            saving from that state would replace the quiz&apos;s existing questions.
+          </Alert.Description>
+        </Alert.Content>
+      </Alert.Root>
+    );
+  }
 
   return (
     <VStack align="stretch" gap={4} pt={2}>

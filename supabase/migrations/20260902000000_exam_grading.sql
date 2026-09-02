@@ -409,11 +409,12 @@ begin
       );
     $f$, b || '_staff_write', b, write_roles, b, write_roles);
   end loop;
-exception when insufficient_privilege then
-  -- Some environments disallow CREATE POLICY on storage.objects (ownership varies);
-  -- apply the equivalent policies via the dashboard. Local dev allows it.
-  raise notice 'Skipped storage.objects policy creation (insufficient privilege).';
 end $$;
+-- Deliberately NO `exception when insufficient_privilege` handler here. Swallowing it turned a
+-- failure to install these policies into a successful migration, and the new buckets then had
+-- no read or write policy at all -- so every template and scan upload failed for staff, with
+-- nothing in the repo to repair it and no error at deploy time to point at the cause. Failing
+-- the migration surfaces the ownership problem while it is still fixable.
 
 -- Freeze the match once finalization has started. MatchReview writes matched_profile_id and
 -- match_status directly, and it does not reload after "Create submissions" -- so the selector
@@ -772,6 +773,26 @@ begin
         and q.exam_id = p_exam_id
         and c.points is distinct from coalesce(q.points, 0);
   end if;
+
+  -- Drop generated LEAF rows for questions that have since GAINED children. The leaf branches
+  -- above simply stop treating such a question as a leaf; the criterion/check generated for it
+  -- while it WAS a leaf survived, because reconciliation only removes rows whose question no
+  -- longer exists. Its old hidden points were then awardable alongside the new child checks.
+  delete from public.rubric_checks c
+  using public.exam_questions q
+  where c.rubric_id = p_rubric_id
+    and c.data ? 'exam_question_id'
+    and q.id = (c.data->>'exam_question_id')::bigint
+    and q.exam_id = p_exam_id
+    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
+  delete from public.rubric_criteria cr
+  using public.exam_questions q
+  where cr.rubric_id = p_rubric_id
+    and cr.data ? 'exam_question_id'
+    and q.id = (cr.data->>'exam_question_id')::bigint
+    and q.exam_id = p_exam_id
+    and q.level = 1
+    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
 
   -- Drop generated checks whose question has BECOME auto-scored. The skip-on-insert predicates
   -- above only stop a NEW manual check being created; a free-text leaf that was synced once and

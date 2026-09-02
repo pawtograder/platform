@@ -251,7 +251,13 @@ begin
           label = q->>'label', prompt = q->>'prompt',
           answer_type = q->>'answer_type', choices = q->'choices',
           points = nullif(q->>'points','')::numeric,
-          correct_answer = q->'correct_answer',
+          -- nullif(...,'null'::jsonb): the editor sends correct_answer: null, and q->'correct_answer'
+          -- stores the JSONB value `null`, which is NOT SQL NULL. Every downstream
+          -- `correct_answer is not null` test then read an objective question with NO key chosen
+          -- as auto-scored: its manual rubric check was skipped AND quiz_autograde compared each
+          -- response against a missing key, so the question scored zero for everybody with no
+          -- way to grade it by hand.
+          correct_answer = nullif(q->'correct_answer', 'null'::jsonb),
           grading_tolerance = nullif(q->>'grading_tolerance','')::numeric
         where id = v_qid;
         v_new_id := v_qid;
@@ -264,7 +270,7 @@ begin
            coalesce((q->>'ordinal')::numeric, 0), q->>'label', q->>'prompt',
            q->>'answer_type', q->'choices',
            nullif(q->>'points','')::numeric,
-           q->'correct_answer',
+           nullif(q->'correct_answer', 'null'::jsonb),
            nullif(q->>'grading_tolerance','')::numeric)
         returning id into v_new_id;
       end if;
