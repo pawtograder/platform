@@ -1372,8 +1372,12 @@ edgeFunctions:
   # render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration does not fit
   # 2Gi, so the old default was a combination the guardrail now rejects outright.
-  # That was 2906Mi (~2.8Gi) when the cache was 512Mi; at the current 256Mi cache
-  # it is 2650Mi (~2.6Gi), still well past 2Gi. The limit is deliberately NOT
+  # That was 3416Mi (~3.3Gi) when the cache was 512Mi; at the current 256Mi cache
+  # it is 3160Mi (~3.1Gi), still well past 2Gi — and 3160Mi is the exact figure
+  # tests/render-guardrails.sh asserts the guard still refuses one Mi below. Both
+  # numbers here were 90Mi-era sums (2906/2650) until 2026-09-02; the host term
+  # moved to ~600Mi and this sentence did not, which is the fourth instance on
+  # this branch of the trap the paragraph above names. The limit is deliberately NOT
   # lowered to track the cache: it is the backstop described below, and the slack
   # is the point.
   #

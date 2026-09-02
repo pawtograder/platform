@@ -29,7 +29,7 @@ see the `maxParallelism` note in `values.yaml`.) Callers are unaffected — ever
 split does not exist on hosted supabase.com or under `supabase functions serve`.
 See the `workerTier` block in `values.yaml` for the sizing and the reasoning.
 
-### Upgrading to 0.4.0
+## Upgrading to 0.4.0
 
 Two render-time refusals are new, and both can stop a `helm upgrade` on values
 that rendered fine on 0.3.x. Neither touches the cluster when it fires.
