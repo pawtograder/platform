@@ -117,7 +117,18 @@ async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, e
 }
 
 async function setBatchError(admin: Admin, batchId: number, message: string): Promise<void> {
-  await admin.from("exam_scan_batches").update({ status: "error", error: message }).eq("id", batchId);
+  // The batch's status IS how staff learn something failed, so a silent failure here leaves a
+  // batch sitting in 'ocr'/'finalizing' forever with nothing explaining why. Throwing keeps the
+  // message unarchived so the status write is retried.
+  //
+  // Callers run this BEFORE deadLetter for that reason: if it were second, a failure would
+  // redeliver a message that had already been dead-lettered, appending a duplicate DLQ message
+  // and audit row on every attempt.
+  const { error: updErr } = await admin
+    .from("exam_scan_batches")
+    .update({ status: "error", error: message })
+    .eq("id", batchId);
+  if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
 }
 
 async function downloadImage(admin: Admin, bucket: string, path: string): Promise<Uint8Array> {
@@ -702,8 +713,8 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   if (msg.read_ct >= PGMQ_MAX_READ_CT) {
     const err = new Error(`read_ct=${msg.read_ct} exceeded max — DLQ`);
     Sentry.captureException(err, scope);
-    await deadLetter(admin, env, msg.msg_id, err);
     if (env.batch_id) await setBatchError(admin, env.batch_id, err.message);
+    await deadLetter(admin, env, msg.msg_id, err);
     await archive(admin, msg.msg_id);
     return;
   }
@@ -726,9 +737,9 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       // permanently-exhausted quota can't requeue forever.
       if ((env.retry_count ?? 0) >= MAX_RATE_LIMIT_RETRIES) {
         Sentry.captureException(error, scope);
-        await deadLetter(admin, env, msg.msg_id, error);
         if (env.batch_id)
           await setBatchError(admin, env.batch_id, error instanceof Error ? error.message : String(error));
+        await deadLetter(admin, env, msg.msg_id, error);
         await archive(admin, msg.msg_id);
         return;
       }
@@ -740,9 +751,9 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     const retryCount = env.retry_count ?? 0;
     if (retryCount >= 5) {
       Sentry.captureException(error, scope);
-      await deadLetter(admin, env, msg.msg_id, error);
       if (env.batch_id)
         await setBatchError(admin, env.batch_id, error instanceof Error ? error.message : String(error));
+      await deadLetter(admin, env, msg.msg_id, error);
       await archive(admin, msg.msg_id);
       return;
     }
