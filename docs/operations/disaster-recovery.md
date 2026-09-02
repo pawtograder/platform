@@ -150,44 +150,91 @@ nothing writes during the restore and no half-restored state is served.
    stop issuing writes:
 
    ```bash
-   # Discover the write tiers by LABEL rather than naming them. A fixed list is
-   # wrong here in three separate ways, and each one leaves a writer running
-   # through a window this step exists to close:
-   #   * `edgeFunctions.workerTier` adds a SECOND edge Deployment
-   #     (`<release>-functions-workers`), and it is the one that drains pgmq.
-   #   * deployment channels add `<release>-functions-<channel>` and
-   #     `<release>-web-<channel>`, which share this Postgres.
-   #   * `auth` and `storage` write too (GoTrue's user tables, storage's object
-   #     rows); an earlier version of this step named neither.
-   # Select on `app.kubernetes.io/instance`, which is the RELEASE NAME. Do not
-   # select on `app.kubernetes.io/name`: `pawtograder.name` stamps `nameOverride`
-   # into it, so `-l app.kubernetes.io/name=pawtograder` matches nothing at all on
-   # an install that sets one -- and a selector that matches nothing scales
-   # nothing, exits 0, and prints nothing, so the failure is silent. The component
-   # regex is what keeps this from being a whole-release selector: `postgres`,
-   # `kong`, `supavisor` and the maintenance page do not match it.
-   WRITERS="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" \
-     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
-     | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print $2 }')"
-   echo "$WRITERS"   # eyeball it first: this list IS the fence
-   [ -n "$WRITERS" ] || { echo "NOTHING MATCHED -- wrong release name or namespace; do not proceed"; }
-   kubectl -n "$NS" scale deploy $WRITERS --replicas=0
-   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
+   # RUN THE WHOLE FENCE AS ONE COMMAND. The subshell's `set -euo pipefail` is the
+   # point: every step below has a failure mode that used to be advisory -- an
+   # empty selector, a partial scale, a wait that timed out -- and an operator
+   # reading a runbook does not reliably notice a non-zero exit three lines up.
+   # Inside `set -e` the sequence STOPS at the first failure and the whole block
+   # exits non-zero, so "the fence printed an error" and "the fence completed"
+   # cannot look the same.
+   (
+     set -euo pipefail
 
-   # Then WAIT. `kubectl scale` only writes `.spec.replicas`; termination is
-   # asynchronous and these pods have a drain window
-   # (terminationGracePeriodSeconds plus the edge tier's preStop), so for a minute
-   # or more after the scale returns a "fenced" writer is still committing --
-   # including a worker still draining pgmq. Waiting is the difference between
-   # this step fencing writes and merely requesting that they stop.
-   PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" \
-     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
-     | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
-   # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
-   # matching resources found" when nothing matches, which is the NORMAL state
-   # here once the pods are already gone -- and a step that fails when everything
-   # is correct is a step that gets skipped next time.
-   [ -n "$PODS" ] && kubectl -n "$NS" wait --for=delete $PODS --timeout=5m
+     # Discover the write tiers by LABEL rather than naming them. A fixed list is
+     # wrong here in three separate ways, and each one leaves a writer running
+     # through a window this step exists to close:
+     #   * `edgeFunctions.workerTier` adds a SECOND edge Deployment
+     #     (`<release>-functions-workers`), and it is the one that drains pgmq.
+     #   * deployment channels add `<release>-functions-<channel>` and
+     #     `<release>-web-<channel>`, which share this Postgres.
+     #   * `auth` and `storage` write too (GoTrue's user tables, storage's object
+     #     rows); an earlier version of this step named neither.
+     # Select on `app.kubernetes.io/instance`, which is the RELEASE NAME. Do not
+     # select on `app.kubernetes.io/name`: `pawtograder.name` stamps `nameOverride`
+     # into it, so `-l app.kubernetes.io/name=pawtograder` matches nothing at all on
+     # an install that sets one -- and a selector that matches nothing scales
+     # nothing, exits 0, and prints nothing, so the failure is silent. The component
+     # regex is what keeps this from being a whole-release selector: `postgres`,
+     # `kong`, `supavisor` and the maintenance page do not match it.
+     #
+     # Realtime is enumerated BY NAME rather than scaled with `-l`, which is the
+     # other silent hole this block used to have: `kubectl scale statefulset -l
+     # <selector>` prints "No resources found" and exits 0 when the selector
+     # matches nothing, so a realtime rename or a label change skipped the one
+     # StatefulSet in the fence without failing anything.
+     jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
+     WRITE_DEPLOY="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }')"
+     WRITE_STS="$(kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }')"
+     WRITERS="$(printf '%s\n%s\n' "$WRITE_DEPLOY" "$WRITE_STS" | awk 'NF')"
+
+     printf '%s\n' "$WRITERS"   # eyeball it first: this list IS the fence
+     if [ -z "$WRITERS" ]; then
+       echo "NOTHING MATCHED -- wrong release name or namespace. NOT fenced; do not proceed." >&2
+       exit 1
+     fi
+     # shellcheck disable=SC2086  # deliberate word-splitting: one kubectl call, N targets
+     kubectl -n "$NS" scale $WRITERS --replicas=0
+
+     # Then WAIT, and wait LONG ENOUGH. `kubectl scale` only writes
+     # `.spec.replicas`; termination is asynchronous, so between the scale
+     # returning and the last pod exiting there is a window in which a "fenced"
+     # writer is still committing -- including a worker still draining pgmq into
+     # the database you are about to overwrite.
+     #
+     # 480s is DERIVED from the chart, not chosen for looking generous. The edge
+     # tier dominates every other fenced component (realtime is next at 60s):
+     #     preStopSleepSeconds        10s   endpoint-drop delay before SIGTERM
+     #   + gracefulExitTimeoutSeconds 410s  in-flight drain (>= worker.timeoutMs 400s)
+     #   = 420s of intended drain
+     #     terminationGracePeriodSeconds 430s  kubelet SIGKILL backstop, and so the
+     #                                         hard ceiling on a pod's life after
+     #                                         deletion
+     #   + ~50s  container teardown and the pod object leaving the API
+     #   = 480s
+     # An earlier version of this step waited 300s, which was below the graceful
+     # window ALONE: a worker running a long batch legitimately outlived the wait,
+     # and the timeout read as "taking a while" rather than "still writing".
+     # If your overlay raises any of those three values, re-derive this: they are
+     # in `charts/pawtograder/values.yaml` under `edgeFunctions`.
+     PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+     # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
+     # matching resources found" when nothing matches, which is the NORMAL state
+     # here once the pods are already gone -- and a step that fails when everything
+     # is correct is a step that gets skipped next time.
+     if [ -n "$PODS" ]; then
+       # shellcheck disable=SC2086
+       if ! kubectl -n "$NS" wait --for=delete $PODS --timeout=480s; then
+         echo "STOP: writer pods are STILL PRESENT after the full 480s drain window." >&2
+         echo "They can still be committing. Do NOT run the next step. Investigate with" >&2
+         echo "  kubectl -n \"$NS\" get pod -l app.kubernetes.io/instance=<release>" >&2
+         exit 1
+       fi
+     fi
+     echo "FENCED: every web/rest/auth/storage/edge/realtime pod is gone."
+   )
    ```
 
    Leave Postgres running. (Rancher UI: set each workload's scale to 0 from the
@@ -195,13 +242,36 @@ nothing writes during the restore and no half-restored state is served.
 
 2. **Restore over the live DB.** `--clean --if-exists` drops and recreates each
    object from the dump:
+
    ```bash
-   pg_restore --clean --if-exists --no-owner --no-acl \
+   # HARD GATE, and it is chained with `&&` on purpose: the destructive command
+   # below CANNOT run unless the assertion exits 0. A `pg_restore --clean` over a database that a
+   # worker is still writing to interleaves the restore with live commits, and
+   # nothing downstream will tell you which rows lost.
+   #
+   # This is deliberately a re-check rather than trust in the previous step. The
+   # gap between the two steps is however long the operator takes, and a
+   # `helm upgrade`, an HPA, or a controller reconcile can put pods back in it.
+   fenced() {
+     local jp left
+     jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
+     left="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
+     if [ "$left" -ne 0 ]; then
+       echo "NOT FENCED: $left writer pod(s) still present -- refusing to continue." >&2
+       return 1
+     fi
+     echo "fence verified: no writer pods present"
+   }
+
+   fenced && pg_restore --clean --if-exists --no-owner --no-acl \
      -d postgres /tmp/latest.dump
    ```
+
    Expect noisy `does not exist, skipping` notices on the first `--clean` pass;
    those are benign. A non-zero exit that is **not** just those notices is a
    real failure — stop and investigate before bringing traffic back.
+
 3. **Bring writers back** by scaling the tiers to their prod replica counts
    (re-run `helm upgrade` with the prod values, or `kubectl scale` back up).
 4. **Smoke test** before announcing recovery: run

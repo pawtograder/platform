@@ -237,70 +237,117 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    and scale the writer tiers to 0**, so you can restore them exactly in step 5:
 
    ```bash
-   # 0. Pause pg_cron FIRST. ~20 scheduled jobs write in-DB every minute,
-   #    independent of every app pod, so scaling Deployments alone does NOT fence
-   #    them. Record the active set so you can resume exactly in step 5.
-   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
-     -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
-   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
-     -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
+   # RUN THE WHOLE FENCE AS ONE COMMAND. `set -euo pipefail` in a subshell is the
+   # point: every step here had a failure mode that was advisory, and this
+   # procedure's whole claim is that nothing writes to the primary while it is
+   # bounced. Inside `set -e` the sequence STOPS at the first failure and the
+   # block exits non-zero, so a fence that broke halfway cannot look like a fence
+   # that completed.
+   (
+     set -euo pipefail
 
-   # 1. Record what to restore: writer Deployments + the realtime StatefulSet
-   #    (name + desired replicas — a `-o wide` snapshot is not machine-readable),
-   #    and the HPA YAML.
-   kubectl -n "$NS" get deploy,statefulset \
-     -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
-     > /tmp/pg-maint-replicas-$(date +%s).txt
-   kubectl -n "$NS" get hpa -o yaml > /tmp/pg-maint-hpa-$(date +%s).yaml
+     # 0. Pause pg_cron FIRST. ~20 scheduled jobs write in-DB every minute,
+     #    independent of every app pod, so scaling Deployments alone does NOT
+     #    fence them. Record the active set so you can resume exactly in step 5.
+     #    Then VERIFY the pause took: this psql can fail for reasons that leave
+     #    the jobs running (wrong pod name after a rename, RBAC on exec, a
+     #    primary that is not `-0`), and a fence that silently skipped its
+     #    in-database writers is the worst version of this failure -- the app
+     #    pods are all gone, so everything looks quiet.
+     kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
+     kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
+     still_active="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;" | tr -d '[:space:]')"
+     if [ "$still_active" != "0" ]; then
+       echo "STOP: $still_active pg_cron job(s) are still active -- in-database writers are NOT fenced." >&2
+       exit 1
+     fi
 
-   # 2. edge-functions is HPA-managed and cannot be "paused" via minReplicas:0
-   #    (needs the HPAScaleToZero gate) / maxReplicas:0 (rejected outright) — so
-   #    DELETE the HPA first (recorded above), then scale the writer tiers to 0
-   #    BY COMPONENT. Do NOT use `-l app.kubernetes.io/instance=<release>`: it
-   #    would also scale the maintenance page down and STILL miss realtime (a
-   #    StatefulSet, not a Deployment).
-   kubectl -n "$NS" delete hpa <release>-functions
-   for c in rest auth storage; do
-     kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0
-   done
-   # Every web and edge tier, not just `web` and `functions`. The component label
-   # is exact, so naming the two stable components misses the background-worker
-   # tier (component=functions-workers, edgeFunctions.workerTier) and every
-   # per-course channel (functions-<channel>, web-<channel>) — and the worker tier
-   # is the one that keeps draining pgmq and writing to the primary through a
-   # window you believe is fenced. Enumerate them instead of naming them.
-   #
-   # Selected on app.kubernetes.io/INSTANCE, which is the release name.
-   # NOT on app.kubernetes.io/name: `pawtograder.name` stamps `nameOverride` into
-   # that label, so `-l app.kubernetes.io/name=pawtograder` matches NOTHING on an
-   # install that sets one — and this loop failing open is silent, because
-   # enumerating zero Deployments scales zero Deployments, exits 0 and prints
-   # nothing, while the procedure goes on claiming writes are fenced. The
-   # component regex is what keeps this from being the whole-release selector
-   # warned against above: `maintenance` (the page you are about to serve),
-   # `kong`, `postgres` and `supavisor` do not match it.
-   WRITERS="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" \
-     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
-     | awk '$1 ~ /^(web|functions)(-.+)?$/ { print $2 }')"
-   echo "$WRITERS"   # eyeball it first: this list IS the fence
-   [ -n "$WRITERS" ] || { echo "NOTHING MATCHED — wrong release name or namespace; do not proceed"; }
-   kubectl -n "$NS" scale deploy $WRITERS --replicas=0
-   kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
+     # 1. Record what to restore: writer Deployments + the realtime StatefulSet
+     #    (name + desired replicas — a `-o wide` snapshot is not machine-readable),
+     #    and the HPA YAML.
+     kubectl -n "$NS" get deploy,statefulset \
+       -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
+       > "/tmp/pg-maint-replicas-$(date +%s).txt"
+     kubectl -n "$NS" get hpa -o yaml > "/tmp/pg-maint-hpa-$(date +%s).yaml"
 
-   # 3. WAIT for the writers to actually be gone. `kubectl scale` only writes
-   #    `.spec.replicas`; termination is asynchronous and these pods have a drain
-   #    window (terminationGracePeriodSeconds plus the edge tier's preStop), so
-   #    for a minute or more after the scale returns a "fenced" writer is still
-   #    committing — including a worker still draining pgmq into the primary you
-   #    are about to bounce.
-   PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" \
-     -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}' \
-     | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
-   # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
-   # matching resources found" when nothing matches, which is the NORMAL state
-   # here once the pods are already gone — and a step that fails when everything
-   # is correct is a step that gets skipped next time.
-   [ -n "$PODS" ] && kubectl -n "$NS" wait --for=delete $PODS --timeout=5m
+     # 2. edge-functions is HPA-managed and cannot be "paused" via minReplicas:0
+     #    (needs the HPAScaleToZero gate) / maxReplicas:0 (rejected outright) — so
+     #    DELETE the HPA first (recorded above), then scale the writer tiers to 0.
+     #    `--ignore-not-found` because an install with autoscaling off has no HPA
+     #    and a NotFound here would abort a fence that is otherwise fine; unlike
+     #    `scale`, `delete` really does take that flag.
+     kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
+
+     # ONE enumeration for every writer, by NAME. Three separate holes are being
+     # closed here and they were all the same shape -- `kubectl scale -l
+     # <selector>` prints "No resources found" and exits 0 when nothing matches:
+     #   * `for c in rest auth storage` scaled by exact component label, so a
+     #     label change skipped a tier without failing.
+     #   * `scale statefulset -l component=realtime` skipped realtime the same way.
+     #   * the previous `-l app.kubernetes.io/name=pawtograder` selector matched
+     #     NOTHING at all on an install with `nameOverride` set, because
+     #     `pawtograder.name` stamps the override into that label.
+     # Selecting on app.kubernetes.io/INSTANCE (the release name, which nothing
+     # overrides) and filtering by component regex covers the stable web and edge
+     # tiers, the background-worker tier (component=functions-workers) and every
+     # per-course channel (functions-<channel>, web-<channel>) in one pass. The
+     # regex is what keeps this from being the whole-release selector: it excludes
+     # `maintenance` (the page you are about to serve), `kong`, `postgres` and
+     # `supavisor`.
+     jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
+     WRITE_DEPLOY="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }')"
+     WRITE_STS="$(kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }')"
+     WRITERS="$(printf '%s\n%s\n' "$WRITE_DEPLOY" "$WRITE_STS" | awk 'NF')"
+
+     printf '%s\n' "$WRITERS"   # eyeball it first: this list IS the fence
+     if [ -z "$WRITERS" ]; then
+       echo "NOTHING MATCHED -- wrong release name or namespace. NOT fenced; do not proceed." >&2
+       exit 1
+     fi
+     # shellcheck disable=SC2086  # deliberate word-splitting: one kubectl call, N targets
+     kubectl -n "$NS" scale $WRITERS --replicas=0
+
+     # 3. WAIT for the writers to actually be gone, and wait LONG ENOUGH.
+     #    `kubectl scale` only writes `.spec.replicas`; termination is
+     #    asynchronous, so a "fenced" writer keeps committing until its pod
+     #    actually exits — including a worker draining pgmq into the primary you
+     #    are about to bounce.
+     #
+     #    480s is DERIVED from the chart. The edge tier dominates every other
+     #    fenced component (realtime is next at 60s):
+     #        preStopSleepSeconds        10s
+     #      + gracefulExitTimeoutSeconds 410s  (>= worker.timeoutMs 400s)
+     #      = 420s of intended drain
+     #        terminationGracePeriodSeconds 430s  kubelet SIGKILL backstop, the
+     #                                            hard ceiling on a pod's life
+     #      + ~50s  container teardown and the pod object leaving the API
+     #      = 480s
+     #    This wait was 300s, below the graceful window ALONE: a worker running a
+     #    long batch outlived it legitimately, and the timeout read as "slow"
+     #    rather than "still writing". Re-derive if your overlay raises any of the
+     #    three values (charts/pawtograder/values.yaml, under `edgeFunctions`).
+     PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+     # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
+     # matching resources found" when nothing matches, which is the NORMAL state
+     # here once the pods are already gone — and a step that fails when everything
+     # is correct is a step that gets skipped next time.
+     if [ -n "$PODS" ]; then
+       # shellcheck disable=SC2086
+       if ! kubectl -n "$NS" wait --for=delete $PODS --timeout=480s; then
+         echo "STOP: writer pods are STILL PRESENT after the full 480s drain window." >&2
+         echo "They can still be committing. Do NOT drain the node. Investigate with" >&2
+         echo "  kubectl -n \"$NS\" get pod -l app.kubernetes.io/instance=<release>" >&2
+         exit 1
+       fi
+     fi
+     echo "FENCED: pg_cron is paused and every writer pod is gone."
+   )
    ```
 
 2. **Confirm the physical standby is caught up** before you disturb the primary —
@@ -324,7 +371,33 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
 3. **Do the maintenance.** Drain the node (or reboot/upgrade it):
 
    ```bash
-   kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+   # HARD GATE, chained with `&&`: the drain CANNOT start unless the assertion
+   # exits 0. Draining the primary's node while a writer is still committing is
+   # the failure this whole procedure is built to avoid, and the gap between the
+   # fence and this step is however long steps 2 and 3 took -- long enough for a
+   # `helm upgrade`, an HPA, or a controller reconcile to put pods back.
+   #
+   # pg_cron is checked too: it is fenced by a DB update rather than by a scale,
+   # so it is the one writer that can come back without a pod appearing.
+   fenced() {
+     local jp left crons
+     jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
+     left="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
+     if [ "$left" -ne 0 ]; then
+       echo "NOT FENCED: $left writer pod(s) still present -- refusing to drain." >&2
+       return 1
+     fi
+     crons="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;" | tr -d '[:space:]')"
+     if [ "$crons" != "0" ]; then
+       echo "NOT FENCED: $crons pg_cron job(s) active -- refusing to drain." >&2
+       return 1
+     fi
+     echo "fence verified: no writer pods, no active pg_cron jobs"
+   }
+
+   fenced && kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
    ```
 
    With the postgres PDB and preStop fast-shutdown in place, the primary evicts,
