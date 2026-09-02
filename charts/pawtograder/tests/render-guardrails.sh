@@ -1237,55 +1237,85 @@ assert_renders "a web-only channel named workers does not collide with the tier"
   "${WT[@]}" --set channelWildcardTlsSecret=wc \
   --set 'channels[0].name=workers' --set 'channels[0].web.image.tag=v1'
 
-# A Kong plain-prefix path also matches LONGER paths, so /functions/v1/<worker>
-# would swallow /functions/v1/<worker>-something. Nothing collides today
-# (gradebook-column-inserted vs gradebook-column-recalculate diverge before the
-# boundary), but that is luck rather than design: a future function whose name
-# extends a worker's would be silently routed to the worker tier and 404 there.
-# Checked against the real tree, not a hardcoded list -- which also lets the same
-# pass catch a routed name that matches NO function at all.
-echo "== no routed worker name shadows another function's path =="
+# Two things about the routed worker names, both of which fail silently in
+# production and neither of which the chart can check on its own.
+#
+# WHAT THIS NO LONGER CHECKS, and why the check was removed rather than kept.
+# Until 2026-09-02 this pass also refused any function whose name EXTENDS a
+# routed worker's -- `github-async-worker-v2` against a routed
+# `github-async-worker` -- on the theory that a Kong plain-prefix path swallows
+# longer paths. That was true of an unanchored path and is not true of the
+# anchored one the chart now renders: `$` terminates the regex, so
+# `/functions/v1/github-async-worker-v2` cannot match
+# `/functions/v1/github-async-worker$` and falls through to functions-v1-all.
+# Measured against live Kong 3.9.1, not inferred. Keeping the loop meant the
+# REQUIRED lint workflow refused a legitimate new function for exactly the case
+# the anchoring fixed, which is a worse failure than the one it was guarding: a
+# guard that blocks correct changes gets deleted wholesale by the next person in
+# a hurry, and the existence check below goes with it.
+#
+# The shadowing risk did not disappear, it MOVED -- it is now conditional on the
+# anchor being there. So the narrowed replacement asserts the precondition
+# instead of the consequence: every routed name must render an anchored path.
+# Drop the `$` from kong-config.yaml and this fails by name, where the old loop
+# would not have noticed (nor would the sed below, which silently matches
+# nothing without the anchor -- the old code turned that into a confusing
+# "could not read routed worker names" instead of naming the real problem).
+# The per-name assertion above pins the anchor for one hardcoded function; this
+# pins it for whatever is in .Values.edgeFunctions.workerTier.functions.
+echo "== every routed worker name is anchored and exists in the image =="
 shadow_check() {
-  local fns_dir="$CHART/../../supabase/functions" bad=0 w f
-  local workers
-  # This is the one check in the file that reads OUTSIDE the chart, so it only
-  # works in a monorepo checkout. A packaged or vendored chart has no
-  # supabase/functions/ next to it, and without this it produced four hard FAILs
-  # that looked like real shadowing rather than a missing input.
-  if [ ! -d "$fns_dir" ]; then
-    echo "skip [prefix shadowing]: $fns_dir not present (packaged chart, not a monorepo checkout)"
-    return
-  fi
-  workers="$(helm template t "$CHART" "${BASE[@]}" "${WT[@]}" \
-    --show-only templates/kong-config.yaml 2>/dev/null \
+  local fns_dir="$CHART/../../supabase/functions" bad=0 w
+  local render anchored declared
+  render="$(helm template t "$CHART" "${BASE[@]}" "${WT[@]}" \
+    --show-only templates/kong-config.yaml 2>/dev/null)"
+  # Names that rendered an ANCHORED path, and names that rendered a route at all.
+  # The two sets must be equal: a name in `declared` but not in `anchored` has a
+  # plain-prefix path and CAN shadow a longer function name.
+  anchored="$(printf '%s\n' "$render" \
     | sed -nE 's#^[ \t]*- "/functions/v1/([a-z0-9-]+)[$]"$#\1#p' | sort -u)"
-  if [ -z "$workers" ]; then
-    echo "FAIL [prefix shadowing]: could not read routed worker names from the render"
+  declared="$(printf '%s\n' "$render" \
+    | sed -nE 's#^[ \t]*- name: functions-v1-worker-([a-z0-9-]+)$#\1#p' | sort -u)"
+  if [ -z "$declared" ]; then
+    echo "FAIL [worker routes]: could not read any functions-v1-worker-* route from the render"
     FAILED=1
     return
   fi
-  # A routed name that matches NO function directory is the same silent failure
-  # as a shadowed one, from the other side: Kong renders a route, the demuxer
-  # 404s on it, and the real function keeps being served by the request tier. A
-  # typo in edgeFunctions.workerTier.functions is the way in, and the chart
-  # itself cannot check this (it does not know its image's inventory).
-  for w in $workers; do
-    if [ ! -f "$fns_dir/$w/index.ts" ]; then
-      echo "FAIL [routed name exists]: worker route /functions/v1/$w has no supabase/functions/$w/index.ts"
-      bad=1
-    fi
-  done
-  for w in $workers; do
-    for f in "$fns_dir"/*/; do
-      f="$(basename "$f")"
-      [ "$f" = "$w" ] && continue
-      [ -f "$fns_dir/$f/index.ts" ] || continue
-      case "$f" in
-        "$w"*) echo "FAIL [prefix shadowing]: function $f is shadowed by the worker route /functions/v1/$w"; bad=1 ;;
-      esac
+  if [ "$anchored" != "$declared" ]; then
+    echo "FAIL [route anchoring]: these routed names did not render an anchored (\$-terminated) path,"
+    echo "       so each can swallow a longer function name as a plain prefix:"
+    comm -13 <(printf '%s\n' "$anchored") <(printf '%s\n' "$declared") | sed 's/^/         /'
+    bad=1
+  fi
+  # A routed name that matches NO function directory is a silent failure from the
+  # other side: Kong renders a route, the demuxer 404s on it, and the real
+  # function keeps being served by the request tier. A typo in
+  # edgeFunctions.workerTier.functions is the way in, and the chart itself cannot
+  # check this (it does not know its image's inventory).
+  #
+  # This is the one check in the file that reads OUTSIDE the chart, so it only
+  # works in a monorepo checkout. A packaged or vendored chart has no
+  # supabase/functions/ next to it, and without the guard it produced four hard
+  # FAILs that looked like real typos rather than a missing input. The anchoring
+  # check above needs no such guard -- it reads only the render.
+  if [ ! -d "$fns_dir" ]; then
+    echo "skip [routed name exists]: $fns_dir not present (packaged chart, not a monorepo checkout)"
+  else
+    for w in $declared; do
+      if [ ! -f "$fns_dir/$w/index.ts" ]; then
+        echo "FAIL [routed name exists]: worker route /functions/v1/$w has no supabase/functions/$w/index.ts"
+        bad=1
+      fi
     done
-  done
-  [ "$bad" -eq 0 ] && echo "ok   [no routed worker name is a prefix of another function name]" || FAILED=1
+  fi
+  # NOTE for whoever adds a function whose name extends a routed worker's: that
+  # is now a supported change and needs no edit here. It lands on
+  # functions-v1-all (the request tier), NOT on the worker tier. If you wanted it
+  # on the worker tier, add it to edgeFunctions.workerTier.functions -- and
+  # remember production's list lives in the separate prod-charts repo, which this
+  # pass cannot see. PawtograderEdgeWorkerRouteNoTraffic is the control for that
+  # gap; see the comment on it in templates/prometheus-rules.yaml.
+  [ "$bad" -eq 0 ] && echo "ok   [every routed worker name is anchored and exists in the image]" || FAILED=1
 }
 shadow_check
 
