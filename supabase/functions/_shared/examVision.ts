@@ -173,7 +173,28 @@ class GoogleVisionOcr {
     if (res.status === 429) throw new ProviderRateLimitError("Vision OCR rate limited", 60);
     if (!res.ok) throw new Error(`Vision OCR failed: ${res.status} ${await res.text()}`);
     const json = await res.json();
+    // A per-image error arrives inside an HTTP 200 batch response, with no fullTextAnnotation.
+    // Treating that as "an empty page" was silent data loss: processPage would persist non-null
+    // ocr_data, the match join would count the page as OCR'd, and the batch could be reviewed
+    // and finalized with permanently blank responses -- no retry, no error surfaced anywhere.
+    const perImageError = json?.responses?.[0]?.error;
+    if (perImageError) {
+      const code = perImageError.code;
+      const message = perImageError.message ?? JSON.stringify(perImageError);
+      // Vision reports quota exhaustion per image as RESOURCE_EXHAUSTED (8); route it to the
+      // same backoff path as an HTTP 429 rather than the generic error path.
+      if (code === 8 || /quota|rate limit|resource[ _]exhausted/i.test(message)) {
+        throw new ProviderRateLimitError(`Vision OCR rate limited: ${message}`, 60);
+      }
+      throw new Error(`Vision OCR failed for ${page.name}: ${message}`);
+    }
     const annotation = json?.responses?.[0]?.fullTextAnnotation;
+    // A response with neither an error nor an annotation is still not a legitimate empty page --
+    // a genuinely blank scan returns an annotation with empty text. Fail rather than record it
+    // as read.
+    if (!annotation) {
+      throw new Error(`Vision OCR returned no annotation for ${page.name}; refusing to record it as empty`);
+    }
     const text: string = annotation?.text ?? "";
     const words: WordBox[] = [];
     const w = page.width || 1;

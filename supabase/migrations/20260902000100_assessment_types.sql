@@ -468,7 +468,12 @@ begin
     (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
   values
     (p_assignment_id, v_profile_id, v_class_id, 'quiz',
-     'quiz/' || v_profile_id::text, v_run_attempt, 1, true, 'manual')
+     -- The assignment id is part of the key on purpose. submissions carries a GLOBAL unique
+     -- index on (repository, sha, run_number, run_attempt) where submitted_via is not 'pr', and
+     -- run_attempt is derived per assignment -- so a student's FIRST quiz on two different
+     -- assignments produced the identical tuple ('quiz/<profile>','quiz',1,0) and the second
+     -- quiz failed outright with a duplicate key.
+     'quiz/' || p_assignment_id::text || '/' || v_profile_id::text, v_run_attempt, 1, true, 'manual')
   returning id into v_submission_id;
 
   insert into public.submission_artifacts (submission_id, class_id, profile_id, name, data)
@@ -681,7 +686,10 @@ begin
       (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active, submitted_via)
     values
       (v_assignment_id, new.profile_id, v_class_id, 'survey',
-       'survey/' || new.profile_id::text, 0, 1, true, 'manual')
+       -- Assignment-scoped for the same reason as the quiz insert above: the fixed
+       -- ('survey/<profile>','survey',1,0) tuple collided across survey assignments, so
+       -- completing a second required survey failed on the global unique index.
+       'survey/' || v_assignment_id::text || '/' || new.profile_id::text, 0, 1, true, 'manual')
     returning id into v_submission_id;
     -- grading_review_id is set by submissions_after_insert_hook (an AFTER INSERT
     -- trigger), so it is not yet visible in the RETURNING row above — re-read it.

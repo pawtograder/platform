@@ -492,7 +492,15 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     if (matchErr) throw new Error(`persist match for scanned submission ${scannedId} failed: ${matchErr.message}`);
   }
 
-  const { error: reviewErr } = await admin.from("exam_scan_batches").update({ status: "review" }).eq("id", batch.id);
+  // Conditional transition. A large match job can outlast the 120s visibility window, so a
+  // duplicate worker may still be running this after staff have finalized the batch -- an
+  // unconditional write would then stamp 'review' over 'completed' or 'error', hiding the
+  // terminal result. Only advance from the states that precede review.
+  const { error: reviewErr } = await admin
+    .from("exam_scan_batches")
+    .update({ status: "review" })
+    .eq("id", batch.id)
+    .in("status", ["uploaded", "ocr", "matching", "error"]);
   if (reviewErr) throw new Error(`set batch ${batch.id} to review failed: ${reviewErr.message}`);
 }
 

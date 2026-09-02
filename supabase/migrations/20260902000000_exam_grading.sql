@@ -415,6 +415,34 @@ exception when insufficient_privilege then
   raise notice 'Skipped storage.objects policy creation (insufficient privilege).';
 end $$;
 
+-- Freeze the match once finalization has started. MatchReview writes matched_profile_id and
+-- match_status directly, and it does not reload after "Create submissions" -- so the selector
+-- stayed enabled with a stale null submission_id. Re-picking a student then rewrote
+-- matched_profile_id while submission_id still pointed at the PREVIOUS student's submission, and
+-- doing it concurrently could race exam_create_submission and leave the review row and the
+-- created exam owned by different people. Enforced in the database because the client guard is
+-- advisory: it cannot see a submission created a moment ago by the worker.
+create or replace function public.exam_scanned_submission_freeze_match()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.submission_id is not null
+     and (new.matched_profile_id is distinct from old.matched_profile_id
+          or new.match_status is distinct from old.match_status) then
+    raise exception
+      'Scanned submission % already has submission %; its match can no longer be changed (the submission would belong to a different student than the review row)',
+      old.id, old.submission_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_exam_scanned_submission_freeze_match on public.exam_scanned_submissions;
+create trigger trg_exam_scanned_submission_freeze_match
+  before update of matched_profile_id, match_status on public.exam_scanned_submissions
+  for each row execute function public.exam_scanned_submission_freeze_match();
+
 -- ---------------------------------------------------------------------------
 -- 6) Data RPCs
 -- ---------------------------------------------------------------------------
@@ -726,6 +754,40 @@ begin
       end if;
     end loop;
   end loop;
+
+  -- Refresh generated check points from the question while the assignment is still a DRAFT.
+  -- Checks are INSERT-ONLY so a grader's edits survive a re-sync, but that also meant changing a
+  -- draft question's points never reached rubric_checks.points: the criterion total summed stale
+  -- checks, so manual grading used the old maximum while quiz autograding used the new value.
+  -- Gating on "no submissions yet" keeps both properties -- a draft stays consistent, and once
+  -- grading can have happened the grader's numbers are left alone. Only rows carrying
+  -- data.exam_question_id are touched, so user-authored checks are never rewritten.
+  if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
+    update public.rubric_checks c
+      set points = coalesce(q.points, 0)
+      from public.exam_questions q
+      where c.rubric_id = p_rubric_id
+        and c.data ? 'exam_question_id'
+        and q.id = (c.data->>'exam_question_id')::bigint
+        and q.exam_id = p_exam_id
+        and c.points is distinct from coalesce(q.points, 0);
+  end if;
+
+  -- Drop generated checks whose question has BECOME auto-scored. The skip-on-insert predicates
+  -- above only stop a NEW manual check being created; a free-text leaf that was synced once and
+  -- later given an objective type plus an answer key kept its existing check, and the
+  -- reconciliation below retains it because the question still exists -- so the recompute could
+  -- sum that manual check on top of quiz_autograde's score for the same question.
+  if v_in_app then
+    delete from public.rubric_checks c
+    using public.exam_questions q
+    where c.rubric_id = p_rubric_id
+      and c.data ? 'exam_question_id'
+      and q.id = (c.data->>'exam_question_id')::bigint
+      and q.exam_id = p_exam_id
+      and q.answer_type in ('multiple_choice','true_false','numeric')
+      and q.correct_answer is not null;
+  end if;
 
   -- Reconcile: drop generated rows whose question no longer exists. exam_upsert_questions_and_
   -- regions prunes deleted questions, but this sync only ever iterated the SURVIVING ones, so a
