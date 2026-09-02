@@ -129,6 +129,39 @@ export async function generateExamPdf(
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
 
+  // Fail fast, and as a whole, on text the standard fonts cannot encode. StandardFonts use
+  // WinAnsi (Windows-1252), so a CJK/Cyrillic/emoji character makes pdf-lib throw from deep
+  // inside drawText -- previously mid-save, after exam_create had already run, with an opaque
+  // "WinAnsi cannot encode" message and no indication of which question was at fault. The
+  // alternative is embedding a Unicode font via @pdf-lib/fontkit, which means shipping a font
+  // binary; until that is wanted, reject the input with a message naming the offending
+  // characters. Deliberately NOT stripping them: that silently corrupts the exam text.
+  const unsupported = new Set<string>();
+  const checkText = (text: string | null | undefined) => {
+    if (!text) return;
+    for (const ch of text) {
+      try {
+        font.encodeText(ch);
+      } catch {
+        unsupported.add(ch);
+      }
+    }
+  };
+  checkText(opts.title);
+  for (const q of questions) {
+    checkText(q.label);
+    checkText(q.prompt);
+    if (Array.isArray(q.choices)) for (const c of q.choices) checkText(String(c));
+  }
+  if (unsupported.size > 0) {
+    const shown = [...unsupported].slice(0, 10).join(" ");
+    throw new Error(
+      `The printable PDF cannot render these character(s): ${shown}. ` +
+        `Printable exams use the standard PDF fonts, which only support Western European ` +
+        `characters. Please replace them in the question text and save again.`
+    );
+  }
+
   const regions: GeneratedRegion[] = [];
   let page: PDFPage = doc.addPage([pageWidth, pageHeight]);
   let pageNumber = 1;

@@ -9,7 +9,7 @@ import { toaster } from "@/components/ui/toaster";
 import { examQuestionIdFromField, examTreeToSurveyJson, type StudentQuizQuestion } from "@/lib/exam/examToSurveyJs";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
-import { Alert, Box, Heading, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Button, Heading, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { Model } from "survey-core";
@@ -61,31 +61,54 @@ export default function StudentQuizPage() {
     })();
   }, [assignmentId]);
 
+  type QuizAnswer = { exam_question_id: number; value: unknown };
+  // SurveyJS has already switched to its completion page by the time onComplete fires, and the
+  // answers exist only in in-memory survey state. A failed quiz_submit used to leave nothing but
+  // a toast: no retry control, and a reload discarded the attempt entirely, so one transient
+  // network error cost the student a whole quiz. Hold the mapped answers so the submit can be
+  // retried from the same page.
+  const [pendingAnswers, setPendingAnswers] = useState<QuizAnswer[] | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submitAnswers = useCallback(
+    async (answers: QuizAnswer[]) => {
+      setSubmitting(true);
+      try {
+        const supabase = createClient();
+        const { error: submitErr } = await supabase.rpc("quiz_submit", {
+          p_assignment_id: assignmentId,
+          p_answers: answers as unknown as never
+        });
+        if (submitErr) {
+          setPendingAnswers(answers);
+          toaster.error({ title: "Submit failed", description: submitErr.message });
+          return;
+        }
+        setPendingAnswers(null);
+        toaster.success({ title: "Quiz submitted" });
+        router.push(`/course/${courseId}/assignments/${assignmentId}`);
+      } catch (e) {
+        setPendingAnswers(answers);
+        toaster.error({ title: "Submit failed", description: e instanceof Error ? e.message : String(e) });
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [assignmentId, courseId, router]
+  );
+
   const onComplete = useCallback(
     (survey: Model) => {
-      const supabase = createClient();
       const data = survey.data as Record<string, unknown>;
       const answers = Object.entries(data)
         .map(([name, value]) => {
           const qid = examQuestionIdFromField(name);
           return qid == null ? null : { exam_question_id: qid, value };
         })
-        .filter((a): a is { exam_question_id: number; value: unknown } => a != null);
-
-      (async () => {
-        const { error: submitErr } = await supabase.rpc("quiz_submit", {
-          p_assignment_id: assignmentId,
-          p_answers: answers as unknown as never
-        });
-        if (submitErr) {
-          toaster.error({ title: "Submit failed", description: submitErr.message });
-          return;
-        }
-        toaster.success({ title: "Quiz submitted" });
-        router.push(`/course/${courseId}/assignments/${assignmentId}`);
-      })();
+        .filter((a): a is QuizAnswer => a != null);
+      void submitAnswers(answers);
     },
-    [assignmentId, courseId, router]
+    [submitAnswers]
   );
 
   if (loading) return <Spinner />;
@@ -109,6 +132,26 @@ export default function StudentQuizPage() {
           <Alert.Content>
             <Alert.Title>Cannot load quiz</Alert.Title>
             <Alert.Description>{error}</Alert.Description>
+          </Alert.Content>
+        </Alert.Root>
+      ) : pendingAnswers ? (
+        <Alert.Root status="error" flexDirection="column" alignItems="flex-start">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Your quiz was not submitted</Alert.Title>
+            <Alert.Description>
+              Your {pendingAnswers.length} answer{pendingAnswers.length === 1 ? "" : "s"} are still held on this page.
+              Please retry — do not close or reload this tab, or they will be lost.
+            </Alert.Description>
+            <Button
+              mt={3}
+              size="sm"
+              colorPalette="green"
+              loading={submitting}
+              onClick={() => void submitAnswers(pendingAnswers)}
+            >
+              Retry submit
+            </Button>
           </Alert.Content>
         </Alert.Root>
       ) : surveyJson ? (

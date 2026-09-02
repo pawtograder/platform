@@ -8,7 +8,17 @@ export type FinalizeArgs = { scanned_submission_id: number };
 
 export type ExamAsyncArgs = ProcessPageArgs | MatchArgs | FinalizeArgs;
 
-type ExamAsyncMeta = { class_id: number; batch_id: number; retry_count?: number; debug_id?: string };
+// `retry_count` is the dispatcher's transient-error budget (5 attempts, exponential backoff)
+// and MUST NOT be spent on anything else. `ocr_waits` is counted separately so a match message
+// that legitimately parks itself waiting for the process_page fan-out to finish does not eat
+// the error budget it would need if a real transient failure happened afterwards.
+type ExamAsyncMeta = {
+  class_id: number;
+  batch_id: number;
+  retry_count?: number;
+  ocr_waits?: number;
+  debug_id?: string;
+};
 
 // Discriminated on `method` so an envelope can't pair the wrong args with a method
 // (e.g. method "finalize" with MatchArgs); the worker's dispatch narrows args by method.

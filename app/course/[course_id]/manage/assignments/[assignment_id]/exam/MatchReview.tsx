@@ -14,6 +14,7 @@ type Scanned = {
   match_confidence: number | null;
   match_status: string;
   submission_id: number | null;
+  finalized_at: string | null;
 };
 type RosterStudent = { profile_id: string; name: string | null };
 
@@ -28,7 +29,7 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
       supabase
         .from("exam_scanned_submissions")
         .select(
-          "id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id"
+          "id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id, finalized_at"
         )
         .eq("batch_id", batchId)
         .order("exam_index"),
@@ -123,7 +124,13 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
     }
   }, [batchId]);
 
-  const confirmedCount = rows.filter((r) => r.match_status === "confirmed" && !r.submission_id).length;
+  // Count rows that are not FINALIZED, not rows without a submission id. finalized_at is the
+  // worker's single source of truth for "fully finalized" (set last, after the submission row,
+  // the page files and the exam artifact are all written). Keying off submission_id instead hid
+  // exactly the rows that need another pass: if finalize created the submission but then
+  // exhausted its retries, the row is still confirmed and recoverable by enqueue_exam_finalize,
+  // yet it dropped out of this count and left the button disabled with no way to resume.
+  const unfinalizedCount = rows.filter((r) => r.match_status === "confirmed" && !r.finalized_at).length;
 
   return (
     <VStack align="stretch" gap={3}>
@@ -134,9 +141,9 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
           colorPalette="green"
           onClick={createSubmissions}
           loading={busy}
-          disabled={confirmedCount === 0}
+          disabled={unfinalizedCount === 0}
         >
-          Create {confirmedCount} submission(s)
+          Create {unfinalizedCount} submission(s)
         </Button>
       </HStack>
       <Table.Root size="sm" variant="outline">

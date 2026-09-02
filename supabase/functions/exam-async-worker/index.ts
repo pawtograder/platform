@@ -22,6 +22,13 @@ const PGMQ_MAX_READ_CT = 8;
 // PGMQ_MAX_READ_CT poison-pill guard never trips on the requeue path; without this bound a
 // message behind a permanently-exhausted provider quota would requeue forever.
 const MAX_RATE_LIMIT_RETRIES = 20;
+// `match` must not run until every process_page message for the batch has finished OCR (they
+// are separate queue messages and may be handled by concurrent worker invocations). When OCR
+// is still outstanding the match message re-queues itself with this delay, bounded by
+// MAX_OCR_WAIT_RETRIES -- ~15 min, comfortably longer than OCR of a large batch, after which
+// it is treated as a real failure so the batch surfaces an error instead of waiting forever.
+const OCR_WAIT_SECONDS = 30;
+const MAX_OCR_WAIT_RETRIES = 30;
 
 type QueueMessage = {
   msg_id: number;
@@ -39,6 +46,16 @@ async function archive(admin: Admin, msgId: number): Promise<void> {
 async function requeue(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
   // Preserve the (method, args) pairing of the discriminated envelope; only bump retry_count.
   const next = { ...env, retry_count: (env.retry_count ?? 0) + 1 };
+  await sendEnvelope(admin, next, delaySeconds);
+}
+
+// Park a message without spending its transient-error budget: bumps ocr_waits, not retry_count.
+async function requeueWaitingForOcr(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
+  const next = { ...env, ocr_waits: (env.ocr_waits ?? 0) + 1 };
+  await sendEnvelope(admin, next, delaySeconds);
+}
+
+async function sendEnvelope(admin: Admin, next: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
   await admin.schema("pgmq_public").rpc("send", {
     queue_name: QUEUE,
     message: next as unknown as Json,
@@ -189,7 +206,8 @@ async function matchProfile(
   return { profile_id: null, confidence: 0 };
 }
 
-async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<void> {
+async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): Promise<void> {
+  const classId = env.class_id;
   const provider = getExamVisionProvider();
   const { data: batch, error } = await admin
     .from("exam_scan_batches")
@@ -197,6 +215,33 @@ async function doMatch(admin: Admin, classId: number, args: MatchArgs): Promise<
     .eq("id", args.batch_id)
     .single();
   if (error || !batch) throw new Error(`batch ${args.batch_id} not found`);
+
+  // Join the OCR fan-out before doing anything else. enqueue_exam_process_batch sends one
+  // process_page message per page plus this single match message, with no ordering guarantee
+  // between them, so match can win the race while pages are still un-OCR'd. That mattered
+  // twice over: identity is read from OCR words (so a match would be made from missing text),
+  // and the unconditional `status = 'review'` below opens confirm/finalize in the UI --
+  // finalize treats a page with no ocr_data as having no words and then stamps finalized_at,
+  // permanently recording an incomplete artifact that later OCR completion never rebuilds.
+  const { count: pendingOcr, error: pendingErr } = await admin
+    .from("exam_scan_pages")
+    .select("id", { count: "exact", head: true })
+    .eq("batch_id", batch.id)
+    .is("ocr_data", null);
+  if (pendingErr) throw new Error(`count pending OCR for batch ${batch.id} failed: ${pendingErr.message}`);
+  if ((pendingOcr ?? 0) > 0) {
+    const waits = env.ocr_waits ?? 0;
+    if (waits >= MAX_OCR_WAIT_RETRIES) {
+      throw new Error(
+        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits; not advancing to review`
+      );
+    }
+    // Fresh message, then the dispatcher archives this copy on our normal return. Leave the
+    // batch status alone so the scans page keeps showing it as still processing.
+    await requeueWaitingForOcr(admin, env, OCR_WAIT_SECONDS);
+    return;
+  }
+
   await admin.from("exam_scan_batches").update({ status: "matching" }).eq("id", batch.id);
 
   const perExam = Math.max(1, batch.pages_per_exam);
@@ -526,7 +571,7 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     if (env.method === "process_page") {
       await processPage(admin, env.args);
     } else if (env.method === "match") {
-      await doMatch(admin, env.class_id, env.args);
+      await doMatch(admin, env, env.args);
     } else if (env.method === "finalize") {
       await finalize(admin, env.class_id, env.args);
     } else {
